@@ -10,6 +10,19 @@ from extract.extractors.file_index.line_index import (
     extract_line_index_rows,
 )
 
+ONE_LINE = 1
+TWO_LINES = 2
+THREE_LINES = 3
+HELLO_WORLD_BYTES = 11
+HELLO_WORLD_LF_BYTES = 12
+HELLO_WORLD_CRLF_BYTES = 13
+FIRST_LF_END = 9
+SECOND_LF_END = 18
+THIRD_LF_END = 28
+TRUNCATED_LINE_BYTES = 37
+THIRD_LINE_NO = 2
+SECOND_EMPTY_LINE_END = 2
+
 
 class TestExtractLineIndexRows:
     """Test extract_line_index_rows function."""
@@ -20,13 +33,13 @@ class TestExtractLineIndexRows:
         config = _LineIndexConfig(file_id="f1", path="test.py")
         rows = list(extract_line_index_rows(content, config=config))
 
-        assert len(rows) == 1
+        assert len(rows) == ONE_LINE
         row = rows[0]
         assert row["file_id"] == "f1"
         assert row["path"] == "test.py"
         assert row["line_no"] == 0
         assert row["line_start_byte"] == 0
-        assert row["line_end_byte"] == 11
+        assert row["line_end_byte"] == HELLO_WORLD_BYTES
         assert row["line_text"] == "hello world"
         assert row["newline_kind"] == "none"
 
@@ -36,11 +49,11 @@ class TestExtractLineIndexRows:
         config = _LineIndexConfig(file_id="f1", path="test.py")
         rows = list(extract_line_index_rows(content, config=config))
 
-        assert len(rows) == 1
+        assert len(rows) == ONE_LINE
         row = rows[0]
         assert row["line_no"] == 0
         assert row["line_start_byte"] == 0
-        assert row["line_end_byte"] == 12  # includes newline
+        assert row["line_end_byte"] == HELLO_WORLD_LF_BYTES  # includes newline
         assert row["line_text"] == "hello world"  # excludes newline
         assert row["newline_kind"] == "lf"
 
@@ -50,11 +63,11 @@ class TestExtractLineIndexRows:
         config = _LineIndexConfig(file_id="f1", path="test.py")
         rows = list(extract_line_index_rows(content, config=config))
 
-        assert len(rows) == 1
+        assert len(rows) == ONE_LINE
         row = rows[0]
         assert row["line_no"] == 0
         assert row["line_start_byte"] == 0
-        assert row["line_end_byte"] == 13  # includes \r\n
+        assert row["line_end_byte"] == HELLO_WORLD_CRLF_BYTES  # includes \r\n
         assert row["line_text"] == "hello world"  # excludes \r\n
         assert row["newline_kind"] == "crlf"
 
@@ -64,23 +77,23 @@ class TestExtractLineIndexRows:
         config = _LineIndexConfig(file_id="f1", path="test.py")
         rows = list(extract_line_index_rows(content, config=config))
 
-        assert len(rows) == 3
+        assert len(rows) == THREE_LINES
 
         assert rows[0]["line_no"] == 0
         assert rows[0]["line_start_byte"] == 0
-        assert rows[0]["line_end_byte"] == 9
+        assert rows[0]["line_end_byte"] == FIRST_LF_END
         assert rows[0]["line_text"] == "line one"
         assert rows[0]["newline_kind"] == "lf"
 
         assert rows[1]["line_no"] == 1
-        assert rows[1]["line_start_byte"] == 9
-        assert rows[1]["line_end_byte"] == 18
+        assert rows[1]["line_start_byte"] == FIRST_LF_END
+        assert rows[1]["line_end_byte"] == SECOND_LF_END
         assert rows[1]["line_text"] == "line two"
         assert rows[1]["newline_kind"] == "lf"
 
-        assert rows[2]["line_no"] == 2
-        assert rows[2]["line_start_byte"] == 18
-        assert rows[2]["line_end_byte"] == 28
+        assert rows[2]["line_no"] == THIRD_LINE_NO
+        assert rows[2]["line_start_byte"] == SECOND_LF_END
+        assert rows[2]["line_end_byte"] == THIRD_LF_END
         assert rows[2]["line_text"] == "line three"
         assert rows[2]["newline_kind"] == "none"
 
@@ -98,7 +111,7 @@ class TestExtractLineIndexRows:
         config = _LineIndexConfig(file_id="f1", path="test.py")
         rows = list(extract_line_index_rows(content, config=config))
 
-        assert len(rows) == 2
+        assert len(rows) == TWO_LINES
 
         assert rows[0]["line_no"] == 0
         assert rows[0]["line_start_byte"] == 0
@@ -108,7 +121,7 @@ class TestExtractLineIndexRows:
 
         assert rows[1]["line_no"] == 1
         assert rows[1]["line_start_byte"] == 1
-        assert rows[1]["line_end_byte"] == 2
+        assert rows[1]["line_end_byte"] == SECOND_EMPTY_LINE_END
         assert rows[1]["line_text"] == ""
         assert rows[1]["newline_kind"] == "lf"
 
@@ -118,7 +131,7 @@ class TestExtractLineIndexRows:
         config = _LineIndexConfig(file_id="f1", path="test.py", include_text=False)
         rows = list(extract_line_index_rows(content, config=config))
 
-        assert len(rows) == 1
+        assert len(rows) == ONE_LINE
         assert rows[0]["line_text"] is None
 
     def test_max_line_text_bytes_truncation(self) -> None:
@@ -127,10 +140,10 @@ class TestExtractLineIndexRows:
         config = _LineIndexConfig(file_id="f1", path="test.py", max_line_text_bytes=5)
         rows = list(extract_line_index_rows(content, config=config))
 
-        assert len(rows) == 1
+        assert len(rows) == ONE_LINE
         assert rows[0]["line_text"] == "hello"
         # Line end byte still includes full line
-        assert rows[0]["line_end_byte"] == 37
+        assert rows[0]["line_end_byte"] == TRUNCATED_LINE_BYTES
 
     def test_utf8_content(self) -> None:
         """Test extraction of UTF-8 content."""
@@ -138,10 +151,10 @@ class TestExtractLineIndexRows:
         config = _LineIndexConfig(file_id="f1", path="test.py")
         rows = list(extract_line_index_rows(content, config=config))
 
-        assert len(rows) == 1
+        assert len(rows) == ONE_LINE
         assert rows[0]["line_text"] == "hello \u4e16\u754c"
         # UTF-8: hello=5, space=1, 2 Chinese chars=6 bytes, newline=1 = 13 total
-        assert rows[0]["line_end_byte"] == 13
+        assert rows[0]["line_end_byte"] == HELLO_WORLD_CRLF_BYTES
 
     def test_mixed_newlines(self) -> None:
         """Test extraction handles mixed newline types."""
@@ -149,7 +162,7 @@ class TestExtractLineIndexRows:
         config = _LineIndexConfig(file_id="f1", path="test.py")
         rows = list(extract_line_index_rows(content, config=config))
 
-        assert len(rows) == 3
+        assert len(rows) == THREE_LINES
 
         assert rows[0]["newline_kind"] == "crlf"
         assert rows[1]["newline_kind"] == "lf"

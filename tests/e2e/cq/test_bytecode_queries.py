@@ -16,6 +16,10 @@ from tools.cq.introspection import (
     parse_exception_table,
 )
 
+MIN_CFG_BLOCKS_FOR_BRANCH = 2
+MIN_CFG_BLOCKS_FOR_LOOP = 2
+MULTI_RETURN_FIRST_BRANCH_THRESHOLD = 10
+
 
 class TestInstructionFactExtraction:
     """Tests for instruction fact extraction."""
@@ -171,7 +175,7 @@ class TestCFGBuilder:
             return "non-positive"
 
         cfg = build_cfg(with_branch.__code__)
-        assert cfg.block_count >= 2  # At least 2 paths
+        assert cfg.block_count >= MIN_CFG_BLOCKS_FOR_BRANCH  # At least 2 paths
         assert len(cfg.exit_blocks) >= 1
 
     def test_build_cfg_with_loop(self) -> None:
@@ -184,7 +188,7 @@ class TestCFGBuilder:
             return total
 
         cfg = build_cfg(with_loop.__code__)
-        assert cfg.block_count >= 2  # Loop creates multiple blocks
+        assert cfg.block_count >= MIN_CFG_BLOCKS_FOR_LOOP  # Loop creates multiple blocks
 
     def test_cfg_mermaid_output(self) -> None:
         """Generate Mermaid output for CFG."""
@@ -203,7 +207,7 @@ class TestCFGBuilder:
         """CFG identifies exit blocks correctly."""
 
         def multi_return(x: int) -> int:
-            if x > 10:
+            if x > MULTI_RETURN_FIRST_BRANCH_THRESHOLD:
                 return 1
             if x > 0:
                 return 2

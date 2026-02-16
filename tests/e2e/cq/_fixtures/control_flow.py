@@ -5,6 +5,8 @@ Used for testing CFG reconstruction, exception handling, and bytecode analysis.
 
 from __future__ import annotations
 
+WHILE_FOUND_SENTINEL = 5
+
 import asyncio
 import logging
 import threading
@@ -167,7 +169,7 @@ def while_with_else(n: int) -> str:
     """
     i = 0
     while i < n:
-        if i == 5:
+        if i == WHILE_FOUND_SENTINEL:
             return "found 5"
         i += 1
     return "exhausted"

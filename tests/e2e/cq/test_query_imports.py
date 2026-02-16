@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 
     from tools.cq.core.schema import CqResult, Finding
 
+MIN_IMPORT_FINDINGS_ACROSS_CODEBASE = 10
+MIN_FILES_WITH_IMPORTS = 5
+
 
 @pytest.mark.e2e
 @pytest.mark.requires_ast_grep
@@ -170,11 +173,13 @@ def test_imports_across_codebase(
         all_findings.extend(section.findings)
 
     # Should find many imports across the codebase
-    assert len(all_findings) > 10, "Expected many imports across codebase"
+    assert len(all_findings) > MIN_IMPORT_FINDINGS_ACROSS_CODEBASE, (
+        "Expected many imports across codebase"
+    )
 
     # Verify diverse files are represented
     files = {f.anchor.file for f in all_findings if f.anchor is not None}
-    assert len(files) > 5, "Expected imports from multiple files"
+    assert len(files) > MIN_FILES_WITH_IMPORTS, "Expected imports from multiple files"
 
     # Run should complete successfully
     assert result.run.elapsed_ms >= 0

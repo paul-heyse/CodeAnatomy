@@ -17,9 +17,12 @@ except ImportError:  # pragma: no cover - environment dependent
     Language = None
     Query = None
 
+EXPECTED_PATTERN_PLANS = 2
+
 
 @pytest.mark.skipif(tree_sitter_python is None, reason="tree-sitter-python is unavailable")
 def test_build_pattern_plan_orders_by_rooting_and_locality() -> None:
+    """Test build pattern plan orders by rooting and locality."""
     assert Language is not None
     assert Query is not None
     assert tree_sitter_python is not None
@@ -30,7 +33,7 @@ def test_build_pattern_plan_orders_by_rooting_and_locality() -> None:
     )
 
     plans = build_pattern_plan(query)
-    assert len(plans) == 2
+    assert len(plans) == EXPECTED_PATTERN_PLANS
     assert plans[0].score >= plans[1].score
     assert plans[0].pattern_idx == 1
     assert plans[1].pattern_idx == 0
@@ -39,6 +42,7 @@ def test_build_pattern_plan_orders_by_rooting_and_locality() -> None:
 
 @pytest.mark.skipif(tree_sitter_python is None, reason="tree-sitter-python is unavailable")
 def test_build_pack_plan_and_pack_sort() -> None:
+    """Test build pack plan and pack sort."""
     assert Language is not None
     assert Query is not None
     assert tree_sitter_python is not None
@@ -70,6 +74,7 @@ def test_build_pack_plan_and_pack_sort() -> None:
 
 
 def test_build_pattern_plan_handles_invalid_capture_quantifier() -> None:
+    """Handle unsupported capture quantifier queries without failing hard."""
     class _FakeQuery:
         pattern_count = 1
         capture_count = 2

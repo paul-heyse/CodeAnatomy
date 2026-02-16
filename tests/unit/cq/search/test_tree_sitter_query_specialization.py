@@ -31,6 +31,7 @@ class _FakeQuery:
 
 
 def test_terminal_surface_disables_artifact_only_pattern_and_payload_debug_captures() -> None:
+    """Test terminal surface disables artifact only pattern and payload debug captures."""
     query = _FakeQuery()
     specialize_query(query, request_surface="terminal")
 
@@ -41,6 +42,7 @@ def test_terminal_surface_disables_artifact_only_pattern_and_payload_debug_captu
 
 
 def test_artifact_surface_keeps_patterns_and_captures_enabled() -> None:
+    """Test artifact surface keeps patterns and captures enabled."""
     query = _FakeQuery()
     specialize_query(query, request_surface="artifact")
     assert query.disabled_patterns == []

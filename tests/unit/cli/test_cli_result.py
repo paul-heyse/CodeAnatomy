@@ -11,6 +11,8 @@ import pytest
 from cli.exit_codes import ExitCode
 from cli.result import CliResult
 
+CUSTOM_ERROR_EXIT_CODE = 42
+
 
 class TestCliResultSuccess:
     """Test CliResult.success factory."""
@@ -50,8 +52,8 @@ class TestCliResultError:
 
     def test_with_int_exit_code(self) -> None:
         """error() should accept integer exit code."""
-        result = CliResult.error(42)
-        assert result.exit_code == 42
+        result = CliResult.error(CUSTOM_ERROR_EXIT_CODE)
+        assert result.exit_code == CUSTOM_ERROR_EXIT_CODE
 
     def test_with_summary(self) -> None:
         """error() should accept a summary."""

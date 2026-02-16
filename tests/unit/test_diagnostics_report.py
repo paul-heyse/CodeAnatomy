@@ -6,6 +6,15 @@ from pathlib import Path
 
 from obs.diagnostics_report import build_diagnostics_report, write_run_diagnostics_report
 
+EXECUTION_METRICS_ROWS = 2
+MEMORY_RESERVED_BYTES = 4096
+METADATA_CACHE_ENTRIES = 12
+METADATA_CACHE_HITS = 21
+LIST_FILES_CACHE_ENTRIES = 5
+STATISTICS_CACHE_ENTRIES = 9
+RUNTIME_POLICY_CONSUMED_SETTINGS = 2
+RUNTIME_CAPABILITIES_TOTAL = 2
+
 
 def test_runtime_capability_summary_from_runtime_artifact() -> None:
     """Summarize runtime capability payload emitted by runtime profiles."""
@@ -66,12 +75,12 @@ def test_runtime_capability_summary_includes_execution_metrics() -> None:
         ],
     }
     report = build_diagnostics_report(snapshot)
-    assert report.runtime_capabilities["execution_metrics_rows"] == 2
-    assert report.runtime_capabilities["execution_memory_reserved_bytes"] == 4096
-    assert report.runtime_capabilities["execution_metadata_cache_entries"] == 12
-    assert report.runtime_capabilities["execution_metadata_cache_hits"] == 21
-    assert report.runtime_capabilities["execution_list_files_cache_entries"] == 5
-    assert report.runtime_capabilities["execution_statistics_cache_entries"] == 9
+    assert report.runtime_capabilities["execution_metrics_rows"] == EXECUTION_METRICS_ROWS
+    assert report.runtime_capabilities["execution_memory_reserved_bytes"] == MEMORY_RESERVED_BYTES
+    assert report.runtime_capabilities["execution_metadata_cache_entries"] == METADATA_CACHE_ENTRIES
+    assert report.runtime_capabilities["execution_metadata_cache_hits"] == METADATA_CACHE_HITS
+    assert report.runtime_capabilities["execution_list_files_cache_entries"] == LIST_FILES_CACHE_ENTRIES
+    assert report.runtime_capabilities["execution_statistics_cache_entries"] == STATISTICS_CACHE_ENTRIES
 
 
 def test_runtime_capability_summary_includes_runtime_policy_bridge_fields() -> None:
@@ -115,7 +124,10 @@ def test_runtime_capability_summary_includes_runtime_policy_bridge_fields() -> N
     assert report.runtime_capabilities["delta_session_defaults_available"] is True
     assert report.runtime_capabilities["delta_session_defaults_installed"] is True
     assert report.runtime_capabilities["runtime_policy_bridge_enabled"] is True
-    assert report.runtime_capabilities["runtime_policy_bridge_consumed_settings"] == 2
+    assert (
+        report.runtime_capabilities["runtime_policy_bridge_consumed_settings"]
+        == RUNTIME_POLICY_CONSUMED_SETTINGS
+    )
     assert report.runtime_capabilities["runtime_policy_bridge_unsupported_settings"] == 1
     assert report.runtime_capabilities["runtime_policy_bridge_reason"] is None
 
@@ -248,7 +260,7 @@ def test_provider_mode_summary_includes_strict_violation_counts() -> None:
         ],
     }
     report = build_diagnostics_report(snapshot)
-    assert report.provider_modes["total"] == 2
+    assert report.provider_modes["total"] == RUNTIME_CAPABILITIES_TOTAL
     assert report.provider_modes["warnings"] == 1
     assert report.provider_modes["strict_native_provider_enabled"] is True
     assert report.provider_modes["strict_native_provider_violations"] == 1

@@ -6,6 +6,7 @@ from tools.cq.macros.shared import macro_score_payload, macro_scoring_details
 
 
 def test_macro_score_payload_populates_buckets() -> None:
+    """Test macro score payload populates buckets."""
     payload = macro_score_payload(files=3, findings=5)
     assert payload.impact >= 0.0
     assert payload.confidence >= 0.0
@@ -14,6 +15,7 @@ def test_macro_score_payload_populates_buckets() -> None:
 
 
 def test_macro_scoring_details_supports_breakage_signals() -> None:
+    """Test macro scoring details supports breakage signals."""
     details = macro_scoring_details(
         sites=10,
         files=4,

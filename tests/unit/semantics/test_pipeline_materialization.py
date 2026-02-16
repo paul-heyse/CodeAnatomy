@@ -75,6 +75,7 @@ def _dataset_location(view_name: str) -> DatasetLocation:
 def test_write_semantic_output_applies_write_policy_and_schema_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test write semantic output applies write policy and schema policy."""
     view_name = "py_bc_blocks_norm"
     location = _dataset_location(view_name)
     spec = dataset_spec(view_name)
@@ -145,6 +146,7 @@ def test_write_semantic_output_applies_write_policy_and_schema_policy(
 def test_write_semantic_output_disables_schema_evolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test write semantic output disables schema evolution."""
     view_name = "py_bc_blocks_norm"
     location = _dataset_location(view_name)
 

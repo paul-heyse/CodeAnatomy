@@ -43,6 +43,13 @@ from semantics.pipeline import (
 )
 from semantics.registry import SEMANTIC_TABLE_SPECS
 
+HIGH_CONFIDENCE_THRESHOLD = 0.8
+LOW_CONFIDENCE_MAX = 0.49
+FK_CONFIDENCE = 0.85
+CUSTOM_HIGH_FANOUT_THRESHOLD = 5
+CUSTOM_ROW_THRESHOLD_SMALL = 50_000
+CUSTOM_ROW_THRESHOLD_LARGE = 5_000_000
+
 
 @pytest.mark.integration
 class TestCachePolicyHierarchy:
@@ -216,12 +223,12 @@ class TestInferenceConfidenceFlow:
         props = InferredViewProperties(inference_confidence=conf)
 
         assert props.inference_confidence is not None
-        assert props.inference_confidence.confidence_score >= 0.8
+        assert props.inference_confidence.confidence_score >= HIGH_CONFIDENCE_THRESHOLD
 
     def test_high_confidence_clamps_score(self) -> None:
         """Verify high_confidence clamps score to [0.8, 1.0]."""
         conf = high_confidence("test", "value", ("lineage",), score=0.5)
-        assert conf.confidence_score >= 0.8
+        assert conf.confidence_score >= HIGH_CONFIDENCE_THRESHOLD
 
         conf_high = high_confidence("test", "value", ("lineage",), score=1.5)
         assert conf_high.confidence_score <= 1.0
@@ -229,7 +236,7 @@ class TestInferenceConfidenceFlow:
     def test_low_confidence_clamps_score(self) -> None:
         """Verify low_confidence clamps score to [0.0, 0.49]."""
         conf = low_confidence("test", "value", "not enough evidence", ("stats",), score=0.8)
-        assert conf.confidence_score <= 0.49
+        assert conf.confidence_score <= LOW_CONFIDENCE_MAX
 
         conf_low = low_confidence("test", "value", "no evidence", (), score=-1.0)
         assert conf_low.confidence_score >= 0.0
@@ -255,12 +262,12 @@ class TestInferenceConfidenceFlow:
     def test_inference_confidence_round_trip(self) -> None:
         """Verify InferenceConfidence fields are accessible after construction."""
         conf = InferenceConfidence(
-            confidence_score=0.85,
+            confidence_score=FK_CONFIDENCE,
             evidence_sources=("lineage", "stats"),
             decision_type="join_strategy",
             decision_value="span_overlap",
         )
-        assert conf.confidence_score == 0.85
+        assert conf.confidence_score == FK_CONFIDENCE
         assert conf.evidence_sources == ("lineage", "stats")
         assert conf.decision_type == "join_strategy"
         assert conf.decision_value == "span_overlap"
@@ -304,9 +311,9 @@ class TestCalibrationIntegration:
             observation_count=10,
         )
         thresholds = CalibrationThresholds(
-            high_fanout_threshold=5,
-            small_table_row_threshold=50_000,
-            large_table_row_threshold=5_000_000,
+            high_fanout_threshold=CUSTOM_HIGH_FANOUT_THRESHOLD,
+            small_table_row_threshold=CUSTOM_ROW_THRESHOLD_SMALL,
+            large_table_row_threshold=CUSTOM_ROW_THRESHOLD_LARGE,
         )
         result = calibrate_from_execution_metrics(
             metrics=metrics,
@@ -316,9 +323,9 @@ class TestCalibrationIntegration:
         )
 
         assert result.mode == "off"
-        assert result.adjusted_thresholds.high_fanout_threshold == 5
-        assert result.adjusted_thresholds.small_table_row_threshold == 50_000
-        assert result.adjusted_thresholds.large_table_row_threshold == 5_000_000
+        assert result.adjusted_thresholds.high_fanout_threshold == CUSTOM_HIGH_FANOUT_THRESHOLD
+        assert result.adjusted_thresholds.small_table_row_threshold == CUSTOM_ROW_THRESHOLD_SMALL
+        assert result.adjusted_thresholds.large_table_row_threshold == CUSTOM_ROW_THRESHOLD_LARGE
 
     def test_observe_mode_computes_without_committing(self) -> None:
         """Verify 'observe' mode computes adjustments without side effects."""
@@ -378,7 +385,7 @@ class TestCalibrationIntegration:
             mode="apply",
         )
 
-        assert result.calibration_confidence.confidence_score >= 0.8
+        assert result.calibration_confidence.confidence_score >= HIGH_CONFIDENCE_THRESHOLD
 
 
 __all__ = [

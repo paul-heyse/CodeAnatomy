@@ -16,6 +16,9 @@ from tools.cq.query.ir import PatternSpec, Query
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import AstGrepRule, compile_query
 
+PATTERN_LIMIT = 10
+NTH_CHILD_POSITION = 2
+
 
 class TestPatternSpec:
     """Tests for PatternSpec dataclass."""
@@ -76,9 +79,9 @@ class TestPatternQueryParsing:
 
     def test_pattern_with_limit(self) -> None:
         """Parse pattern query with limit."""
-        query = parse_query("pattern='$X = getattr($Y, $Z)' limit=10")
+        query = parse_query(f"pattern='$X = getattr($Y, $Z)' limit={PATTERN_LIMIT}")
         assert query.pattern_spec is not None
-        assert query.limit == 10
+        assert query.limit == PATTERN_LIMIT
 
     def test_pattern_with_double_quotes(self) -> None:
         """Parse pattern query with double-quoted value."""
@@ -144,13 +147,13 @@ class TestPatternQueryPlanning:
         """Pattern-plan compilation should preserve composite + nthChild."""
         query = parse_query(
             "pattern='print($A)' any='print($A),print($B)' "
-            "nthChild=2 nthChild.reverse=true nthChild.ofRule='kind=argument'"
+            f"nthChild={NTH_CHILD_POSITION} nthChild.reverse=true nthChild.ofRule='kind=argument'"
         )
         plan = compile_query(query)
         assert plan.sg_rules[0].composite is not None
         assert plan.sg_rules[0].composite.operator == "any"
         assert plan.sg_rules[0].nth_child is not None
-        assert plan.sg_rules[0].nth_child.position == 2
+        assert plan.sg_rules[0].nth_child.position == NTH_CHILD_POSITION
         assert plan.sg_rules[0].nth_child.reverse is True
         assert plan.sg_rules[0].nth_child.of_rule == "kind=argument"
 

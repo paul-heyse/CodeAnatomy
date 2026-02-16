@@ -10,6 +10,8 @@ from obs.diagnostics import (
 )
 from obs.metrics import quality_issue_rows
 
+EXPECTED_ROW_COUNT = 10
+
 
 def test_semantic_quality_artifact_payload() -> None:
     """Semantic quality artifacts should capture payload fields."""
@@ -26,7 +28,7 @@ def test_semantic_quality_artifact_payload() -> None:
     assert "semantic_quality_artifact_v1" in artifacts
     payload = artifacts["semantic_quality_artifact_v1"][0]
     assert payload["name"] == "relationship_quality_metrics_v1"
-    assert payload["row_count"] == 10
+    assert payload["row_count"] == EXPECTED_ROW_COUNT
     assert payload["schema_hash"] == "abc123"
     assert payload["artifact_uri"] == "/tmp/metrics"
     assert payload["run_id"] == "run_1"

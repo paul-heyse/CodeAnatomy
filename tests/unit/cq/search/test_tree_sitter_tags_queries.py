@@ -9,6 +9,7 @@ _REF_TOKEN = "@role.reference"
 
 
 def test_rust_tags_query_contains_definition_and_reference_roles() -> None:
+    """Test rust tags query contains definition and reference roles."""
     source = Path("tools/cq/search/queries/rust/80_tags.scm").read_text(encoding="utf-8")
     assert _DEF_TOKEN in source
     assert _REF_TOKEN in source

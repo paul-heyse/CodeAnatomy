@@ -22,6 +22,10 @@ except ImportError:  # pragma: no cover - optional dependency
 
 _STAMP_TTL_SECONDS = 300
 _STAMP_TAG = "ns:tree_sitter|kind:query_pack_load"
+_DISTRIBUTION_PACKAGES: dict[str, str] = {
+    "python": "tree-sitter-python",
+    "rust": "tree-sitter-rust",
+}
 
 _LAST_DRIFT_REPORTS: dict[str, GrammarDriftReportV1] = {}
 
@@ -77,9 +81,12 @@ def _local_query_pack_hash(language: str) -> str:
     return digest[:24]
 
 
-def _load_rust_distribution_queries() -> list[QueryPackSourceV1]:
+def _load_distribution_queries(language: str) -> list[QueryPackSourceV1]:
+    package_name = _DISTRIBUTION_PACKAGES.get(language)
+    if package_name is None:
+        return []
     try:
-        dist = distribution("tree-sitter-rust")
+        dist = distribution(package_name)
     except PackageNotFoundError:
         return []
 
@@ -95,7 +102,7 @@ def _load_rust_distribution_queries() -> list[QueryPackSourceV1]:
             continue
         out.append(
             QueryPackSourceV1(
-                language="rust",
+                language=language,
                 pack_name=Path(item_text).name,
                 source=source,
                 source_path=str(source_path),
@@ -109,18 +116,32 @@ def _load_sources_uncached(
     language: str,
     include_distribution: bool,
 ) -> tuple[QueryPackSourceV1, ...]:
-    local_sources = _load_local_query_sources(language)
-    if language != "rust" or not include_distribution:
+    normalized = language.strip().lower()
+    local_sources = _load_local_query_sources(normalized)
+    if not include_distribution:
         return tuple(local_sources)
 
     seen = {source.pack_name for source in local_sources}
     combined = list(local_sources)
-    for source in _load_rust_distribution_queries():
+    for source in _load_distribution_queries(normalized):
         if source.pack_name in seen:
             continue
         seen.add(source.pack_name)
         combined.append(source)
     return tuple(combined)
+
+
+def load_distribution_query_source(language: str, pack_name: str) -> str | None:
+    """Load one distribution query-pack source for a language by pack name.
+
+    Returns:
+        str | None: Function return value.
+    """
+    normalized = language.strip().lower()
+    for row in _load_distribution_queries(normalized):
+        if row.pack_name == pack_name:
+            return row.source
+    return None
 
 
 def _fanout_cache() -> FanoutCache | None:
@@ -164,15 +185,16 @@ def load_query_pack_sources(
     tuple[QueryPackSourceV1, ...]
         Ordered local-first query-pack sources for the selected language.
     """
-    loader = _stamped_loader(language)
-    local_hash = _local_query_pack_hash(language)
+    normalized = language.strip().lower()
+    loader = _stamped_loader(normalized)
+    local_hash = _local_query_pack_hash(normalized)
     loaded_rows: tuple[QueryPackSourceV1, ...]
     if callable(loader):
         try:
             loaded = loader(include_distribution=include_distribution, local_hash=local_hash)
         except (RuntimeError, TypeError, ValueError):
             loaded = _load_sources_uncached(
-                language=language,
+                language=normalized,
                 include_distribution=include_distribution,
             )
         if isinstance(loaded, tuple):
@@ -181,20 +203,20 @@ def load_query_pack_sources(
             loaded_rows = tuple(row for row in loaded if isinstance(row, QueryPackSourceV1))
         else:
             loaded_rows = _load_sources_uncached(
-                language=language,
+                language=normalized,
                 include_distribution=include_distribution,
             )
     else:
         loaded_rows = _load_sources_uncached(
-            language=language,
+            language=normalized,
             include_distribution=include_distribution,
         )
-    report = build_grammar_drift_report(language=language, query_sources=loaded_rows)
-    _LAST_DRIFT_REPORTS[language] = report
+    report = build_grammar_drift_report(language=normalized, query_sources=loaded_rows)
+    _LAST_DRIFT_REPORTS[normalized] = report
     if not report.compatible and include_distribution:
-        fallback_rows = _load_sources_uncached(language=language, include_distribution=False)
-        _LAST_DRIFT_REPORTS[language] = build_grammar_drift_report(
-            language=language,
+        fallback_rows = _load_sources_uncached(language=normalized, include_distribution=False)
+        _LAST_DRIFT_REPORTS[normalized] = build_grammar_drift_report(
+            language=normalized,
             query_sources=fallback_rows,
         )
         return fallback_rows
@@ -206,7 +228,11 @@ def load_query_pack_sources_for_profile(
     *,
     profile: QueryPackProfileV1,
 ) -> tuple[QueryPackSourceV1, ...]:
-    """Load query-pack sources according to a profile contract."""
+    """Load query-pack sources according to a profile contract.
+
+    Returns:
+        tuple[QueryPackSourceV1, ...]: Function return value.
+    """
     rows = load_query_pack_sources(
         language,
         include_distribution=profile.include_distribution,
@@ -222,13 +248,14 @@ def load_query_pack_sources_for_profile(
 
 def get_last_grammar_drift_report(language: str) -> GrammarDriftReportV1 | None:
     """Return latest grammar drift report for a language load lane."""
-    return _LAST_DRIFT_REPORTS.get(language)
+    return _LAST_DRIFT_REPORTS.get(language.strip().lower())
 
 
 __all__ = [
     "QueryPackProfileV1",
     "QueryPackSourceV1",
     "get_last_grammar_drift_report",
+    "load_distribution_query_source",
     "load_query_pack_sources",
     "load_query_pack_sources_for_profile",
 ]

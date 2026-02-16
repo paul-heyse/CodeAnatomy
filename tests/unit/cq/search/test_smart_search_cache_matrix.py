@@ -1,3 +1,5 @@
+"""Tests for test_smart_search_cache_matrix."""
+
 from __future__ import annotations
 
 import os
@@ -43,7 +45,9 @@ def _normalize_result_payload(result: object) -> dict[str, object]:
     return payload
 
 
+
 def test_smart_search_is_deterministic_across_reruns(tmp_path: Path) -> None:
+    """Re-run smart search with stable inputs should yield deterministic payloads."""
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     (root / "module.py").write_text(
@@ -69,7 +73,9 @@ def test_smart_search_is_deterministic_across_reruns(tmp_path: Path) -> None:
     assert _normalize_result_payload(result_a) == _normalize_result_payload(result_b)
 
 
+
 def test_smart_search_is_deterministic_across_backend_restarts(tmp_path: Path) -> None:
+    """Result stability should survive backend restart for identical query inputs."""
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     (root / "module.py").write_text(
@@ -99,6 +105,7 @@ def test_smart_search_is_deterministic_across_backend_restarts(tmp_path: Path) -
 def test_search_enrichment_reuses_unchanged_anchors_and_recomputes_changed_anchors(
     tmp_path: Path,
 ) -> None:
+    """Recompute stale enrichments after source changes but keep unchanged anchors cached."""
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     first = root / "first.py"

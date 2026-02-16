@@ -19,6 +19,7 @@ class _Range:
 
 
 def test_windows_from_changed_ranges_merges_overlaps_and_applies_padding() -> None:
+    """Test windows from changed ranges merges overlaps and applies padding."""
     windows = windows_from_changed_ranges(
         (_Range(10, 20), _Range(18, 30)),
         source_byte_len=200,
@@ -29,11 +30,13 @@ def test_windows_from_changed_ranges_merges_overlaps_and_applies_padding() -> No
 
 
 def test_ensure_query_windows_uses_fallback_when_empty() -> None:
+    """Test ensure query windows uses fallback when empty."""
     fallback = QueryWindowV1(start_byte=2, end_byte=4)
     assert ensure_query_windows((), fallback=fallback) == (fallback,)
 
 
 def test_contains_window_detects_contained_range() -> None:
+    """Test contains window detects contained range."""
     windows = (QueryWindowV1(start_byte=100, end_byte=200),)
     assert contains_window(windows, value=120, width=8) is True
     assert contains_window(windows, value=90, width=5) is False

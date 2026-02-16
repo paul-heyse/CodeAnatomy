@@ -14,6 +14,13 @@ import pytest
 from tools.cq.query.ir import Expander, Query, Scope
 from tools.cq.query.parser import QueryParseError, parse_query
 
+DEPTH_THREE = 3
+TWO_EXPANDERS = 2
+LIMIT_TEN = 10
+LIMIT_TWENTY = 20
+SECOND_EXPANDER_INDEX = 1
+SECOND_DEPTH = 2
+
 
 class TestParseQuery:
     """Tests for parse_query function."""
@@ -57,15 +64,15 @@ class TestParseQuery:
     def test_entity_with_expander_depth(self) -> None:
         """Parse entity query with expander and custom depth."""
         query = parse_query("entity=function expand=callers(depth=3)")
-        assert query.expand[0].depth == 3
+        assert query.expand[0].depth == DEPTH_THREE
 
     def test_entity_with_multiple_expanders(self) -> None:
         """Parse entity query with multiple expanders."""
         query = parse_query("entity=function expand=callers(depth=2),callees(depth=1)")
-        assert len(query.expand) == 2
+        assert len(query.expand) == TWO_EXPANDERS
         assert query.expand[0].kind == "callers"
-        assert query.expand[0].depth == 2
-        assert query.expand[1].kind == "callees"
+        assert query.expand[0].depth == SECOND_DEPTH
+        assert query.expand[SECOND_EXPANDER_INDEX].kind == "callees"
         assert query.expand[1].depth == 1
 
     def test_entity_with_fields(self) -> None:
@@ -76,7 +83,7 @@ class TestParseQuery:
     def test_entity_with_limit(self) -> None:
         """Parse entity query with result limit."""
         query = parse_query("entity=function limit=10")
-        assert query.limit == 10
+        assert query.limit == LIMIT_TEN
 
     def test_entity_with_explain(self) -> None:
         """Parse entity query with explain flag."""
@@ -92,11 +99,11 @@ class TestParseQuery:
         assert query.entity == "function"
         assert query.name == "build"
         assert query.expand[0].kind == "callers"
-        assert query.expand[0].depth == 2
+        assert query.expand[0].depth == SECOND_DEPTH
         assert query.scope.in_dir == "src/"
         assert query.scope.exclude == ("tests",)
         assert query.fields == ("def", "imports")
-        assert query.limit == 20
+        assert query.limit == LIMIT_TWENTY
 
     def test_class_entity(self) -> None:
         """Parse class entity query."""
@@ -115,7 +122,7 @@ class TestParseQuery:
             "pattern='print($A)' nthChild=2 nthChild.reverse=true nthChild.ofRule='kind=argument'"
         )
         assert query.nth_child is not None
-        assert query.nth_child.position == 2
+        assert query.nth_child.position == TWO_EXPANDERS
         assert query.nth_child.reverse is True
         assert query.nth_child.of_rule == "kind=argument"
 

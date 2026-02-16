@@ -9,6 +9,8 @@ import pytest
 
 from datafusion_engine.session import runtime as runtime_module
 
+DISTINCT_RESOLVER_COUNT = 2
+
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.program_manifest import ManifestDatasetResolver
@@ -66,7 +68,7 @@ def test_record_compile_resolver_invariants_strict_raises_after_recording() -> N
     assert payload["label"] == "unit-test"
     assert payload["compile_count"] == 0
     assert payload["max_compiles"] == 1
-    assert payload["distinct_resolver_count"] == 2
+    assert payload["distinct_resolver_count"] == DISTINCT_RESOLVER_COUNT
     assert payload["strict"] is True
     assert payload["violations"] == ("compile mismatch",)
 

@@ -6,6 +6,11 @@ from tools.cq.core.locations import SourceSpan
 from tools.cq.search.objects.resolve import build_object_resolved_view
 from tools.cq.search.pipeline.smart_search import EnrichedMatch
 
+OCCURRENCE_COUNT_TWO = 2
+BLOCK_START_LINE = 8
+BLOCK_END_LINE = 12
+DEFAULT_CONTEXT_LINE = 40
+
 
 def _span(file: str, line: int, col: int = 0) -> SourceSpan:
     return SourceSpan(
@@ -18,6 +23,7 @@ def _span(file: str, line: int, col: int = 0) -> SourceSpan:
 
 
 def test_object_resolver_groups_occurrences_by_qualified_name() -> None:
+    """Test object resolver groups occurrences by qualified name."""
     matches = [
         EnrichedMatch(
             span=_span("src/a.py", 10),
@@ -53,17 +59,18 @@ def test_object_resolver_groups_occurrences_by_qualified_name() -> None:
 
     runtime = build_object_resolved_view(matches, query="build_graph")
     assert len(runtime.view.summaries) == 1
-    assert runtime.view.summaries[0].occurrence_count == 2
-    assert len(runtime.view.occurrences) == 2
+    assert runtime.view.summaries[0].occurrence_count == OCCURRENCE_COUNT_TWO
+    assert len(runtime.view.occurrences) == OCCURRENCE_COUNT_TWO
     assert runtime.view.occurrences[0].line_id is not None
-    assert runtime.view.occurrences[0].block_start_line == 8
-    assert runtime.view.occurrences[0].block_end_line == 12
-    assert runtime.view.occurrences[0].context_start_line == 8
-    assert runtime.view.occurrences[0].context_end_line == 12
-    assert len(runtime.view.snippets) == 2
+    assert runtime.view.occurrences[0].block_start_line == BLOCK_START_LINE
+    assert runtime.view.occurrences[0].block_end_line == BLOCK_END_LINE
+    assert runtime.view.occurrences[0].context_start_line == BLOCK_START_LINE
+    assert runtime.view.occurrences[0].context_end_line == BLOCK_END_LINE
+    assert len(runtime.view.snippets) == OCCURRENCE_COUNT_TWO
 
 
 def test_object_resolver_marks_non_callable_applicability() -> None:
+    """Test object resolver marks non callable applicability."""
     match = EnrichedMatch(
         span=_span("src/model.py", 12),
         text="stable_id = value",
@@ -85,6 +92,7 @@ def test_object_resolver_marks_non_callable_applicability() -> None:
 
 
 def test_object_resolver_defaults_block_bounds_to_match_line() -> None:
+    """Test object resolver defaults block bounds to match line."""
     match = EnrichedMatch(
         span=_span("src/model.py", 40),
         text="stable_id",
@@ -95,13 +103,14 @@ def test_object_resolver_defaults_block_bounds_to_match_line() -> None:
     )
     runtime = build_object_resolved_view([match], query="stable_id")
     occurrence = runtime.view.occurrences[0]
-    assert occurrence.block_start_line == 40
-    assert occurrence.block_end_line == 40
-    assert occurrence.context_start_line == 40
-    assert occurrence.context_end_line == 40
+    assert occurrence.block_start_line == DEFAULT_CONTEXT_LINE
+    assert occurrence.block_end_line == DEFAULT_CONTEXT_LINE
+    assert occurrence.context_start_line == DEFAULT_CONTEXT_LINE
+    assert occurrence.context_end_line == DEFAULT_CONTEXT_LINE
 
 
 def test_object_resolver_omits_empty_python_enrichment_payload() -> None:
+    """Test object resolver omits empty python enrichment payload."""
     match = EnrichedMatch(
         span=_span("src/model.py", 12),
         text="stable_id = value",

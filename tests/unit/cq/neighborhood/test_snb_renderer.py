@@ -13,6 +13,7 @@ from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_resu
 
 
 def test_render_snb_result_emits_bundle_enrichment_evidence() -> None:
+    """Test render snb result emits bundle enrichment evidence."""
     bundle = SemanticNeighborhoodBundleV1(
         bundle_id="abc123",
         subject=SemanticNodeRefV1(

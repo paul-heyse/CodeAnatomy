@@ -15,6 +15,10 @@ from tools.cq.introspection import (
     is_closure,
 )
 
+MIN_SCOPES_WITH_FUNCTION = 2
+MIN_FUNCTION_SYMBOLS = 3
+MIN_SCOPES_WITH_FIXTURE_CLOSURES = 3
+
 
 class TestScopeGraphExtraction:
     """Tests for scope graph extraction."""
@@ -36,7 +40,7 @@ def my_func(a, b):
     return a + b
 """
         graph = extract_scope_graph(source, "test.py")
-        assert len(graph.scopes) >= 2  # module + function
+        assert len(graph.scopes) >= MIN_SCOPES_WITH_FUNCTION  # module + function
 
         # Find function scope
         func_scope = graph.scope_by_name.get("my_func")
@@ -231,7 +235,7 @@ def func(a, b):
         graph = extract_scope_graph(source, "test.py")
         func = graph.scope_by_name.get("func")
         assert func is not None
-        assert len(func.symbols) >= 3  # a, b, x
+        assert len(func.symbols) >= MIN_FUNCTION_SYMBOLS  # a, b, x
 
     def test_parameters_are_marked(self) -> None:
         """Function parameters are marked as is_parameter."""
@@ -312,7 +316,7 @@ class TestScopeGraphWithFixtures:
         graph = extract_scope_graph(source, str(closures_path))
 
         # Should have multiple scopes
-        assert len(graph.scopes) >= 3
+        assert len(graph.scopes) >= MIN_SCOPES_WITH_FIXTURE_CLOSURES
 
         # Should detect closures
         closures = [s for s in graph.scopes if is_closure(s)]

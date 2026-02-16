@@ -11,6 +11,7 @@ class _EncodeIntoPayload(CqStruct, frozen=True):
 
 
 def test_encode_msgpack_into_appends_bytes() -> None:
+    """Test encode msgpack into appends bytes."""
     buffer = bytearray(b"prefix")
     written = encode_msgpack_into(_EncodeIntoPayload(text="ok"), buffer=buffer)
     assert written > 0

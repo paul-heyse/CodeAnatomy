@@ -11,6 +11,8 @@ from tools.cq.search.semantic.diagnostics import (
     features_from_macro,
 )
 
+MULTI_FEATURE_DIAGNOSTIC_COUNT = 2
+
 
 class TestCapabilityMatrix:
     """Tests for the capability matrix data structure."""
@@ -100,7 +102,7 @@ class TestBuildCapabilityDiagnostics:
             features=["entity:decorator", "scope_filter"],
             lang_scope="auto",
         )
-        assert len(diags) == 2
+        assert len(diags) == MULTI_FEATURE_DIAGNOSTIC_COUNT
 
 
 class TestFeaturesFromMacro:

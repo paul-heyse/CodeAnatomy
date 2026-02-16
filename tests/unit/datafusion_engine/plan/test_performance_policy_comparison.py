@@ -53,6 +53,7 @@ def _sample_plan_artifact_row() -> PlanArtifactRow:
 
 
 def test_comparison_policy_retention_redacts_p1_p2_payloads() -> None:
+    """Test comparison policy retention redacts p1 p2 payloads."""
     row = _sample_plan_artifact_row()
     redacted = _apply_plan_artifact_retention(
         row,
@@ -72,6 +73,7 @@ def test_comparison_policy_retention_redacts_p1_p2_payloads() -> None:
 
 
 def test_diff_gate_detects_plan_identity_change() -> None:
+    """Test diff gate detects plan identity change."""
     row = _sample_plan_artifact_row()
     violations = _plan_diff_gate_violations(
         (row,),

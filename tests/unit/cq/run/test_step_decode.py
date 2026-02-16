@@ -7,6 +7,8 @@ from tools.cq.core.typed_boundary import BoundaryDecodeError
 from tools.cq.run.spec import CallsStep, QStep, SearchStep
 from tools.cq.run.step_decode import parse_run_step_json, parse_run_steps_json
 
+MULTI_STEP_COUNT = 3
+
 
 def test_parse_run_step_json_q_step() -> None:
     """Test parsing a single q step from JSON."""
@@ -65,7 +67,7 @@ def test_parse_run_steps_json_multiple() -> None:
     ]
     """
     steps = parse_run_steps_json(raw)
-    assert len(steps) == 3
+    assert len(steps) == MULTI_STEP_COUNT
     assert isinstance(steps[0], QStep)
     assert isinstance(steps[1], SearchStep)
     assert isinstance(steps[2], CallsStep)

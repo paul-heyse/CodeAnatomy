@@ -7,6 +7,7 @@ from tools.cq.search.rust import enrichment as runtime_module
 
 
 def test_runtime_available_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test runtime available delegates."""
     monkeypatch.setattr(runtime_module, "is_tree_sitter_rust_available", lambda: True)
     assert runtime_module.runtime_available() is True
 
@@ -14,6 +15,7 @@ def test_runtime_available_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_enrich_context_by_byte_range_normalizes_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test enrich context by byte range normalizes none."""
     monkeypatch.setattr(
         runtime_module,
         "enrich_rust_context_by_byte_range",

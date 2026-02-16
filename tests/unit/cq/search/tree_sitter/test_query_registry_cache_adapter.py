@@ -35,6 +35,7 @@ class _CacheWithGetSet:
 def test_query_registry_cache_returns_none_when_backend_has_no_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Return None when cache backend does not expose a cache interface."""
     @dataclass
     class _Backend:
         cache: object | None = None
@@ -46,6 +47,7 @@ def test_query_registry_cache_returns_none_when_backend_has_no_cache(
 def test_query_registry_cache_returns_cache_when_backend_exposes_get_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test query registry cache returns cache when backend exposes get set."""
     cache = _CacheWithGetSet()
 
     @dataclass

@@ -9,21 +9,6 @@ from typing import Any, Protocol, cast
 
 from tools.cq.core.structs import CqStruct
 
-try:
-    from tree_sitter import Language as _TreeSitterLanguage
-except ImportError:  # pragma: no cover - optional dependency
-    _TreeSitterLanguage = None
-
-try:
-    import tree_sitter_python as _tree_sitter_python
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_python = None
-
-try:
-    import tree_sitter_rust as _tree_sitter_rust
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_rust = None
-
 
 class GrammarNodeTypeV1(CqStruct, frozen=True):
     """One node-type row from `node-types.json`."""
@@ -31,6 +16,8 @@ class GrammarNodeTypeV1(CqStruct, frozen=True):
     type: str
     named: bool
     fields: tuple[str, ...] = ()
+    is_visible: bool | None = None
+    is_supertype: bool | None = None
 
 
 class GrammarSchemaV1(CqStruct, frozen=True):
@@ -38,6 +25,19 @@ class GrammarSchemaV1(CqStruct, frozen=True):
 
     language: str
     node_types: tuple[GrammarNodeTypeV1, ...] = ()
+    supertype_index: tuple[SupertypeIndexV1, ...] = ()
+    grammar_name: str | None = None
+    semantic_version: tuple[int, int, int] | None = None
+    abi_version: int | None = None
+
+
+class SupertypeIndexV1(CqStruct, frozen=True):
+    """Supertype-to-subtype mapping derived from runtime language metadata."""
+
+    supertype_id: int
+    supertype: str
+    subtype_ids: tuple[int, ...] = ()
+    subtypes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +55,7 @@ _GENERATED_MODULES: dict[str, str] = {
     "rust": "tools.cq.search.generated.rust_node_types_v1",
 }
 _NODE_TYPE_ROW_LENGTH = 3
+_SEMANTIC_VERSION_PARTS = 3
 _RUNTIME_FIELD_REGISTRY_NODE = "__field_registry__"
 
 
@@ -84,14 +85,114 @@ def _load_generated_node_types(language: str) -> tuple[GrammarNodeTypeV1, ...]:
 
 
 def _runtime_language(language: str) -> object | None:
-    if _TreeSitterLanguage is None:
+    from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
+
+    return load_tree_sitter_language(language)
+
+
+def _normalize_semantic_version(value: object) -> tuple[int, int, int] | None:
+    if not isinstance(value, tuple) or len(value) != _SEMANTIC_VERSION_PARTS:
         return None
-    normalized = language.strip().lower()
-    if normalized == "python" and _tree_sitter_python is not None:
-        return _TreeSitterLanguage(_tree_sitter_python.language())
-    if normalized == "rust" and _tree_sitter_rust is not None:
-        return _TreeSitterLanguage(_tree_sitter_rust.language())
-    return None
+    if not all(isinstance(part, int) and not isinstance(part, bool) for part in value):
+        return None
+    return (int(value[0]), int(value[1]), int(value[2]))
+
+
+def _extract_provenance(
+    runtime_language_obj: object | None,
+) -> tuple[str | None, tuple[int, int, int] | None, int | None]:
+    if runtime_language_obj is None:
+        return None, None, None
+    grammar_name = getattr(runtime_language_obj, "name", None)
+    semantic_version = _normalize_semantic_version(
+        getattr(runtime_language_obj, "semantic_version", None)
+    )
+    abi_version_raw = getattr(runtime_language_obj, "abi_version", None)
+    abi_version = (
+        int(abi_version_raw)
+        if isinstance(abi_version_raw, int) and not isinstance(abi_version_raw, bool)
+        else None
+    )
+    return (
+        grammar_name if isinstance(grammar_name, str) and grammar_name else None,
+        semantic_version,
+        abi_version,
+    )
+
+
+def _safe_bool_call(obj: object, method: str, *args: object) -> bool | None:
+    fn = getattr(obj, method, None)
+    if not callable(fn):
+        return None
+    try:
+        return bool(fn(*args))
+    except (TypeError, RuntimeError, ValueError, AttributeError):
+        return None
+
+
+def _kind_name(language_obj: object, kind_id: int) -> str | None:
+    node_kind_for_id = getattr(language_obj, "node_kind_for_id", None)
+    if not callable(node_kind_for_id):
+        return None
+    try:
+        value = node_kind_for_id(kind_id)
+    except (TypeError, RuntimeError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def _load_supertype_ids(language_obj: object) -> tuple[int, ...]:
+    supertypes_attr = getattr(language_obj, "supertypes", None)
+    if not isinstance(supertypes_attr, tuple):
+        return ()
+    ids: list[int] = []
+    for value in supertypes_attr:
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        ids.append(int(value))
+    return tuple(sorted(set(ids)))
+
+
+def _load_subtype_ids(language_obj: object, supertype_id: int) -> tuple[int, ...]:
+    subtypes_fn = getattr(language_obj, "subtypes", None)
+    if not callable(subtypes_fn):
+        return ()
+    try:
+        subtypes = subtypes_fn(supertype_id)
+    except (TypeError, RuntimeError, ValueError, AttributeError):
+        return ()
+    if not isinstance(subtypes, tuple):
+        return ()
+    ids: list[int] = []
+    for value in subtypes:
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        ids.append(int(value))
+    return tuple(sorted(set(ids)))
+
+
+def build_supertype_index(language_obj: object) -> tuple[SupertypeIndexV1, ...]:
+    """Build a supertype taxonomy index from runtime language metadata.
+
+    Returns:
+        tuple[SupertypeIndexV1, ...]: Function return value.
+    """
+    rows: list[SupertypeIndexV1] = []
+    for supertype_id in _load_supertype_ids(language_obj):
+        subtype_ids = _load_subtype_ids(language_obj, supertype_id)
+        rows.append(
+            SupertypeIndexV1(
+                supertype_id=supertype_id,
+                supertype=_kind_name(language_obj, supertype_id) or f"id:{supertype_id}",
+                subtype_ids=subtype_ids,
+                subtypes=tuple(
+                    name
+                    for subtype_id in subtype_ids
+                    if (name := _kind_name(language_obj, subtype_id)) is not None
+                ),
+            )
+        )
+    return tuple(rows)
 
 
 def _load_runtime_node_types(language: str) -> tuple[GrammarNodeTypeV1, ...]:
@@ -114,12 +215,14 @@ def _load_runtime_node_types(language: str) -> tuple[GrammarNodeTypeV1, ...]:
                 type=node_kind,
                 named=bool(runtime_language.node_kind_is_named(kind_id)),
                 fields=(),
+                is_visible=_safe_bool_call(runtime_language, "node_kind_is_visible", kind_id),
+                is_supertype=_safe_bool_call(runtime_language, "node_kind_is_supertype", kind_id),
             )
         )
 
     field_names = tuple(
         field_name
-        for field_id in range(field_count)
+        for field_id in range(1, field_count + 1)
         if isinstance((field_name := runtime_language.field_name_for_id(field_id)), str)
         and field_name
     )
@@ -144,7 +247,18 @@ def load_grammar_schema(language: str) -> GrammarSchemaV1 | None:
     """
     runtime = _load_runtime_node_types(language)
     if runtime:
-        return GrammarSchemaV1(language=language, node_types=runtime)
+        runtime_language_obj = _runtime_language(language)
+        grammar_name, semantic_version, abi_version = _extract_provenance(runtime_language_obj)
+        return GrammarSchemaV1(
+            language=language,
+            node_types=runtime,
+            supertype_index=build_supertype_index(runtime_language_obj)
+            if runtime_language_obj is not None
+            else (),
+            grammar_name=grammar_name,
+            semantic_version=semantic_version,
+            abi_version=abi_version,
+        )
     generated = _load_generated_node_types(language)
     if generated:
         return GrammarSchemaV1(language=language, node_types=generated)
@@ -176,33 +290,61 @@ def build_schema_index(schema: GrammarSchemaV1) -> GrammarSchemaIndex:
 class RuntimeLanguage(Protocol):
     """Subset of tree-sitter Language APIs used for runtime id lookups."""
 
-    def id_for_node_kind(self, name: str, named: object) -> int:
+    def id_for_node_kind(self, name: str, named: object) -> int | None:
         """Return node-kind id for a given name."""
         ...
 
-    def field_id_for_name(self, name: str) -> int:
+    def field_id_for_name(self, name: str) -> int | None:
         """Return field id for a given field name."""
         ...
 
 
-def build_runtime_ids(language: RuntimeLanguage) -> dict[str, int]:
-    """Build runtime node-kind ids for frequently queried symbols."""
+def build_runtime_ids(language: object) -> dict[str, int]:
+    """Build runtime node-kind ids for frequently queried symbols.
+
+    Returns:
+        dict[str, int]: Function return value.
+    """
     out: dict[str, int] = {}
     named = True
+    runtime_language = cast("Any", language)
     for kind in ("identifier", "call", "function_definition"):
         try:
-            out[kind] = int(language.id_for_node_kind(kind, named))
+            out[kind] = int(runtime_language.id_for_node_kind(kind, named))
         except (RuntimeError, TypeError, ValueError, AttributeError):
             continue
     return out
 
 
-def build_runtime_field_ids(language: RuntimeLanguage) -> dict[str, int]:
-    """Build runtime field ids for frequently queried field names."""
+def build_runtime_field_ids(
+    language: object,
+    *,
+    field_names: tuple[str, ...] | None = None,
+) -> dict[str, int]:
+    """Build runtime field ids for frequently queried field names.
+
+    Returns:
+        dict[str, int]: Function return value.
+    """
     out: dict[str, int] = {}
-    for field_name in ("name", "body", "parameters"):
+    defaults = ("name", "body", "parameters")
+    candidates: tuple[str, ...] = field_names if field_names is not None else defaults
+    seen: set[str] = set()
+    runtime_language = cast("Any", language)
+    for field_name in defaults:
+        if field_name in seen:
+            continue
+        seen.add(field_name)
         try:
-            out[field_name] = int(language.field_id_for_name(field_name))
+            out[field_name] = int(runtime_language.field_id_for_name(field_name))
+        except (RuntimeError, TypeError, ValueError, AttributeError):
+            continue
+    for field_name in candidates:
+        if field_name in seen:
+            continue
+        seen.add(field_name)
+        try:
+            out[field_name] = int(runtime_language.field_id_for_name(field_name))
         except (RuntimeError, TypeError, ValueError, AttributeError):
             continue
     return out
@@ -243,9 +385,11 @@ __all__ = [
     "GrammarSchemaIndex",
     "GrammarSchemaV1",
     "RuntimeLanguage",
+    "SupertypeIndexV1",
     "build_runtime_field_ids",
     "build_runtime_ids",
     "build_schema_index",
+    "build_supertype_index",
     "load_grammar_schema",
     "render_node_types_module",
     "write_node_types_module",

@@ -1,3 +1,5 @@
+"""Tests for test_msgspec_contract_boundaries."""
+
 from __future__ import annotations
 
 import msgspec
@@ -10,17 +12,22 @@ from tools.cq.search._shared.search_contracts import CrossLanguageDiagnostic, Py
 
 
 def test_struct_bases_are_msgspec_contract_types() -> None:
+    """Ensure cache and output contracts inherit from msgspec.Struct."""
     assert issubclass(CqSettingsStruct, msgspec.Struct)
     assert issubclass(CqOutputStruct, msgspec.Struct)
     assert issubclass(CqCacheStruct, msgspec.Struct)
 
 
+
 def test_cache_contract_rejects_unknown_fields() -> None:
+    """Reject unknown keys when decoding cache record contracts."""
     with pytest.raises(msgspec.ValidationError):
         msgspec.convert({"record": "def", "extra": 1}, type=SgRecordCacheV1)
 
 
+
 def test_cache_policy_rejects_unknown_fields() -> None:
+    """Reject unexpected keys in CqCachePolicyV1 payloads."""
     with pytest.raises(msgspec.ValidationError):
         msgspec.convert(
             {
@@ -35,7 +42,9 @@ def test_cache_policy_rejects_unknown_fields() -> None:
         )
 
 
+
 def test_meta_constraints_reject_invalid_numeric_values() -> None:
+    """Enforce numeric lower bounds and guard ranges in shared contracts."""
     with pytest.raises(msgspec.ValidationError):
         msgspec.convert(
             {"cpu_workers": 0, "io_workers": 8, "semantic_request_workers": 2},
@@ -46,21 +55,27 @@ def test_meta_constraints_reject_invalid_numeric_values() -> None:
         msgspec.convert({"record": "def", "start_line": -1}, type=SgRecordCacheV1)
 
 
+
 def test_unset_fields_are_omitted_by_default() -> None:
+    """Default serialization omits unset optional fields."""
     diag_payload = msgspec.to_builtins(CrossLanguageDiagnostic())
     overview_payload = msgspec.to_builtins(PythonSemanticOverview())
     assert "feature" not in diag_payload
     assert "primary_symbol" not in overview_payload
 
 
+
 def test_explicit_none_is_distinct_from_unset() -> None:
+    """Distinguish explicit ``None`` fields from omitted optional fields."""
     diag_payload = msgspec.to_builtins(CrossLanguageDiagnostic(feature=None))
     overview_payload = msgspec.to_builtins(PythonSemanticOverview(primary_symbol=None))
     assert diag_payload["feature"] is None
     assert overview_payload["primary_symbol"] is None
 
 
+
 def test_query_cache_round_trip_uses_typed_contracts() -> None:
+    """Round-trip a typed cache envelope through msgspec encode/decode."""
     payload = QueryEntityScanCacheV1(
         records=[
             SgRecordCacheV1(
@@ -82,7 +97,9 @@ def test_query_cache_round_trip_uses_typed_contracts() -> None:
     assert decoded.records[0].file == "src/mod.py"
 
 
+
 def test_type_info_exposes_contract_shape_and_constraints() -> None:
+    """Inspect msgspec metadata to confirm contract shape and constraints."""
     cache_info = msgspec.inspect.type_info(QueryEntityScanCacheV1)
     assert isinstance(cache_info, msgspec.inspect.StructType)
     assert cache_info.forbid_unknown_fields is True

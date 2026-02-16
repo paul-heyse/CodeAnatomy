@@ -11,6 +11,7 @@ class _Node:
 
 
 def test_cq_eq_predicate_true_when_capture_text_matches_literal() -> None:
+    """Test cq eq predicate true when capture text matches literal."""
     predicate = make_query_predicate()
     ok = predicate(
         "cq-eq?",
@@ -22,6 +23,7 @@ def test_cq_eq_predicate_true_when_capture_text_matches_literal() -> None:
 
 
 def test_cq_match_predicate_evaluates_regex() -> None:
+    """Test cq match predicate evaluates regex."""
     predicate = make_query_predicate()
     ok = predicate(
         "cq-match?",
@@ -33,6 +35,7 @@ def test_cq_match_predicate_evaluates_regex() -> None:
 
 
 def test_cq_any_of_predicate_checks_membership() -> None:
+    """Test cq any of predicate checks membership."""
     predicate = make_query_predicate()
     ok = predicate(
         "cq-any-of?",
@@ -44,6 +47,7 @@ def test_cq_any_of_predicate_checks_membership() -> None:
 
 
 def test_cq_regex_predicate_uses_capture_name() -> None:
+    """Test cq regex predicate uses capture name."""
     predicate = make_query_predicate()
     ok = predicate(
         "cq-regex?",

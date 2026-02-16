@@ -1,3 +1,5 @@
+"""Tests for test_schema_ids."""
+
 from __future__ import annotations
 
 from tools.cq.core.schema import (
@@ -49,7 +51,9 @@ def _build_result(*, run_id: str) -> CqResult:
     )
 
 
+
 def test_assign_result_finding_ids_sets_stable_and_execution_fields() -> None:
+    """Assign both stable and execution IDs on all result findings."""
     result = _build_result(run_id="run-A")
 
     assign_result_finding_ids(result)
@@ -62,7 +66,9 @@ def test_assign_result_finding_ids_sets_stable_and_execution_fields() -> None:
         assert finding.id_taxonomy == "stable_execution"
 
 
+
 def test_stable_ids_match_across_runs_but_execution_ids_differ() -> None:
+    """Keep stable IDs deterministic while execution IDs remain run-scoped."""
     result_a = _build_result(run_id="run-A")
     result_b = _build_result(run_id="run-B")
 

@@ -42,6 +42,7 @@ def test_resolve_plugin_manifest_uses_candidate_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Test resolve plugin manifest uses candidate path."""
     plugin_path = tmp_path / "libdf_plugin_codeanatomy.so"
     plugin_path.write_bytes(b"plugin")
     module = _ManifestModule(plugin_path=plugin_path)
@@ -66,6 +67,7 @@ def test_resolve_plugin_manifest_uses_candidate_path(
 def test_resolve_plugin_manifest_reports_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test resolve plugin manifest reports error."""
     module = _FailingModule()
 
     monkeypatch.setattr(

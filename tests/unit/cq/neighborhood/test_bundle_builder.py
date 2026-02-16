@@ -29,6 +29,7 @@ def helper(value):
 
 
 def test_build_bundle_tree_sitter_only(tmp_path: Path) -> None:
+    """Test build bundle tree sitter only."""
     _write_python_fixture(tmp_path)
     request = BundleBuildRequest(
         target_name="target",
@@ -49,6 +50,7 @@ def test_build_bundle_tree_sitter_only(tmp_path: Path) -> None:
 
 
 def test_bundle_deterministic_id(tmp_path: Path) -> None:
+    """Test bundle deterministic id."""
     _write_python_fixture(tmp_path)
     request1 = BundleBuildRequest(
         target_name="target",
@@ -69,6 +71,7 @@ def test_bundle_deterministic_id(tmp_path: Path) -> None:
 
 
 def test_plan_feasible_slices_returns_degrades() -> None:
+    """Test plan feasible slices returns degrades."""
     requested = ("references", "implementations")
     capabilities: dict[str, object] = {}
 
@@ -80,6 +83,7 @@ def test_plan_feasible_slices_returns_degrades() -> None:
 
 
 def test_bundle_includes_semantic_marker_diagnostic(tmp_path: Path) -> None:
+    """Test bundle includes semantic marker diagnostic."""
     _write_python_fixture(tmp_path)
     request = BundleBuildRequest(
         target_name="target",
@@ -95,6 +99,7 @@ def test_bundle_includes_semantic_marker_diagnostic(tmp_path: Path) -> None:
 
 
 def test_bundle_subject_fallback_when_anchor_missing(tmp_path: Path) -> None:
+    """Test bundle subject fallback when anchor missing."""
     _write_python_fixture(tmp_path)
     request = BundleBuildRequest(
         target_name="missing_symbol",

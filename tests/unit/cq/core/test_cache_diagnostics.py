@@ -1,3 +1,5 @@
+"""Tests for test_cache_diagnostics."""
+
 from __future__ import annotations
 
 from collections.abc import Generator
@@ -13,6 +15,15 @@ from tools.cq.core.cache.telemetry import (
     reset_cache_telemetry,
 )
 
+EXPECTED_GETS = 2
+EXPECTED_HITS = 1
+EXPECTED_MISSES = 1
+EXPECTED_RATIO = 0.5
+EXPECTED_SETS = 2
+EXPECTED_SET_FAILURES = 1
+EXPECTED_ABORTS = 1
+EXPECTED_KEY_CARDINALITY = 3
+
 
 @pytest.fixture(autouse=True)
 def _reset_cache_state() -> Generator[None]:
@@ -27,6 +38,7 @@ def test_snapshot_backend_metrics_includes_namespace_hit_ratios(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Assert namespace-level hit and miss ratios appear in diagnostics payload."""
     monkeypatch.setenv("CQ_CACHE_ENABLED", "0")
 
     record_cache_get(namespace="search_candidates", hit=True, key="short_key")
@@ -41,12 +53,12 @@ def test_snapshot_backend_metrics_includes_namespace_hit_ratios(
 
     search_metrics = namespaces.get("search_candidates")
     assert isinstance(search_metrics, dict)
-    assert search_metrics["gets"] == 2
-    assert search_metrics["hits"] == 1
-    assert search_metrics["misses"] == 1
-    assert search_metrics["hit_ratio"] == 0.5
-    assert search_metrics["miss_ratio"] == 0.5
-    assert search_metrics["sets"] == 2
-    assert search_metrics["set_failures"] == 1
-    assert search_metrics["aborts"] == 1
-    assert search_metrics["key_cardinality"] == 3
+    assert search_metrics["gets"] == EXPECTED_GETS
+    assert search_metrics["hits"] == EXPECTED_HITS
+    assert search_metrics["misses"] == EXPECTED_MISSES
+    assert search_metrics["hit_ratio"] == EXPECTED_RATIO
+    assert search_metrics["miss_ratio"] == EXPECTED_RATIO
+    assert search_metrics["sets"] == EXPECTED_SETS
+    assert search_metrics["set_failures"] == EXPECTED_SET_FAILURES
+    assert search_metrics["aborts"] == EXPECTED_ABORTS
+    assert search_metrics["key_cardinality"] == EXPECTED_KEY_CARDINALITY

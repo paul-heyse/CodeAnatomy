@@ -11,6 +11,9 @@ from __future__ import annotations
 from typing import cast
 
 from tools.cq.query.ir import DecoratorFilter, Query
+
+MAX_DECORATOR_COUNT = 3
+MIN_DECORATOR_COUNT = 2
 from tools.cq.query.parser import parse_query
 
 
@@ -28,10 +31,10 @@ class TestDecoratorFilter:
         """Create decorator filter with count constraints."""
         filt = DecoratorFilter(
             decorator_count_min=1,
-            decorator_count_max=3,
+            decorator_count_max=MAX_DECORATOR_COUNT,
         )
         assert filt.decorator_count_min == 1
-        assert filt.decorator_count_max == 3
+        assert filt.decorator_count_max == MAX_DECORATOR_COUNT
 
 
 class TestDecoratorQueryParsing:
@@ -50,9 +53,9 @@ class TestDecoratorQueryParsing:
 
     def test_decorator_count_filter(self) -> None:
         """Parse query with decorator count filter."""
-        query = parse_query("entity=function decorator_count_min=2")
+        query = parse_query(f"entity=function decorator_count_min={MIN_DECORATOR_COUNT}")
         assert query.decorator_filter is not None
-        assert query.decorator_filter.decorator_count_min == 2
+        assert query.decorator_filter.decorator_count_min == MIN_DECORATOR_COUNT
 
     def test_decorator_filter_with_scope(self) -> None:
         """Parse decorator filter with scope constraint."""
@@ -125,7 +128,7 @@ def helper():
     pass
 """
         decorators = extract_decorators_from_function(source, 4)
-        assert len(decorators) == 2
+        assert len(decorators) == MIN_DECORATOR_COUNT
         assert "staticmethod" in decorators
         assert "deprecated" in decorators
 

@@ -159,7 +159,11 @@ def _as_bytes(line: str | bytes) -> bytes:
 
 
 def decode_rg_event(line: str | bytes) -> RgAnyEvent | None:
-    """Decode one ripgrep JSON event line with typed-first fallback."""
+    """Decode one ripgrep JSON event line with typed-first fallback.
+
+    Returns:
+        RgAnyEvent | None: Function return value.
+    """
     raw = _as_bytes(line)
     try:
         return _RG_TYPED_DECODER.decode(raw)
@@ -171,7 +175,11 @@ def decode_rg_event(line: str | bytes) -> RgAnyEvent | None:
 
 
 def decode_event(line: str | bytes) -> dict[str, object] | None:
-    """Decode one JSON line into a mapping payload."""
+    """Decode one JSON line into a mapping payload.
+
+    Returns:
+        dict[str, object] | None: Function return value.
+    """
     raw = _as_bytes(line)
     try:
         return _RG_MAPPING_DECODER.decode(raw)
@@ -180,12 +188,20 @@ def decode_event(line: str | bytes) -> dict[str, object] | None:
 
 
 def decode_event_strict(line: str | bytes) -> dict[str, object]:
-    """Decode one JSON line into a mapping payload, raising on failure."""
+    """Decode one JSON line into a mapping payload, raising on failure.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     return _RG_MAPPING_DECODER.decode(_as_bytes(line))
 
 
 def decode_rg_event_mapping(line: str | bytes) -> dict[str, object] | None:
-    """Compatibility alias for mapping decode."""
+    """Compatibility alias for mapping decode.
+
+    Returns:
+        dict[str, object] | None: Function return value.
+    """
     return decode_event(line)
 
 
@@ -201,7 +217,11 @@ def _coerce_event_data(event: RgAnyEvent, event_type: str, type_: object) -> obj
 
 
 def as_match_data(event: RgAnyEvent) -> RgMatchData | None:
-    """Coerce event payload into typed match data."""
+    """Coerce event payload into typed match data.
+
+    Returns:
+        RgMatchData | None: Function return value.
+    """
     if isinstance(event, RgMatchEvent):
         return event.data
     value = _coerce_event_data(event, "match", RgMatchData)
@@ -209,7 +229,11 @@ def as_match_data(event: RgAnyEvent) -> RgMatchData | None:
 
 
 def as_context_data(event: RgAnyEvent) -> RgContextData | None:
-    """Coerce event payload into typed context data."""
+    """Coerce event payload into typed context data.
+
+    Returns:
+        RgContextData | None: Function return value.
+    """
     if isinstance(event, RgContextEvent):
         return event.data
     value = _coerce_event_data(event, "context", RgContextData)
@@ -217,7 +241,11 @@ def as_context_data(event: RgAnyEvent) -> RgContextData | None:
 
 
 def as_summary_data(event: RgAnyEvent) -> RgSummaryData | None:
-    """Coerce event payload into typed summary data."""
+    """Coerce event payload into typed summary data.
+
+    Returns:
+        RgSummaryData | None: Function return value.
+    """
     if isinstance(event, RgSummaryEvent):
         return event.data
     value = _coerce_event_data(event, "summary", RgSummaryData)
@@ -225,7 +253,11 @@ def as_summary_data(event: RgAnyEvent) -> RgSummaryData | None:
 
 
 def as_begin_data(event: RgAnyEvent) -> RgBeginData | None:
-    """Coerce event payload into typed begin data."""
+    """Coerce event payload into typed begin data.
+
+    Returns:
+        RgBeginData | None: Function return value.
+    """
     if isinstance(event, RgBeginEvent):
         return event.data
     value = _coerce_event_data(event, "begin", RgBeginData)
@@ -233,7 +265,11 @@ def as_begin_data(event: RgAnyEvent) -> RgBeginData | None:
 
 
 def as_end_data(event: RgAnyEvent) -> RgEndData | None:
-    """Coerce event payload into typed end data."""
+    """Coerce event payload into typed end data.
+
+    Returns:
+        RgEndData | None: Function return value.
+    """
     if isinstance(event, RgEndEvent):
         return event.data
     value = _coerce_event_data(event, "end", RgEndData)
@@ -241,7 +277,11 @@ def as_end_data(event: RgAnyEvent) -> RgEndData | None:
 
 
 def match_path(data: RgMatchData | RgContextData | RgBeginData | RgEndData) -> str | None:
-    """Extract path text from typed event data."""
+    """Extract path text from typed event data.
+
+    Returns:
+        str | None: Function return value.
+    """
     path = getattr(data, "path", None)
     if path is None:
         return None
@@ -249,7 +289,11 @@ def match_path(data: RgMatchData | RgContextData | RgBeginData | RgEndData) -> s
 
 
 def match_line_text(data: RgMatchData | RgContextData) -> str:
-    """Extract line text from typed match/context data."""
+    """Extract line text from typed match/context data.
+
+    Returns:
+        str: Function return value.
+    """
     lines = getattr(data, "lines", None)
     if lines is None:
         return ""
@@ -257,12 +301,20 @@ def match_line_text(data: RgMatchData | RgContextData) -> str:
 
 
 def match_line_number(data: RgMatchData | RgContextData) -> int | None:
-    """Extract 1-based line number from typed match/context data."""
+    """Extract 1-based line number from typed match/context data.
+
+    Returns:
+        int | None: Function return value.
+    """
     return data.line_number
 
 
 def submatch_text(submatch: RgSubmatch, line_text: str) -> str:
-    """Extract safe submatch text fallback."""
+    """Extract safe submatch text fallback.
+
+    Returns:
+        str: Function return value.
+    """
     if submatch.match is not None:
         direct = submatch.match.text or submatch.match.bytes
         if isinstance(direct, str) and direct:
@@ -271,25 +323,27 @@ def submatch_text(submatch: RgSubmatch, line_text: str) -> str:
 
 
 def summary_stats(data: RgSummaryData) -> dict[str, object] | None:
-    """Convert typed summary stats to mapping payload."""
+    """Convert typed summary stats to mapping payload.
+
+    Returns:
+        dict[str, object] | None: Function return value.
+    """
     if data.stats is None:
         return None
-    return {
-        "searches": data.stats.searches if isinstance(data.stats.searches, int) else 0,
-        "searches_with_match": (
-            data.stats.searches_with_match if isinstance(data.stats.searches_with_match, int) else 0
-        ),
-        "matches": data.stats.matches if isinstance(data.stats.matches, int) else 0,
-        "matched_lines": data.stats.matched_lines
-        if isinstance(data.stats.matched_lines, int)
-        else 0,
-        "bytes_searched": data.stats.bytes_searched
-        if isinstance(data.stats.bytes_searched, int)
-        else 0,
-        "bytes_printed": data.stats.bytes_printed
-        if isinstance(data.stats.bytes_printed, int)
-        else 0,
-    }
+    stats_map: dict[str, object] = {}
+    if isinstance(data.stats.searches, int):
+        stats_map["searches"] = data.stats.searches
+    if isinstance(data.stats.searches_with_match, int):
+        stats_map["searches_with_match"] = data.stats.searches_with_match
+    if isinstance(data.stats.matches, int):
+        stats_map["matches"] = data.stats.matches
+    if isinstance(data.stats.matched_lines, int):
+        stats_map["matched_lines"] = data.stats.matched_lines
+    if isinstance(data.stats.bytes_searched, int):
+        stats_map["bytes_searched"] = data.stats.bytes_searched
+    if isinstance(data.stats.bytes_printed, int):
+        stats_map["bytes_printed"] = data.stats.bytes_printed
+    return stats_map
 
 
 __all__ = [

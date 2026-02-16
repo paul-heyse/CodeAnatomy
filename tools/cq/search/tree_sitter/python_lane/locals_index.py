@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from functools import lru_cache
 from typing import Protocol
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids, child_by_field
 from tools.cq.search.tree_sitter.core.node_utils import node_text
 
 
@@ -33,6 +35,11 @@ class LocalBindingV1(CqStruct, frozen=True):
     definition_start: int
 
 
+@lru_cache(maxsize=1)
+def _python_field_ids() -> dict[str, int]:
+    return cached_field_ids("python")
+
+
 def _contains(container: NodeLike, item: NodeLike) -> bool:
     container_start = int(getattr(container, "start_byte", 0))
     container_end = int(getattr(container, "end_byte", container_start))
@@ -55,7 +62,7 @@ def _nearest_scope(node: NodeLike, scopes: Sequence[NodeLike]) -> NodeLike | Non
 
 
 def _scope_label(scope: NodeLike, source_bytes: bytes) -> str:
-    name_node = scope.child_by_field_name("name")
+    name_node = child_by_field(scope, "name", _python_field_ids())
     if name_node is not None:
         name = node_text(name_node, source_bytes)
         if name:
@@ -69,7 +76,11 @@ def build_locals_index(
     scopes: Sequence[NodeLike],
     source_bytes: bytes,
 ) -> tuple[LocalBindingV1, ...]:
-    """Build typed local-binding rows anchored to nearest local scope."""
+    """Build typed local-binding rows anchored to nearest local scope.
+
+    Returns:
+        tuple[LocalBindingV1, ...]: Function return value.
+    """
     bindings: list[LocalBindingV1] = []
     for node in definitions:
         name = node_text(node, source_bytes)
@@ -99,7 +110,11 @@ def scope_chain_for_anchor(
     scopes: Sequence[NodeLike],
     source_bytes: bytes,
 ) -> list[str]:
-    """Build deterministic scope-name chain from available ``@local.scope`` rows."""
+    """Build deterministic scope-name chain from available ``@local.scope`` rows.
+
+    Returns:
+        list[str]: Function return value.
+    """
     anchor_start = int(getattr(anchor, "start_byte", 0))
     anchor_end = int(getattr(anchor, "end_byte", anchor_start))
     containing: list[NodeLike] = []

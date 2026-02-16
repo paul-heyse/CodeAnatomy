@@ -16,11 +16,20 @@ class _Language:
 def test_parse_injected_ranges_reports_combined_count_when_bindings_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test parse injected ranges reports combined count when bindings missing."""
     import tools.cq.search.tree_sitter.rust_lane.injection_runtime as runtime
 
-    monkeypatch.setattr(runtime, "_TreeSitterParser", None)
-    monkeypatch.setattr(runtime, "_TreeSitterPoint", None)
-    monkeypatch.setattr(runtime, "_TreeSitterRange", None)
+    class _Parser:
+        def __init__(self, _language: object | None = None) -> None:
+            self.included_ranges: list[object] = []
+
+        def parse(self, _source_bytes: bytes) -> object:
+            msg = "boom"
+            raise RuntimeError(msg)
+
+    monkeypatch.setattr(runtime, "_TreeSitterParser", _Parser)
+    monkeypatch.setattr(runtime, "_TreeSitterPoint", lambda row, col: (row, col))
+    monkeypatch.setattr(runtime, "_TreeSitterRange", lambda *_args: object())
     language: Any = _Language()
     result = parse_injected_ranges(
         source_bytes=b'sql!("select 1")',
@@ -38,3 +47,4 @@ def test_parse_injected_ranges_reports_combined_count_when_bindings_missing(
     assert result.plan_count == 1
     assert result.combined_count == 1
     assert result.parsed is False
+    assert result.errors == ("RuntimeError",)

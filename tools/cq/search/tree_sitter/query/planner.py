@@ -15,6 +15,36 @@ if TYPE_CHECKING:
     from tree_sitter import Query
 
 _MIN_ASSERTION_TUPLE_SIZE = 2
+_SEMANTIC_VERSION_PARTS = 3
+
+
+def _normalize_semantic_version(value: object) -> tuple[int, int, int] | None:
+    if not isinstance(value, tuple) or len(value) != _SEMANTIC_VERSION_PARTS:
+        return None
+    if not all(isinstance(part, int) and not isinstance(part, bool) for part in value):
+        return None
+    return (int(value[0]), int(value[1]), int(value[2]))
+
+
+def _extract_provenance(
+    *,
+    language_obj: object | None,
+) -> tuple[str | None, tuple[int, int, int] | None, int | None]:
+    if language_obj is None:
+        return None, None, None
+    grammar_name = getattr(language_obj, "name", None)
+    semantic_version = _normalize_semantic_version(getattr(language_obj, "semantic_version", None))
+    abi_version_raw = getattr(language_obj, "abi_version", None)
+    abi_version = (
+        int(abi_version_raw)
+        if isinstance(abi_version_raw, int) and not isinstance(abi_version_raw, bool)
+        else None
+    )
+    return (
+        grammar_name if isinstance(grammar_name, str) and grammar_name else None,
+        semantic_version,
+        abi_version,
+    )
 
 
 def _capture_quantifier_name(query: Query, pattern_idx: int, capture_idx: int) -> str:
@@ -106,6 +136,7 @@ def build_pack_plan(
     pack_name: str,
     query: Query,
     query_text: str,
+    language: str | None = None,
 ) -> QueryPackPlanV1:
     """Build a plan summary for one pack for scheduling and cache keys.
 
@@ -115,7 +146,21 @@ def build_pack_plan(
     patterns = build_pattern_plan(query)
     pack_score = sum(pattern.score for pattern in patterns)
     digest = hashlib.sha256(query_text.encode("utf-8")).hexdigest()[:16]
-    return QueryPackPlanV1(pack_name=pack_name, query_hash=digest, plans=patterns, score=pack_score)
+    language_obj = getattr(query, "language", None)
+    if language_obj is None and isinstance(language, str) and language:
+        from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
+
+        language_obj = load_tree_sitter_language(language)
+    grammar_name, semantic_version, abi_version = _extract_provenance(language_obj=language_obj)
+    return QueryPackPlanV1(
+        pack_name=pack_name,
+        query_hash=digest,
+        plans=patterns,
+        score=pack_score,
+        grammar_name=grammar_name,
+        semantic_version=semantic_version,
+        abi_version=abi_version,
+    )
 
 
 def sort_pack_plans(

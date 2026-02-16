@@ -77,6 +77,7 @@ def _wire_test_doubles(
 
 
 def test_staged_execution_ordering(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test staged execution ordering."""
     calls: list[str] = []
     stage1_extractors: dict[str, object] = {
         "ast_files": lambda: (calls.append("ast_files"), _sample_table("ast"))[1],
@@ -95,6 +96,7 @@ def test_staged_execution_ordering(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
 
 def test_parallel_stage1_extractors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test parallel stage1 extractors."""
     calls: list[str] = []
     stage1_extractors: dict[str, object] = {
         "ast_files": lambda: (calls.append("ast_files"), _sample_table("ast"))[1],
@@ -118,6 +120,7 @@ def test_parallel_stage1_extractors(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
 
 def test_error_collection(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test error collection."""
     calls: list[str] = []
     stage1_extractors: dict[str, object] = {
         "ast_files": lambda: (calls.append("ast_files"), _sample_table("ast"))[1],
@@ -141,6 +144,7 @@ def test_error_collection(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
 
 
 def test_delta_output_locations(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test delta output locations."""
     calls: list[str] = []
     stage1_extractors: dict[str, object] = {
         "libcst_files": lambda: (calls.append("libcst_files"), _sample_table("cst"))[1],
@@ -161,6 +165,7 @@ def test_delta_output_locations(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 
 def test_timing_recorded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test timing recorded."""
     calls: list[str] = []
     stage1_extractors: dict[str, object] = {
         "ast_files": lambda: (calls.append("ast_files"), _sample_table("ast"))[1],
@@ -181,6 +186,7 @@ def test_run_repo_scan_propagates_diff_options(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Test run repo scan propagates diff options."""
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(

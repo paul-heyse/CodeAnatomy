@@ -11,6 +11,7 @@ from tools.cq.search.tree_sitter.query.support import (
 
 
 def test_query_pack_dir_points_to_repository_queries() -> None:
+    """Test query pack dir points to repository queries."""
     python_dir = query_pack_dir("python")
     rust_dir = query_pack_dir("rust")
     assert python_dir.name == "python"
@@ -20,6 +21,7 @@ def test_query_pack_dir_points_to_repository_queries() -> None:
 
 
 def test_query_pack_paths_resolve_existing_assets() -> None:
+    """Test query pack paths resolve existing assets."""
     assert query_pack_path("python", "00_defs.scm").exists()
     assert query_pack_path("rust", "80_tags.scm").exists()
     assert query_contracts_path("python").exists()

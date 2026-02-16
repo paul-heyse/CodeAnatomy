@@ -22,6 +22,9 @@ from tools.cq.core.snb_schema import (
     SemanticNodeRefV1,
 )
 
+PREVIEW_NODE_COUNT = 2
+BUNDLE_GRAPH_NODE_COUNT = 10
+
 
 def test_artifact_pointer_v1_roundtrip() -> None:
     """Test ArtifactPointerV1 msgspec encode/decode roundtrip."""
@@ -142,7 +145,7 @@ def test_neighborhood_slice_v1_roundtrip() -> None:
     assert decoded.kind == original.kind
     assert decoded.title == original.title
     assert decoded.total == original.total
-    assert len(decoded.preview) == 2
+    assert len(decoded.preview) == PREVIEW_NODE_COUNT
     assert decoded.preview[0].name == "caller1"
     assert decoded.preview[1].name == "caller2"
     assert len(decoded.edges) == 1
@@ -279,7 +282,7 @@ def test_semantic_neighborhood_bundle_v1_roundtrip() -> None:
     assert decoded.meta.tool_version == "0.1.0"
     assert len(decoded.slices) == 1
     assert decoded.graph is not None
-    assert decoded.graph.node_count == 10
+    assert decoded.graph.node_count == BUNDLE_GRAPH_NODE_COUNT
     assert decoded.node_index is not None
     assert len(decoded.node_index) == 1
     assert len(decoded.artifacts) == 1

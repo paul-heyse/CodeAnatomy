@@ -1,3 +1,5 @@
+"""Tests for test_tree_sitter_cache_store."""
+
 from __future__ import annotations
 
 import os
@@ -13,6 +15,7 @@ from tools.cq.core.cache.tree_sitter_cache_store import (
 
 
 def test_tree_sitter_cache_store_roundtrip(tmp_path: Path) -> None:
+    """Persist and load a small tree-sitter cache envelope from disk."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
@@ -52,7 +55,9 @@ def test_tree_sitter_cache_store_roundtrip(tmp_path: Path) -> None:
     os.environ.pop("CQ_CACHE_DIR", None)
 
 
+
 def test_tree_sitter_cache_store_uses_blob_pointer_for_large_payload(tmp_path: Path) -> None:
+    """Store large payloads via blob pointer and read back identical content."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")

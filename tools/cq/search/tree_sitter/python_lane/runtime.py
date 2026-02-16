@@ -24,6 +24,8 @@ from tools.cq.search.tree_sitter.core.change_windows import (
     ensure_query_windows,
     windows_from_changed_ranges,
 )
+from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids, child_by_field
+from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
 from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
@@ -40,14 +42,10 @@ if TYPE_CHECKING:
     from tree_sitter import Language, Node, Parser, Query, Tree
 
 try:
-    import tree_sitter_python as _tree_sitter_python
-    from tree_sitter import Language as _TreeSitterLanguage
     from tree_sitter import Parser as _TreeSitterParser
     from tree_sitter import Query as _TreeSitterQuery
     from tree_sitter import QueryCursor as _TreeSitterQueryCursor
 except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_python = None
-    _TreeSitterLanguage = None
     _TreeSitterParser = None
     _TreeSitterQuery = None
     _TreeSitterQueryCursor = None
@@ -58,6 +56,12 @@ _MAX_CAPTURE_TEXT_LEN = 120
 _DEFAULT_MATCH_LIMIT = 4_096
 _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 _STOP_CONTEXT_KINDS: frozenset[str] = frozenset({"module", "source_file"})
+
+
+@lru_cache(maxsize=1)
+def _python_field_ids() -> dict[str, int]:
+    return cached_field_ids("python")
+
 
 from tools.cq.search.tree_sitter.python_lane.fallback_support import (
     _capture_binding_candidates,
@@ -74,8 +78,7 @@ def is_tree_sitter_python_available() -> bool:
     return all(
         obj is not None
         for obj in (
-            _tree_sitter_python,
-            _TreeSitterLanguage,
+            load_tree_sitter_language("python"),
             _TreeSitterParser,
             _TreeSitterQuery,
             _TreeSitterQueryCursor,
@@ -85,10 +88,11 @@ def is_tree_sitter_python_available() -> bool:
 
 @lru_cache(maxsize=1)
 def _python_language() -> Language:
-    if _tree_sitter_python is None or _TreeSitterLanguage is None:
+    resolved = load_tree_sitter_language("python")
+    if resolved is None:
         msg = "tree_sitter_python language bindings are unavailable"
         raise RuntimeError(msg)
-    return _TreeSitterLanguage(_tree_sitter_python.language())
+    return cast("Language", resolved)
 
 
 def _make_parser() -> Parser:
@@ -218,6 +222,7 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
                     request_surface="artifact",
                 ),
                 query_text=source,
+                language="python",
             ),
         )
         for pack_name, source in sorted(sources.items())
@@ -472,7 +477,7 @@ def _capture_call_target(captures: dict[str, list[Node]], source_bytes: bytes) -
     call_nodes = captures.get("call.expression", [])
     if not call_nodes:
         return None
-    function_node = call_nodes[0].child_by_field_name("function")
+    function_node = child_by_field(call_nodes[0], "function", _python_field_ids())
     if function_node is None:
         return None
     text = node_text(function_node, source_bytes)

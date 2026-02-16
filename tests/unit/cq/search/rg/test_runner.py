@@ -11,6 +11,8 @@ from tools.cq.search.pipeline.profiles import SearchLimits
 from tools.cq.search.rg.codec import RgEvent
 from tools.cq.search.rg.contracts import RgRunSettingsV1
 from tools.cq.search.rg.runner import (
+    RgCountRequest,
+    RgFilesWithMatchesRequest,
     RgProcessResult,
     build_command_from_settings,
     run_rg_count,
@@ -20,6 +22,7 @@ from tools.cq.search.rg.runner import (
 
 
 def test_build_command_from_settings_identifier_mode() -> None:
+    """Test build command from settings identifier mode."""
     settings = RgRunSettingsV1(
         pattern="foo",
         mode="identifier",
@@ -36,6 +39,7 @@ def test_build_command_from_settings_identifier_mode() -> None:
 
 
 def test_build_command_from_settings_files_operation() -> None:
+    """Test build command from settings files operation."""
     settings = RgRunSettingsV1(
         pattern="",
         mode="regex",
@@ -50,6 +54,7 @@ def test_build_command_from_settings_files_operation() -> None:
 
 
 def test_build_command_applies_context_multiline_and_sort() -> None:
+    """Test build command applies context multiline and sort."""
     settings = RgRunSettingsV1(
         pattern="foo",
         mode="regex",
@@ -65,6 +70,7 @@ def test_build_command_applies_context_multiline_and_sort() -> None:
 
 
 def test_build_command_enables_pcre2_for_lookaround_patterns() -> None:
+    """Test build command enables pcre2 for lookaround patterns."""
     settings = RgRunSettingsV1(
         pattern="(?<=foo)bar",
         mode="regex",
@@ -79,6 +85,7 @@ def test_build_command_enables_pcre2_for_lookaround_patterns() -> None:
 
 
 def test_run_with_request_normalizes_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test run with request normalizes result."""
     from tools.cq.search.rg import runner as runner_module
 
     def _fake_run(_request: RgRunRequest, *, pcre2_available: bool = False) -> RgProcessResult:
@@ -106,6 +113,7 @@ def test_run_with_request_normalizes_result(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_run_rg_count_parses_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test run rg count parses stdout."""
     from tools.cq.search.rg import runner as runner_module
 
     monkeypatch.setattr(
@@ -115,15 +123,18 @@ def test_run_rg_count_parses_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     counts = run_rg_count(
-        root=Path(),
-        pattern="foo",
-        mode=QueryMode.REGEX,
-        lang_types=("py",),
+        RgCountRequest(
+            root=Path(),
+            pattern="foo",
+            mode=QueryMode.REGEX,
+            lang_types=("py",),
+        )
     )
     assert counts == {"a.py": 3, "b.py": 7}
 
 
 def test_run_rg_files_with_matches_returns_none_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test run rg files with matches returns none on failure."""
     from tools.cq.search.rg import runner as runner_module
 
     monkeypatch.setattr(
@@ -133,9 +144,11 @@ def test_run_rg_files_with_matches_returns_none_on_failure(monkeypatch: pytest.M
     )
 
     rows = run_rg_files_with_matches(
-        root=Path(),
-        patterns=("foo", "bar"),
-        mode=QueryMode.LITERAL,
-        lang_types=("py",),
+        RgFilesWithMatchesRequest(
+            root=Path(),
+            patterns=("foo", "bar"),
+            mode=QueryMode.LITERAL,
+            lang_types=("py",),
+        )
     )
     assert rows is None

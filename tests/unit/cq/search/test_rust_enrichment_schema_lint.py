@@ -7,11 +7,13 @@ from tools.cq.search.rust import enrichment as rust_enrichment
 
 
 def test_schema_lint_has_no_deprecated_key_errors() -> None:
+    """Test schema lint has no deprecated key errors."""
     errors = rust_enrichment.lint_rust_enrichment_schema()
     assert all("deprecated key emitted" not in err for err in errors)
 
 
 def test_ast_grep_precedence_over_tree_sitter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test ast grep precedence over tree sitter."""
     source = 'fn build_graph() { println!("x"); }\n'
 
     def _fake_ast(*_args: object, **_kwargs: object) -> dict[str, object]:
@@ -52,6 +54,7 @@ def test_ast_grep_precedence_over_tree_sitter(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_crosscheck_mode_emits_mismatch_details(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test crosscheck mode emits mismatch details."""
     source = 'fn build_graph() { println!("x"); }\n'
 
     def _fake_ast(*_args: object, **_kwargs: object) -> dict[str, object]:

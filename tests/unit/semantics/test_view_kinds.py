@@ -18,6 +18,10 @@ from semantics.view_kinds import (
 )
 from tests.test_helpers.immutability import assert_immutable_assignment
 
+VIEW_KIND_TOTAL = 14
+ARTIFACT_ORDER_INDEX = 11
+CONSOLIDATED_KIND_TOTAL = 6
+
 # ---------------------------------------------------------------------------
 # Expected raw string values (the canonical set from the old Literal types)
 # ---------------------------------------------------------------------------
@@ -56,7 +60,7 @@ class TestViewKind:
 
     def test_count(self) -> None:
         """Enum member count must be 14."""
-        assert len(ViewKind) == 14
+        assert len(ViewKind) == VIEW_KIND_TOTAL
 
     @pytest.mark.parametrize("value", sorted(_EXPECTED_KINDS))
     def test_str_equality(self, value: str) -> None:
@@ -85,7 +89,7 @@ class TestViewKindOrder:
 
     def test_count(self) -> None:
         """Order dict must have exactly 14 entries."""
-        assert len(VIEW_KIND_ORDER) == 14
+        assert len(VIEW_KIND_ORDER) == VIEW_KIND_TOTAL
 
     def test_values_are_non_negative_ints(self) -> None:
         """All order values must be non-negative integers."""
@@ -99,7 +103,7 @@ class TestViewKindOrder:
 
     def test_artifact_is_last(self) -> None:
         """The ``artifact`` kind must have the highest order value (11)."""
-        assert VIEW_KIND_ORDER[ViewKind.ARTIFACT] == 11
+        assert VIEW_KIND_ORDER[ViewKind.ARTIFACT] == ARTIFACT_ORDER_INDEX
 
     def test_matches_legacy_kind_order(self) -> None:
         """Order dict must match the values from the former ``_KIND_ORDER`` dict."""
@@ -146,7 +150,7 @@ class TestConsolidatedKind:
 
     def test_exactly_six_unique_targets(self) -> None:
         """Consolidation must produce exactly 6 unique target kinds."""
-        assert len(set(CONSOLIDATED_KIND.values())) == 6
+        assert len(set(CONSOLIDATED_KIND.values())) == CONSOLIDATED_KIND_TOTAL
 
     def test_normalize_group(self) -> None:
         """Normalize-category kinds must all map to 'normalize'."""

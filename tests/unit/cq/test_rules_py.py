@@ -6,6 +6,13 @@ from tools.cq.astgrep.rulepack_loader import clear_rulepack_cache, load_default_
 from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import RecordType, RuleSpec
 
+PYTHON_RULEPACK_COUNT = 23
+DEF_RULE_COUNT = 7
+CALL_RULE_COUNT = 2
+IMPORT_RULE_COUNT = 6
+RAISE_RULE_COUNT = 3
+EXCEPT_RULE_COUNT = 3
+
 
 def _python_rules() -> tuple[RuleSpec, ...]:
     clear_rulepack_cache()
@@ -14,11 +21,13 @@ def _python_rules() -> tuple[RuleSpec, ...]:
 
 
 def test_python_rulepack_count_matches_yaml() -> None:
+    """Test python rulepack count matches yaml."""
     rules = _python_rules()
-    assert len(rules) == 23
+    assert len(rules) == PYTHON_RULEPACK_COUNT
 
 
 def test_python_rule_ids_are_unique_and_prefixed() -> None:
+    """Test python rule ids are unique and prefixed."""
     rules = _python_rules()
     rule_ids = [rule.rule_id for rule in rules]
     assert len(rule_ids) == len(set(rule_ids))
@@ -26,6 +35,7 @@ def test_python_rule_ids_are_unique_and_prefixed() -> None:
 
 
 def test_get_rules_for_types_uses_loader_dispatch() -> None:
+    """Verify loader dispatch applies language and record-type filters correctly."""
     def_types: set[RecordType] = {"def"}
     call_types: set[RecordType] = {"call"}
     import_types: set[RecordType] = {"import"}
@@ -38,14 +48,15 @@ def test_get_rules_for_types_uses_loader_dispatch() -> None:
     raise_rules = get_rules_for_types(raise_types, lang="python")
     except_rules = get_rules_for_types(except_types, lang="python")
 
-    assert len(def_rules) == 7
-    assert len(call_rules) == 2
-    assert len(import_rules) == 6
-    assert len(raise_rules) == 3
-    assert len(except_rules) == 3
+    assert len(def_rules) == DEF_RULE_COUNT
+    assert len(call_rules) == CALL_RULE_COUNT
+    assert len(import_rules) == IMPORT_RULE_COUNT
+    assert len(raise_rules) == RAISE_RULE_COUNT
+    assert len(except_rules) == EXCEPT_RULE_COUNT
 
 
 def test_python_rule_config_shape_from_loader() -> None:
+    """Test python rule config shape from loader."""
     rules_by_id = {rule.rule_id: rule for rule in _python_rules()}
 
     def_rule = rules_by_id["py_def_function"]

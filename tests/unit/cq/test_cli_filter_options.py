@@ -11,6 +11,9 @@ from tools.cq.cli_app.app import app
 from tools.cq.cli_app.options import CommonFilters, options_from_params
 from tools.cq.cli_app.params import FilterParams
 
+DEFAULT_LIMIT = 50
+CLI_LIMIT = 25
+
 
 class TestFilterOptionsConversion:
     """Tests for converting filter params into CommonFilters."""
@@ -38,8 +41,8 @@ class TestFilterOptionsConversion:
 
     def test_limit(self) -> None:
         """Test building filters with limit."""
-        filters = options_from_params(FilterParams(limit=50), type_=CommonFilters)
-        assert filters.limit == 50
+        filters = options_from_params(FilterParams(limit=DEFAULT_LIMIT), type_=CommonFilters)
+        assert filters.limit == DEFAULT_LIMIT
 
 
 class TestFilterOptionsFromCLI:
@@ -79,9 +82,9 @@ class TestFilterOptionsFromCLI:
 
     def test_limit_from_cli(self) -> None:
         """Test limit parsed from CLI."""
-        _cmd, bound, _extra = app.parse_args(["calls", "foo", "--limit", "25"])
+        _cmd, bound, _extra = app.parse_args(["calls", "foo", "--limit", str(CLI_LIMIT)])
         opts = bound.kwargs["opts"]
-        assert opts.limit == 25
+        assert opts.limit == CLI_LIMIT
 
     def test_impact_filter_flag(self) -> None:
         """Test --impact flag."""

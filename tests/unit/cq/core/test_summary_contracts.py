@@ -10,6 +10,7 @@ from tools.cq.core.summary_contracts import (
 
 
 def test_build_summary_envelope_and_mapping() -> None:
+    """Test build summary envelope and mapping."""
     envelope = build_summary_envelope(
         summary={"query": "foo"},
         diagnostics=[{"code": "ML001"}],

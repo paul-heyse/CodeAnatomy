@@ -16,6 +16,7 @@ def _write_file(path: Path, content: str) -> None:
 
 
 def test_calls_integration_basic(tmp_path: Path) -> None:
+    """Test calls integration basic."""
     tc = Toolchain.detect()
     if not tc.has_sgpy:
         pytest.skip("ast-grep-py not available")

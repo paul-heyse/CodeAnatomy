@@ -1,3 +1,5 @@
+"""Tests for test_bootstrap_runtime_services."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,6 +18,7 @@ from tools.cq.core.toolchain import Toolchain
 
 
 def test_runtime_services_are_workspace_scoped(tmp_path: Path) -> None:
+    """Cache runtime services per workspace to enforce isolated service lifecycles."""
     clear_runtime_services()
     workspace_a = tmp_path / "workspace_a"
     workspace_b = tmp_path / "workspace_b"
@@ -31,7 +34,9 @@ def test_runtime_services_are_workspace_scoped(tmp_path: Path) -> None:
     clear_runtime_services()
 
 
+
 def test_service_request_contracts_are_constructible(tmp_path: Path) -> None:
+    """Build runtime service request payloads for search and call workflows."""
     toolchain = Toolchain.detect()
     search = SearchServiceRequest(root=tmp_path, query="foo")
     calls = CallsServiceRequest(

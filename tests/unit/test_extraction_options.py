@@ -9,6 +9,7 @@ from semantics.incremental import SemanticIncrementalConfig
 
 
 def test_normalize_extraction_options_accepts_canonical_fields() -> None:
+    """Test normalize extraction options accepts canonical fields."""
     normalized = normalize_extraction_options(
         {
             "include_globs": ["**/*.py"],
@@ -41,6 +42,7 @@ def test_normalize_extraction_options_accepts_canonical_fields() -> None:
 
 
 def test_normalize_extraction_options_accepts_tree_sitter_and_git_aliases() -> None:
+    """Test normalize extraction options accepts tree sitter and git aliases."""
     normalized = normalize_extraction_options(
         {
             "enable_tree_sitter": False,
@@ -57,6 +59,7 @@ def test_normalize_extraction_options_accepts_tree_sitter_and_git_aliases() -> N
 
 
 def test_normalize_extraction_options_maps_incremental_config_fields() -> None:
+    """Test normalize extraction options maps incremental config fields."""
     incremental_config = SemanticIncrementalConfig(
         enabled=True,
         git_base_ref="origin/main",
@@ -71,6 +74,7 @@ def test_normalize_extraction_options_maps_incremental_config_fields() -> None:
 
 
 def test_normalize_extraction_options_top_level_overrides_incremental_config() -> None:
+    """Test normalize extraction options top level overrides incremental config."""
     incremental_config = SemanticIncrementalConfig(
         enabled=True,
         git_base_ref="old_base",
@@ -92,5 +96,6 @@ def test_normalize_extraction_options_top_level_overrides_incremental_config() -
 
 
 def test_normalize_extraction_options_rejects_changed_only_without_diff_refs() -> None:
+    """Test normalize extraction options rejects changed only without diff refs."""
     with pytest.raises(ValueError, match="changed_only=True requires both diff_base_ref"):
         normalize_extraction_options({"changed_only": True})

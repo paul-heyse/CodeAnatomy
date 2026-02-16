@@ -1,3 +1,5 @@
+"""Tests for test_tree_sitter_runtime_windowing."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -72,7 +74,9 @@ def _clear_ranges() -> None:
     _CAPTURED_POINT_RANGES.clear()
 
 
+
 def test_run_bounded_query_uses_point_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Forward point window boundaries to the cursor during bounded query."""
     monkeypatch.setattr(tree_sitter_runtime, "_TreeSitterQueryCursor", _fake_cursor_factory)
 
     root = SimpleNamespace(start_byte=0, end_byte=20)
@@ -90,7 +94,9 @@ def test_run_bounded_query_uses_point_windows(monkeypatch: pytest.MonkeyPatch) -
     assert telemetry.windows_executed == 1
 
 
+
 def test_run_bounded_query_enforces_containment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify containment filtering removes out-of-window matches when enabled."""
     monkeypatch.setattr(tree_sitter_runtime, "_TreeSitterQueryCursor", _fake_cursor_factory)
 
     root = SimpleNamespace(start_byte=0, end_byte=20)

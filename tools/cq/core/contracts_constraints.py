@@ -32,7 +32,11 @@ def enforce_mapping_constraints(
     *,
     policy: ContractConstraintPolicyV1 | None = None,
 ) -> None:
-    """Validate mapping payload against shared contract constraints."""
+    """Validate mapping payload against shared contract constraints.
+
+    Raises:
+        ValueError: Raised when a contract payload field violates limits.
+    """
     effective_policy = policy or _DEFAULT_CONTRACT_POLICY
     if len(payload) > effective_policy.max_key_count:
         msg = f"mapping exceeds max_key_count={effective_policy.max_key_count}"

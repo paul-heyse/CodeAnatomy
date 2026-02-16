@@ -10,6 +10,7 @@ from tools.cq.search.tree_sitter.contracts.lane_payloads import (
 
 
 def test_tree_sitter_lane_payload_schemas_exist() -> None:
+    """Test tree sitter lane payload schemas exist."""
     py_schema = msgspec.json.schema(PythonTreeSitterPayloadV1)
     rust_schema = msgspec.json.schema(RustTreeSitterPayloadV1)
     if py_schema.get("type") is not None:

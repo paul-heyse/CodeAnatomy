@@ -26,6 +26,7 @@ def test_ldmd_index_search_get_neighbors(
     update_golden: bool,
     tmp_path: Path,
 ) -> None:
+    """Test ldmd index search get neighbors."""
     ldmd_text = run_cq_text(
         [
             "search",
@@ -134,6 +135,7 @@ def test_ldmd_root_alias_json_envelope(
     run_cq_text: Callable[..., str],
     tmp_path: Path,
 ) -> None:
+    """Test ldmd root alias json envelope."""
     ldmd_text = run_cq_text(
         [
             "search",

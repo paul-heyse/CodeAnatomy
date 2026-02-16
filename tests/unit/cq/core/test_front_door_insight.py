@@ -31,6 +31,10 @@ from tools.cq.search.semantic.models import (
     derive_semantic_contract_state,
 )
 
+CALLER_TOTAL = 3
+CALLEE_TOTAL = 2
+INCOMING_TOTAL = 4
+
 
 def _definition_finding(name: str = "target") -> Finding:
     return Finding(
@@ -60,6 +64,7 @@ def _entity_insight(request: EntityInsightBuildRequestV1) -> FrontDoorInsightV1:
 
 
 def test_front_door_insight_roundtrip() -> None:
+    """Test front door insight roundtrip."""
     insight = FrontDoorInsightV1(
         source="search",
         target=_search_insight(
@@ -77,6 +82,7 @@ def test_front_door_insight_roundtrip() -> None:
 
 
 def test_build_neighborhood_from_slices_maps_core_slices() -> None:
+    """Test build neighborhood from slices maps core slices."""
     caller = SemanticNodeRefV1(node_id="n1", kind="function", name="caller")
     callee = SemanticNodeRefV1(node_id="n2", kind="function", name="callee")
     slices = (
@@ -89,14 +95,15 @@ def test_build_neighborhood_from_slices_maps_core_slices() -> None:
         preview_per_slice=1,
         overflow_artifact_ref="artifacts/overflow.json",
     )
-    assert neighborhood.callers.total == 3
+    assert neighborhood.callers.total == CALLER_TOTAL
     assert neighborhood.callers.preview[0].name == "caller"
     assert neighborhood.callers.overflow_artifact_ref == "artifacts/overflow.json"
-    assert neighborhood.callees.total == 2
+    assert neighborhood.callees.total == CALLEE_TOTAL
     assert neighborhood.hierarchy_or_scope.total == 1
 
 
 def test_augment_insight_with_semantic_updates_target_and_call_graph() -> None:
+    """Test augment insight with semantic updates target and call graph."""
     base = _entity_insight(
         EntityInsightBuildRequestV1(
             summary={"query": "entity=function name=target", "entity_kind": "function"},
@@ -114,12 +121,13 @@ def test_augment_insight_with_semantic_updates_target_and_call_graph() -> None:
     }
     updated = augment_insight_with_semantic(base, semantic_payload)
     assert updated.target.signature == "def target(x: int) -> str"
-    assert updated.neighborhood.callers.total == 4
+    assert updated.neighborhood.callers.total == INCOMING_TOTAL
     assert updated.neighborhood.callees.total == 1
     assert updated.degradation.semantic == "ok"
 
 
 def test_build_search_insight_prefers_definition_target() -> None:
+    """Test build search insight prefers definition target."""
     primary = _definition_finding("build_graph")
     insight = _search_insight(
         SearchInsightBuildRequestV1(
@@ -135,6 +143,7 @@ def test_build_search_insight_prefers_definition_target() -> None:
 
 
 def test_build_calls_insight_uses_counters_for_risk() -> None:
+    """Test build calls insight uses counters for risk."""
     neighborhood = build_neighborhood_from_slices(
         (
             NeighborhoodSliceV1(kind="callers", title="Callers", total=11),
@@ -161,6 +170,7 @@ def test_build_calls_insight_uses_counters_for_risk() -> None:
 
 
 def test_build_entity_insight_fallback_target_when_missing_findings() -> None:
+    """Test build entity insight fallback target when missing findings."""
     insight = _entity_insight(
         EntityInsightBuildRequestV1(
             summary={"query": "entity=function name=foo", "entity_kind": "function"},
@@ -173,6 +183,7 @@ def test_build_entity_insight_fallback_target_when_missing_findings() -> None:
 
 
 def test_render_insight_card_includes_budget_and_artifact_refs() -> None:
+    """Test render insight card includes budget and artifact refs."""
     insight = _search_insight(
         SearchInsightBuildRequestV1(
             summary={"query": "target", "scan_method": "hybrid"},
@@ -192,6 +203,7 @@ def test_render_insight_card_includes_budget_and_artifact_refs() -> None:
 
 
 def test_mark_partial_for_missing_languages_downgrades_availability() -> None:
+    """Test mark partial for missing languages downgrades availability."""
     insight = _search_insight(
         SearchInsightBuildRequestV1(
             summary={"query": "target", "scan_method": "hybrid"},
@@ -208,6 +220,7 @@ def test_mark_partial_for_missing_languages_downgrades_availability() -> None:
 
 
 def test_attach_neighborhood_overflow_ref_sets_slice_refs() -> None:
+    """Test attach neighborhood overflow ref sets slice refs."""
     insight = _search_insight(
         SearchInsightBuildRequestV1(
             summary={"query": "target", "scan_method": "hybrid"},
@@ -228,6 +241,7 @@ def test_attach_neighborhood_overflow_ref_sets_slice_refs() -> None:
 
 
 def test_risk_from_counters_is_deterministic() -> None:
+    """Test risk from counters is deterministic."""
     risk = risk_from_counters(
         InsightRiskCountersV1(
             callers=12,
@@ -242,6 +256,7 @@ def test_risk_from_counters_is_deterministic() -> None:
 
 
 def test_coerce_front_door_insight_from_mapping() -> None:
+    """Test coerce front door insight from mapping."""
     insight = _search_insight(
         SearchInsightBuildRequestV1(
             summary={"query": "target", "scan_method": "hybrid"},
@@ -256,6 +271,7 @@ def test_coerce_front_door_insight_from_mapping() -> None:
 
 
 def test_to_public_front_door_insight_dict_emits_full_shape() -> None:
+    """Test to public front door insight dict emits full shape."""
     insight = _search_insight(
         SearchInsightBuildRequestV1(
             summary={"query": "target", "scan_method": "hybrid"},
@@ -296,6 +312,7 @@ def test_to_public_front_door_insight_dict_emits_full_shape() -> None:
 
 
 def test_derive_semantic_status_contract() -> None:
+    """Test derive semantic status contract."""
     assert (
         derive_semantic_contract_state(
             SemanticContractStateInputV1(provider="python_static", available=False)

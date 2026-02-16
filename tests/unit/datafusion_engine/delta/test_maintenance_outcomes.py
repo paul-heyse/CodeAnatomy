@@ -26,6 +26,7 @@ def _plan_input(policy: DeltaMaintenancePolicy | None) -> DeltaMaintenancePlanIn
 
 
 def test_metrics_unavailable_uses_internal_compatibility_fallback() -> None:
+    """Test metrics unavailable uses internal compatibility fallback."""
     decision = resolve_maintenance_from_execution(
         _plan_input(DeltaMaintenancePolicy(optimize_on_write=True)),
         metrics=None,
@@ -37,6 +38,7 @@ def test_metrics_unavailable_uses_internal_compatibility_fallback() -> None:
 
 
 def test_optimize_threshold_exceeded_enables_optimize() -> None:
+    """Test optimize threshold exceeded enables optimize."""
     decision = resolve_maintenance_from_execution(
         _plan_input(DeltaMaintenancePolicy(optimize_file_threshold=5)),
         metrics=WriteOutcomeMetrics(files_created=6, final_version=11),
@@ -52,6 +54,7 @@ def test_optimize_threshold_exceeded_enables_optimize() -> None:
 
 
 def test_vacuum_threshold_exceeded_enables_vacuum() -> None:
+    """Test vacuum threshold exceeded enables vacuum."""
     decision = resolve_maintenance_from_execution(
         _plan_input(DeltaMaintenancePolicy(vacuum_version_threshold=2)),
         metrics=WriteOutcomeMetrics(version_delta=3, final_version=11),
@@ -66,6 +69,7 @@ def test_vacuum_threshold_exceeded_enables_vacuum() -> None:
 
 
 def test_checkpoint_interval_enables_checkpoint() -> None:
+    """Test checkpoint interval enables checkpoint."""
     decision = resolve_maintenance_from_execution(
         _plan_input(DeltaMaintenancePolicy(checkpoint_version_interval=5)),
         metrics=WriteOutcomeMetrics(final_version=20),
@@ -80,6 +84,7 @@ def test_checkpoint_interval_enables_checkpoint() -> None:
 
 
 def test_thresholds_not_met_returns_no_plan() -> None:
+    """Test thresholds not met returns no plan."""
     decision = resolve_maintenance_from_execution(
         _plan_input(
             DeltaMaintenancePolicy(
@@ -100,6 +105,7 @@ def test_thresholds_not_met_returns_no_plan() -> None:
 
 
 def test_artifact_payload_is_deterministic_and_ordered() -> None:
+    """Test artifact payload is deterministic and ordered."""
     decision = resolve_maintenance_from_execution(
         _plan_input(
             DeltaMaintenancePolicy(

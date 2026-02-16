@@ -7,6 +7,10 @@ from tools.cq.search.tree_sitter.schema.node_schema import (
     build_runtime_ids,
 )
 
+CALL_NODE_KIND_ID = 2
+BODY_FIELD_ID = 2
+FUNCTION_FIELD_ID = 4
+
 
 class _LanguageStub:
     def id_for_node_kind(self, name: str, named: object) -> int:
@@ -14,10 +18,19 @@ class _LanguageStub:
         return {"identifier": 1, "call": 2, "function_definition": 3}[name]
 
     def field_id_for_name(self, name: str) -> int:
-        return {"name": 1, "body": 2, "parameters": 3}[name]
+        return {"name": 1, "body": 2, "parameters": 3, "function": 4}[name]
 
 
 def test_build_runtime_ids_and_field_ids() -> None:
+    """Test build runtime ids and field ids."""
     language = _LanguageStub()
-    assert build_runtime_ids(language)["call"] == 2
-    assert build_runtime_field_ids(language)["body"] == 2
+    assert build_runtime_ids(language)["call"] == CALL_NODE_KIND_ID
+    assert build_runtime_field_ids(language)["body"] == BODY_FIELD_ID
+
+
+def test_build_runtime_field_ids_with_custom_candidates() -> None:
+    """Test build runtime field ids with custom candidates."""
+    language = _LanguageStub()
+    out = build_runtime_field_ids(language, field_names=("function",))
+    assert out["name"] == 1
+    assert out["function"] == FUNCTION_FIELD_ID

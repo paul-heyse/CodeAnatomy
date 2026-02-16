@@ -10,6 +10,7 @@ from graph.build_pipeline import _AuxiliaryOutputOptions
 
 
 def test_collect_auxiliary_outputs_uses_contract_paths(tmp_path: Path) -> None:
+    """Test collect auxiliary outputs uses contract paths."""
     extraction_result = ExtractionResult(
         delta_locations={},
         semantic_input_locations={},
@@ -46,6 +47,7 @@ def test_collect_auxiliary_outputs_uses_contract_paths(tmp_path: Path) -> None:
 
 
 def test_collect_auxiliary_outputs_falls_back_to_output_dir(tmp_path: Path) -> None:
+    """Test collect auxiliary outputs falls back to output dir."""
     extraction_result = ExtractionResult(
         delta_locations={},
         semantic_input_locations={},

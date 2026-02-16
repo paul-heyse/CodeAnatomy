@@ -13,6 +13,7 @@ from tools.cq.search.pipeline.smart_search import SearchResultAssembly
 def test_assemble_result_delegates_to_legacy_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test assemble result delegates to legacy pipeline."""
     sentinel = {"ok": True}
     context = cast("SearchConfig", object())
 

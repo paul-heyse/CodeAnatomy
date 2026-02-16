@@ -12,6 +12,7 @@ from tools.cq.search.pipeline.contracts import SearchConfig
 
 
 def test_run_candidate_phase_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test run candidate phase delegates."""
     sentinel = (["raw"], SimpleNamespace(total=1), "pattern")
     context = cast("SearchConfig", object())
 

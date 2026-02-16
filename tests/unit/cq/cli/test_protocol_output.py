@@ -9,6 +9,8 @@ from tools.cq.cli_app.protocol_output import emit_payload, json_result, text_res
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.toolchain import Toolchain
 
+ERROR_EXIT_CODE = 2
+
 
 def test_wants_json_true() -> None:
     """Test wants_json returns True when output format is JSON."""
@@ -81,10 +83,10 @@ def test_text_result_custom_exit_code() -> None:
         root=Path("/tmp"),
         toolchain=Toolchain.detect(),
     )
-    result = text_result(ctx, "Error occurred", exit_code=2)
+    result = text_result(ctx, "Error occurred", exit_code=ERROR_EXIT_CODE)
 
-    assert result.exit_code == 2
-    assert result.get_exit_code() == 2
+    assert result.exit_code == ERROR_EXIT_CODE
+    assert result.get_exit_code() == ERROR_EXIT_CODE
 
 
 def test_json_result_default() -> None:
@@ -114,10 +116,10 @@ def test_json_result_custom_exit_code() -> None:
         toolchain=Toolchain.detect(),
     )
     payload = {"error": "not found"}
-    result = json_result(ctx, payload, exit_code=2)
+    result = json_result(ctx, payload, exit_code=ERROR_EXIT_CODE)
 
-    assert result.exit_code == 2
-    assert result.get_exit_code() == 2
+    assert result.exit_code == ERROR_EXIT_CODE
+    assert result.get_exit_code() == ERROR_EXIT_CODE
     assert '"error": "not found"' in result.result.text
 
 

@@ -1,3 +1,5 @@
+"""Tests for test_search_artifact_store."""
+
 from __future__ import annotations
 
 import os
@@ -23,7 +25,9 @@ def _sample_bundle(run_id: str) -> SearchArtifactBundleV1:
     )
 
 
+
 def test_search_artifact_store_roundtrip(tmp_path: Path) -> None:
+    """Persist and load a tiny search artifact bundle end-to-end."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
@@ -55,7 +59,9 @@ def test_search_artifact_store_roundtrip(tmp_path: Path) -> None:
     os.environ.pop("CQ_CACHE_DIR", None)
 
 
+
 def test_search_artifact_store_large_bundle_roundtrip(tmp_path: Path) -> None:
+    """Persist and load a large artifact payload through blob-backed cache path."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")

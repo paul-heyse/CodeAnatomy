@@ -30,6 +30,7 @@ def _manifest_with_locations(locations: dict[str, DatasetLocation]) -> SemanticP
 
 
 def test_datasource_config_from_manifest_fails_closed_when_bindings_empty() -> None:
+    """Test datasource config from manifest fails closed when bindings empty."""
     profile = DataFusionRuntimeProfile()
     manifest = _manifest_with_locations({})
     with pytest.raises(ValueError, match="Manifest dataset bindings are empty"):
@@ -37,6 +38,7 @@ def test_datasource_config_from_manifest_fails_closed_when_bindings_empty() -> N
 
 
 def test_datasource_config_from_manifest_uses_manifest_bindings() -> None:
+    """Test datasource config from manifest uses manifest bindings."""
     profile = DataFusionRuntimeProfile(
         data_sources=DataSourceConfig(
             extract_output=ExtractOutputConfig(output_root="/tmp/extract"),
@@ -59,6 +61,7 @@ def test_datasource_config_from_manifest_uses_manifest_bindings() -> None:
 
 
 def test_datasource_config_from_profile_uses_bootstrap_derivations(tmp_path: Path) -> None:
+    """Test datasource config from profile uses bootstrap derivations."""
     normalize_root = tmp_path / "normalize"
     profile = DataFusionRuntimeProfile(
         data_sources=DataSourceConfig(

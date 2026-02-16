@@ -25,7 +25,11 @@ def build_summary_envelope(
     diagnostics: list[dict[str, Any]] | None = None,
     telemetry: Mapping[str, Any] | None = None,
 ) -> SummaryEnvelopeV1:
-    """Build a typed summary envelope from mapping surfaces."""
+    """Build a typed summary envelope from mapping surfaces.
+
+    Returns:
+        SummaryEnvelopeV1: Function return value.
+    """
     return SummaryEnvelopeV1(
         summary=dict(summary),
         diagnostics=[dict(row) for row in (diagnostics or [])],
@@ -34,7 +38,11 @@ def build_summary_envelope(
 
 
 def summary_envelope_to_mapping(envelope: SummaryEnvelopeV1) -> dict[str, Any]:
-    """Convert summary envelope to mapping payload."""
+    """Convert summary envelope to mapping payload.
+
+    Returns:
+        dict[str, Any]: Function return value.
+    """
     return require_mapping(envelope)
 
 

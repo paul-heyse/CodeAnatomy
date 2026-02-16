@@ -33,6 +33,7 @@ def _manifest(bindings: ManifestDatasetBindings) -> SemanticProgramManifest:
 
 
 def test_manifest_dataset_bindings_lookup_subset_and_payload() -> None:
+    """Test manifest dataset bindings lookup subset and payload."""
     bindings = ManifestDatasetBindings(
         locations={
             "zeta": DatasetLocation(path="/tmp/zeta", format="delta"),
@@ -52,12 +53,14 @@ def test_manifest_dataset_bindings_lookup_subset_and_payload() -> None:
 
 
 def test_manifest_dataset_bindings_require_location_raises_key_error() -> None:
+    """Test manifest dataset bindings require location raises key error."""
     bindings = ManifestDatasetBindings(locations={})
     with pytest.raises(KeyError, match="Required dataset location not found"):
         _ = bindings.require_location("missing_dataset")
 
 
 def test_semantic_program_manifest_payload_and_fingerprint_stability() -> None:
+    """Test semantic program manifest payload and fingerprint stability."""
     bindings = ManifestDatasetBindings(
         locations={"alpha": DatasetLocation(path="/tmp/alpha", format="delta")}
     )
@@ -71,6 +74,7 @@ def test_semantic_program_manifest_payload_and_fingerprint_stability() -> None:
 
 
 def test_dataset_bindings_helper_returns_profile_catalog_bindings() -> None:
+    """Test dataset bindings helper returns profile catalog bindings."""
     profile = DataFusionRuntimeProfile(
         data_sources=msgspec.structs.replace(
             DataFusionRuntimeProfile().data_sources,
@@ -95,6 +99,7 @@ def test_dataset_bindings_helper_returns_profile_catalog_bindings() -> None:
 
 
 def test_semantic_execution_context_carries_manifest_resolver() -> None:
+    """Test semantic execution context carries manifest resolver."""
     profile = DataFusionRuntimeProfile()
     bindings = ManifestDatasetBindings(
         locations={"repo_snapshot": DatasetLocation(path="/tmp/repo_snapshot", format="delta")}

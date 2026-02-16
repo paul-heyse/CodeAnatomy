@@ -14,6 +14,7 @@ def _py_files_under(root: Path) -> list[Path]:
 
 
 def test_no_pydantic_import_in_hot_paths() -> None:
+    """Test no pydantic import in hot paths."""
     repo = _repo_root()
     hot_roots = [
         repo / "tools/cq/search",
@@ -30,6 +31,7 @@ def test_no_pydantic_import_in_hot_paths() -> None:
 
 
 def test_contract_modules_use_msgspec() -> None:
+    """Test contract modules use msgspec."""
     repo = _repo_root()
     contract_files = [
         repo / "tools/cq/core/contracts.py",
@@ -45,6 +47,7 @@ def test_contract_modules_use_msgspec() -> None:
 
 
 def test_no_typeddict_in_cq_runtime_modules() -> None:
+    """Test no typeddict in cq runtime modules."""
     repo = _repo_root()
     cq_root = repo / "tools/cq"
     offenders: list[Path] = []

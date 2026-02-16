@@ -40,6 +40,7 @@ def _span(token: bytes, *, occurrence: int = 1) -> tuple[int, int]:
 
 
 def test_resolution_for_imported_call_symbol() -> None:
+    """Test resolution for imported call symbol."""
     start, end = _span(b"alias_thing", occurrence=2)
     payload = enrich_python_resolution_by_byte_range(
         _SOURCE,
@@ -67,6 +68,7 @@ def test_resolution_for_imported_call_symbol() -> None:
 
 
 def test_resolution_for_assignment_symbol_role() -> None:
+    """Test resolution for assignment symbol role."""
     start, end = _span(b"target", occurrence=1)
     payload = enrich_python_resolution_by_byte_range(
         _SOURCE,
@@ -86,6 +88,7 @@ def test_resolution_for_assignment_symbol_role() -> None:
 
 
 def test_resolution_import_alias_chain() -> None:
+    """Test resolution import alias chain."""
     start, end = _span(b"alias_thing", occurrence=1)
     payload = enrich_python_resolution_by_byte_range(
         _SOURCE,
@@ -101,6 +104,7 @@ def test_resolution_import_alias_chain() -> None:
 
 
 def test_resolution_session_cache_populates_index() -> None:
+    """Test resolution session cache populates index."""
     session = get_python_analysis_session(Path("sample.py"), _SOURCE)
     start, end = _span(b"operating_system", occurrence=2)
     payload = enrich_python_resolution_by_byte_range(
@@ -119,6 +123,7 @@ def test_resolution_session_cache_populates_index() -> None:
 
 
 def test_resolution_fail_open_for_invalid_span_and_syntax() -> None:
+    """Test resolution fail open for invalid span and syntax."""
     invalid_span = enrich_python_resolution_by_byte_range(
         _SOURCE,
         source_bytes=_bytes(),

@@ -10,6 +10,9 @@ import pytest
 from tools.cq.query import parse_query
 from tools.cq.query.ir import RelationalConstraint
 
+MULTIPLE_RELATIONAL_CONSTRAINT_COUNT = 2
+ALL_CONSTRAINTS_COUNT = 3
+
 
 class TestRelationalOperatorParsing:
     """Tests for relational operator parsing."""
@@ -51,7 +54,7 @@ class TestRelationalOperatorParsing:
         """Parse multiple relational constraints."""
         query = parse_query("pattern='$X()' inside='def handle' has='await'")
         constraints = query.get_all_relational_constraints()
-        assert len(constraints) == 2
+        assert len(constraints) == MULTIPLE_RELATIONAL_CONSTRAINT_COUNT
         operators = {c.operator for c in constraints}
         assert operators == {"inside", "has"}
 
@@ -202,6 +205,6 @@ class TestQueryRelationalMethods:
         """Query with multiple constraints returns all."""
         query = parse_query("pattern='$X' inside='class $C' has='$Y' follows='$Z'")
         constraints = query.get_all_relational_constraints()
-        assert len(constraints) == 3
+        assert len(constraints) == ALL_CONSTRAINTS_COUNT
         operators = {c.operator for c in constraints}
         assert operators == {"inside", "has", "follows"}

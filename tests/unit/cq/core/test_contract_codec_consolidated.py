@@ -14,6 +14,10 @@ from tools.cq.core.contract_codec import (
 from tools.cq.core.schema import CqResult, RunMeta
 from tools.cq.core.structs import CqStruct, JsonScalar, JsonValue
 
+SAMPLE_STRUCT_COUNT = 5
+PUBLIC_LIST_LENGTH = 2
+JSON_SCALAR_COUNT = 5
+
 
 class _SampleStruct(CqStruct, frozen=True):
     name: str = "test"
@@ -57,10 +61,10 @@ class TestLoadsJsonResult:
 
 class TestToPublicDict:
     def test_struct_to_dict(self) -> None:
-        s = _SampleStruct(name="hello", count=5)
+        s = _SampleStruct(name="hello", count=SAMPLE_STRUCT_COUNT)
         d = to_public_dict(s)
         assert d["name"] == "hello"
-        assert d["count"] == 5
+        assert d["count"] == SAMPLE_STRUCT_COUNT
 
     def test_non_dict_raises(self) -> None:
         import pytest
@@ -73,7 +77,7 @@ class TestToPublicList:
     def test_structs_to_list(self) -> None:
         items = [_SampleStruct(name="a"), _SampleStruct(name="b")]
         result = to_public_list(items)
-        assert len(result) == 2
+        assert len(result) == PUBLIC_LIST_LENGTH
         assert result[0]["name"] == "a"
         assert result[1]["name"] == "b"
 
@@ -81,7 +85,7 @@ class TestToPublicList:
 class TestJsonTypeAliases:
     def test_scalar_types(self) -> None:
         scalars: list[JsonScalar] = ["str", 1, 1.0, True, None]
-        assert len(scalars) == 5
+        assert len(scalars) == JSON_SCALAR_COUNT
 
     def test_nested_value(self) -> None:
         val: JsonValue = {"key": [1, "two", {"nested": None}]}

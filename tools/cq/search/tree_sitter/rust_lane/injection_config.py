@@ -20,7 +20,11 @@ class InjectionSettingsV1(CqStruct, frozen=True):
 
 
 def settings_for_pattern(query: object, pattern_idx: int) -> InjectionSettingsV1:
-    """Load normalized injection settings for one query pattern index."""
+    """Load normalized injection settings for one query pattern index.
+
+    Returns:
+        InjectionSettingsV1: Function return value.
+    """
     pattern_settings = getattr(query, "pattern_settings", None)
     if not callable(pattern_settings):
         return InjectionSettingsV1()

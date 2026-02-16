@@ -71,7 +71,11 @@ def build_contract_snapshot(
     grammar_digest: str,
     query_digest: str | None = None,
 ) -> QueryContractSnapshotV1:
-    """Build stable contract snapshot for one language lane."""
+    """Build stable contract snapshot for one language lane.
+
+    Returns:
+        QueryContractSnapshotV1: Function return value.
+    """
     node_kinds = tuple(
         sorted(
             str(kind)
@@ -102,7 +106,11 @@ def diff_snapshots(
     previous: QueryContractSnapshotV1,
     current: QueryContractSnapshotV1,
 ) -> GrammarDiffV1:
-    """Diff two snapshots by node-kind and field-name sets."""
+    """Diff two snapshots by node-kind and field-name sets.
+
+    Returns:
+        GrammarDiffV1: Function return value.
+    """
     return diff_schema(
         _SnapshotIndexV1(
             all_node_kinds=previous.all_node_kinds,

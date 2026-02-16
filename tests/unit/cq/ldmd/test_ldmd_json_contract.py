@@ -24,6 +24,7 @@ details
 
 
 def test_ldmd_get_json_returns_structured_payload(tmp_path: Path) -> None:
+    """Test ldmd get json returns structured payload."""
     ldmd_path = tmp_path / "result.ldmd"
     _write_ldmd(ldmd_path)
     ctx = CliContext.build(
@@ -48,6 +49,7 @@ def test_ldmd_get_json_returns_structured_payload(tmp_path: Path) -> None:
 
 
 def test_ldmd_neighbors_json_returns_envelope(tmp_path: Path) -> None:
+    """Test ldmd neighbors json returns envelope."""
     ldmd_path = tmp_path / "result.ldmd"
     _write_ldmd(ldmd_path)
     ctx = CliContext.build(

@@ -16,6 +16,12 @@ from tools.cq.core.snb_schema import (
     SemanticNodeRefV1,
 )
 
+PREVIEW_TOTAL = 10
+PREVIEW_NODE_COUNT = 2
+CREATED_AT_MS = 1234567890.0
+MAX_NODES = 42
+MAX_EDGES = 100
+
 
 def test_artifact_pointer_v1_construction() -> None:
     """Test ArtifactPointerV1 construction with required fields."""
@@ -151,11 +157,11 @@ def test_neighborhood_slice_v1_with_preview() -> None:
     slice_v1 = NeighborhoodSliceV1(
         kind="callers",
         title="Callers",
-        total=10,
+        total=PREVIEW_TOTAL,
         preview=(node1, node2),
     )
-    assert slice_v1.total == 10
-    assert len(slice_v1.preview) == 2
+    assert slice_v1.total == PREVIEW_TOTAL
+    assert len(slice_v1.preview) == PREVIEW_NODE_COUNT
     assert slice_v1.preview[0].name == "caller1"
     assert slice_v1.preview[1].name == "caller2"
 
@@ -194,14 +200,14 @@ def test_bundle_meta_v1_with_values() -> None:
         tool_version="0.1.0",
         workspace_root="/workspace",
         query_text="entity=function name=build_graph",
-        created_at_ms=1234567890.0,
+        created_at_ms=CREATED_AT_MS,
         semantic_sources=({"name": "tree_sitter", "version": "0.25.10"},),
         limits={"max_nodes": 1000, "max_depth": 3},
     )
     assert meta.tool_version == "0.1.0"
     assert meta.workspace_root == "/workspace"
     assert meta.query_text == "entity=function name=build_graph"
-    assert meta.created_at_ms == 1234567890.0
+    assert meta.created_at_ms == CREATED_AT_MS
     assert len(meta.semantic_sources) == 1
     assert meta.limits == {"max_nodes": 1000, "max_depth": 3}
 
@@ -222,12 +228,12 @@ def test_neighborhood_graph_summary_v1_with_counts() -> None:
         deterministic_id="sha256-graph",
     )
     summary = NeighborhoodGraphSummaryV1(
-        node_count=42,
-        edge_count=100,
+        node_count=MAX_NODES,
+        edge_count=MAX_EDGES,
         full_graph_artifact=artifact,
     )
-    assert summary.node_count == 42
-    assert summary.edge_count == 100
+    assert summary.node_count == MAX_NODES
+    assert summary.edge_count == MAX_EDGES
     assert summary.full_graph_artifact is not None
     assert summary.full_graph_artifact.artifact_id == "graph-123"
 
@@ -311,9 +317,9 @@ def test_semantic_neighborhood_bundle_v1_with_full_data() -> None:
     assert len(bundle.slices) == 1
     assert bundle.slices[0].kind == "callers"
     assert bundle.graph is not None
-    assert bundle.graph.node_count == 10
+    assert bundle.graph.node_count == PREVIEW_TOTAL
     assert bundle.node_index is not None
-    assert len(bundle.node_index) == 2
+    assert len(bundle.node_index) == PREVIEW_NODE_COUNT
     assert len(bundle.artifacts) == 1
     assert bundle.artifacts[0].artifact_kind == "semantic.call_graph"
     assert len(bundle.diagnostics) == 1

@@ -10,7 +10,7 @@ from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.query.language import ripgrep_types_for_scope
 from tools.cq.search.pipeline.classifier import QueryMode
 from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
-from tools.cq.search.rg.runner import run_rg_files_with_matches
+from tools.cq.search.rg.runner import RgFilesWithMatchesRequest, run_rg_files_with_matches
 
 if TYPE_CHECKING:
     from tools.cq.astgrep.sgpy_scanner import RuleSpec
@@ -28,7 +28,11 @@ def extract_literal_fragments(pattern: str) -> list[str]:
 
 
 def collect_prefilter_fragments(rules: tuple[RuleSpec, ...]) -> tuple[str, ...]:
-    """Collect a high-signal literal set from ast-grep rule patterns."""
+    """Collect a high-signal literal set from ast-grep rule patterns.
+
+    Returns:
+        tuple[str, ...]: Function return value.
+    """
     fragments: list[str] = []
     for rule in rules:
         pattern = rule.to_config().get("pattern")
@@ -66,14 +70,16 @@ def rg_prefilter_files(
         normalize_repo_relative_path(path.resolve(), root=resolved_root) for path in files
     )
     matched_rel = run_rg_files_with_matches(
-        root=resolved_root,
-        patterns=literals,
-        mode=QueryMode.LITERAL,
-        lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
-        include_globs=[],
-        exclude_globs=[],
-        paths=candidate_paths,
-        limits=limits or INTERACTIVE,
+        RgFilesWithMatchesRequest(
+            root=resolved_root,
+            patterns=literals,
+            mode=QueryMode.LITERAL,
+            lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
+            include_globs=(),
+            exclude_globs=(),
+            paths=candidate_paths,
+            limits=limits or INTERACTIVE,
+        )
     )
     if matched_rel is None:
         return files
@@ -103,7 +109,11 @@ def maybe_prefilter_astgrep_files(
     limits: SearchLimits | None = None,
     enabled: bool = True,
 ) -> list[Path]:
-    """Apply rg prefilter for multi-file ast-grep scans, fail-open on no literals."""
+    """Apply rg prefilter for multi-file ast-grep scans, fail-open on no literals.
+
+    Returns:
+        list[Path]: Function return value.
+    """
     if not enabled or len(files) <= 1 or not rules:
         return files
     literals = collect_prefilter_fragments(rules)

@@ -41,24 +41,41 @@ class NodeLike(Protocol):
         ...
 
 
+def _normalized_role(capture_names: Sequence[str]) -> str | None:
+    for capture_name in capture_names:
+        if capture_name.startswith(("role.definition", "definition.")):
+            return "definition"
+        if capture_name.startswith(("role.reference", "reference.")):
+            return "reference"
+    return None
+
+
+def _name_nodes(capture_map: Mapping[str, Sequence[NodeLike]]) -> Sequence[NodeLike]:
+    names = capture_map.get("name", ())
+    if names:
+        return names
+    for capture_name, nodes in capture_map.items():
+        if capture_name.endswith(".name") and nodes:
+            return nodes
+    return ()
+
+
 def build_tag_events(
     *,
     matches: Sequence[tuple[int, Mapping[str, Sequence[NodeLike]]]],
     source_bytes: bytes,
 ) -> tuple[RustTagEventV1, ...]:
-    """Build normalized tag events from query match rows."""
+    """Build normalized tag events from query match rows.
+
+    Returns:
+        tuple[RustTagEventV1, ...]: Function return value.
+    """
     rows: list[RustTagEventV1] = []
     for pattern_idx, capture_map in matches:
-        kind = "unknown"
-        if "role.definition" in capture_map:
-            role = "definition"
-            kind = "symbol"
-        elif "role.reference" in capture_map:
-            role = "reference"
-            kind = "symbol"
-        else:
+        role = _normalized_role(tuple(capture_map.keys()))
+        if role is None:
             continue
-        names = capture_map.get("name", [])
+        names = _name_nodes(capture_map)
         if not names:
             continue
         node = names[0]
@@ -68,7 +85,7 @@ def build_tag_events(
         rows.append(
             RustTagEventV1(
                 role=role,
-                kind=kind,
+                kind="symbol",
                 name=text,
                 start_byte=int(getattr(node, "start_byte", 0)),
                 end_byte=int(getattr(node, "end_byte", 0)),

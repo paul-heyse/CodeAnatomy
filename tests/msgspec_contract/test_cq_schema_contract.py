@@ -7,6 +7,7 @@ from tools.cq.core.summary_contracts import SummaryEnvelopeV1
 
 
 def test_summary_envelope_schema_smoke() -> None:
+    """Test summary envelope schema smoke."""
     schema = msgspec.json.schema(SummaryEnvelopeV1)
     assert isinstance(schema, dict)
     if schema.get("type") is not None:

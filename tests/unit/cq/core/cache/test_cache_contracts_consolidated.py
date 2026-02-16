@@ -29,19 +29,30 @@ from tools.cq.core.cache.contracts import (
     SgRecordCacheV1,
 )
 
+BLOB_SIZE_BYTES = 1024
+DEFAULT_LANE_LIMIT = 4
+DEFAULT_TTL_SECONDS = 15
+CACHE_HITS = 100
+CACHE_MISSES = 20
+EXPIRED_REMOVED = 5
+CULLED_REMOVED = 3
+DEFAULT_CULL_LIMIT = 16
+CREATED_TIMESTAMP_MS = 1234567890.0
+CALLSITE_FOO_COUNT = 5
+
 
 def test_tree_sitter_blob_ref_roundtrip() -> None:
     """Test TreeSitterBlobRefV1 msgspec roundtrip."""
     ref = TreeSitterBlobRefV1(
         blob_id="abc123",
         storage_key="cq:tree_sitter_blob:v1:abc123",
-        size_bytes=1024,
+        size_bytes=BLOB_SIZE_BYTES,
         path="/tmp/blobs/abc123.bin",
     )
     encoded = msgspec.msgpack.encode(ref)
     decoded = msgspec.msgpack.decode(encoded, type=TreeSitterBlobRefV1)
     assert decoded.blob_id == "abc123"
-    assert decoded.size_bytes == 1024
+    assert decoded.size_bytes == BLOB_SIZE_BYTES
     assert decoded.path == "/tmp/blobs/abc123.bin"
 
 
@@ -50,31 +61,31 @@ def test_lane_coordination_policy_defaults() -> None:
     policy = LaneCoordinationPolicyV1()
     assert policy.semaphore_key == "cq:tree_sitter:lanes"
     assert policy.lock_key_suffix == ":lock"
-    assert policy.lane_limit == 4
-    assert policy.ttl_seconds == 15
+    assert policy.lane_limit == DEFAULT_LANE_LIMIT
+    assert policy.ttl_seconds == DEFAULT_TTL_SECONDS
 
 
 def test_cache_maintenance_snapshot_roundtrip() -> None:
     """Test CacheMaintenanceSnapshotV1 msgspec roundtrip."""
     snapshot = CacheMaintenanceSnapshotV1(
-        hits=100,
-        misses=20,
-        expired_removed=5,
-        culled_removed=3,
+        hits=CACHE_HITS,
+        misses=CACHE_MISSES,
+        expired_removed=EXPIRED_REMOVED,
+        culled_removed=CULLED_REMOVED,
         integrity_errors=0,
     )
     encoded = msgspec.msgpack.encode(snapshot)
     decoded = msgspec.msgpack.decode(encoded, type=CacheMaintenanceSnapshotV1)
-    assert decoded.hits == 100
-    assert decoded.misses == 20
-    assert decoded.expired_removed == 5
-    assert decoded.culled_removed == 3
+    assert decoded.hits == CACHE_HITS
+    assert decoded.misses == CACHE_MISSES
+    assert decoded.expired_removed == EXPIRED_REMOVED
+    assert decoded.culled_removed == CULLED_REMOVED
 
 
 def test_cache_runtime_tuning_defaults() -> None:
     """Test CacheRuntimeTuningV1 default values."""
     tuning = CacheRuntimeTuningV1()
-    assert tuning.cull_limit == 16
+    assert tuning.cull_limit == DEFAULT_CULL_LIMIT
     assert tuning.eviction_policy == "least-recently-stored"
     assert tuning.statistics_enabled is False
     assert tuning.create_tag_index is True
@@ -147,26 +158,26 @@ def test_search_artifact_bundle_roundtrip() -> None:
         occurrences=[],
         diagnostics={},
         snippets={},
-        created_ms=1234567890.0,
+        created_ms=CREATED_TIMESTAMP_MS,
     )
     encoded = msgspec.msgpack.encode(bundle)
     decoded = msgspec.msgpack.decode(encoded, type=SearchArtifactBundleV1)
     assert decoded.run_id == "run123"
     assert decoded.query == "build_graph"
-    assert decoded.created_ms == 1234567890.0
+    assert decoded.created_ms == CREATED_TIMESTAMP_MS
 
 
 def test_calls_target_cache_roundtrip() -> None:
     """Test CallsTargetCacheV1 msgspec roundtrip."""
     cache = CallsTargetCacheV1(
         target_location=("src/test.py", 10),
-        target_callees={"foo": 5, "bar": 3},
+        target_callees={"foo": CALLSITE_FOO_COUNT, "bar": CULLED_REMOVED},
         snapshot_digest="digest123",
     )
     encoded = msgspec.msgpack.encode(cache)
     decoded = msgspec.msgpack.decode(encoded, type=CallsTargetCacheV1)
     assert decoded.target_location == ("src/test.py", 10)
-    assert decoded.target_callees["foo"] == 5
+    assert decoded.target_callees["foo"] == CALLSITE_FOO_COUNT
 
 
 def test_pattern_fragment_cache_defaults() -> None:

@@ -34,15 +34,21 @@ from planning_engine.spec_contracts import (
     ViewDefinition,
 )
 
+TOTAL_PIPELINE_OUTPUTS = 10
+ENGINE_OUTPUT_COUNT = 6
+PYTHON_AUX_OUTPUT_COUNT = 3
+
 
 class TestOutputContractConstants:
     """Verify output contract constant integrity."""
 
-    def test_full_pipeline_outputs_count(self) -> None:
+    @staticmethod
+    def test_full_pipeline_outputs_count() -> None:
         """FULL_PIPELINE_OUTPUTS has exactly 10 entries."""
-        assert len(FULL_PIPELINE_OUTPUTS) == 10
+        assert len(FULL_PIPELINE_OUTPUTS) == TOTAL_PIPELINE_OUTPUTS
 
-    def test_full_pipeline_outputs_exact_keys(self) -> None:
+    @staticmethod
+    def test_full_pipeline_outputs_exact_keys() -> None:
         """FULL_PIPELINE_OUTPUTS matches the canonical output names."""
         expected = {
             "cpg_nodes",
@@ -58,47 +64,57 @@ class TestOutputContractConstants:
         }
         assert set(FULL_PIPELINE_OUTPUTS) == expected
 
-    def test_engine_cpg_outputs_count(self) -> None:
+    @staticmethod
+    def test_engine_cpg_outputs_count() -> None:
         """ENGINE_CPG_OUTPUTS has exactly 6 Rust-producible entries."""
-        assert len(ENGINE_CPG_OUTPUTS) == 6
+        assert len(ENGINE_CPG_OUTPUTS) == ENGINE_OUTPUT_COUNT
 
-    def test_python_auxiliary_outputs_count(self) -> None:
+    @staticmethod
+    def test_python_auxiliary_outputs_count() -> None:
         """PYTHON_AUXILIARY_OUTPUTS has exactly 3 Python-side entries."""
-        assert len(PYTHON_AUXILIARY_OUTPUTS) == 3
+        assert len(PYTHON_AUXILIARY_OUTPUTS) == PYTHON_AUX_OUTPUT_COUNT
 
-    def test_orchestrator_outputs_count(self) -> None:
+    @staticmethod
+    def test_orchestrator_outputs_count() -> None:
         """ORCHESTRATOR_OUTPUTS has exactly 1 orchestrator entry."""
         assert len(ORCHESTRATOR_OUTPUTS) == 1
 
-    def test_no_duplicate_outputs(self) -> None:
+    @staticmethod
+    def test_no_duplicate_outputs() -> None:
         """No output name appears in more than one source category."""
         all_outputs = ENGINE_CPG_OUTPUTS + PYTHON_AUXILIARY_OUTPUTS + ORCHESTRATOR_OUTPUTS
         assert len(all_outputs) == len(set(all_outputs))
 
-    def test_full_equals_union(self) -> None:
+    @staticmethod
+    def test_full_equals_union() -> None:
         """FULL_PIPELINE_OUTPUTS is the union of all source categories."""
         union = set(ENGINE_CPG_OUTPUTS) | set(PYTHON_AUXILIARY_OUTPUTS) | set(ORCHESTRATOR_OUTPUTS)
         assert set(FULL_PIPELINE_OUTPUTS) == union
 
-    def test_output_source_map_covers_all(self) -> None:
+    @staticmethod
+    def test_output_source_map_covers_all() -> None:
         """OUTPUT_SOURCE_MAP has an entry for every output."""
         assert set(OUTPUT_SOURCE_MAP.keys()) == set(FULL_PIPELINE_OUTPUTS)
 
-    def test_output_source_map_values(self) -> None:
+    @staticmethod
+    def test_output_source_map_values() -> None:
         """OUTPUT_SOURCE_MAP values are valid source names."""
         valid_sources = {"rust_engine", "python_auxiliary", "orchestrator"}
         assert set(OUTPUT_SOURCE_MAP.values()).issubset(valid_sources)
 
-    def test_legacy_aliases_present_for_all_cpg_outputs(self) -> None:
+    @staticmethod
+    def test_legacy_aliases_present_for_all_cpg_outputs() -> None:
         """Every canonical CPG output has one legacy alias."""
         assert len(CANONICAL_CPG_OUTPUTS) == len(LEGACY_CPG_OUTPUTS) == len(ENGINE_CPG_OUTPUTS)
 
-    def test_output_source_map_with_aliases_covers_legacy(self) -> None:
+    @staticmethod
+    def test_output_source_map_with_aliases_covers_legacy() -> None:
         """Compatibility source map includes legacy CPG aliases."""
         for name in LEGACY_CPG_OUTPUTS:
             assert OUTPUT_SOURCE_MAP_WITH_ALIASES[name] == "rust_engine"
 
-    def test_name_conversion_helpers(self) -> None:
+    @staticmethod
+    def test_name_conversion_helpers() -> None:
         """Canonical/legacy helper conversion is invertible for CPG outputs."""
         for canonical in CANONICAL_CPG_OUTPUTS:
             legacy = legacy_cpg_output_name(canonical)
@@ -169,7 +185,8 @@ def _spec_fixture() -> SemanticExecutionSpec:
 class TestRunResultMapping:
     """RunResult and BuildResult mapping contract tests."""
 
-    def test_run_result_to_build_result(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_run_result_to_build_result(tmp_path: Path) -> None:
         """Map BuildResult payloads to the public GraphProductBuildResult contract."""
         request = GraphProductBuildRequest(
             repo_root=tmp_path,
@@ -187,7 +204,8 @@ class TestRunResultMapping:
         assert parsed.cpg_props_map.path.name == "cpg_props_map"
         assert parsed.cpg_edges_by_dst.path.name == "cpg_edges_by_dst"
 
-    def test_run_result_contains_all_engine_outputs(self) -> None:
+    @staticmethod
+    def test_run_result_contains_all_engine_outputs() -> None:
         """Ensure BuildResult contains the full canonical CPG output set."""
         fixture = _build_result_fixture("/tmp/build")
         for key in ENGINE_CPG_OUTPUTS:
@@ -197,8 +215,8 @@ class TestRunResultMapping:
 class TestRustBoundaryContracts:
     """Boundary behavior contracts for graph.build_pipeline."""
 
+    @staticmethod
     def test_execute_engine_phase_preserves_typed_engine_error(
-        self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Typed boundary errors propagate without Python re-wrapping."""
@@ -231,8 +249,8 @@ class TestRustBoundaryContracts:
         assert exc_info.value.stage == "runtime"
         assert exc_info.value.code == "RUN_BUILD_EXECUTION_FAILED"
 
+    @staticmethod
     def test_execute_engine_phase_uses_dict_native_run_payload(
-        self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Engine response contracts are consumed from dict-native payloads."""
@@ -259,8 +277,8 @@ class TestRustBoundaryContracts:
         assert run_result["outputs"] == []
         assert artifacts == {}
 
+    @staticmethod
     def test_execute_engine_phase_returns_artifact_contract(
-        self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Engine response artifacts are returned to orchestrator callers."""
@@ -296,7 +314,8 @@ class TestRustBoundaryContracts:
 class TestCLIOutputContracts:
     """Contract checks for CLI-facing structured output payloads."""
 
-    def test_build_output_report_fields(self) -> None:
+    @staticmethod
+    def test_build_output_report_fields() -> None:
         """Validate required fields in structured per-table output reports."""
         payload = _finalize_payload("/tmp/build/cpg_nodes")
         assert {"path", "rows", "error_rows", "paths"} <= set(payload)
@@ -304,7 +323,8 @@ class TestCLIOutputContracts:
         assert isinstance(paths, dict)
         assert {"data", "errors", "stats", "alignment"} <= set(paths)
 
-    def test_plan_targets_match_engine_contract(self) -> None:
+    @staticmethod
+    def test_plan_targets_match_engine_contract() -> None:
         """Lock the plan-command output target list to canonical engine names."""
         assert list(ENGINE_CPG_OUTPUTS) == [
             "cpg_nodes",
@@ -319,12 +339,14 @@ class TestCLIOutputContracts:
 class TestDiagnosticArtifactContracts:
     """Contract checks for diagnostics artifact payload schemas."""
 
-    def test_plan_summary_artifact_schema(self) -> None:
+    @staticmethod
+    def test_plan_summary_artifact_schema() -> None:
         """Verify required fields exist on EnginePlanSummaryArtifact."""
         summary = record_engine_plan_summary(_spec_fixture())
         assert {"spec_hash", "view_count", "join_edge_count"} <= set(summary.__struct_fields__)
 
-    def test_execution_summary_artifact_schema(self) -> None:
+    @staticmethod
+    def test_execution_summary_artifact_schema() -> None:
         """Verify required fields exist on EngineExecutionSummaryArtifact."""
         execution_summary = record_engine_execution_summary(
             {

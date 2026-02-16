@@ -15,6 +15,7 @@ def _write(path: Path, content: str) -> None:
 
 
 def test_imports_scope_filters_include_only_selected_files(tmp_path: Path) -> None:
+    """Test imports scope filters include only selected files."""
     _write(
         tmp_path / "pkg" / "a.py",
         "import os\nfrom pathlib import Path\n",
@@ -34,6 +35,7 @@ def test_imports_scope_filters_include_only_selected_files(tmp_path: Path) -> No
 
 
 def test_exceptions_scope_filters_exclude_files(tmp_path: Path) -> None:
+    """Test exceptions scope filters exclude files."""
     _write(
         tmp_path / "pkg" / "a.py",
         "def alpha():\n    raise ValueError('a')\n",
@@ -55,6 +57,7 @@ def test_exceptions_scope_filters_exclude_files(tmp_path: Path) -> None:
 
 
 def test_side_effects_scope_filters_include_files(tmp_path: Path) -> None:
+    """Test side effects scope filters include files."""
     _write(
         tmp_path / "pkg" / "a.py",
         "import os\nENV = os.environ.get('HOME')\n",

@@ -12,6 +12,8 @@ from pathlib import Path
 
 from tools.cq.cli_app.infrastructure import build_config_chain
 
+DEFAULT_PROVIDER_COUNT = 2
+
 
 class TestBuildConfigChain:
     """Tests for build_config_chain function."""
@@ -19,7 +21,7 @@ class TestBuildConfigChain:
     def test_default_config_chain(self) -> None:
         """Test default config chain includes Env and Toml providers."""
         providers = build_config_chain()
-        assert len(providers) == 2
+        assert len(providers) == DEFAULT_PROVIDER_COUNT
         # First provider should be Env
         assert providers[0].__class__.__name__ == "Env"
         # Second provider should be Toml
@@ -37,7 +39,7 @@ class TestBuildConfigChain:
         config_file.write_text("[cq]\nformat = 'json'\n")
 
         providers = build_config_chain(config_file=str(config_file))
-        assert len(providers) == 2
+        assert len(providers) == DEFAULT_PROVIDER_COUNT
         # First should still be Env
         assert providers[0].__class__.__name__ == "Env"
         # Second should be Toml with our file
@@ -48,7 +50,7 @@ class TestBuildConfigChain:
         config_file = tmp_path / "nonexistent.toml"
         # The provider is created, but will fail when trying to read
         providers = build_config_chain(config_file=str(config_file))
-        assert len(providers) == 2
+        assert len(providers) == DEFAULT_PROVIDER_COUNT
 
 
 class TestEnvVarPrefix:

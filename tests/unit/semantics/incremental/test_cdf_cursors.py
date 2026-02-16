@@ -9,6 +9,12 @@ import pytest
 
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 
+START_VERSION = 5
+UPDATED_VERSION = 10
+OVERWRITE_VERSION = 15
+CURSOR_LIST_COUNT = 3
+NEXT_VERSION_AFTER_FIVE = 6
+
 
 class TestCdfCursor:
     """Tests for CdfCursor dataclass."""
@@ -16,9 +22,9 @@ class TestCdfCursor:
     @pytest.mark.smoke
     def test_create_factory_method(self) -> None:
         """CdfCursor.create factory method creates cursor."""
-        cursor = CdfCursor.create("my_dataset", 5)
+        cursor = CdfCursor.create("my_dataset", START_VERSION)
         assert cursor.dataset_name == "my_dataset"
-        assert cursor.last_version == 5
+        assert cursor.last_version == START_VERSION
         assert cursor.last_timestamp is None
 
     def test_create_with_zero_version(self) -> None:
@@ -30,19 +36,19 @@ class TestCdfCursor:
         """CdfCursor can be constructed directly."""
         cursor = CdfCursor(
             dataset_name="direct_dataset",
-            last_version=10,
+            last_version=UPDATED_VERSION,
             last_timestamp="2024-01-01T00:00:00Z",
         )
         assert cursor.dataset_name == "direct_dataset"
-        assert cursor.last_version == 10
+        assert cursor.last_version == UPDATED_VERSION
         assert cursor.last_timestamp == "2024-01-01T00:00:00Z"
 
     def test_cursor_is_frozen(self) -> None:
         """CdfCursor is immutable."""
-        cursor = CdfCursor.create("dataset", 5)
+        cursor = CdfCursor.create("dataset", START_VERSION)
         attr_name = "last_version"
         with pytest.raises(FrozenInstanceError):
-            setattr(cursor, attr_name, 10)
+            setattr(cursor, attr_name, UPDATED_VERSION)
 
     def test_cursor_with_timestamp(self) -> None:
         """CdfCursor can store timestamp."""
@@ -91,14 +97,14 @@ class TestCdfCursorStoreSaveLoad:
     def test_save_and_load_cursor(self, tmp_path: Path) -> None:
         """save_cursor and load_cursor work correctly."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
-        cursor = CdfCursor.create("test_dataset", 10)
+        cursor = CdfCursor.create("test_dataset", UPDATED_VERSION)
 
         store.save_cursor(cursor)
         loaded = store.load_cursor("test_dataset")
 
         assert loaded is not None
         assert loaded.dataset_name == "test_dataset"
-        assert loaded.last_version == 10
+        assert loaded.last_version == UPDATED_VERSION
 
     def test_load_nonexistent_cursor(self, tmp_path: Path) -> None:
         """load_cursor returns None for nonexistent cursor."""
@@ -112,30 +118,30 @@ class TestCdfCursorStoreSaveLoad:
         """save_cursor overwrites existing cursor."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
-        cursor1 = CdfCursor.create("dataset", 5)
+        cursor1 = CdfCursor.create("dataset", START_VERSION)
         store.save_cursor(cursor1)
 
-        cursor2 = CdfCursor.create("dataset", 15)
+        cursor2 = CdfCursor.create("dataset", OVERWRITE_VERSION)
         store.save_cursor(cursor2)
 
         loaded = store.load_cursor("dataset")
         assert loaded is not None
-        assert loaded.last_version == 15
+        assert loaded.last_version == OVERWRITE_VERSION
 
     def test_save_multiple_cursors(self, tmp_path: Path) -> None:
         """Multiple cursors can be saved independently."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
-        store.save_cursor(CdfCursor.create("dataset_a", 5))
-        store.save_cursor(CdfCursor.create("dataset_b", 10))
+        store.save_cursor(CdfCursor.create("dataset_a", START_VERSION))
+        store.save_cursor(CdfCursor.create("dataset_b", UPDATED_VERSION))
 
         loaded_a = store.load_cursor("dataset_a")
         loaded_b = store.load_cursor("dataset_b")
 
         assert loaded_a is not None
-        assert loaded_a.last_version == 5
+        assert loaded_a.last_version == START_VERSION
         assert loaded_b is not None
-        assert loaded_b.last_version == 10
+        assert loaded_b.last_version == UPDATED_VERSION
 
 
 class TestCdfCursorStoreDelete:
@@ -145,7 +151,7 @@ class TestCdfCursorStoreDelete:
     def test_delete_cursor(self, tmp_path: Path) -> None:
         """delete_cursor removes cursor file."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
-        cursor = CdfCursor.create("to_delete", 5)
+        cursor = CdfCursor.create("to_delete", START_VERSION)
         store.save_cursor(cursor)
 
         assert store.load_cursor("to_delete") is not None
@@ -167,7 +173,7 @@ class TestCdfCursorStoreDelete:
 
         assert not store.has_cursor("dataset")
 
-        store.save_cursor(CdfCursor.create("dataset", 5))
+        store.save_cursor(CdfCursor.create("dataset", START_VERSION))
         assert store.has_cursor("dataset")
 
         store.delete_cursor("dataset")
@@ -189,12 +195,12 @@ class TestCdfCursorStoreList:
         """list_cursors returns all saved cursors."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
-        store.save_cursor(CdfCursor.create("dataset_a", 5))
-        store.save_cursor(CdfCursor.create("dataset_b", 10))
-        store.save_cursor(CdfCursor.create("dataset_c", 15))
+        store.save_cursor(CdfCursor.create("dataset_a", START_VERSION))
+        store.save_cursor(CdfCursor.create("dataset_b", UPDATED_VERSION))
+        store.save_cursor(CdfCursor.create("dataset_c", OVERWRITE_VERSION))
 
         result = store.list_cursors()
-        assert len(result) == 3
+        assert len(result) == CURSOR_LIST_COUNT
 
         names = {c.dataset_name for c in result}
         assert names == {"dataset_a", "dataset_b", "dataset_c"}
@@ -215,25 +221,25 @@ class TestCdfCursorStoreUpdateVersion:
         """update_version creates and saves cursor."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
-        cursor = store.update_version("dataset", 10)
+        cursor = store.update_version("dataset", UPDATED_VERSION)
         assert cursor.dataset_name == "dataset"
-        assert cursor.last_version == 10
+        assert cursor.last_version == UPDATED_VERSION
 
         # Verify it was persisted
         loaded = store.load_cursor("dataset")
         assert loaded is not None
-        assert loaded.last_version == 10
+        assert loaded.last_version == UPDATED_VERSION
 
     def test_update_version_overwrites(self, tmp_path: Path) -> None:
         """update_version overwrites existing cursor."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
-        store.update_version("dataset", 5)
-        store.update_version("dataset", 15)
+        store.update_version("dataset", START_VERSION)
+        store.update_version("dataset", OVERWRITE_VERSION)
 
         loaded = store.load_cursor("dataset")
         assert loaded is not None
-        assert loaded.last_version == 15
+        assert loaded.last_version == OVERWRITE_VERSION
 
 
 class TestCdfCursorStoreGetStartVersion:
@@ -243,10 +249,10 @@ class TestCdfCursorStoreGetStartVersion:
     def test_get_start_version_returns_next_version(self, tmp_path: Path) -> None:
         """get_start_version returns last_version + 1."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
-        store.update_version("dataset", 5)
+        store.update_version("dataset", START_VERSION)
 
         start = store.get_start_version("dataset")
-        assert start == 6
+        assert start == NEXT_VERSION_AFTER_FIVE
 
     def test_get_start_version_returns_none_for_missing(self, tmp_path: Path) -> None:
         """get_start_version returns None for missing cursor."""
@@ -273,7 +279,7 @@ class TestCdfCursorStoreSanitization:
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
         # Names with slashes should be saved safely
-        store.save_cursor(CdfCursor.create("path/to/dataset", 5))
+        store.save_cursor(CdfCursor.create("path/to/dataset", START_VERSION))
 
         loaded = store.load_cursor("path/to/dataset")
         assert loaded is not None
@@ -283,7 +289,7 @@ class TestCdfCursorStoreSanitization:
         """Dataset names with backslashes are sanitized."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
-        store.save_cursor(CdfCursor.create("path\\to\\dataset", 5))
+        store.save_cursor(CdfCursor.create("path\\to\\dataset", START_VERSION))
 
         loaded = store.load_cursor("path\\to\\dataset")
         assert loaded is not None

@@ -10,6 +10,9 @@ import pytest
 from tools.cq.query import parse_query
 from tools.cq.query.ir import PatternSpec
 
+COMPOSITE_PATTERN_COUNT = 2
+NTH_CHILD_EXACT_POSITION = 3
+
 
 class TestPatternContextParsing:
     """Tests for pattern.context syntax parsing."""
@@ -156,14 +159,14 @@ class TestCompositeRuleParsing:
         query = parse_query("pattern='$X' all='p1,p2'")
         assert query.composite is not None
         assert query.composite.operator == "all"
-        assert len(query.composite.patterns) == 2
+        assert len(query.composite.patterns) == COMPOSITE_PATTERN_COUNT
 
     def test_parse_any_rule(self) -> None:
         """Parse 'any' composite rule."""
         query = parse_query("pattern='$X' any='logger.$M,print($$$)'")
         assert query.composite is not None
         assert query.composite.operator == "any"
-        assert len(query.composite.patterns) == 2
+        assert len(query.composite.patterns) == COMPOSITE_PATTERN_COUNT
 
     def test_parse_not_rule(self) -> None:
         """Parse 'not' composite rule."""
@@ -178,9 +181,9 @@ class TestNthChildParsing:
 
     def test_parse_exact_position(self) -> None:
         """Parse nthChild with exact position."""
-        query = parse_query("pattern='$X' nthChild=3")
+        query = parse_query(f"pattern='$X' nthChild={NTH_CHILD_EXACT_POSITION}")
         assert query.nth_child is not None
-        assert query.nth_child.position == 3
+        assert query.nth_child.position == NTH_CHILD_EXACT_POSITION
         assert not query.nth_child.reverse
 
     def test_parse_formula_position(self) -> None:

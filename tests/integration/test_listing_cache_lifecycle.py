@@ -16,6 +16,8 @@ from tests.test_helpers.optional_deps import require_datafusion_udfs
 
 require_datafusion_udfs()
 
+MIN_PROVIDER_EVENTS = 2
+
 
 def _write_parquet(path: Path) -> None:
     table = pa.table({"id": [1, 2], "value": ["a", "b"]})
@@ -49,7 +51,7 @@ def test_listing_refresh_records_event(tmp_path: Path) -> None:
         runtime_profile=profile,
     )
     providers = sink.artifacts_snapshot().get("datafusion_table_providers_v1", [])
-    assert len(providers) >= 2
+    assert len(providers) >= MIN_PROVIDER_EVENTS
     latest = providers[-1]
     assert latest.get("name") == "events"
     assert latest.get("listing_mutable") is True

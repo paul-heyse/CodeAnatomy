@@ -1,3 +1,5 @@
+"""Tests for test_cache_coordination."""
+
 from __future__ import annotations
 
 import os
@@ -13,6 +15,7 @@ from tools.cq.core.cache import (
 
 
 def test_lane_guard_noop_backend() -> None:
+    """Noop backend should still honor semaphore-lane guard entry/exit."""
     backend = NoopCacheBackend()
     marker = {"entered": False}
     with tree_sitter_lane_guard(
@@ -26,7 +29,9 @@ def test_lane_guard_noop_backend() -> None:
     assert marker["entered"]
 
 
+
 def test_publish_once_barrier_executes_function() -> None:
+    """Publish-once barrier executes callback exactly once."""
     backend = NoopCacheBackend()
     counter = {"value": 0}
 
@@ -41,7 +46,9 @@ def test_publish_once_barrier_executes_function() -> None:
     assert counter["value"] == 1
 
 
+
 def test_lane_guard_with_diskcache_backend(tmp_path: Path) -> None:
+    """Protect diskcache lane updates with shared lock/semaphore coordination."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")

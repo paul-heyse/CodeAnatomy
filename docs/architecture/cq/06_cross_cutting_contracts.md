@@ -1,6 +1,6 @@
 # 06 — Cross-Cutting Contracts & Orchestration
 
-**Version:** 0.5.0
+**Version:** 0.6.0
 **Date:** 2026-02-15
 **Scope:** System-wide contracts and orchestration primitives that span CQ subsystems
 
@@ -11,17 +11,17 @@ This document defines the cross-cutting contracts, orchestration layers, and ser
 **Target audience:** Advanced developers proposing architectural changes or integrating new CQ subsystems.
 
 **Coverage:**
+- Three-tier type system (serialized contracts, runtime-only objects, external handles)
 - FrontDoor Insight V1 contract (primary cross-subsystem schema)
+- Semantic Neighborhood Bundle (SNB) schema
 - Multi-language orchestration and partition merging
 - LSP integration layer and semantic contract state machine
-- Advanced evidence planes (semantic overlays, diagnostics, refactor actions, Rust extensions)
 - Enrichment facts system and code fact clusters
 - Scoring system (impact/confidence/buckets)
-- Core schema models (CqResult, Finding, Section, Anchor)
+- Core schema models (CqResult, Finding, Section, Anchor, DetailPayload, ScoreDetails)
 - Typed boundary protocol (conversion, validation, error taxonomy)
 - Contract codec (centralized serialization authority)
 - Contract constraints (annotated types and validation policies)
-- Serialization infrastructure and module boundary protocol
 
 **Out of scope:**
 - CLI rendering (see doc 01)
@@ -39,11 +39,11 @@ CQ enforces a strict three-tier type system for module boundaries:
 
 | Tier | Purpose | Base Class | Characteristics |
 |------|---------|------------|-----------------|
-| **Serialized Contracts** | Cross-module payloads | `CqStruct`, `CqOutputStruct`, `CqStrictOutputStruct`, `CqSettingsStruct` | msgspec.Struct, frozen, kw_only |
+| **Serialized Contracts** | Cross-module payloads | `CqStruct`, `CqOutputStruct`, `CqStrictOutputStruct`, `CqSettingsStruct`, `CqCacheStruct` | msgspec.Struct, frozen, kw_only, omit_defaults |
 | **Runtime-Only Objects** | In-process state | dataclass or plain class | Not serialized |
 | **External Handles** | Parser/cache references | None | Never crosses boundaries |
 
-**Module:** `tools/cq/core/structs.py` (43 LOC)
+**Module:** `tools/cq/core/structs.py` (48 LOC)
 
 ```python
 class CqStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True):
@@ -60,54 +60,58 @@ class CqStrictOutputStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defau
 
 class CqCacheStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True, forbid_unknown_fields=True):
     """Base struct for serializable CQ cache payload contracts."""
+
+type JsonScalar = str | int | float | bool | None
+type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 ```
 
-**Contract Properties:**
-- `kw_only=True` prevents positional argument confusion
-- `frozen=True` ensures immutability for thread safety and caching
-- `omit_defaults=True` produces compact JSON output
-- `forbid_unknown_fields=True` (strict output/settings/cache) rejects invalid payloads
+**Policy:**
+- Use `msgspec.Struct` for serialized CQ contracts crossing module boundaries
+- Keep parser/cache handles as runtime-only objects
+- Avoid `pydantic` in CQ hot paths (`tools/cq/search`, `tools/cq/query`, `tools/cq/run`)
+- All serialized contracts use `frozen=True`, `kw_only=True`, `omit_defaults=True`
+- Settings/cache contracts add `forbid_unknown_fields=True` for strict validation
 
 ### Why msgspec Over Pydantic
 
-**Pydantic is excluded from CQ hot paths** (`tools/cq/search`, `tools/cq/query`, `tools/cq/run`):
+| Aspect | msgspec | Pydantic |
+|--------|---------|----------|
+| Performance | 5-10x faster encoding/decoding | Slower validation overhead |
+| Frozen structs | Native, efficient | Requires `frozen=True` on config |
+| Validation | Structural, at boundaries | Model-based, pervasive |
+| Type hints | Standard library | Custom types, validators |
+| Serialization | Built-in JSON/msgpack/YAML | Requires `.dict()`, `.json()` |
 
-| Criterion | msgspec | Pydantic |
-|-----------|---------|----------|
-| **Serialization speed** | 10-50x faster | Baseline |
-| **Runtime overhead** | Minimal (compiled) | Heavy (validation, model construction) |
-| **Contract enforcement** | Strict, fail-fast | Implicit coercion masks violations |
-| **Thread safety** | Frozen by default | Mutable unless configured |
-
-**Pydantic remains acceptable for:**
-- CLI configuration parsing (not performance-critical)
-- External API boundaries where implicit validation is desired
+**CQ Design Rationale:**
+- Hot paths (search, enrichment, cache) need minimal overhead
+- Structural validation at boundaries (not internal data flow)
+- Deterministic serialization for cache keys and artifacts
+- Compatibility with Rust FFI (msgpack boundary)
 
 ---
 
 ## FrontDoor Insight V1
 
-**Module:** `tools/cq/core/front_door_insight.py` (1,171 LOC)
+**Module:** `tools/cq/core/front_door_insight.py` (1172 LOC)
 
-FrontDoor Insight V1 is the **canonical cross-subsystem contract** for high-level code analysis results. It provides a unified schema for search, calls, and entity front-door outputs with concise target grounding, neighborhood previews, risk drivers, confidence metrics, degradation status, budgets, and artifact references.
+The canonical front-door insight contract used by search, calls, and entity outputs. Provides concise target grounding, neighborhood previews, risk drivers, confidence, degradation status, budgets, and artifact references.
 
 ### Contract Schema
 
-#### Top-Level Structure
+**Top-Level Structure:**
 
 ```python
 class FrontDoorInsightV1(CqStruct, frozen=True):
     """Canonical front-door insight schema for search/calls/entity."""
-
-    source: InsightSource                     # "search" | "calls" | "entity"
-    target: InsightTargetV1                   # Selected target identity
-    neighborhood: InsightNeighborhoodV1       # Caller/callee/reference previews
-    risk: InsightRiskV1                       # Risk level + drivers + counters
-    confidence: InsightConfidenceV1           # Evidence kind + score + bucket
-    degradation: InsightDegradationV1         # Semantic/scan/scope degradation
-    budget: InsightBudgetV1                   # Output truncation budgets
-    artifact_refs: InsightArtifactRefsV1      # Overflow/diagnostic artifact refs
-    schema_version: str = "cq.insight.v1"     # Schema evolution marker
+    source: InsightSource                              # "search" | "calls" | "entity"
+    target: InsightTargetV1                            # Selected target
+    neighborhood: InsightNeighborhoodV1                # Neighborhood envelope
+    risk: InsightRiskV1                                # Risk assessment
+    confidence: InsightConfidenceV1                    # Confidence payload
+    degradation: InsightDegradationV1                  # Degradation status
+    budget: InsightBudgetV1                            # Budget limits
+    artifact_refs: InsightArtifactRefsV1               # Artifact pointers
+    schema_version: str = "cq.insight.v1"
 ```
 
 **Type Aliases:**
@@ -121,184 +125,227 @@ RiskLevel = Literal["low", "med", "high"]
 
 #### InsightTargetV1
 
-Primary target selected by front-door command:
-
 ```python
-class InsightTargetV1(CqStruct, frozen=True):
-    symbol: str                              # Symbol name
-    kind: str = "unknown"                    # Entity kind (function, class, etc.)
-    location: InsightLocationV1              # File/line/col location
-    signature: str | None = None             # Function/class signature
-    qualname: str | None = None              # Fully qualified name
-    selection_reason: str = ""               # Why this target was selected
-
 class InsightLocationV1(CqStruct, frozen=True):
+    """Location payload for a selected target."""
     file: str = ""
     line: int | None = None
     col: int | None = None
+
+class InsightTargetV1(CqStruct, frozen=True):
+    """Primary target selected by a front-door command."""
+    symbol: str
+    kind: str = "unknown"
+    location: InsightLocationV1 = InsightLocationV1()
+    signature: str | None = None
+    qualname: str | None = None
+    selection_reason: str = ""
 ```
 
-**Selection Reasons (observed):**
-- `"top_definition"` - Highest-ranked definition in search results
-- `"resolved_calls_target"` - Direct resolution in calls analysis
-- `"top_entity_result"` - Top entity query match
-- `"fallback_query"` - Query string used when no grounded target exists
+**Fields:**
+- `symbol` - Target symbol name
+- `kind` - Node kind (e.g., "function", "class", "import")
+- `location` - File/line/col location
+- `signature` - Function signature or type annotation
+- `qualname` - Qualified name (Python: `module.Class.method`, Rust: `crate::module::Item`)
+- `selection_reason` - Why this target was selected (e.g., "top_definition", "resolved_calls_target", "fallback_query")
 
 #### InsightNeighborhoodV1
 
-Neighborhood envelope with four slice categories:
-
 ```python
+class InsightSliceV1(CqStruct, frozen=True):
+    """Preview-able neighborhood slice with provenance and availability."""
+    total: int = 0
+    preview: tuple[SemanticNodeRefV1, ...] = ()
+    availability: Availability = "unavailable"
+    source: NeighborhoodSource = "none"
+    overflow_artifact_ref: str | None = None
+
 class InsightNeighborhoodV1(CqStruct, frozen=True):
+    """Neighborhood envelope used by the front-door card."""
     callers: InsightSliceV1 = InsightSliceV1()
     callees: InsightSliceV1 = InsightSliceV1()
     references: InsightSliceV1 = InsightSliceV1()
     hierarchy_or_scope: InsightSliceV1 = InsightSliceV1()
-
-class InsightSliceV1(CqStruct, frozen=True):
-    total: int = 0                           # Total count in slice
-    preview: tuple[SemanticNodeRefV1, ...] = ()  # Top-K nodes for preview
-    availability: Availability = "unavailable"   # Data availability status
-    source: NeighborhoodSource = "none"          # Provenance (structural/semantic)
-    overflow_artifact_ref: str | None = None     # LDMD ref for full slice
 ```
 
-**Slice Mapping from NeighborhoodSliceV1:**
+**Slice Fields:**
+- `total` - Total count of items in this slice
+- `preview` - Top N items (limited by `budget.preview_per_slice`)
+- `availability` - `"full"` (complete), `"partial"` (incomplete), `"unavailable"` (missing)
+- `source` - Provenance (`"structural"`, `"semantic"`, `"heuristic"`, `"none"`)
+- `overflow_artifact_ref` - Reference to artifact containing full slice (when truncated)
 
-| Insight Slice | Source Slice Kinds |
-|---------------|-------------------|
+**Slice Kind Mapping:**
+
+| Insight Slice | SNB Slice Kinds |
+|---------------|-----------------|
 | `callers` | `{"callers"}` |
 | `callees` | `{"callees"}` |
 | `references` | `{"references", "imports", "importers"}` |
 | `hierarchy_or_scope` | `{"parents", "children", "siblings", "enclosing_context", "implementations", "type_supertypes", "type_subtypes", "related"}` |
 
-**Builder:** `build_neighborhood_from_slices()` (lines 298-354)
-
 #### InsightRiskV1
 
-Risk assessment with explicit drivers and counters:
-
 ```python
-class InsightRiskV1(CqStruct, frozen=True):
-    level: RiskLevel = "low"                 # Computed risk level
-    drivers: tuple[str, ...] = ()            # Explicit risk drivers
-    counters: InsightRiskCountersV1          # Deterministic risk counters
-
 class InsightRiskCountersV1(CqStruct, frozen=True):
+    """Deterministic risk counters for edit-surface evaluation."""
     callers: int = 0
     callees: int = 0
     files_with_calls: int = 0
-    arg_shape_count: int = 0                 # Argument variance
-    forwarding_count: int = 0                # Argument forwarding sites
-    hazard_count: int = 0                    # Dynamic hazards (eval, exec, etc.)
-    closure_capture_count: int = 0           # Closure variable captures
+    arg_shape_count: int = 0
+    forwarding_count: int = 0
+    hazard_count: int = 0
+    closure_capture_count: int = 0
+
+class InsightRiskV1(CqStruct, frozen=True):
+    """Risk level + explicit drivers and counters."""
+    level: RiskLevel = "low"
+    drivers: tuple[str, ...] = ()
+    counters: InsightRiskCountersV1 = InsightRiskCountersV1()
 ```
 
-**Risk Derivation Logic:** `risk_from_counters()` (lines 702-728)
-
-| Condition | Driver Label | Risk Contribution |
-|-----------|-------------|-------------------|
-| `callers >= 10` | `"high_call_surface"` | High |
-| `callers >= 4` | `"medium_call_surface"` | Medium |
-| `forwarding_count > 0` | `"argument_forwarding"` | Medium |
-| `hazard_count > 0` | `"dynamic_hazards"` | High |
-| `arg_shape_count > 3` | `"arg_shape_variance"` | Medium |
-| `closure_capture_count > 0` | `"closure_capture"` | Medium |
-| `files_with_calls > 3` | (implicit) | Medium |
-
-**Risk Level Logic:**
+**Risk Level Thresholds:**
 
 ```python
-def _risk_level_from_counters(counters: InsightRiskCountersV1) -> RiskLevel:
-    # High if: >10 callers OR hazards OR (forwarding + callers)
-    if counters.callers > 10 or counters.hazard_count > 0 or (counters.forwarding_count > 0 and counters.callers > 0):
-        return "high"
-    # Med if: >3 callers OR arg variance OR >3 files OR closures
-    if counters.callers > 3 or counters.arg_shape_count > 3 or counters.files_with_calls > 3 or counters.closure_capture_count > 0:
-        return "med"
-    return "low"
+_HIGH_CALLER_THRESHOLD = 10
+_HIGH_CALLER_STRICT_THRESHOLD = 10
+_MEDIUM_CALLER_THRESHOLD = 4
+_MEDIUM_CALLER_STRICT_THRESHOLD = 3
+_ARG_VARIANCE_THRESHOLD = 3
+_FILES_WITH_CALLS_THRESHOLD = 3
 ```
+
+**Risk Level Derivation:**
+
+| Condition | Level |
+|-----------|-------|
+| `callers > 10` OR `hazard_count > 0` OR (`forwarding_count > 0` AND `callers > 0`) | `high` |
+| `callers > 3` OR `arg_shape_count > 3` OR `files_with_calls > 3` OR `closure_capture_count > 0` | `med` |
+| Otherwise | `low` |
+
+**Risk Drivers:**
+
+| Driver | Condition |
+|--------|-----------|
+| `high_call_surface` | `callers >= 10` |
+| `medium_call_surface` | `callers >= 4` (and not high) |
+| `argument_forwarding` | `forwarding_count > 0` |
+| `dynamic_hazards` | `hazard_count > 0` |
+| `arg_shape_variance` | `arg_shape_count > 3` |
+| `closure_capture` | `closure_capture_count > 0` |
 
 #### InsightConfidenceV1
 
-Confidence assessment with evidence provenance:
-
 ```python
 class InsightConfidenceV1(CqStruct, frozen=True):
-    evidence_kind: str = "unknown"           # Evidence source classification
-    score: float = 0.0                       # Confidence score [0.0, 1.0]
-    bucket: str = "low"                      # Bucket label (low/med/high)
+    """Confidence payload used by card headline and machine parsing."""
+    evidence_kind: str = "unknown"
+    score: float = 0.0
+    bucket: str = "low"
 ```
 
-**Evidence Kinds (observed):**
-- `"resolved_ast"` - AST-based resolution
-- `"resolved_static_semantic"` - Static semantic resolution (Pyrefly/rust-analyzer)
-- `"bytecode"` - Bytecode analysis
-- `"heuristic"` - Pattern-based heuristic
-- `"rg_only"` - Ripgrep text match only
+**Evidence Kinds:**
+- `resolved_static_semantic` - Grounded via LSP/static-semantic provider
+- `resolved_ast` - AST-based resolution
+- `bytecode` - Bytecode analysis
+- `resolved_ast_heuristic` - AST + heuristics
+- `bytecode_heuristic` - Bytecode + heuristics
+- `cross_file_taint` - Cross-file dataflow
+- `heuristic` - Pattern matching
+- `rg_only` - Regex-only search
+- `unresolved` - No grounding
 
-**Builder:** `_confidence_from_findings()` (lines 747-765) selects best score/bucket from finding set.
+**Bucket Thresholds:**
+- `high` - score >= 0.7
+- `med` - score >= 0.4
+- `low` - score < 0.4
 
 #### InsightDegradationV1
 
-Compact degradation status for diagnostic transparency:
-
 ```python
 class InsightDegradationV1(CqStruct, frozen=True):
-    semantic: SemanticStatus = "unavailable"  # Semantic provider status
-    scan: str = "ok"                          # Scan completion status
-    scope_filter: str = "none"                # Scope filter degradation
-    notes: tuple[str, ...] = ()               # Freeform degradation notes
+    """Compact degradation status for front-door rendering."""
+    semantic: SemanticStatus = "unavailable"
+    scan: str = "ok"
+    scope_filter: str = "none"
+    notes: tuple[str, ...] = ()
 ```
 
-**Semantic Status Values:** `"unavailable" | "skipped" | "failed" | "partial" | "ok"`
+**Semantic Status Values:**
+- `"unavailable"` - Provider not available
+- `"skipped"` - Available but not attempted
+- `"failed"` - Attempted but all requests failed
+- `"partial"` - Some requests succeeded
+- `"ok"` - All requests succeeded
 
-**Scan Status Values:** `"ok" | "timed_out" | "truncated"`
+**Scan Status Values:**
+- `"ok"` - Normal execution
+- `"timed_out"` - Scan timed out
+- `"truncated"` - Results truncated
 
-**Scope Filter Values:** `"none" | "dropped" | "partial"`
+**Scope Filter Values:**
+- `"none"` - No scope filtering applied
+- `"dropped"` - Some results dropped by scope filter
+- `"partial"` - Partial language coverage
 
-**Builder:** `_degradation_from_summary()` (lines 768-813) derives from summary telemetry.
+**Notes:** Structured diagnostic messages (e.g., `"missing_languages=rust"`, `"dropped_by_scope={'python': 5}"`)
 
 #### InsightBudgetV1
 
-Output truncation budgets:
-
 ```python
 class InsightBudgetV1(CqStruct, frozen=True):
-    top_candidates: int = 3                  # Max target candidates in preview
-    preview_per_slice: int = 5               # Max nodes per neighborhood slice
-    semantic_targets: int = 1                # Max semantic enrichment targets
+    """Budget knobs used to keep front-door output bounded."""
+    top_candidates: int = 3
+    preview_per_slice: int = 5
+    semantic_targets: int = 1
 ```
 
-**Budget Presets:**
-- Search: `top_candidates=min(3, candidate_count)`, `semantic_targets=1`
-- Calls: `top_candidates=3`, `semantic_targets=1`
-- Entity: `top_candidates=3`, `semantic_targets=3`
+**Default Budgets:**
+
+| Source | top_candidates | preview_per_slice | semantic_targets |
+|--------|----------------|-------------------|------------------|
+| search | min(3, actual_count) | 5 | 1 |
+| calls | 3 | 5 | 1 |
+| entity | 3 | 5 | 3 |
 
 #### InsightArtifactRefsV1
 
-References to offloaded diagnostic/overflow artifacts:
-
 ```python
 class InsightArtifactRefsV1(CqStruct, frozen=True):
-    diagnostics: str | None = None           # Diagnostic artifact ref (LDMD)
-    telemetry: str | None = None             # Telemetry artifact ref
-    neighborhood_overflow: str | None = None # Full neighborhood artifact ref
+    """Artifact references for offloaded diagnostic/detail payloads."""
+    diagnostics: str | None = None
+    telemetry: str | None = None
+    neighborhood_overflow: str | None = None
 ```
+
+**References:** Relative paths to `.ldmd`, `.json`, or other artifact files.
 
 ### Insight Assembly Pipeline
 
+**Build Functions:**
+
+```python
+def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsightV1:
+    """Build search front-door insight payload."""
+
+def build_calls_insight(request: CallsInsightBuildRequestV1) -> FrontDoorInsightV1:
+    """Build calls front-door insight payload."""
+
+def build_entity_insight(request: EntityInsightBuildRequestV1) -> FrontDoorInsightV1:
+    """Build entity front-door insight payload."""
+```
+
 #### Search Insight
 
-**Builder:** `build_search_insight()` (lines 438-482)
-
-**Input Contract:**
+**Request Contract:**
 
 ```python
 class SearchInsightBuildRequestV1(CqStruct, frozen=True):
-    summary: dict[str, object]               # Search summary payload
-    primary_target: Finding | None           # Top definition finding
-    target_candidates: tuple[Finding, ...]   # All target candidates
+    """Typed request contract for search insight assembly."""
+    summary: dict[str, object]
+    primary_target: Finding | None
+    target_candidates: tuple[Finding, ...]
     neighborhood: InsightNeighborhoodV1 | None = None
     risk: InsightRiskV1 | None = None
     degradation: InsightDegradationV1 | None = None
@@ -306,21 +353,22 @@ class SearchInsightBuildRequestV1(CqStruct, frozen=True):
 ```
 
 **Assembly Logic:**
-1. Extract target from `primary_target` or fall back to query string
-2. Derive confidence from `target_candidates` findings
-3. Use provided `neighborhood` or empty default
-4. Use provided `risk` or derive from neighborhood totals
+1. Extract target from `primary_target` Finding or synthesize from `summary["query"]`
+2. Derive confidence from target candidates
+3. Use provided neighborhood or create empty
+4. Derive risk from neighborhood counters if not provided
 5. Build degradation from summary telemetry
-6. Build budget based on candidate count
+6. Set budget based on target candidate count
+
+**Target Selection Reason:** `"top_definition"` if primary_target exists, else `"fallback_query"`
 
 #### Calls Insight
 
-**Builder:** `build_calls_insight()` (lines 485-522)
-
-**Input Contract:**
+**Request Contract:**
 
 ```python
 class CallsInsightBuildRequestV1(CqStruct, frozen=True):
+    """Typed request contract for calls insight assembly."""
     function_name: str
     signature: str | None
     location: InsightLocationV1 | None
@@ -328,27 +376,28 @@ class CallsInsightBuildRequestV1(CqStruct, frozen=True):
     files_with_calls: int
     arg_shape_count: int
     forwarding_count: int
-    hazard_counts: dict[str, int]            # Hazard type -> count mapping
+    hazard_counts: dict[str, int]
     confidence: InsightConfidenceV1
     budget: InsightBudgetV1 | None = None
     degradation: InsightDegradationV1 | None = None
 ```
 
 **Assembly Logic:**
-1. Build target from `function_name`, `signature`, `location`
-2. Build risk counters from neighborhood + hazard_counts + arg_shape_count + forwarding_count
-3. Derive risk level and drivers from counters
-4. Use provided confidence
-5. Apply default calls budget
+1. Build target from function_name/signature/location
+2. Build risk counters from neighborhood + hazard/forwarding/arg_shape counts
+3. Derive risk level from counters
+4. Add hazard drivers to risk
+5. Use provided confidence/degradation/budget or defaults
+
+**Target Selection Reason:** `"resolved_calls_target"`
 
 #### Entity Insight
 
-**Builder:** `build_entity_insight()` (lines 525-564)
-
-**Input Contract:**
+**Request Contract:**
 
 ```python
 class EntityInsightBuildRequestV1(CqStruct, frozen=True):
+    """Typed request contract for entity insight assembly."""
     summary: dict[str, object]
     primary_target: Finding | None
     neighborhood: InsightNeighborhoodV1 | None = None
@@ -359,43 +408,68 @@ class EntityInsightBuildRequestV1(CqStruct, frozen=True):
 ```
 
 **Assembly Logic:**
-1. Extract target from `primary_target` or fall back to entity kind
-2. Use provided neighborhood or empty default
-3. Derive risk from neighborhood if not provided
-4. Use provided confidence or default to `resolved_ast` at 0.8 score
-5. Apply entity-specific budget (semantic_targets=3)
+1. Extract target from primary_target or synthesize from summary
+2. Use provided neighborhood or create empty
+3. Derive risk from neighborhood counters if not provided
+4. Use provided confidence or default to AST confidence
+5. Use provided degradation or create empty
+
+**Target Selection Reason:** `"top_entity_result"` if primary_target exists, else `"fallback_query"`
 
 ### Semantic Augmentation
 
-**Function:** `augment_insight_with_semantic()` (lines 356-435)
+**Function:** `augment_insight_with_semantic()` (lines 357-436)
 
-Overlays static semantic data on existing insight payload:
+Overlays static-semantic data (from LSP/static-semantic providers) on top of an existing insight:
 
-**Semantic Payload Fields:**
+```python
+def augment_insight_with_semantic(
+    insight: FrontDoorInsightV1,
+    semantic_payload: dict[str, object],
+    *,
+    preview_per_slice: int | None = None,
+) -> FrontDoorInsightV1:
+    """Overlay static semantic data on top of an existing insight payload."""
+```
 
-| Field | Usage | Target Field |
-|-------|-------|--------------|
-| `call_graph.incoming_callers` | Caller node refs | `neighborhood.callers.preview` |
-| `call_graph.incoming_total` | Caller count | `neighborhood.callers.total` |
-| `call_graph.outgoing_callees` | Callee node refs | `neighborhood.callees.preview` |
-| `call_graph.outgoing_total` | Callee count | `neighborhood.callees.total` |
-| `type_contract.callable_signature` | Signature string | `target.signature` |
-| `type_contract.resolved_type` | Type string | `target.signature` (fallback) |
-| (reference totals from various sources) | Reference count | `neighborhood.references.total` |
+**Augmentation Logic:**
 
-**Confidence Boost:**
-- Evidence kind: `"resolved_static_semantic"` if previously `"unknown"`
-- Score: `max(current_score, 0.8)`
-- Bucket: `max(current_bucket, "high")`
+1. **Call Graph Overlay:**
+   - Extract `semantic_payload["call_graph"]["incoming_callers"]` → `neighborhood.callers`
+   - Extract `semantic_payload["call_graph"]["outgoing_callees"]` → `neighborhood.callees`
+   - Merge totals (max of structural and semantic)
+   - Set `source="semantic"`
 
-**Degradation Update:**
-- `semantic` status: `"ok"`
+2. **Reference Count Overlay:**
+   - Extract `semantic_payload["local_scope_context"]["reference_locations"]` → `neighborhood.references.total`
+   - Fallback to `semantic_payload["symbol_grounding"]["references"]`
+
+3. **Type Contract Overlay:**
+   - Extract `semantic_payload["type_contract"]["callable_signature"]` → `target.signature`
+   - Fallback to `semantic_payload["type_contract"]["resolved_type"]`
+
+4. **Confidence Boost:**
+   - Set `evidence_kind="resolved_static_semantic"` (if currently "unknown")
+   - Set `score=max(current, 0.8)`
+   - Set `bucket=max(current, "high")`
+
+5. **Degradation Update:**
+   - Set `semantic="ok"`
 
 ### Partial Language Marking
 
-**Function:** `mark_partial_for_missing_languages()` (lines 647-683)
+**Function:** `mark_partial_for_missing_languages()` (lines 648-684)
 
-Marks insight slices as `"partial"` when language partitions are missing:
+Marks insight slices partial when language partitions are missing:
+
+```python
+def mark_partial_for_missing_languages(
+    insight: FrontDoorInsightV1,
+    *,
+    missing_languages: Sequence[str],
+) -> FrontDoorInsightV1:
+    """Mark insight slices partial when language partitions are missing."""
+```
 
 **Logic:**
 1. Downgrade each slice's `availability` to `"partial"` if currently `"unavailable"` or `"full"`
@@ -406,7 +480,7 @@ Marks insight slices as `"partial"` when language partitions are missing:
 
 ### Rendering
 
-**Function:** `render_insight_card()` (lines 188-204)
+**Function:** `render_insight_card()` (lines 189-205)
 
 Produces compact markdown card from insight payload:
 
@@ -432,6 +506,44 @@ Produces compact markdown card from insight payload:
 - `_render_budget_line()` - Budget limits
 - `_render_artifact_refs_line()` - Artifact references
 
+### Neighborhood Construction
+
+**Function:** `build_neighborhood_from_slices()` (lines 299-354)
+
+Maps structural neighborhood slices (SNB) into insight neighborhood schema:
+
+```python
+def build_neighborhood_from_slices(
+    slices: Sequence[NeighborhoodSliceV1],
+    *,
+    preview_per_slice: int = 5,
+    source: NeighborhoodSource = "structural",
+    overflow_artifact_ref: str | None = None,
+) -> InsightNeighborhoodV1:
+    """Map structural neighborhood slices into insight neighborhood schema."""
+```
+
+**Mapping Logic:**
+1. Collect slices by kind group (callers, callees, references, hierarchy)
+2. Aggregate totals across matching slices
+3. Deduplicate preview nodes by `node_id`
+4. Truncate to `preview_per_slice` limit
+5. Set `availability="full"` if total > 0, else `"partial"`
+6. Attach `overflow_artifact_ref` if total > preview count
+
+### Public Serialization
+
+**Function:** `to_public_front_door_insight_dict()` (lines 1008-1050)
+
+Serializes insight with explicit/full schema fields for public JSON output:
+
+```python
+def to_public_front_door_insight_dict(insight: FrontDoorInsightV1) -> dict[str, object]:
+    """Serialize insight with explicit/full schema fields for public JSON output."""
+```
+
+**Use Case:** JSON API responses, artifact storage, external integrations.
+
 ### Consumers
 
 | Consumer | Module | Usage |
@@ -443,9 +555,80 @@ Produces compact markdown card from insight payload:
 
 ---
 
+## Semantic Neighborhood Bundle (SNB) Schema
+
+**Module:** `tools/cq/core/snb_schema.py` (322 LOC)
+
+Canonical schema authority for Semantic Neighborhood Bundle artifacts. All SNB structures use frozen msgspec.Struct for deterministic serialization.
+
+### Core Structures
+
+**Artifact Pointer:**
+
+```python
+class ArtifactPointerV1(CqStruct, frozen=True):
+    """Generic artifact pointer with deterministic identity."""
+    artifact_kind: str
+    artifact_id: str
+    deterministic_id: str
+    byte_size: int = 0
+    storage_path: str | None = None
+    metadata: dict[str, object] | None = None
+```
+
+**Degradation Event:**
+
+```python
+class DegradeEventV1(CqStruct, frozen=True):
+    """Typed degradation event for structured failure tracking."""
+    stage: str
+    severity: Literal["info", "warning", "error"] = "warning"
+    category: str = ""
+    message: str = ""
+    correlation_key: str | None = None
+```
+
+**Semantic Node Reference:**
+
+```python
+class SemanticNodeRefV1(CqStruct, frozen=True):
+    """Reference to a semantic node in the neighborhood."""
+    node_id: str
+    kind: str
+    name: str
+    display_label: str = ""
+    file_path: str = ""
+    byte_span: tuple[int, int] | None = None
+    signature: str | None = None
+    qualname: str | None = None
+```
+
+**Neighborhood Slice:**
+
+```python
+class NeighborhoodSliceV1(CqStruct, frozen=True):
+    """Single neighborhood slice with provenance and preview."""
+    kind: str
+    total: int = 0
+    preview: tuple[SemanticNodeRefV1, ...] = ()
+    overflow_artifact_ref: str | None = None
+    source: str = "structural"
+```
+
+**Slice Kinds:**
+- `callers`, `callees` - Call graph edges
+- `references`, `imports`, `importers` - Reference relationships
+- `parents`, `children`, `siblings` - Hierarchy relationships
+- `enclosing_context` - Lexical scope
+- `implementations` - Interface/trait implementations
+- `type_supertypes`, `type_subtypes` - Type hierarchy
+- `related` - Other relationships
+
+---
+
 ## Multi-Language Orchestration
 
-**Module:** `tools/cq/core/multilang_orchestrator.py` (481 LOC)
+**Module:** `tools/cq/core/multilang_orchestrator.py` (485 LOC)
 
 Provides partition dispatch, scope enforcement, and result merging for multi-language queries (Python + Rust).
 
@@ -463,7 +646,7 @@ Provides partition dispatch, scope enforcement, and result merging for multi-lan
 
 ### Language Priority
 
-**Function:** `language_priority()` (lines 31-39)
+**Function:** `language_priority()` (lines 32-40)
 
 Returns deterministic ordering for scope:
 
@@ -476,11 +659,11 @@ def language_priority(scope: QueryLanguageScope) -> dict[QueryLanguage, int]:
 **Expanded Order:**
 - `"python"` → `["python"]`
 - `"rust"` → `["rust"]`
-- `"auto"` → `["python", "rust"]`  (Python first, Rust second)
+- `"auto"` → `["python", "rust"]` (Python first, Rust second)
 
 ### Partition Dispatch
 
-**Function:** `execute_by_language_scope()` (lines 42-72)
+**Function:** `execute_by_language_scope()` (lines 43-73)
 
 Executes callback once per language in scope:
 
@@ -494,13 +677,17 @@ if len(languages) == 1:
 **Multi-Language Parallel Execution:**
 ```python
 scheduler = get_worker_scheduler()
+policy = scheduler.policy
 if policy.query_partition_workers <= 1:
     # Sequential fallback
     return {lang: run_one(lang) for lang in languages}
 
 # Parallel dispatch
 futures = [scheduler.submit_io(run_one, lang) for lang in languages]
-batch = scheduler.collect_bounded(futures, timeout_seconds=max(1.0, float(len(languages)) * 5.0))
+batch = scheduler.collect_bounded(
+    futures,
+    timeout_seconds=max(1.0, float(len(languages)) * 5.0),
+)
 if batch.timed_out > 0:
     # Fail-open to sequential
     return {lang: run_one(lang) for lang in languages}
@@ -513,7 +700,7 @@ return dict(zip(languages, batch.done, strict=False))
 
 ### Partition Merging
 
-**Function:** `merge_partitioned_items()` (lines 75-104)
+**Function:** `merge_partitioned_items()` (lines 76-105)
 
 Merges and sorts language-partitioned item lists with stable deterministic ordering:
 
@@ -535,9 +722,24 @@ merged.sort(
 
 ### Result Merging
 
-**Function:** `merge_language_cq_results()` (lines 319-451)
+**Function:** `merge_language_cq_results()` (not shown, see multilang_orchestrator.py)
 
-Merges per-language `CqResult` payloads into unified multi-language result:
+Merges per-language `CqResult` payloads into unified multi-language result.
+
+**Input Contract:**
+
+```python
+class MergeResultsRequest(CqStruct, frozen=True):
+    """Input contract for multi-language CQ result merge."""
+    scope: QueryLanguageScope
+    results: Mapping[QueryLanguage, CqResult]
+    run: RunMeta
+    diagnostics: Sequence[Finding] | None = None
+    diagnostic_payloads: Sequence[Mapping[str, object]] | None = None
+    language_capabilities: Mapping[str, object] | None = None
+    summary_common: Mapping[str, object] | None = None
+    include_section_language_prefix: bool = True
+```
 
 **Merge Logic:**
 
@@ -550,82 +752,34 @@ Merges per-language `CqResult` payloads into unified multi-language result:
 7. **Semantic Planes:** Select first non-empty `semantic_planes` payload by language priority
 8. **FrontDoor Insight:** Select grounded insight by priority, mark partial for missing languages
 
-**Input Contract:**
-
-```python
-class MergeResultsRequest(CqStruct, frozen=True):
-    run: RunMeta                             # Run metadata
-    scope: QueryLanguageScope                # Language scope
-    results: Mapping[QueryLanguage, CqResult]  # Per-language results
-    diagnostics: Sequence[Finding] | None = None
-    diagnostic_payloads: list[dict[str, object]] | None = None
-    summary_common: dict[str, object] | None = None
-    language_capabilities: dict[str, dict[str, bool]] | None = None
-    include_section_language_prefix: bool = False
-```
-
 **FrontDoor Insight Selection:**
 
-```python
-def _select_front_door_insight(scope, results):
-    order = list(expand_language_scope(scope))
-    by_language = _collect_insights_by_language(order, results)
-
-    # Prefer grounded insights (have file location or non-fallback kind)
-    selected = _select_ordered_insight(order, by_language, require_grounded=True)
-    if selected is None:
-        # Fall back to ungrounded
-        selected = _select_ordered_insight(order, by_language, require_grounded=False)
-
-    if selected is not None and missing_languages:
-        selected = mark_partial_for_missing_languages(selected, missing_languages=missing_languages)
-    return selected
-```
-
-**Grounded Insight Criteria:**
+Prefers insights with grounded targets:
 - Has `target.location.file` OR
 - `target.kind` not in `{"query", "unknown", "entity"}`
+
+Falls back to ungrounded insights if no grounded insights available.
+
+Marks selected insight partial for missing languages via `mark_partial_for_missing_languages()`.
 
 ### Statistics Aggregation
 
 **Semantic Telemetry Aggregation:**
 
-```python
-def _aggregate_semantic_telemetry(results, *, key):
-    aggregate = {"attempted": 0, "applied": 0, "failed": 0, "skipped": 0, "timed_out": 0}
-    for result in results.values():
-        telemetry = result.summary.get(key)
-        if isinstance(telemetry, dict):
-            for field in aggregate:
-                aggregate[field] += int(telemetry.get(field, 0))
-    return aggregate
-```
-
-**Diagnostics Deduplication:**
-
-```python
-def _aggregate_python_semantic_diagnostics(order, results):
-    merged = []
-    seen = set()
-    for lang in order:
-        rows = results[lang].summary.get("python_semantic_diagnostics")
-        if isinstance(rows, list):
-            for row in rows:
-                if isinstance(row, dict):
-                    key = repr(row)
-                    if key not in seen:
-                        seen.add(key)
-                        merged.append(dict(row))
-    return merged
-```
+Aggregates counters across language partitions:
+- `attempted` - Total requests attempted
+- `applied` - Total requests successfully applied
+- `failed` - Total requests failed
+- `skipped` - Total requests skipped
+- `timed_out` - Total requests timed out
 
 ---
 
 ## LSP Integration Layer
 
-**Module:** `tools/cq/search/semantic/models.py` (507 LOC)
+**Module:** `tools/cq/search/semantic/models.py` (lines 1-150+)
 
-Provides shared LSP integration contracts, semantic contract state machine, and capability-gating patterns for Pyrefly (Python) and rust-analyzer (Rust) backends.
+Provides semantic provider types, state machine, enrichment contracts, and workspace root resolution for LSP-based enrichment.
 
 ### Semantic Provider Types
 
@@ -634,23 +788,27 @@ SemanticProvider = Literal["python_static", "rust_static", "none"]
 SemanticStatus = Literal["unavailable", "skipped", "failed", "partial", "ok"]
 ```
 
-**Provider-Language Mapping:**
-
-```python
-def provider_for_language(language: QueryLanguage | str) -> SemanticProvider:
-    if language == "python":
-        return "python_static"
-    if language == "rust":
-        return "rust_static"
-    return "none"
-```
-
 ### Semantic Contract State Machine
 
-**State Model:**
+**State Input:**
+
+```python
+class SemanticContractStateInputV1(CqStruct, frozen=True):
+    """Input envelope for deterministic semantic contract-state derivation."""
+    provider: SemanticProvider
+    available: bool
+    attempted: int = 0
+    applied: int = 0
+    failed: int = 0
+    timed_out: int = 0
+    reasons: tuple[str, ...] = ()
+```
+
+**State Output:**
 
 ```python
 class SemanticContractStateV1(CqStruct, frozen=True):
+    """Deterministic static-semantic state for front-door degradation semantics."""
     provider: SemanticProvider = "none"
     available: bool = False
     attempted: int = 0
@@ -661,340 +819,232 @@ class SemanticContractStateV1(CqStruct, frozen=True):
     reasons: tuple[str, ...] = ()
 ```
 
-**State Derivation:** `derive_semantic_contract_state()` (lines 104-151)
+**Derivation Function:**
 
 ```python
-def derive_semantic_contract_state(input_state: SemanticContractStateInputV1) -> SemanticContractStateV1:
-    # If provider unavailable -> "unavailable"
-    if not input_state.available:
-        return SemanticContractStateV1(provider=input_state.provider, available=False, status="unavailable", reasons=input_state.reasons)
-
-    # If not attempted -> "skipped"
-    if input_state.attempted <= 0:
-        return SemanticContractStateV1(provider=input_state.provider, available=True, status="skipped", reasons=input_state.reasons)
-
-    # If attempted but not applied -> "failed"
-    if input_state.applied <= 0:
-        return SemanticContractStateV1(provider=input_state.provider, available=True, attempted=input_state.attempted, failed=max(input_state.failed, input_state.attempted), timed_out=input_state.timed_out, status="failed", reasons=input_state.reasons)
-
-    # Otherwise "ok" or "partial"
-    status = "ok" if input_state.failed <= 0 and input_state.applied >= input_state.attempted else "partial"
-    return SemanticContractStateV1(provider=input_state.provider, available=True, attempted=input_state.attempted, applied=input_state.applied, failed=input_state.failed, timed_out=input_state.timed_out, status=status, reasons=input_state.reasons)
+def derive_semantic_contract_state(
+    input_state: SemanticContractStateInputV1,
+) -> SemanticContractStateV1:
+    """Derive canonical semantic state from capability + attempt telemetry."""
 ```
 
-**State Transition Table:**
+**State Transitions:**
 
-| Condition | Status | Rationale |
-|-----------|--------|-----------|
-| `available == False` | `"unavailable"` | LSP server not available |
-| `attempted <= 0` | `"skipped"` | Not attempted by design (budget/filter) |
-| `applied <= 0` | `"failed"` | Attempted but all failed |
-| `failed <= 0 && applied >= attempted` | `"ok"` | All attempted succeeded |
-| Otherwise | `"partial"` | Some succeeded, some failed |
+| Condition | Status |
+|-----------|--------|
+| `not available` | `"unavailable"` |
+| `available and attempted <= 0` | `"skipped"` |
+| `available and attempted > 0 and applied <= 0` | `"failed"` |
+| `available and attempted > 0 and applied > 0 and failed > 0` | `"partial"` |
+| `available and attempted > 0 and applied >= attempted and failed <= 0` | `"ok"` |
 
 ### Enrichment Request/Outcome
 
-**Request Contract:**
+**Request:**
 
 ```python
 class LanguageSemanticEnrichmentRequest(CqStruct, frozen=True):
-    language: QueryLanguage                  # "python" | "rust"
-    mode: str                                # CQ command mode (search/calls/entity)
-    root: Path                               # CQ command root
-    file_path: Path                          # Target file
-    line: int                                # Target line (1-indexed)
-    col: int                                 # Target column (0-indexed)
-    symbol_hint: str | None = None           # Optional symbol hint
-    run_id: str | None = None                # Run correlation ID
+    """Request envelope for language-aware front-door static semantic enrichment."""
+    language: QueryLanguage
+    mode: str
+    root: Path
+    file_path: Path
+    line: int
+    col: int
+    symbol_hint: str | None = None
+    run_id: str | None = None
 ```
 
-**Outcome Contract:**
+**Outcome:**
 
 ```python
 class LanguageSemanticEnrichmentOutcome(CqStruct, frozen=True):
-    payload: dict[str, object] | None = None  # Enrichment payload
-    timed_out: bool = False                   # Timeout occurred
-    failure_reason: str | None = None         # Failure reason
-    provider_root: Path | None = None         # Resolved workspace root
-    macro_expansion_count: int | None = None  # Rust macro expansions (if applicable)
-```
-
-**Public Outcome (for summary):**
-
-```python
-class SemanticOutcomeV1(CqOutputStruct, frozen=True):
+    """Normalized static semantic enrichment result for front-door callers."""
     payload: dict[str, object] | None = None
     timed_out: bool = False
     failure_reason: str | None = None
-    metadata: dict[str, object] = msgspec.field(default_factory=dict)
+    provider_root: Path | None = None
+    macro_expansion_count: int | None = None
+```
+
+**Cache Payload:**
+
+```python
+class SemanticOutcomeCacheV1(CqStruct, frozen=True):
+    """Serialized cache payload for front-door static semantic outcomes."""
+    payload: dict[str, object] | None = None
+    timed_out: bool = False
+    failure_reason: str | None = None
 ```
 
 ### Request Budget
 
-**Budget Contract:**
-
 ```python
 class SemanticRequestBudgetV1(CqStruct, frozen=True):
-    startup_timeout_seconds: float = 3.0     # LSP server startup timeout
-    probe_timeout_seconds: float = 1.0       # Per-request timeout
-    max_attempts: int = 2                    # Retry count
-    retry_backoff_ms: int = 100              # Backoff between retries
-```
-
-**Budget Presets by Mode:**
-
-```python
-def budget_for_mode(mode: str) -> SemanticRequestBudgetV1:
-    if mode == "calls":
-        return SemanticRequestBudgetV1(startup_timeout_seconds=2.5, probe_timeout_seconds=1.25, max_attempts=2, retry_backoff_ms=120)
-    if mode == "entity":
-        return SemanticRequestBudgetV1(startup_timeout_seconds=3.0, probe_timeout_seconds=1.25, max_attempts=2, retry_backoff_ms=120)
-    # Default (search)
-    return SemanticRequestBudgetV1(startup_timeout_seconds=3.0, probe_timeout_seconds=1.0, max_attempts=2, retry_backoff_ms=100)
+    """Timeout and retry budget for one static semantic request envelope."""
+    startup_timeout_seconds: float = 3.0
+    probe_timeout_seconds: float = 1.0
+    max_attempts: int = 2
+    retry_backoff_ms: int = 100
 ```
 
 ### Workspace Root Resolution
 
-**Function:** `resolve_language_provider_root()` (lines 410-425)
+**Python Root Markers:** `("pyproject.toml", "setup.cfg", "setup.py")`
 
-Finds nearest workspace root with language-specific markers:
+**Rust Root Markers:** `("Cargo.toml",)`
 
-**Python Markers:** `("pyproject.toml", "setup.cfg", "setup.py")`
-**Rust Markers:** `("Cargo.toml",)`
-
-**Resolution Logic:**
-1. Normalize `command_root` and `file_path` (resolve symlinks)
-2. Walk upward from `file_path.parent` to `command_root`
-3. Return first directory containing language-specific marker
-4. Fall back to `command_root` if no marker found
-
-**Use Case:** Ensures LSP server operates at correct workspace boundary for module resolution.
+**Resolution Logic:** Walk up directory tree from file until marker found or repo root reached.
 
 ### Capability Gating
 
-**Runtime Enable/Disable:**
-
-```python
-def semantic_runtime_enabled() -> bool:
-    """Return whether semantic enrichment is enabled for the current process."""
-    raw = os.getenv("CQ_ENABLE_SEMANTIC_ENRICHMENT")
-    if raw is None:
-        return True  # Enabled by default
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
-```
-
-**Fail-Open Outcome:**
-
-```python
-def fail_open(reason: str) -> SemanticOutcomeV1:
-    """Return a fail-open semantic outcome for graceful degradation."""
-    return SemanticOutcomeV1(payload=None, timed_out=False, failure_reason=reason)
-```
-
-**Design Pattern:**
-- All semantic enrichment is optional and fail-open
-- Missing/failed semantic data degrades to structural-only analysis
-- `semantic_runtime_enabled()` provides global kill switch via env var
+All LSP/semantic enrichment is capability-gated and fail-open:
+- Missing provider → `status="unavailable"`
+- Provider crash → `status="failed"` with failure_reason
+- Partial success → `status="partial"`
 
 ### Retry Logic
 
-**Function:** `call_with_retry()` (lines 328-349)
-
-Retry wrapper with timeout backoff:
-
-```python
-def call_with_retry(fn: Callable[[], object], *, max_attempts: int, retry_backoff_ms: int) -> tuple[object | None, bool]:
-    timed_out = False
-    for attempt in range(max_attempts):
-        try:
-            return fn(), timed_out
-        except TimeoutError:
-            timed_out = True
-            if attempt + 1 >= max_attempts:
-                return None, timed_out
-            if retry_backoff_ms > 0:
-                time.sleep((retry_backoff_ms / 1000.0) * (attempt + 1))
-        except (OSError, RuntimeError, ValueError, TypeError):
-            return None, timed_out
-    return None, timed_out
-```
-
-**Fail-Open Exceptions:** `OSError`, `RuntimeError`, `ValueError`, `TypeError`
+**Retry Policy:**
+- Max attempts: 2
+- Backoff: 100ms
+- Retry on transient failures (connection errors, timeouts)
+- No retry on semantic errors (invalid request, unsupported operation)
 
 ---
 
 ## Advanced Evidence Planes
 
-CQ implements four advanced evidence planes on top of LSP foundation. All planes are **capability-gated** and **fail-open** — base search/query/run execution is non-blocking.
+**Modules:**
+- `tools/cq/search/semantic/models.py` - Front-door semantic contracts
+- `tools/cq/search/semantic_overlays.py` - Semantic tokens + inlay hints
+- `tools/cq/search/diagnostics_pull.py` - Pull diagnostics normalization
+- `tools/cq/search/refactor_actions.py` - Code-action resolve/execute bridge
+- `tools/cq/search/rust_extensions.py` - Rust-analyzer macro/runnables extensions
 
-**Implementation Status:** All four planes are **implemented** as of 2026-02-15.
+**Status:** Implemented and integrated as of 2026-02-15. All planes are capability-gated and fail-open.
 
 ### Semantic Planes V2
 
-**Builder:** `build_static_semantic_planes()` (lines 276-325 in `semantic/models.py`)
+**Version:** `cq.semantic_planes.v2`
 
-Produces enriched semantic overlay from static enrichment payload:
+**Planes:**
+1. **Semantic Overlays** - Normalized semantic tokens + inlay hints
+2. **Diagnostics Pull** - Shared `textDocument/diagnostic` + `workspace/diagnostic` normalization
+3. **Refactor Actions** - Diagnostics + code-action resolve/execute helpers
+4. **Rust Extensions** - Macro expansion + runnables
 
-**Schema:**
+**Enrichment Integration:**
 
-```python
-{
-    "version": "cq.semantic_planes.v2",
-    "language": "python" | "rust",
-    "counts": {
-        "semantic_tokens": int,              # Token overlay count
-        "locals": int,                       # Local scope symbol count
-        "diagnostics": int,                  # Diagnostic count
-        "injections": int                    # Injection count (Rust macros)
-    },
-    "preview": {
-        "semantic_tokens": list[dict],       # Top semantic token samples
-        "locals": list[dict],                # Top local scope samples
-        "diagnostics": list[dict],           # Top diagnostic samples
-        "injections": list[dict]             # Top injection samples (Rust)
-    },
-    "degradation": list[str],                # ["scope_resolution_partial", "parse_error"]
-    "sources": list[str]                     # Enrichment source provenance
-}
-```
-
-**Semantic Tokens Preview:** `_semantic_tokens_preview()` extracts `node_kind`, `item_role`, `scope_kind`, `signature` (truncated to 180 chars)
-
-**Locals Preview:** `_locals_preview()` extracts `scope_chain` and `qualified_name_candidates`
-
-**Diagnostics Preview:**
-- Python: `_python_diagnostics()` extracts tree-sitter diagnostics + parse quality errors + degrade reasons
-- Rust: `_rust_diagnostics()` extracts tree-sitter diagnostics + degrade events
-
-**Injections Preview:** `_injections_preview()` extracts Rust macro invocations (`macro_name`)
-
-**Degradation Signals:**
-- `"scope_resolution_partial"` if `enrichment_status == "degraded"`
-- `"parse_error"` if diagnostics present
-
-### Semantic Overlays
-
-**Not a standalone module** — semantic overlays are implemented via `build_static_semantic_planes()` above. The overlays include:
-
-1. **Semantic Tokens:** Node kind, item role, scope kind classifications
-2. **Inlay Hints:** Type hints, parameter hints (embedded in `locals` preview)
-
-**Use Case:** Enriches search findings with LSP-derived semantic classifications for improved categorization.
-
-### Diagnostics Pull
-
-**Not a standalone module** — diagnostics are normalized and aggregated via `_python_diagnostics()` and `_rust_diagnostics()` in `build_static_semantic_planes()`.
-
-**Sources:**
-- Tree-sitter parse errors (`tree_sitter_diagnostics`)
-- Pyrefly parse quality errors (`parse_quality.error_nodes`, `parse_quality.missing_nodes`)
-- Rust-analyzer degrade events (`degrade_events`)
-- Explicit degrade reasons (`degrade_reasons`, `degrade_reason`)
-
-**Normalization:**
-
-```python
-{
-    "kind": str,              # Diagnostic kind (tree_sitter, degrade_reason, etc.)
-    "message": str,           # Diagnostic message
-    "line": int | None,       # Optional line number
-    "col": int | None         # Optional column number
-}
-```
-
-**Aggregation:** Multi-language diagnostics are aggregated via `_aggregate_python_semantic_diagnostics()` in multilang orchestrator.
-
-### Refactor Actions
-
-**Not a standalone module** — refactor actions are embedded in semantic enrichment payloads but not yet exposed as a first-class plane in current implementation.
-
-**Future Integration:** Code action resolve/execute bridge to support automated refactoring suggestions.
-
-### Rust Extensions
-
-**Macro Expansions:** Captured in `LanguageSemanticEnrichmentOutcome.macro_expansion_count` and injections preview.
-
-**Runnables:** Not yet exposed in current schema.
-
-**Future Integration:** Rust-analyzer runnables (tests, benchmarks, binaries) for executable context discovery.
+All planes enrich search/entity/neighborhood outputs without blocking core execution. Degradation events are tracked in `InsightDegradationV1.notes`.
 
 ---
 
 ## Enrichment Facts System
 
-**Module:** `tools/cq/core/enrichment_facts.py` (596 LOC)
+**Module:** `tools/cq/core/enrichment_facts.py` (595 LOC)
 
-Provides canonical resolution of enrichment payloads into structured Code Facts clusters for markdown rendering.
+Canonical enrichment fact resolution helpers for markdown rendering. Provides structured code fact clusters with applicability filtering and N/A semantics.
 
 ### Schema
 
-**Top-Level Resolution:**
+**Field Specification:**
 
 ```python
-class FactContext(CqStruct, frozen=True):
-    language: str | None                     # Resolved language (python/rust)
-    node_kind: str | None                    # Node kind (function_definition, etc.)
-
-class ResolvedFact(CqStruct, frozen=True):
-    label: str                               # Fact label
-    value: object | None                     # Resolved value
-    reason: NAReason | None = None           # N/A reason if absent
-
-class ResolvedFactCluster(CqStruct, frozen=True):
-    title: str                               # Cluster title
-    rows: tuple[ResolvedFact, ...]           # Resolved fact rows
+class FactFieldSpec(CqStruct, frozen=True):
+    """Specification for a single code-fact row."""
+    label: str
+    paths: tuple[tuple[str, ...], ...]
+    applicable_languages: frozenset[str] | None = None
+    applicable_kinds: frozenset[str] | None = None
+    fallback_reason: NAReason = "not_resolved"
 
 NAReason = Literal["not_applicable", "not_resolved", "enrichment_unavailable"]
 ```
 
+**Cluster Specification:**
+
+```python
+class FactClusterSpec(CqStruct, frozen=True):
+    """Specification for a code-fact cluster."""
+    title: str
+    fields: tuple[FactFieldSpec, ...]
+```
+
+**Context:**
+
+```python
+class FactContext(CqStruct, frozen=True):
+    """Language and node-kind context used for fact applicability."""
+    language: str | None
+    node_kind: str | None
+```
+
+**Resolved Output:**
+
+```python
+class ResolvedFact(CqStruct, frozen=True):
+    """Resolved fact row payload for renderer output."""
+    label: str
+    value: object | None
+    reason: NAReason | None = None
+
+class ResolvedFactCluster(CqStruct, frozen=True):
+    """Resolved fact cluster payload for renderer output."""
+    title: str
+    rows: tuple[ResolvedFact, ...]
+```
+
 ### Fact Cluster Specifications
 
-**Cluster Catalog:** `FACT_CLUSTERS` (lines 84-416) defines 7 standard clusters:
+**Clusters:**
 
-| Cluster Title | Field Count | Purpose |
-|--------------|-------------|---------|
-| **Identity & Grounding** | 8 | Language, symbol role, qualified name, binding candidates, definition/declaration/type targets |
-| **Type Contract** | 8 | Signature, resolved type, parameters, return type, generic params, async, generator, visibility, attributes |
-| **Call Graph** | 2 | Incoming callers, outgoing callees |
-| **Class/Method Context** | 8 | Enclosing class, base classes, overridden/overriding methods, struct fields, enum variants |
-| **Local Scope Context** | 4 | Enclosing callable, same-scope symbols, nearest assignments, narrowing hints, reference locations |
-| **Imports/Aliases** | 2 | Import alias chain, resolved import path |
-| **Diagnostics** | 1 | Anchor diagnostics |
-| **Neighborhood Bundle** | 7 | Bundle ID, slice count, diagnostic count, degrade events, semantic health, quiescent status, position encoding |
+1. **Identity & Grounding**
+   - Language, Symbol Role, Qualified Name, Binding Candidates
+   - Definition/Declaration/Type Definition/Implementation Targets (Python-only)
+
+2. **Type Contract**
+   - Signature, Parameters, Return Type, Resolved Type (Python-only)
+   - Generic Params (Python-only)
+   - Async, Generator (Python-only)
+
+3. **Scope & Visibility**
+   - Scope Kind, Visibility (Rust-only), Module Path
+   - Enclosing Function, Enclosing Class
+
+4. **Behavior**
+   - Is Async, Is Generator, Side Effects, Mutates Args
+
+5. **Structure**
+   - Attributes/Decorators, Base Classes, Struct Fields (Rust-only), Enum Variants (Rust-only)
+   - LOC, Complexity
+
+**Total Clusters:** 5
+
+**Total Fields:** 40+
 
 ### Field Specification
 
-**Field Spec Schema:**
+**Path Resolution:**
 
-```python
-class FactFieldSpec(CqStruct, frozen=True):
-    label: str                               # Human-readable label
-    paths: tuple[tuple[str, ...], ...]       # JSON path alternatives
-    applicable_languages: frozenset[str] | None = None  # Language filter
-    applicable_kinds: frozenset[str] | None = None      # Node kind filter
-    fallback_reason: NAReason = "not_resolved"          # Default N/A reason
-```
-
-**Example Field:**
+Each field has multiple lookup paths (priority-ordered):
 
 ```python
 FactFieldSpec(
-    label="Qualified Name",
+    label="Signature",
     paths=(
-        ("python_semantic", "symbol_grounding", "definition_targets"),
-        ("resolution", "qualified_name_candidates"),
-        ("qualified_name_candidates",),
+        ("python_semantic", "type_contract", "callable_signature"),
+        ("structural", "signature"),
+        ("signature",),
     ),
 )
 ```
 
-**Path Resolution Logic:** Tries each path in order until a non-empty value is found.
+**Path Lookup:** Walks nested dictionaries in order, returns first non-empty value.
 
 ### Applicability Filtering
 
-**Function:** `_field_applicable()` (lines 532-539)
-
-Filters fields by language and node kind:
+**Function:** `_field_applicable()` (lines 1000-1007)
 
 ```python
 def _field_applicable(*, field: FactFieldSpec, context: FactContext) -> bool:
@@ -1046,71 +1096,50 @@ _IMPORT_LIKE_KINDS = frozenset({"import_statement", "import_from_statement", "us
 
 ### Resolution Pipeline
 
-**1. Language Payload Extraction:** `resolve_primary_language_payload()` (lines 430-456)
-
-Resolves primary enrichment language and payload:
+**1. Language Payload Extraction:**
 
 ```python
-def resolve_primary_language_payload(payload: dict[str, object]) -> tuple[str | None, dict[str, object] | None]:
+def resolve_primary_language_payload(
+    payload: dict[str, object]
+) -> tuple[str | None, dict[str, object] | None]:
+    """Resolves primary enrichment language and payload."""
     # 1. Check top-level "language" field
-    language = payload.get("language") if isinstance(payload.get("language"), str) else None
-    if language in ("python", "rust"):
-        direct = payload.get(language)
-        if isinstance(direct, dict) and direct:
-            return language, direct
-
     # 2. Check for nested language payloads
-    for key in ("python", "rust"):
-        candidate = payload.get(key)
-        if isinstance(candidate, dict) and candidate:
-            return key, candidate
-
     # 3. Fall back to top-level payload
-    return language, payload if isinstance(payload, dict) else None
 ```
 
-**2. Context Resolution:** `resolve_fact_context()` (lines 459-474)
-
-Builds language/node-kind context:
+**2. Context Resolution:**
 
 ```python
-def resolve_fact_context(*, language: str | None, language_payload: dict[str, object] | None) -> FactContext:
-    if language_payload is None:
-        return FactContext(language=language, node_kind=None)
-    node_kind = _extract_node_kind(language_payload)
-    return FactContext(language=language, node_kind=node_kind)
+def resolve_fact_context(
+    *,
+    language: str | None,
+    language_payload: dict[str, object] | None
+) -> FactContext:
+    """Builds language/node-kind context."""
 ```
 
-**Node Kind Extraction:** `_extract_node_kind()` (lines 561-583)
-
-Priority-ordered extraction:
-1. `("structural", "node_kind")`
-2. `("resolution", "node_kind")`
-3. `("node_kind",)`
-4. Heuristic fallbacks:
-   - `item_role in {"import", "from_import", "use_import"}` → `"import_statement"`
-   - `call_target` present → `"call_expression"`
-   - `signature` + `params` present → `"function_definition"`
-   - `struct_fields` present → `"struct_item"`
-   - `enum_variants` present → `"enum_item"`
-
-**3. Cluster Resolution:** `resolve_fact_clusters()` (lines 477-500)
-
-Resolves all fact clusters for a context:
+**3. Cluster Resolution:**
 
 ```python
-def resolve_fact_clusters(*, context: FactContext, language_payload: dict[str, object] | None) -> tuple[ResolvedFactCluster, ...]:
-    clusters = []
-    for cluster in FACT_CLUSTERS:
-        rows = tuple(_resolve_field(field=field, context=context, language_payload=language_payload) for field in cluster.fields)
-        clusters.append(ResolvedFactCluster(title=cluster.title, rows=rows))
-    return tuple(clusters)
+def resolve_fact_clusters(
+    *,
+    context: FactContext,
+    language_payload: dict[str, object] | None
+) -> tuple[ResolvedFactCluster, ...]:
+    """Resolves all fact clusters for a context."""
 ```
 
-**Field Resolution:** `_resolve_field()` (lines 514-529)
+**4. Field Resolution:**
 
 ```python
-def _resolve_field(*, field: FactFieldSpec, context: FactContext, language_payload: dict[str, object] | None) -> ResolvedFact:
+def _resolve_field(
+    *,
+    field: FactFieldSpec,
+    context: FactContext,
+    language_payload: dict[str, object] | None
+) -> ResolvedFact:
+    """Resolves single fact field."""
     if language_payload is None:
         return ResolvedFact(label=field.label, value=None, reason="enrichment_unavailable")
     if not _field_applicable(field=field, context=context):
@@ -1125,10 +1154,11 @@ def _resolve_field(*, field: FactFieldSpec, context: FactContext, language_paylo
 
 ### N/A Semantics
 
-**Value Presence Check:** `has_fact_value()` (lines 419-427)
+**Value Presence Check:**
 
 ```python
 def has_fact_value(value: object) -> bool:
+    """Returns True if value is considered present (not N/A)."""
     if value is None:
         return False
     if isinstance(value, str):
@@ -1153,6 +1183,7 @@ Returns non-structured keys for additional facts rendering:
 
 ```python
 def additional_language_payload(language_payload: dict[str, object] | None) -> dict[str, object]:
+    """Returns non-structured keys for additional facts rendering."""
     if not isinstance(language_payload, dict):
         return {}
     return {
@@ -1170,7 +1201,7 @@ def additional_language_payload(language_payload: dict[str, object] | None) -> d
 
 ## Scoring System
 
-**Module:** `tools/cq/core/scoring.py` (252 LOC)
+**Module:** `tools/cq/core/scoring.py` (251 LOC)
 
 Provides standardized impact and confidence scoring for CQ findings.
 
@@ -1180,16 +1211,21 @@ Provides standardized impact and confidence scoring for CQ findings.
 
 ```python
 class ImpactSignals(CqStruct, frozen=True):
-    sites: int = 0                           # Affected call/usage sites
-    files: int = 0                           # Affected files
-    depth: int = 0                           # Propagation depth (taint/impact)
-    breakages: int = 0                       # Breaking changes count
-    ambiguities: int = 0                     # Ambiguous cases count
+    sites: int = 0           # Affected call/usage sites
+    files: int = 0           # Affected files
+    depth: int = 0           # Propagation depth (taint/impact)
+    breakages: int = 0       # Breaking changes count
+    ambiguities: int = 0     # Ambiguous cases count
 ```
 
-**Scoring Function:** `impact_score()` (lines 90-138)
+**Scoring Function:**
 
-Weighted sum of normalized signals:
+```python
+def impact_score(signals: ImpactSignals, severity: str | None = None) -> float:
+    """Compute weighted impact score from signals."""
+```
+
+**Weighted Sum:**
 
 | Signal | Weight | Normalization Denominator | Range |
 |--------|--------|---------------------------|-------|
@@ -1199,27 +1235,25 @@ Weighted sum of normalized signals:
 | `breakages` | 10% | 10 | [0, 1] |
 | `ambiguities` | 5% | 10 | [0, 1] |
 
+**Severity Multipliers:**
+
+| Severity | Multiplier |
+|----------|------------|
+| `error` | 1.5 |
+| `warning` | 1.0 |
+| `info` | 0.5 |
+
 **Formula:**
 
 ```python
 score = (
-    0.45 * min(sites / 100, 1.0) +
-    0.25 * min(files / 20, 1.0) +
-    0.15 * min(depth / 10, 1.0) +
-    0.10 * min(breakages / 10, 1.0) +
-    0.05 * min(ambiguities / 10, 1.0)
-)
+    (sites / 100) * 0.45 +
+    (files / 20) * 0.25 +
+    (depth / 10) * 0.15 +
+    (breakages / 10) * 0.10 +
+    (ambiguities / 10) * 0.05
+) * severity_multiplier
 ```
-
-**Severity Multiplier:**
-
-| Severity | Multiplier |
-|----------|-----------|
-| `"error"` | 1.5x |
-| `"warning"` | 1.0x |
-| `"info"` | 0.5x |
-
-**Final Score:** `min(max(score * multiplier, 0.0), 1.0)`
 
 ### Confidence Scoring
 
@@ -1227,196 +1261,212 @@ score = (
 
 ```python
 class ConfidenceSignals(CqStruct, frozen=True):
-    evidence_kind: str = "unresolved"        # Evidence classification
+    evidence_kind: str = "unresolved"
 ```
 
-**Scoring Function:** `confidence_score()` (lines 141-154)
+**Scoring Function:**
 
-Direct mapping from evidence kind to score:
+```python
+def confidence_score(signals: ConfidenceSignals) -> float:
+    """Compute confidence score from evidence kind."""
+```
+
+**Evidence Kind Mappings:**
 
 | Evidence Kind | Score |
 |---------------|-------|
-| `"resolved_ast"` | 0.95 |
-| `"bytecode"` | 0.90 |
-| `"resolved_ast_heuristic"` | 0.75 |
-| `"bytecode_heuristic"` | 0.75 |
-| `"cross_file_taint"` | 0.70 |
-| `"heuristic"` | 0.60 |
-| `"rg_only"` | 0.45 |
-| `"unresolved"` | 0.30 |
+| `resolved_ast` | 0.95 |
+| `bytecode` | 0.90 |
+| `resolved_ast_heuristic` | 0.75 |
+| `bytecode_heuristic` | 0.75 |
+| `cross_file_taint` | 0.70 |
+| `heuristic` | 0.60 |
+| `rg_only` | 0.45 |
+| `unresolved` | 0.30 |
 
 ### Bucket Classification
 
-**Function:** `bucket()` (lines 157-174)
+**Function:**
 
-Converts score to categorical bucket:
+```python
+def classify_bucket(score: float) -> str:
+    """Classify score into bucket label."""
+```
 
-| Score Range | Bucket |
-|-------------|--------|
-| `>= 0.7` | `"high"` |
-| `>= 0.4` | `"med"` |
-| `< 0.4` | `"low"` |
+**Thresholds:**
+
+| Bucket | Score Range |
+|--------|-------------|
+| `high` | >= 0.7 |
+| `med` | >= 0.4 and < 0.7 |
+| `low` | < 0.4 |
 
 ### Score Details Builder
 
-**Function:** `build_score_details()` (lines 177-200)
-
-Combines impact and confidence signals into `ScoreDetails` struct:
+**Functions:**
 
 ```python
-def build_score_details(*, impact: ImpactSignals | None = None, confidence: ConfidenceSignals | None = None, severity: str | None = None) -> ScoreDetails | None:
-    if impact is None and confidence is None:
-        return None
-    impact_value = impact_score(impact, severity=severity) if impact is not None else None
-    confidence_value = confidence_score(confidence) if confidence is not None else None
-    return ScoreDetails(
-        impact_score=impact_value,
-        impact_bucket=bucket(impact_value) if impact_value is not None else None,
-        confidence_score=confidence_value,
-        confidence_bucket=bucket(confidence_value) if confidence_value is not None else None,
-        evidence_kind=confidence.evidence_kind if confidence is not None else None,
-    )
+def build_score_details(
+    *,
+    impact_signals: ImpactSignals | None = None,
+    confidence_signals: ConfidenceSignals | None = None,
+    severity: str | None = None,
+) -> ScoreDetails:
+    """Build complete score details from signals."""
+
+def build_detail_payload(
+    *,
+    kind: str | None = None,
+    score: ScoreDetails | None = None,
+    data: dict[str, object] | None = None,
+) -> DetailPayload:
+    """Build complete detail payload with score and data."""
 ```
-
-### Detail Payload Builder
-
-**Function:** `build_detail_payload()` (lines 203-224)
-
-Constructs `DetailPayload` from scoring signals and arbitrary data:
-
-```python
-def build_detail_payload(*, data: Mapping[str, object] | None = None, score: ScoreDetails | None = None, scoring: Mapping[str, object] | None = None, kind: str | None = None) -> DetailPayload:
-    if score is None and scoring is not None:
-        score = _score_details_from_mapping(scoring)
-    payload_data = dict(data) if data else {}
-    return DetailPayload(kind=kind, score=score, data=payload_data)
-```
-
-**Legacy Compatibility:** `_score_details_from_mapping()` (lines 227-251) converts dict-based scoring to `ScoreDetails`.
 
 ---
 
 ## Core Schema Models
 
-**Module:** `tools/cq/core/schema.py` (approx. 600+ LOC)
+**Module:** `tools/cq/core/schema.py` (494 LOC)
 
-Defines the fundamental result structures used across all CQ macros.
+Defines structured output format for all CQ macros.
 
 ### CqResult
 
-Top-level result container for all CQ commands:
-
 ```python
 class CqResult(msgspec.Struct):
-    run: RunMeta                             # Run metadata
-    key_findings: list[Finding] = []         # Primary findings
-    evidence: list[Finding] = []             # Supporting evidence
-    sections: list[Section] = []             # Grouped findings by category
-    summary: dict[str, object] = {}          # Structured summary payload
-    artifacts: list[Artifact] = []           # Saved artifact references
+    """Top-level result envelope for all CQ macros."""
+    run: RunMeta
+    summary: dict[str, object]
+    key_findings: list[Finding] = msgspec.field(default_factory=list)
+    evidence: list[Finding] = msgspec.field(default_factory=list)
+    sections: list[Section] = msgspec.field(default_factory=list)
+    artifacts: list[Artifact] = msgspec.field(default_factory=list)
+    schema_version: str = SCHEMA_VERSION
 ```
 
-**Usage:**
-- `key_findings` - High-importance results (definitions, primary matches)
-- `evidence` - Lower-priority results (comments, string mentions)
-- `sections` - Categorical groupings (imports, callsites, etc.)
-- `summary` - Machine-readable metadata (counts, telemetry, insight, etc.)
-- `artifacts` - References to LDMD/JSON/CSV outputs
+**Fields:**
+- `run` - Metadata about the CQ invocation
+- `summary` - Unstructured summary payload (language telemetry, insight, etc.)
+- `key_findings` - Top-priority findings (usually top definitions/targets)
+- `evidence` - Supporting evidence findings
+- `sections` - Logical groupings of findings with headings
+- `artifacts` - References to saved artifacts
+- `schema_version` - Schema version identifier
 
 ### Finding
 
-Individual analysis result (already covered in FrontDoor Insight context):
-
 ```python
 class Finding(msgspec.Struct):
-    category: str                            # "call_site", "import", "definition", etc.
-    message: str                             # Human-readable description
-    anchor: Anchor | None = None             # Source location
+    """A discrete analysis finding."""
+    category: str
+    message: str
+    anchor: Anchor | None = None
     severity: Literal["info", "warning", "error"] = "info"
     details: DetailPayload = msgspec.field(default_factory=DetailPayload)
-    stable_id: str | None = None             # Deterministic semantic ID
-    execution_id: str | None = None          # Run-correlated ID
-    id_taxonomy: str | None = None           # ID interpretation taxonomy
+    stable_id: str | None = None
+    execution_id: str | None = None
+    id_taxonomy: str | None = None
 ```
+
+**Fields:**
+- `category` - Finding type (e.g., "call_site", "import", "exception")
+- `message` - Human-readable description
+- `anchor` - Source location (file/line/col)
+- `severity` - `"info"`, `"warning"`, or `"error"`
+- `details` - Structured data payload
+- `stable_id` - Content-derived identity for semantic equivalence
+- `execution_id` - Execution-scoped identity for run correlation
+- `id_taxonomy` - Identifier taxonomy label
 
 ### Section
 
-Grouped findings under a heading:
-
 ```python
 class Section(msgspec.Struct):
-    title: str                               # Section heading
-    findings: list[Finding] = []             # Findings in this section
-    collapsed: bool = False                  # Render collapsed by default
+    """A logical grouping of findings with a heading."""
+    title: str
+    findings: list[Finding] = msgspec.field(default_factory=list)
+    collapsed: bool = False
 ```
-
-**Common Titles:**
-- `"Definitions"` - Symbol definitions
-- `"Imports"` - Import statements
-- `"Callsites"` - Function invocations
-- `"References"` - Variable/attribute references
-- `"Comments"` - Comment mentions
-- `"Strings"` - String literal matches
 
 ### Anchor
 
-Source location reference (already covered in FrontDoor Insight context):
-
 ```python
 class Anchor(msgspec.Struct, frozen=True, omit_defaults=True):
-    file: str                                # Relative file path
-    line: Annotated[int, msgspec.Meta(ge=1)] # 1-indexed line
-    col: int | None = None                   # 0-indexed column
-    end_line: int | None = None              # Optional range end
-    end_col: int | None = None               # Optional range end
+    """Source code location anchor."""
+    file: str
+    line: Annotated[int, msgspec.Meta(ge=1)]
+    col: int | None = None
+    end_line: int | None = None
+    end_col: int | None = None
+
+    def to_ref(self) -> str:
+        """Return file:line reference string."""
+        return f"{self.file}:{self.line}"
+
+    @classmethod
+    def from_span(cls, span: SourceSpan) -> Anchor:
+        """Create an Anchor from a SourceSpan."""
 ```
 
 ### ScoreDetails
 
-Scoring metadata (already covered in Scoring System):
-
 ```python
 class ScoreDetails(msgspec.Struct, omit_defaults=True):
+    """Scoring metadata for a finding."""
     impact_score: float | None = None
-    impact_bucket: str | None = None         # "high" | "med" | "low"
+    impact_bucket: str | None = None
     confidence_score: float | None = None
-    confidence_bucket: str | None = None     # "high" | "med" | "low"
-    evidence_kind: str | None = None         # Evidence classification
+    confidence_bucket: str | None = None
+    evidence_kind: str | None = None
 ```
 
 ### DetailPayload
 
-Flexible details container (already covered in Scoring System):
-
 ```python
 class DetailPayload(msgspec.Struct, omit_defaults=True):
-    kind: str | None = None                  # Detail kind
-    score: ScoreDetails | None = None        # Scoring metadata
-    data: dict[str, object] = {}             # Arbitrary key-value data
+    """Structured details payload for findings."""
+    kind: str | None = None
+    score: ScoreDetails | None = None
+    data: dict[str, object] = msgspec.field(default_factory=dict)
+
+    @classmethod
+    def from_legacy(cls, details: dict[str, object]) -> DetailPayload:
+        """Convert legacy detail dicts into a structured payload."""
+
+    def get(self, key: str, default: object | None = None) -> object | None:
+        """Mapping-style get for detail payloads."""
+
+    def to_legacy_dict(self) -> dict[str, object]:
+        """Convert structured details back to legacy dict format."""
 ```
+
+**Score Fields:** `impact_score`, `impact_bucket`, `confidence_score`, `confidence_bucket`, `evidence_kind`
+
+**Mapping Protocol:** Supports `get()`, `__getitem__()`, `__setitem__()`, `__contains__()`
+
+**Legacy Compatibility:** `from_legacy()` and `to_legacy_dict()` for backward compat
 
 ### RunMeta
 
-Run metadata for correlation:
-
 ```python
 class RunMeta(msgspec.Struct):
-    macro: str                               # Command macro (search/calls/entity/etc.)
-    argv: list[str]                          # Command-line arguments
-    started_ms: int                          # Start timestamp (milliseconds since epoch)
-    ended_ms: int | None = None              # End timestamp
-    run_id: str                              # Unique run identifier
-    version: str = SCHEMA_VERSION            # CQ schema version
+    """Metadata about a cq invocation."""
+    macro: str
+    argv: list[str]
+    root: str = ""
+    version: str = ""
+    timestamp: str = ""
+    execution_id: str = ""
 ```
 
 ### Artifact
 
-Reference to saved artifact:
-
 ```python
 class Artifact(msgspec.Struct):
-    path: str                                # Relative path to artifact
-    format: str = "json"                     # File format (json/csv/ldmd)
+    """A saved analysis artifact reference."""
+    path: str
+    format: str = "json"
 ```
 
 ---
@@ -1425,18 +1475,19 @@ class Artifact(msgspec.Struct):
 
 **Module:** `tools/cq/core/typed_boundary.py` (129 LOC)
 
-The typed boundary protocol provides centralized conversion helpers and error taxonomy for all CQ module boundaries. It enforces strict type validation at deserialization points and provides format-specific decoders for JSON, TOML, and YAML payloads.
+Shared typed boundary conversion helpers and error taxonomy.
 
 ### Boundary Error Taxonomy
-
-**Exception Hierarchy:**
 
 ```python
 class BoundaryDecodeError(RuntimeError):
     """Raised when payload conversion fails at CQ boundaries."""
 ```
 
-All conversion failures (msgspec validation errors, decode errors, type errors) are normalized to `BoundaryDecodeError` for consistent error handling across module boundaries.
+**Use Cases:**
+- Parsing external payloads (JSON/YAML/TOML/msgpack)
+- Converting dictionaries to typed structs
+- Validating contract schemas at module boundaries
 
 ### Conversion Functions
 
@@ -1446,7 +1497,7 @@ All conversion failures (msgspec validation errors, decode errors, type errors) 
 def convert_strict[T](
     payload: object,
     *,
-    type_: object,
+    type_: type[T] | object,
     from_attributes: bool = False,
 ) -> T:
     """Convert payload with strict msgspec semantics.
@@ -1456,162 +1507,124 @@ def convert_strict[T](
     """
 ```
 
-**Strict conversion** rejects:
-- Extra fields in mappings (when struct uses `forbid_unknown_fields=True`)
-- Type mismatches (no implicit coercion)
-- Missing required fields
-
 **Lax Conversion:**
 
 ```python
 def convert_lax[T](
     payload: object,
     *,
-    type_: object,
+    type_: type[T] | object,
     from_attributes: bool = False,
 ) -> T:
-    """Convert payload with lax msgspec semantics.
+    """Convert payload with lax msgspec semantics (ignores extra fields).
 
     Raises:
         BoundaryDecodeError: If conversion fails.
     """
 ```
 
-**Lax conversion** tolerates:
-- Extra fields in mappings (ignored)
-- Some type coercions (int → float, etc.)
-- Missing optional fields
+**Strict vs Lax:**
+- Strict: Rejects unknown fields, strict type validation
+- Lax: Ignores unknown fields, permissive type coercion
 
-**Use Cases:**
-
-| Scenario | Use |
-|----------|-----|
-| External config files (TOML/YAML) | `convert_lax` |
-| Internal contract boundaries | `convert_strict` |
-| Cache payload deserialization | `convert_strict` |
-| Legacy payload migration | `convert_lax` |
+**Recommended Usage:**
+- Strict: External payloads, API boundaries, cache validation
+- Lax: Internal conversions, backward compatibility, exploratory parsing
 
 ### Format-Specific Decoders
 
-**JSON Decoder:**
+**JSON:**
 
 ```python
-def decode_json_strict[T](payload: bytes | str, *, type_: object) -> T:
-    """Decode JSON payload with strict schema validation.
-
-    Raises:
-        BoundaryDecodeError: If decoding fails.
-    """
+def decode_json_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T:
+    """Decode JSON payload with strict schema validation."""
 ```
 
-**TOML Decoder:**
+**TOML:**
 
 ```python
-def decode_toml_strict[T](payload: bytes | str, *, type_: object) -> T:
-    """Decode TOML payload with strict schema validation.
-
-    Raises:
-        BoundaryDecodeError: If decoding fails.
-    """
+def decode_toml_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T:
+    """Decode TOML payload with strict schema validation."""
 ```
 
-**YAML Decoder:**
+**YAML:**
 
 ```python
-def decode_yaml_strict[T](payload: bytes | str, *, type_: object) -> T:
-    """Decode YAML payload with strict schema validation.
-
-    Raises:
-        BoundaryDecodeError: If decoding fails.
-    """
+def decode_yaml_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T:
+    """Decode YAML payload with strict schema validation."""
 ```
 
-**Design Pattern:**
-- All decoders accept `bytes | str` payloads for convenience
-- All decoders use strict validation by default
-- All decoders normalize errors to `BoundaryDecodeError`
-- String payloads are automatically encoded to UTF-8 bytes
+**All Decoders:**
+- Accept `bytes` or `str`
+- Use `strict=True` validation
+- Raise `BoundaryDecodeError` on failure
 
 ### Usage Examples
 
-**Strict Boundary Validation:**
+**Convert dict to struct (lax):**
 
 ```python
-from tools.cq.core.typed_boundary import convert_strict, BoundaryDecodeError
+from tools.cq.core.typed_boundary import convert_lax
+from tools.cq.core.front_door_insight import FrontDoorInsightV1
 
-try:
-    config = convert_strict(raw_dict, type_=SearchConfig)
-except BoundaryDecodeError as exc:
-    # Handle invalid payload at boundary
-    logger.error(f"Config validation failed: {exc}")
+payload = {"source": "search", "target": {...}, ...}
+insight = convert_lax(payload, type_=FrontDoorInsightV1)
 ```
 
-**Lax External Config:**
+**Decode JSON config (strict):**
+
+```python
+from tools.cq.core.typed_boundary import decode_json_strict
+from tools.cq.core.config import CqConfig
+
+with open(".cq.json", "rb") as f:
+    config = decode_json_strict(f.read(), type_=CqConfig)
+```
+
+**Parse TOML plan (strict):**
 
 ```python
 from tools.cq.core.typed_boundary import decode_toml_strict
+from tools.cq.run.plan_schema import RunPlan
 
-# TOML files use lax semantics by default
-config = decode_toml_strict(toml_bytes, type_=RunPlan)
+with open("plan.toml", "rb") as f:
+    plan = decode_toml_strict(f.read(), type_=RunPlan)
 ```
 
 ---
 
 ## Contract Codec
 
-**Module:** `tools/cq/core/contract_codec.py` (104 LOC)
+**Module:** `tools/cq/core/contract_codec.py` (122 LOC)
 
-The contract codec module is the **single source of truth** for all CQ serialization operations. All other serialization modules (`serialization.py`, `codec.py`, `contracts.py`) delegate to this module.
+Canonical contract codec and conversion helpers for CQ boundaries.
 
 ### Codec Singletons
-
-**JSON Codecs:**
 
 ```python
 JSON_ENCODER = msgspec.json.Encoder(order="deterministic")
 JSON_DECODER = msgspec.json.Decoder(strict=True)
 JSON_RESULT_DECODER = msgspec.json.Decoder(type=CqResult, strict=True)
-```
-
-**MessagePack Codecs:**
-
-```python
 MSGPACK_ENCODER = msgspec.msgpack.Encoder()
 MSGPACK_DECODER = msgspec.msgpack.Decoder(type=object)
 MSGPACK_RESULT_DECODER = msgspec.msgpack.Decoder(type=CqResult)
 ```
 
-**Design Pattern:**
-- All encoders/decoders are module-level singletons (no per-call instantiation)
-- JSON encoder uses deterministic key ordering for stable output
-- JSON decoder uses strict validation by default
-- Typed decoders (`JSON_RESULT_DECODER`, `MSGPACK_RESULT_DECODER`) provide fast-path for CqResult
-
 ### Core Encoding Functions
-
-**JSON Encoding:**
 
 ```python
 def encode_json(value: object, *, indent: int | None = None) -> str:
     """Encode any contract payload to deterministic JSON."""
-```
 
-**Encoding Pipeline:**
-1. Convert value to builtins via `to_contract_builtins(value)`
-2. Encode to JSON bytes with deterministic key ordering
-3. Optionally pretty-print with `msgspec.json.format(payload, indent=indent)`
-4. Decode bytes to UTF-8 string
-
-**MessagePack Encoding:**
-
-```python
 def encode_msgpack(value: object) -> bytes:
     """Encode payload to msgpack bytes."""
+
+def to_contract_builtins(value: object) -> object:
+    """Convert a CQ value to builtins with deterministic contract settings."""
+    return msgspec.to_builtins(value, order="deterministic", str_keys=True)
 ```
 
 ### Core Decoding Functions
-
-**JSON Decoding:**
 
 ```python
 def decode_json(payload: bytes | str) -> object:
@@ -1619,11 +1632,7 @@ def decode_json(payload: bytes | str) -> object:
 
 def decode_json_result(payload: bytes | str) -> CqResult:
     """Decode JSON payload to typed CQ result."""
-```
 
-**MessagePack Decoding:**
-
-```python
 def decode_msgpack(payload: bytes | bytearray | memoryview) -> object:
     """Decode msgpack payload to builtins value."""
 
@@ -1633,484 +1642,229 @@ def decode_msgpack_result(payload: bytes | bytearray | memoryview) -> CqResult:
 
 ### Contract Conversion Helpers
 
-**Builtins Conversion:**
-
-```python
-def to_contract_builtins(value: object) -> object:
-    """Convert a CQ value to builtins with deterministic contract settings."""
-```
-
-**Conversion Policy:**
-- Deterministic key ordering (`order="deterministic"`)
-- String keys enforced (`str_keys=True`)
-- Nested structs recursively converted to dicts
-- Collections (list, tuple, set) preserved
-
-**Struct-to-Dict:**
-
 ```python
 def to_public_dict(value: msgspec.Struct) -> dict[str, object]:
     """Convert one msgspec Struct into mapping payload."""
 
 def to_public_list(values: Iterable[msgspec.Struct]) -> list[dict[str, object]]:
     """Convert iterable of structs into mapping rows."""
-```
 
-**Mapping Validation:**
-
-```python
 def require_mapping(value: object) -> dict[str, object]:
-    """Require mapping-shaped builtins payload."""
-```
+    """Require mapping-shaped builtins payload.
 
-**Validation Pipeline:**
-1. Convert value to builtins via `to_contract_builtins(value)`
-2. Assert result is dict-shaped
-3. Enforce mapping constraints via `enforce_mapping_constraints(payload)`
-4. Return validated mapping
+    Automatically calls enforce_mapping_constraints() for validation.
+    """
+```
 
 ### Module Consolidation
 
-**All serialization modules now delegate to contract_codec:**
+**Canonical Authority:** `tools/cq/core/contract_codec.py` is the single source of truth for:
+- msgspec encoder/decoder singletons
+- Deterministic JSON/msgpack encoding
+- Struct-to-dict conversion
+- Typed decoding (CqResult)
 
-| Module | Delegation Target |
-|--------|------------------|
-| `tools/cq/core/serialization.py` | `encode_json`, `decode_json_result`, `encode_msgpack`, `decode_msgpack`, `decode_msgpack_result`, `to_contract_builtins` |
-| `tools/cq/core/codec.py` | `encode_json`, `decode_json`, `decode_json_result`, codec singletons |
-| `tools/cq/core/contracts.py` | `to_contract_builtins`, `to_public_dict`, `require_mapping` |
-| `tools/cq/core/diagnostics_contracts.py` | `convert_lax` (from `typed_boundary`) |
-| `tools/cq/core/cache/typed_codecs.py` | Uses `convert_lax` for typed cache boundaries |
-
-**Design Rationale:**
-- Centralizes all codec instantiation (prevents duplicate encoder/decoder instances)
-- Ensures consistent serialization settings across CQ
-- Provides single point for instrumentation/logging of serialization operations
-- Simplifies testing (mock one module instead of many)
+**No Duplicates:** All other modules import from this module (not inline encoders/decoders).
 
 ---
 
 ## Contract Constraints
 
-**Module:** `tools/cq/core/contracts_constraints.py` (57 LOC)
+**Module:** `tools/cq/core/contracts_constraints.py` (not shown, inferred from contract_codec.py)
 
-Provides reusable annotated constraint types and validation policies for public CQ contract payloads.
+Provides annotated constraint types and validation policies for contract payloads.
 
 ### Annotated Constraint Types
 
-**Numeric Constraints:**
+**Examples:**
 
 ```python
-PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
-NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
-PositiveFloat = Annotated[float, msgspec.Meta(gt=0.0)]
-BoundedRatio = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
-```
+from typing import Annotated
+import msgspec
 
-**String Constraints:**
-
-```python
 NonEmptyStr = Annotated[str, msgspec.Meta(min_length=1)]
+PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
+BoundedFloat = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
 ```
-
-**Usage in Contract Definitions:**
-
-```python
-class SearchLimits(CqStruct, frozen=True):
-    max_results: PositiveInt = 100              # Must be >= 1
-    timeout_seconds: PositiveFloat = 30.0       # Must be > 0.0
-    confidence_threshold: BoundedRatio = 0.5    # Must be [0.0, 1.0]
-    run_id: NonEmptyStr                         # Must have length >= 1
-```
-
-**Validation:**
-- msgspec enforces constraints during struct construction
-- Constraint violations raise `msgspec.ValidationError`
-- Constraints are type-system visible (improve IDE hints)
 
 ### Contract Constraint Policy
 
-**Global Policy:**
+**Validation Function:**
 
 ```python
-class ContractConstraintPolicyV1(CqStruct, frozen=True):
-    """Global constraints applied to mapping-like output contracts."""
+def enforce_mapping_constraints(payload: dict[str, object]) -> None:
+    """Validate mapping payload constraints.
 
-    max_key_count: int = 10_000              # Prevent DoS via huge payloads
-    max_key_length: int = 128                # Prevent malformed keys
-    max_string_length: int = 100_000         # Prevent unbounded strings
+    Raises:
+        ValueError: If constraints violated.
+    """
 ```
 
-**Enforcement Function:**
+**Usage:** `require_mapping()` automatically calls `enforce_mapping_constraints()`.
 
-```python
-def enforce_mapping_constraints(
-    payload: Mapping[str, object],
-    *,
-    policy: ContractConstraintPolicyV1 | None = None,
-) -> None:
-    """Validate mapping payload against shared contract constraints."""
-```
-
-**Validation Rules:**
-1. Total key count <= `max_key_count`
-2. Each key length <= `max_key_length`
-3. Each string value length <= `max_string_length`
-
-**Use Cases:**
-- External config file validation (prevent malicious payloads)
-- Cache payload validation (prevent cache poisoning)
-- API boundary validation (enforce resource limits)
-
-**Integration:**
-
-```python
-from tools.cq.core.contract_codec import require_mapping
-
-# require_mapping() automatically calls enforce_mapping_constraints()
-validated_dict = require_mapping(external_payload)
-```
+**Constraints:**
+- Non-empty strings for required fields
+- Non-negative integers for counts
+- Bounded floats for scores (0.0-1.0)
+- Enum validation for literal types
 
 ---
 
 ## Summary Envelope Contract
 
-**Module:** `tools/cq/core/summary_contracts.py` (45 LOC)
+**Module:** `tools/cq/core/contracts.py` (124 LOC)
 
-Provides canonical summary envelope for report/render boundaries with strict output validation.
+Provides summary envelope contracts and multi-language summary assembly.
 
 ### Schema
 
-**Summary Envelope:**
+**Summary Build Request:**
 
 ```python
-class SummaryEnvelopeV1(CqStrictOutputStruct, frozen=True):
-    """Canonical summary envelope for report/render boundaries."""
-
-    summary: dict[str, Any] = msgspec.field(default_factory=dict)
-    diagnostics: list[dict[str, Any]] = msgspec.field(default_factory=list)
-    telemetry: dict[str, Any] = msgspec.field(default_factory=dict)
+class SummaryBuildRequest(CqStruct, frozen=True):
+    """Input contract for canonical multilang summary assembly."""
+    lang_scope: QueryLanguageScope
+    languages: Mapping[QueryLanguage, Mapping[str, object]]
+    common: Mapping[str, object] | None = None
+    language_order: tuple[QueryLanguage, ...] | None = None
+    cross_language_diagnostics: Sequence[CrossLanguageDiagnostic | Mapping[str, object]] | None = None
+    language_capabilities: LanguageCapabilities | Mapping[str, object] | None = None
+    enrichment_telemetry: Mapping[str, object] | None = None
 ```
 
-**Contract Properties:**
-- Inherits from `CqStrictOutputStruct` (forbids unknown fields)
-- Three well-defined surfaces: summary, diagnostics, telemetry
-- All fields use factory defaults (never None)
+**Merge Results Request:**
+
+```python
+class MergeResultsRequest(CqStruct, frozen=True):
+    """Input contract for multi-language CQ result merge."""
+    scope: QueryLanguageScope
+    results: Mapping[QueryLanguage, CqResult]
+    run: RunMeta
+    diagnostics: Sequence[Finding] | None = None
+    diagnostic_payloads: Sequence[Mapping[str, object]] | None = None
+    language_capabilities: Mapping[str, object] | None = None
+    summary_common: Mapping[str, object] | None = None
+    include_section_language_prefix: bool = True
+```
+
+**UUID Identity Contract:**
+
+```python
+class UuidIdentityContractV1(CqStruct, frozen=True):
+    """Sortable UUID contract for CQ runtime identity fields."""
+    run_id: str
+    artifact_id: str
+    cache_key_uses_uuid: bool = False
+    run_uuid_version: int | None = None
+    run_created_ms: int | None = None
+```
 
 ### Builders
 
-**Envelope Construction:**
+**Summary Contract Conversion:**
 
 ```python
-def build_summary_envelope(
+def summary_contract_to_mapping(
+    contract: SearchSummaryContract,
     *,
-    summary: Mapping[str, Any],
-    diagnostics: list[dict[str, Any]] | None = None,
-    telemetry: Mapping[str, Any] | None = None,
-) -> SummaryEnvelopeV1:
-    """Build a typed summary envelope from mapping surfaces."""
+    common: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Serialize canonical search summary contract to mapping payload."""
 ```
 
-**Envelope Conversion:**
+**Mapping Requirement:**
 
 ```python
-def summary_envelope_to_mapping(envelope: SummaryEnvelopeV1) -> dict[str, Any]:
-    """Convert summary envelope to mapping payload."""
+def require_mapping(value: object) -> dict[str, object]:
+    """Return mapping payload or raise a deterministic contract error."""
 ```
 
-**Design Pattern:**
-- Builders accept nullable inputs and normalize to non-null defaults
-- Conversion to mapping uses `require_mapping()` (enforces constraints)
-- Strict output contract prevents accidental field additions
-
----
-
-## Typed Cache Codecs
-
-**Module:** `tools/cq/core/cache/typed_codecs.py` (74 LOC)
-
-Provides typed cache boundary helpers for msgpack and mapping payload boundaries.
-
-### Msgpack Typed Decoding
-
-**Typed Decoder:**
+**Contract to Builtins:**
 
 ```python
-def decode_msgpack_typed[T](payload: object, *, type_: type[T]) -> T | None:
-    """Decode msgpack payload into a typed struct or container.
-
-    Returns:
-        Decoded typed payload when possible, otherwise None.
-    """
+def contract_to_builtins(value: object) -> object:
+    """Serialize a CQ contract object into builtins recursively."""
 ```
-
-**Decoder Caching:**
-- Uses `@lru_cache(maxsize=64)` for decoder instance caching
-- One cached decoder per type (prevents redundant instantiation)
-- Thread-safe (decoder instances are immutable)
-
-**Fail-Open Semantics:**
-- Returns `None` on decode failure (no exceptions)
-- Gracefully handles invalid payloads, type mismatches, malformed data
-- Suitable for cache hit paths (missing/corrupt cache → cache miss)
-
-### Mapping Typed Conversion
-
-**Typed Conversion:**
-
-```python
-def convert_mapping_typed[T](payload: object, *, type_: type[T]) -> T | None:
-    """Convert mapping-like payload into a typed contract.
-
-    Returns:
-        Converted typed payload when possible, otherwise None.
-    """
-```
-
-**Conversion Pipeline:**
-- Uses `convert_lax()` from typed boundary (tolerates extra fields)
-- Catches `BoundaryDecodeError` and returns `None`
-- Suitable for legacy cache payloads (schema evolution)
-
-### Msgpack Encoding
-
-**Encoding Functions:**
-
-```python
-def encode_msgpack_payload(payload: object) -> bytes | object:
-    """Encode payload to msgpack, falling back to builtins on failure.
-
-    Returns:
-        Encoded bytes on success, or builtins payload fallback on failure.
-    """
-
-def encode_msgpack_into(payload: object, *, buffer: bytearray) -> int:
-    """Encode payload into a provided buffer.
-
-    Returns:
-        Number of bytes appended to buffer.
-    """
-```
-
-**Design Patterns:**
-- `encode_msgpack_payload()` uses fail-open fallback (returns builtins on encode failure)
-- `encode_msgpack_into()` uses pre-allocated buffer (reduces allocations in hot paths)
-
-### Cache Integration
-
-**Cache Hit Path:**
-
-```python
-from tools.cq.core.cache.typed_codecs import decode_msgpack_typed
-
-# Cache lookup
-raw_payload = cache_store.get(cache_key)
-if raw_payload is not None:
-    # Typed decode with fail-open
-    cached_result = decode_msgpack_typed(raw_payload, type_=CqResult)
-    if cached_result is not None:
-        return cached_result
-# Cache miss or decode failure → recompute
-```
-
-**Cache Write Path:**
-
-```python
-from tools.cq.core.cache.typed_codecs import encode_msgpack_payload
-
-# Encode result with fail-open fallback
-encoded = encode_msgpack_payload(result)
-cache_store.set(cache_key, encoded)
-```
-
----
-
-## Serialization Infrastructure
-
-### msgspec Codecs
-
-**All CQ serialization now delegates to `contract_codec.py`.**
-
-**JSON Encoder/Decoder:**
-
-```python
-from tools.cq.core.contract_codec import JSON_ENCODER, JSON_DECODER
-
-# Encode struct to JSON bytes
-json_bytes = JSON_ENCODER.encode(finding)
-
-# Decode JSON bytes to object
-value = JSON_DECODER.decode(json_bytes)
-```
-
-**Typed Decoding:**
-
-```python
-from tools.cq.core.contract_codec import JSON_RESULT_DECODER
-
-# Decode JSON directly to CqResult
-result = JSON_RESULT_DECODER.decode(json_bytes)
-```
-
-**Type-Safe Conversion:**
-
-```python
-from tools.cq.core.typed_boundary import convert_strict, convert_lax
-
-# Strict conversion (rejects extra fields)
-finding = convert_strict(raw_dict, type_=Finding)
-
-# Lax conversion (ignores extra fields)
-config = convert_lax(raw_dict, type_=SearchConfig)
-```
-
-**Contract Conversion:**
-
-```python
-from tools.cq.core.contract_codec import to_contract_builtins, to_public_dict
-
-# Convert struct to dict
-raw_dict = to_public_dict(finding)
-
-# Convert any value to builtins
-builtins_value = to_contract_builtins(finding)
-```
-
-### Boundary Contracts
-
-**What Crosses Module Boundaries:**
-
-| Contract Type | Examples | Base Class |
-|--------------|----------|------------|
-| **Commands/Requests** | `SearchInsightBuildRequestV1`, `LanguageSemanticEnrichmentRequest`, `MergeResultsRequest` | `CqStruct` |
-| **Outcomes/Responses** | `FrontDoorInsightV1`, `SemanticOutcomeV1`, `CqResult` | `CqStruct`, `CqOutputStruct` |
-| **Strict Outputs** | `SummaryEnvelopeV1`, persisted artifacts | `CqStrictOutputStruct` |
-| **Settings/Config** | `InsightBudgetV1`, `SemanticRequestBudgetV1` | `CqSettingsStruct` |
-| **Cache Payloads** | `SemanticOutcomeCacheV1` | `CqCacheStruct` |
-
-**What Does NOT Cross Module Boundaries:**
-
-| Type | Examples | Storage |
-|------|----------|---------|
-| **Runtime State** | `ScanContext`, `EnrichmentPipeline`, `MatchClassifier` | dataclass, plain class |
-| **External Handles** | `TreeSitter.Parser`, `RgRunner`, `LSPSession` | Never serialized |
-| **Intermediate Results** | `RawMatch`, `ParsedNode`, `TokenStream` | Local variables only |
-
-### Module Boundary Policy
-
-**Serialization Principles:**
-
-1. **Centralized Codec Authority:** All serialization delegates to `contract_codec.py`
-2. **Explicit Contracts:** All cross-module data uses msgspec.Struct subclasses
-3. **Frozen by Default:** All contracts are immutable (frozen=True)
-4. **Keyword-Only:** All contracts use kw_only=True to prevent positional confusion
-5. **Compact Defaults:** omit_defaults=True reduces JSON payload size
-6. **Strict Validation:** Strict output/settings/cache structs use forbid_unknown_fields=True
-7. **Typed Boundaries:** Use `convert_strict` for internal boundaries, `convert_lax` for external boundaries
-8. **Constraint Enforcement:** All mapping-shaped payloads validated via `enforce_mapping_constraints()`
-
-**Anti-Patterns:**
-
-- ❌ Passing `dict[str, object]` across module boundaries (use typed struct)
-- ❌ Mutating shared state (use frozen structs)
-- ❌ Serializing parser/cache handles (keep runtime-only)
-- ❌ Using Pydantic in hot paths (use msgspec)
-- ❌ Creating new encoder/decoder instances (use singletons from `contract_codec`)
-- ❌ Bypassing `contract_codec` for serialization (delegate to canonical authority)
 
 ---
 
 ## Module Map
 
-**Cross-Cutting Contracts & Serialization:**
+**Core Contracts:**
 
 | Module | LOC | Purpose |
 |--------|-----|---------|
-| `tools/cq/core/structs.py` | 43 | Base msgspec struct classes |
-| `tools/cq/core/typed_boundary.py` | 129 | Typed boundary protocol (conversion, validation, error taxonomy) |
-| `tools/cq/core/contract_codec.py` | 104 | Centralized serialization authority (encoders, decoders, conversion) |
-| `tools/cq/core/contracts_constraints.py` | 57 | Annotated constraint types and validation policies |
-| `tools/cq/core/summary_contracts.py` | 45 | Summary envelope contract for report/render boundaries |
-| `tools/cq/core/cache/typed_codecs.py` | 74 | Typed cache boundary helpers (msgpack, mapping conversion) |
-| `tools/cq/core/serialization.py` | ~99 | Public serialization API (delegates to contract_codec) |
-| `tools/cq/core/codec.py` | ~71 | JSON/msgpack codec API (delegates to contract_codec) |
-| `tools/cq/core/contracts.py` | ~75 | Contract conversion helpers (delegates to contract_codec) |
-| `tools/cq/core/diagnostics_contracts.py` | ~96 | Diagnostics artifact contracts (uses typed boundary) |
-| `tools/cq/core/schema_export.py` | ~110 | JSON Schema export for CQ contracts |
+| `tools/cq/core/structs.py` | 48 | Base struct types |
+| `tools/cq/core/schema.py` | 494 | CqResult, Finding, Section, Anchor |
+| `tools/cq/core/front_door_insight.py` | 1172 | FrontDoorInsightV1 schema |
+| `tools/cq/core/snb_schema.py` | 322 | SNB schema authority |
+| `tools/cq/core/contracts.py` | 124 | Summary envelope contracts |
+| `tools/cq/core/contract_codec.py` | 122 | Serialization codec |
+| `tools/cq/core/typed_boundary.py` | 129 | Conversion helpers |
 
-**Cross-Subsystem Contracts:**
+**Orchestration:**
 
 | Module | LOC | Purpose |
 |--------|-----|---------|
-| `tools/cq/core/front_door_insight.py` | 1,171 | FrontDoor Insight V1 canonical schema |
-| `tools/cq/core/multilang_orchestrator.py` | 481 | Multi-language partition dispatch and merging |
-| `tools/cq/search/semantic/models.py` | 507 | LSP integration contracts and semantic state machine |
-| `tools/cq/core/enrichment_facts.py` | 596 | Enrichment facts system and resolution pipeline |
-| `tools/cq/core/scoring.py` | 252 | Impact/confidence scoring and bucketing |
-| `tools/cq/core/schema.py` | ~600 | Core schema models (CqResult, Finding, Section, Anchor) |
+| `tools/cq/core/multilang_orchestrator.py` | 485 | Multi-language dispatch/merge |
+| `tools/cq/core/multilang_summary.py` | 213 | Multi-language summary builder |
+
+**Scoring & Facts:**
+
+| Module | LOC | Purpose |
+|--------|-----|---------|
+| `tools/cq/core/scoring.py` | 251 | Impact/confidence scoring |
+| `tools/cq/core/enrichment_facts.py` | 595 | Code fact clusters |
+
+**Semantic Integration:**
+
+| Module | LOC | Purpose |
+|--------|-----|---------|
+| `tools/cq/search/semantic/models.py` | 150+ | Semantic contracts |
+
+**Total Core Contract LOC:** ~3900+
 
 ---
 
 ## Cross-References
 
-This document is the **primary home** for:
-- FrontDoor Insight V1 schema and assembly
-- Multi-language orchestration and partition merging
-- LSP integration contracts and semantic state machine
-- Advanced evidence planes (semantic overlays, diagnostics, refactor actions, Rust extensions)
-- Enrichment facts system and resolution pipeline
-- Scoring system (impact/confidence/buckets)
-- Core schema models (CqResult, Finding, Section, Anchor, ScoreDetails, DetailPayload)
-- Typed boundary protocol (conversion, validation, error taxonomy)
-- Contract codec (centralized serialization authority)
-- Contract constraints (annotated types and validation policies)
-- Summary envelope contract
-- Typed cache codecs
-- Serialization infrastructure and module boundary protocol
+**Related Docs:**
+- [01 - CLI & Output Contracts](./01_cli_output.md) - Rendering pipeline
+- [02 - Search Pipeline](./02_search_pipeline.md) - Search mechanics
+- [07 - Tree-Sitter Integration](./07_tree_sitter.md) - AST parsing
+- [08 - Neighborhood Schema](./08_neighborhood.md) - SNB details
 
-**Other documents will cross-reference here:**
-
-| Document | Cross-Reference Target |
-|----------|----------------------|
-| **Doc 01 (CLI)** | Rendering of FrontDoor Insight cards |
-| **Doc 02 (Search)** | Search insight assembly via `build_search_insight()` |
-| **Doc 03 (Calls)** | Calls insight assembly via `build_calls_insight()` |
-| **Doc 04 (Entity)** | Entity insight assembly via `build_entity_insight()` |
-| **Doc 07 (Tree-sitter)** | Enrichment facts extraction from tree-sitter payloads |
-| **Doc 08 (Neighborhood)** | Neighborhood slice mapping to insight slices |
-| **Doc 10 (Run)** | Multi-language orchestration for run plans |
-| **All Docs** | Typed boundary protocol for all module boundaries |
-| **All Docs** | Contract codec for all serialization operations |
+**Key Modules:**
+- `tools/cq/core/` - Core contracts and orchestration
+- `tools/cq/search/` - Search pipeline integration
+- `tools/cq/neighborhood/` - Neighborhood assembly
 
 ---
 
 ## Summary
 
-This document has established the foundational cross-cutting contracts and orchestration primitives that enable coherent multi-subsystem integration across CQ:
+CQ's cross-cutting contracts provide:
 
-1. **FrontDoor Insight V1** provides a unified schema for high-level analysis results with target grounding, neighborhood previews, risk assessment, confidence metrics, and degradation transparency.
+1. **Three-Tier Type System** - Clear boundaries between serialized contracts, runtime objects, and external handles
+2. **FrontDoor Insight V1** - Canonical cross-subsystem schema for search/calls/entity
+3. **SNB Schema** - Deterministic semantic neighborhood representation
+4. **Multi-Language Orchestration** - Partition dispatch, scope enforcement, deterministic merging
+5. **LSP Integration** - State machine, enrichment contracts, fail-open semantics
+6. **Enrichment Facts** - Structured code fact clusters with applicability filtering
+7. **Scoring System** - Standardized impact/confidence signals and bucket classification
+8. **Core Schema Models** - CqResult, Finding, Section, Anchor, DetailPayload, ScoreDetails
+9. **Typed Boundaries** - Conversion helpers, error taxonomy, format-specific decoders
+10. **Contract Codec** - Centralized serialization authority with deterministic encoding
 
-2. **Multi-language orchestration** enables deterministic partition dispatch, scope enforcement, and result merging across Python and Rust codebases.
+**Design Principles:**
+- msgspec for performance and determinism
+- Frozen structs for immutability
+- Fail-open for degraded enrichment
+- Language-neutral contracts
+- Deterministic ordering for stability
 
-3. **LSP integration layer** provides semantic contract state machine, capability gating, and fail-open semantics for Pyrefly (Python) and rust-analyzer (Rust) backends.
-
-4. **Advanced evidence planes** overlay semantic tokens, diagnostics, refactor actions, and Rust macro expansions on top of structural analysis.
-
-5. **Enrichment facts system** resolves enrichment payloads into structured Code Facts clusters with language/kind applicability filtering and N/A semantics.
-
-6. **Scoring system** provides standardized impact and confidence scoring with categorical bucketing for machine-readable prioritization.
-
-7. **Core schema models** define the fundamental result structures (CqResult, Finding, Section, Anchor) used across all CQ macros.
-
-8. **Typed boundary protocol** (`typed_boundary.py`) provides centralized conversion helpers and error taxonomy for all CQ module boundaries, with strict/lax semantics and format-specific decoders (JSON, TOML, YAML).
-
-9. **Contract codec** (`contract_codec.py`) serves as the single source of truth for all CQ serialization operations, providing codec singletons, encoding/decoding functions, and contract conversion helpers that all other serialization modules delegate to.
-
-10. **Contract constraints** (`contracts_constraints.py`) provides reusable annotated constraint types (PositiveInt, NonEmptyStr, BoundedRatio) and validation policies for public contract payloads.
-
-11. **Summary envelope contract** (`summary_contracts.py`) provides canonical summary envelope for report/render boundaries with strict output validation.
-
-12. **Typed cache codecs** (`cache/typed_codecs.py`) provides typed cache boundary helpers for msgpack and mapping payload boundaries with fail-open semantics.
-
-13. **Serialization infrastructure** enforces strict module boundary protocol with msgspec.Struct base classes (CqStruct, CqOutputStruct, CqStrictOutputStruct, CqSettingsStruct, CqCacheStruct), centralized codec authority, typed boundary validation, and constraint enforcement.
-
-These primitives form the stable foundation upon which all CQ subsystems integrate. The recent consolidation of serialization infrastructure into `contract_codec.py` ensures consistent serialization behavior, eliminates duplicate codec instances, and provides a single point for instrumentation and testing of all CQ serialization operations.
+**Evolution Strategy:**
+- Add new fields with defaults (backward compat)
+- Never reorder fields (forward compat)
+- Version schema with `schema_version` field
+- Use `forbid_unknown_fields=True` for strict boundaries

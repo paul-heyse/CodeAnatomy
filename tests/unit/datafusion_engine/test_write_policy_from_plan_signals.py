@@ -14,6 +14,10 @@ from datafusion_engine.io.write import (
 )
 from datafusion_engine.plan.signals import NormalizedPlanStats, PlanSignals
 
+SMALL_TABLE_ROWS = 100
+LARGE_TABLE_ROWS = 2_000_000
+SMALL_TABLE_CONTEXT_ROWS = 50
+
 if TYPE_CHECKING:
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 else:
@@ -79,7 +83,7 @@ class TestAdaptiveFileSizeFromBundle:
         assert target == 32 * 1024 * 1024
         assert decision is not None
         assert decision.reason == "small_table"
-        assert decision.estimated_rows == 100
+        assert decision.estimated_rows == SMALL_TABLE_ROWS
 
     def test_returns_decision_for_large_table(
         self,
@@ -97,7 +101,7 @@ class TestAdaptiveFileSizeFromBundle:
         assert target == 128 * 1024 * 1024
         assert decision is not None
         assert decision.reason == "large_table"
-        assert decision.estimated_rows == 2_000_000
+        assert decision.estimated_rows == LARGE_TABLE_ROWS
 
     def test_returns_none_decision_when_no_change(
         self,
@@ -201,7 +205,7 @@ def test_delta_policy_context_carries_adaptive_decision(
     assert isinstance(decision, _AdaptiveFileSizeDecision)
     assert decision.base_target_file_size == 64 * 1024 * 1024
     assert decision.adaptive_target_file_size == 32 * 1024 * 1024
-    assert decision.estimated_rows == 50
+    assert decision.estimated_rows == SMALL_TABLE_CONTEXT_ROWS
     assert decision.reason == "small_table"
 
 

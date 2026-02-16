@@ -14,12 +14,14 @@ class _Source:
 
 
 def test_build_grammar_drift_report_flags_empty_sources() -> None:
+    """Test build grammar drift report flags empty sources."""
     report = build_grammar_drift_report(language="python", query_sources=())
     assert report.compatible is False
     assert "query_pack_sources_empty" in report.errors
 
 
 def test_build_grammar_drift_report_accepts_scm_sources() -> None:
+    """Test build grammar drift report accepts scm sources."""
     report = build_grammar_drift_report(
         language="rust",
         query_sources=(_Source("10_refs.scm", "(identifier) @ref"),),

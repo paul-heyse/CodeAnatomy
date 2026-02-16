@@ -15,6 +15,7 @@ class _CodecPayload(CqStruct, frozen=True):
 
 
 def test_decode_msgpack_typed_roundtrip() -> None:
+    """Test decode msgpack typed roundtrip."""
     encoded = encode_msgpack_payload(_CodecPayload(value=7))
     assert isinstance(encoded, bytes)
     decoded = decode_msgpack_typed(encoded, type_=_CodecPayload)
@@ -22,5 +23,6 @@ def test_decode_msgpack_typed_roundtrip() -> None:
 
 
 def test_convert_mapping_typed_handles_mapping_input() -> None:
+    """Test convert mapping typed handles mapping input."""
     decoded = convert_mapping_typed({"value": 9}, type_=_CodecPayload)
     assert decoded == _CodecPayload(value=9)

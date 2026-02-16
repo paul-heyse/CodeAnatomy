@@ -52,6 +52,7 @@ def _sample_result() -> CqResult:
 
 
 def test_render_ldmd_from_cq_result_has_balanced_markers() -> None:
+    """Test render ldmd from cq result has balanced markers."""
     content = render_ldmd_from_cq_result(_sample_result())
     begin_count = content.count("<!--LDMD:BEGIN")
     end_count = content.count("<!--LDMD:END")
@@ -60,6 +61,7 @@ def test_render_ldmd_from_cq_result_has_balanced_markers() -> None:
 
 
 def test_render_ldmd_from_cq_result_preview_body_split() -> None:
+    """Test render ldmd from cq result preview body split."""
     content = render_ldmd_from_cq_result(_sample_result())
     assert '<!--LDMD:BEGIN id="key_findings_tldr"' in content
     assert '<!--LDMD:BEGIN id="key_findings_body"' in content
@@ -67,6 +69,7 @@ def test_render_ldmd_from_cq_result_preview_body_split() -> None:
 
 
 def test_render_ldmd_from_cq_result_has_stable_section_ids() -> None:
+    """Test render ldmd from cq result has stable section ids."""
     content = render_ldmd_from_cq_result(_sample_result())
     assert '<!--LDMD:BEGIN id="section_0"' in content
     assert '<!--LDMD:BEGIN id="section_0_tldr"' in content
@@ -74,6 +77,7 @@ def test_render_ldmd_from_cq_result_has_stable_section_ids() -> None:
 
 
 def test_render_ldmd_from_cq_result_uses_artifact_only_diagnostics() -> None:
+    """Test render ldmd from cq result uses artifact only diagnostics."""
     content = render_ldmd_from_cq_result(_sample_result())
     assert "Diagnostic Artifacts" in content
     assert "offloaded_keys:" in content

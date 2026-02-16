@@ -37,6 +37,7 @@ class QueryExecutionSettingsV1(CqStruct, frozen=True):
     budget_ms: int | None = None
     timeout_micros: int | None = None
     require_containment: bool = False
+    has_change_context: bool = False
     window_mode: Literal[
         "intersection",
         "containment_preferred",
@@ -152,6 +153,8 @@ class TreeSitterStructuralNodeV1(CqStruct, frozen=True):
     end_col: int
     field_name: str | None = None
     child_index: int | None = None
+    is_visible: bool | None = None
+    is_supertype: bool | None = None
 
 
 class TreeSitterStructuralEdgeV1(CqStruct, frozen=True):

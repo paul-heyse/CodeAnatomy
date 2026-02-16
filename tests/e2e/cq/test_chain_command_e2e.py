@@ -12,12 +12,15 @@ from tests.e2e.cq._support.goldens import assert_json_snapshot_data, load_golden
 from tests.e2e.cq._support.projections import result_snapshot_projection
 from tests.e2e.cq._support.specs import assert_result_matches_spec
 
+EXPECTED_CHAIN_STEPS = 2
+
 
 @pytest.mark.e2e
 def test_chain_search_and_q_steps_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test chain search and q steps golden."""
     result = run_cq_result(
         [
             "chain",
@@ -39,7 +42,7 @@ def test_chain_search_and_q_steps_golden(
     assert_result_matches_spec(result, spec)
     steps = result.summary.get("steps")
     assert isinstance(steps, list)
-    assert len(steps) == 2
+    assert len(steps) == EXPECTED_CHAIN_STEPS
     section_titles = [section.title for section in result.sections]
     assert any("Target Candidates" in title for title in section_titles)
     assert any("Neighborhood Preview" in title for title in section_titles)

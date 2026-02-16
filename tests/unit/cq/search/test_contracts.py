@@ -13,8 +13,12 @@ from tools.cq.search._shared.search_contracts import (
     coerce_language_capabilities,
 )
 
+RUST_MATCH_COUNT = 3
+RUST_CACHE_HIT_COUNT = 2
+
 
 def test_search_summary_contract_preserves_required_keys() -> None:
+    """Test search summary contract preserves required keys."""
     summary = build_multilang_summary(
         SummaryBuildRequest(
             common={"query": "build_graph"},
@@ -37,6 +41,7 @@ def test_search_summary_contract_preserves_required_keys() -> None:
 
 
 def test_cross_language_diagnostic_coercion() -> None:
+    """Test cross language diagnostic coercion."""
     rows = coerce_diagnostics(
         [
             {
@@ -54,10 +59,11 @@ def test_cross_language_diagnostic_coercion() -> None:
     assert isinstance(rows[0], CrossLanguageDiagnostic)
     assert rows[0].code == "ML001"
     assert rows[0].severity == "warning"
-    assert rows[0].counts["rust_matches"] == 3
+    assert rows[0].counts["rust_matches"] == RUST_MATCH_COUNT
 
 
 def test_language_capabilities_coercion() -> None:
+    """Test language capabilities coercion."""
     caps = coerce_language_capabilities(
         {
             "python": {"search": {"supported": True, "level": "full"}},
@@ -72,6 +78,7 @@ def test_language_capabilities_coercion() -> None:
 
 
 def test_search_summary_contract_accepts_enrichment_telemetry() -> None:
+    """Test search summary contract accepts enrichment telemetry."""
     contract = SearchSummaryContract(
         lang_scope="auto",
         language_order=["python", "rust"],
@@ -89,4 +96,4 @@ def test_search_summary_contract_accepts_enrichment_telemetry() -> None:
         ),
     )
     assert contract.enrichment_telemetry is not None
-    assert contract.enrichment_telemetry.rust.cache_hits == 2
+    assert contract.enrichment_telemetry.rust.cache_hits == RUST_CACHE_HIT_COUNT

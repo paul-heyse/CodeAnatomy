@@ -26,6 +26,8 @@ from semantics.validation import (
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+ANNOTATED_SCHEMA_COLUMN_COUNT = 5
+
 
 def _missing_required_from_error(exc: ValueError) -> tuple[str, ...]:
     prefix = "Missing required semantic inputs: "
@@ -370,7 +372,7 @@ class TestSemanticPipelineIntegration:
 
         annotated = AnnotatedSchema.from_arrow_schema(schema)
 
-        assert len(annotated) == 5
+        assert len(annotated) == ANNOTATED_SCHEMA_COLUMN_COUNT
         assert annotated.has_semantic_type(SemanticType.ENTITY_ID)
         assert annotated.has_semantic_type(SemanticType.FILE_ID)
         assert annotated.has_semantic_type(SemanticType.SPAN_START)

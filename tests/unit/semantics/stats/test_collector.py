@@ -14,6 +14,15 @@ from semantics.stats.collector import (
     _parse_row_count_from_line,
 )
 
+COLUMN_DISTINCT_COUNT = 100
+NULL_COUNT_VALUE = 5
+ROW_COUNT_LARGE = 1000
+CACHE_ROW_COUNT = 100
+CACHE_ITEM_COUNT = 2
+PARSED_ROW_COUNT = 1234
+PARSED_ROWS_PRIMARY = 100
+PARSED_ROWS_SECONDARY = 50
+
 
 class TestColumnStats:
     """Tests for ColumnStats dataclass."""
@@ -30,22 +39,22 @@ class TestColumnStats:
         stats = ColumnStats(
             name="bstart",
             null_count=0,
-            distinct_count=100,
+            distinct_count=COLUMN_DISTINCT_COUNT,
             min_value="0",
             max_value="9999",
         )
         assert stats.name == "bstart"
         assert stats.null_count == 0
-        assert stats.distinct_count == 100
+        assert stats.distinct_count == COLUMN_DISTINCT_COUNT
         assert stats.min_value == "0"
         assert stats.max_value == "9999"
 
     def test_as_dict(self) -> None:
         """Serialize ColumnStats to dictionary."""
-        stats = ColumnStats(name="col", null_count=5)
+        stats = ColumnStats(name="col", null_count=NULL_COUNT_VALUE)
         result = stats.as_dict()
         assert result["name"] == "col"
-        assert result["null_count"] == 5
+        assert result["null_count"] == NULL_COUNT_VALUE
         assert result["distinct_count"] is None
 
     def test_frozen(self) -> None:
@@ -103,7 +112,7 @@ class TestViewStats:
         """Serialize ViewStats to dictionary."""
         stats = ViewStats(
             view_name="my_view",
-            row_count=1000,
+            row_count=ROW_COUNT_LARGE,
             row_count_exact=True,
             schema_fingerprint="abc123",
         )
@@ -111,7 +120,7 @@ class TestViewStats:
         result = stats.as_dict()
         column_stats = cast("dict[str, object]", result["column_stats"])
         assert result["view_name"] == "my_view"
-        assert result["row_count"] == 1000
+        assert result["row_count"] == ROW_COUNT_LARGE
         assert result["row_count_exact"] is True
         assert result["schema_fingerprint"] == "abc123"
         assert "col1" in column_stats
@@ -130,21 +139,21 @@ class TestViewStatsCache:
     def test_put_and_get(self) -> None:
         """Store and retrieve stats."""
         cache = ViewStatsCache()
-        stats = ViewStats(view_name="view1", row_count=100)
+        stats = ViewStats(view_name="view1", row_count=CACHE_ROW_COUNT)
         cache.put(stats)
         assert len(cache) == 1
         assert "view1" in cache
         retrieved = cache.get("view1")
         assert retrieved is stats
         assert retrieved is not None
-        assert retrieved.row_count == 100
+        assert retrieved.row_count == CACHE_ROW_COUNT
 
     def test_invalidate(self) -> None:
         """Remove stats from cache."""
         cache = ViewStatsCache()
         cache.put(ViewStats(view_name="view1"))
         cache.put(ViewStats(view_name="view2"))
-        assert len(cache) == 2
+        assert len(cache) == CACHE_ITEM_COUNT
         cache.invalidate("view1")
         assert len(cache) == 1
         assert "view1" not in cache
@@ -160,7 +169,7 @@ class TestViewStatsCache:
         cache = ViewStatsCache()
         cache.put(ViewStats(view_name="v1"))
         cache.put(ViewStats(view_name="v2"))
-        assert len(cache) == 2
+        assert len(cache) == CACHE_ITEM_COUNT
         cache.clear()
         assert len(cache) == 0
 
@@ -168,11 +177,11 @@ class TestViewStatsCache:
         """Putting same view name overwrites."""
         cache = ViewStatsCache()
         cache.put(ViewStats(view_name="v", row_count=1))
-        cache.put(ViewStats(view_name="v", row_count=2))
+        cache.put(ViewStats(view_name="v", row_count=CACHE_ITEM_COUNT))
         assert len(cache) == 1
         retrieved = cache.get("v")
         assert retrieved is not None
-        assert retrieved.row_count == 2
+        assert retrieved.row_count == CACHE_ITEM_COUNT
 
 
 class TestParseRowCountFromLine:
@@ -182,7 +191,7 @@ class TestParseRowCountFromLine:
         """Parse row count from valid line."""
         line = "TableScan: my_table projection=[a, b], rows=1234"
         result = _parse_row_count_from_line(line)
-        assert result == 1234
+        assert result == PARSED_ROW_COUNT
 
     def test_no_rows_marker(self) -> None:
         """Return None if no rows= marker."""
@@ -200,10 +209,10 @@ class TestParseRowCountFromLine:
         """Parse rows with trailing punctuation."""
         line = "rows=100, size=500"
         result = _parse_row_count_from_line(line)
-        assert result == 100
+        assert result == PARSED_ROWS_PRIMARY
 
     def test_rows_with_paren(self) -> None:
         """Parse rows with closing paren."""
         line = "stats=(rows=50)"
         result = _parse_row_count_from_line(line)
-        assert result == 50
+        assert result == PARSED_ROWS_SECONDARY

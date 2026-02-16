@@ -6,6 +6,10 @@ import pytest
 from tools.cq.search.tree_sitter.contracts.core_models import QueryWindowV1
 from tools.cq.search.tree_sitter.core.work_queue import dequeue_window, enqueue_windows
 
+FIRST_WINDOW_END_BYTE = 5
+SECOND_WINDOW_START_BYTE = 10
+SECOND_WINDOW_END_BYTE = 20
+
 
 class _Cache:
     def __init__(self) -> None:
@@ -35,6 +39,7 @@ class _FanoutLike:
 
 
 def test_enqueue_and_dequeue_windows_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test enqueue and dequeue windows roundtrip."""
     import tools.cq.search.tree_sitter.core.work_queue as queue_mod
 
     cache = _Cache()
@@ -49,10 +54,11 @@ def test_enqueue_and_dequeue_windows_roundtrip(monkeypatch: pytest.MonkeyPatch) 
     assert item is not None
     assert item.file_key == "sample.py"
     assert item.start_byte == 1
-    assert item.end_byte == 5
+    assert item.end_byte == FIRST_WINDOW_END_BYTE
 
 
 def test_enqueue_dequeue_windows_with_named_subcache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test enqueue dequeue windows with named subcache."""
     import tools.cq.search.tree_sitter.core.work_queue as queue_mod
 
     cache = _FanoutLike()
@@ -66,5 +72,5 @@ def test_enqueue_dequeue_windows_with_named_subcache(monkeypatch: pytest.MonkeyP
     item = dequeue_window("python")
     assert item is not None
     assert item.file_key == "sample.py"
-    assert item.start_byte == 10
-    assert item.end_byte == 20
+    assert item.start_byte == SECOND_WINDOW_START_BYTE
+    assert item.end_byte == SECOND_WINDOW_END_BYTE

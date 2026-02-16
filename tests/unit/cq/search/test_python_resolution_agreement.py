@@ -6,6 +6,7 @@ from tools.cq.search.python.extractors import _build_agreement_section
 
 
 def test_agreement_full_with_python_resolution_source() -> None:
+    """Test agreement full with python resolution source."""
     agreement = _build_agreement_section(
         ast_fields={"call_target": "pkg.fn"},
         python_resolution_fields={"symbol_role": "read"},
@@ -19,6 +20,7 @@ def test_agreement_full_with_python_resolution_source() -> None:
 
 
 def test_agreement_conflict_uses_python_resolution_key() -> None:
+    """Test agreement conflict uses python resolution key."""
     agreement = _build_agreement_section(
         ast_fields={"symbol_role": "read"},
         python_resolution_fields={"symbol_role": "write"},
@@ -35,6 +37,7 @@ def test_agreement_conflict_uses_python_resolution_key() -> None:
 
 
 def test_agreement_partial_when_resolution_missing() -> None:
+    """Test agreement partial when resolution missing."""
     agreement = _build_agreement_section(
         ast_fields={"call_target": "pkg.fn"},
         python_resolution_fields={},

@@ -9,6 +9,7 @@ from tools.cq.search.tree_sitter.rust_lane.runtime import is_tree_sitter_rust_av
 
 @pytest.mark.skipif(not is_tree_sitter_rust_available(), reason="tree-sitter-rust unavailable")
 def test_rust_module_graph_is_attached_from_tree_sitter_facts() -> None:
+    """Test rust module graph is attached from tree sitter facts."""
     source = "mod corelib { pub fn run() {} }\nuse corelib::run;\nfn main() { run(); }\n"
     byte_start = source.index("run();")
     byte_end = byte_start + len("run")

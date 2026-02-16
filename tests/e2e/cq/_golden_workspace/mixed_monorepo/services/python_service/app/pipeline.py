@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import override
 
 
 def trace(label: str) -> Callable[[Callable[..., str]], Callable[..., str]]:
@@ -22,6 +23,7 @@ class Backend(ABC):
 
 
 class LocalBackend(Backend):
+    @override
     def dispatch(self, payload: str) -> str:
         return payload.upper()
 

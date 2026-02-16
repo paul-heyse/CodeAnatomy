@@ -11,6 +11,8 @@ from tools.cq.macros.rust_fallback_policy import (
     apply_rust_fallback_policy,
 )
 
+FALLBACK_MATCH_COUNT = 7
+
 
 def _base_result() -> CqResult:
     run = RunMeta(
@@ -24,6 +26,7 @@ def _base_result() -> CqResult:
 
 
 def test_apply_rust_fallback_policy_uses_summary_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test apply rust fallback policy uses summary key."""
     captured: dict[str, object] = {}
 
     def _fake_apply(
@@ -48,7 +51,7 @@ def test_apply_rust_fallback_policy_uses_summary_key(monkeypatch: pytest.MonkeyP
     )
 
     result = _base_result()
-    result.summary["fallback_count"] = 7
+    result.summary["fallback_count"] = FALLBACK_MATCH_COUNT
     policy = RustFallbackPolicyV1(
         macro_name="calls",
         pattern="foo\\(",
@@ -57,7 +60,7 @@ def test_apply_rust_fallback_policy_uses_summary_key(monkeypatch: pytest.MonkeyP
     )
     out = apply_rust_fallback_policy(result, root=Path(), policy=policy)
     assert out is result
-    assert captured["fallback_matches"] == 7
+    assert captured["fallback_matches"] == FALLBACK_MATCH_COUNT
     assert captured["macro_name"] == "calls"
     assert captured["pattern"] == "foo\\("
     assert captured["query"] == "foo"
@@ -66,6 +69,7 @@ def test_apply_rust_fallback_policy_uses_summary_key(monkeypatch: pytest.MonkeyP
 def test_apply_rust_fallback_policy_non_int_summary_defaults_zero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test apply rust fallback policy non int summary defaults zero."""
     captured: dict[str, object] = {}
 
     def _fake_apply(

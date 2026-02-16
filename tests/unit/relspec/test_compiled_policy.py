@@ -7,6 +7,8 @@ import pytest
 
 from relspec.compiled_policy import CompiledExecutionPolicy
 from serde_msgspec import to_builtins
+
+SHA256_HEX_DIGEST_LENGTH = 64
 from tests.test_helpers.immutability import assert_immutable_assignment
 
 
@@ -131,7 +133,7 @@ class TestCompiledExecutionPolicyFingerprint:
         fp1 = _compute_policy_fingerprint(policy)
         fp2 = _compute_policy_fingerprint(policy)
         assert fp1 == fp2
-        assert len(fp1) == 64  # SHA-256 hex digest
+        assert len(fp1) == SHA256_HEX_DIGEST_LENGTH  # SHA-256 hex digest
 
     def test_fingerprint_differs_for_different_policies(self) -> None:
         """Different policies produce different fingerprints."""

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 
 def test_view_graph_nodes_threads_runtime_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test view graph nodes threads runtime inputs."""
     profile = df_profile()
     semantic_ir = build_semantic_ir()
 

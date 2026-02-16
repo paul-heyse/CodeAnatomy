@@ -13,6 +13,10 @@ _ts_available = pytest.mark.skipif(
     reason="tree-sitter-rust is not available in this environment",
 )
 
+MAX_SCOPE_CHAIN_LENGTH = 256
+EXPECTED_STRUCT_FIELD_COUNT = 3
+EXPECTED_ENUM_VARIANT_COUNT = 3
+
 
 # ---------------------------------------------------------------------------
 # Original tests (preserved unchanged)
@@ -109,7 +113,7 @@ def test_scope_chain_bounded_depth() -> None:
         chain = payload.get("scope_chain")
         assert isinstance(chain, list)
         # Chain length must be bounded by the internal node-visit cap (256)
-        assert len(chain) <= 256
+        assert len(chain) <= MAX_SCOPE_CHAIN_LENGTH
 
 
 # ---------------------------------------------------------------------------
@@ -419,9 +423,9 @@ def test_struct_shape() -> None:
     fields = payload.get("struct_fields")
     if field_count is not None:
         assert isinstance(field_count, int)
-        assert field_count == 3
+        assert field_count == EXPECTED_STRUCT_FIELD_COUNT
         assert isinstance(fields, list)
-        assert len(fields) >= 3
+        assert len(fields) >= EXPECTED_STRUCT_FIELD_COUNT
 
 
 @_ts_available
@@ -433,9 +437,9 @@ def test_enum_shape() -> None:
     variants = payload.get("enum_variants")
     if variant_count is not None:
         assert isinstance(variant_count, int)
-        assert variant_count == 3
+        assert variant_count == EXPECTED_ENUM_VARIANT_COUNT
         assert isinstance(variants, list)
-        assert len(variants) >= 3
+        assert len(variants) >= EXPECTED_ENUM_VARIANT_COUNT
 
 
 @_ts_available

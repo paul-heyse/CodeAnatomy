@@ -67,7 +67,7 @@ class TestMermaidFlowchart:
         assert "foo[foo]" in output
 
     def test_caller_callee_edge(self) -> None:
-        """Render caller-callee relationship."""
+        """Render caller-callee edge into DOT when callers section is present."""
         definition = Finding(
             category="definition",
             message="function: foo",
@@ -188,7 +188,7 @@ class TestDotRenderer:
         assert "shape=ellipse" in output
 
     def test_caller_callee_edge(self) -> None:
-        """Render caller-callee edge."""
+        """Render caller-callee edge into DOT when callers section is present."""
         definition = Finding(
             category="definition",
             message="function: foo",

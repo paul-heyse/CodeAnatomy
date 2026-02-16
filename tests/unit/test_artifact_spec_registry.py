@@ -16,6 +16,12 @@ from serde_schema_registry import (
     register_artifact_spec,
 )
 
+FINGERPRINT_HEX_BASE = 16
+FINGERPRINT_EXPECTED_LENGTH = 32
+REGISTRY_TWO_ITEMS = 2
+MIN_EXPECTED_SPEC_COUNT = 145
+CUSTOM_VERSION = 2
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -54,7 +60,7 @@ class TestArtifactSpecCreation:
         assert spec.description == "A test artifact."
         assert spec.payload_type is _SamplePayload
         assert spec.version == 1
-        assert len(spec.schema_fingerprint) == 32
+        assert len(spec.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
     def test_create_spec_without_payload_type(self) -> None:
         """Create spec without a payload type (untyped artifact)."""
@@ -99,9 +105,9 @@ class TestArtifactSpecCreation:
         spec = ArtifactSpec(
             canonical_name="versioned_v2",
             description="Version 2.",
-            version=2,
+            version=CUSTOM_VERSION,
         )
-        assert spec.version == 2
+        assert spec.version == CUSTOM_VERSION
 
     def test_fingerprint_is_hex_string(self) -> None:
         """Schema fingerprint is a valid hex string."""
@@ -110,7 +116,7 @@ class TestArtifactSpecCreation:
             description="Hex test.",
             payload_type=_SamplePayload,
         )
-        int(spec.schema_fingerprint, 16)  # Should not raise
+        int(spec.schema_fingerprint, FINGERPRINT_HEX_BASE)  # Should not raise
 
     def test_fingerprint_length_is_32(self) -> None:
         """Schema fingerprint is always 32 characters (128-bit truncation)."""
@@ -119,7 +125,7 @@ class TestArtifactSpecCreation:
             description="Length test.",
             payload_type=_OtherPayload,
         )
-        assert len(spec.schema_fingerprint) == 32
+        assert len(spec.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +238,7 @@ class TestArtifactSpecRegistry:
         registry.register("a_v1", ArtifactSpec(canonical_name="a_v1", description="A."))
         assert len(registry) == 1
         registry.register("b_v1", ArtifactSpec(canonical_name="b_v1", description="B."))
-        assert len(registry) == 2
+        assert len(registry) == REGISTRY_TWO_ITEMS
 
     def test_iter(self) -> None:
         """Check __iter__ yields registered keys."""
@@ -258,7 +264,7 @@ class TestArtifactSpecRegistry:
         registry.register("r_v1", spec)
         snap = registry.snapshot()
         registry.register("extra_v1", ArtifactSpec(canonical_name="extra_v1", description="E."))
-        assert len(registry) == 2
+        assert len(registry) == REGISTRY_TWO_ITEMS
         registry.restore(snap)
         assert len(registry) == 1
         assert "r_v1" in registry
@@ -347,7 +353,7 @@ class TestSerdeArtifactSpecs:
 
         assert VIEW_CACHE_ARTIFACT_SPEC.canonical_name == "view_cache_artifact_v1"
         assert VIEW_CACHE_ARTIFACT_SPEC.payload_type is ViewCacheArtifact
-        assert len(VIEW_CACHE_ARTIFACT_SPEC.schema_fingerprint) == 32
+        assert len(VIEW_CACHE_ARTIFACT_SPEC.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
     def test_run_manifest_spec(self) -> None:
         """RUN_MANIFEST_SPEC has expected properties."""
@@ -356,7 +362,7 @@ class TestSerdeArtifactSpecs:
 
         assert RUN_MANIFEST_SPEC.canonical_name == "run_manifest_v1"
         assert RUN_MANIFEST_SPEC.payload_type is RunManifest
-        assert len(RUN_MANIFEST_SPEC.schema_fingerprint) == 32
+        assert len(RUN_MANIFEST_SPEC.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
     def test_plan_schedule_spec(self) -> None:
         """PLAN_SCHEDULE_SPEC has expected properties."""
@@ -373,7 +379,7 @@ class TestSerdeArtifactSpecs:
 
         assert WRITE_ARTIFACT_SPEC.canonical_name == "write_artifact_v2"
         assert WRITE_ARTIFACT_SPEC.payload_type is WriteArtifactRow
-        assert len(WRITE_ARTIFACT_SPEC.schema_fingerprint) == 32
+        assert len(WRITE_ARTIFACT_SPEC.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
     def test_datafusion_view_artifacts_spec(self) -> None:
         """DATAFUSION_VIEW_ARTIFACTS_SPEC links to ViewArtifactPayload."""
@@ -382,7 +388,10 @@ class TestSerdeArtifactSpecs:
 
         assert DATAFUSION_VIEW_ARTIFACTS_SPEC.canonical_name == "datafusion_view_artifacts_v4"
         assert DATAFUSION_VIEW_ARTIFACTS_SPEC.payload_type is ViewArtifactPayload
-        assert len(DATAFUSION_VIEW_ARTIFACTS_SPEC.schema_fingerprint) == 32
+        assert (
+            len(DATAFUSION_VIEW_ARTIFACTS_SPEC.schema_fingerprint)
+            == FINGERPRINT_EXPECTED_LENGTH
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -433,9 +442,9 @@ class TestNewArtifactSpecs:
             if not isinstance(spec, ArtifactSpec):
                 continue
             if spec.payload_type is not None:
-                assert len(spec.schema_fingerprint) == 32, (
+                assert len(spec.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH, (
                     f"{attr_name} has fingerprint length "
-                    f"{len(spec.schema_fingerprint)}, expected 32"
+                    f"{len(spec.schema_fingerprint)}, expected {FINGERPRINT_EXPECTED_LENGTH}"
                 )
 
     def test_untyped_specs_have_no_fingerprint(self) -> None:
@@ -500,7 +509,9 @@ class TestNewArtifactSpecs:
     def test_total_spec_count(self) -> None:
         """Verify the total number of registered specs is at least 145."""
         registry = artifact_spec_registry()
-        assert len(registry) >= 145, f"Expected at least 145 specs, found {len(registry)}"
+        assert len(registry) >= MIN_EXPECTED_SPEC_COUNT, (
+            f"Expected at least {MIN_EXPECTED_SPEC_COUNT} specs, found {len(registry)}"
+        )
 
 
 # ---------------------------------------------------------------------------

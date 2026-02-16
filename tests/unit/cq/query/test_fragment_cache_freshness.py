@@ -1,3 +1,5 @@
+"""Tests for test_fragment_cache_freshness."""
+
 from __future__ import annotations
 
 import os
@@ -27,7 +29,9 @@ def _cache_env(tmp_path: Path) -> Generator[None]:
     os.environ.pop("CQ_CACHE_DIR", None)
 
 
+
 def test_pattern_fragment_cache_uses_content_hash_for_freshness(tmp_path: Path) -> None:
+    """Use content hash changes to drive cache misses for pattern fragments."""
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     file_path = root / "module.py"

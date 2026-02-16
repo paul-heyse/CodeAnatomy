@@ -18,20 +18,24 @@ def _row(*, join_keys: tuple[str, ...], fields: tuple[str, ...] = ()) -> Semanti
 
 
 def test_infer_entity_grain_relation_from_compatibility_groups() -> None:
+    """Test infer entity grain relation from compatibility groups."""
     inferred = _infer_entity_grain_from_metadata(_row(join_keys=("entity_id", "symbol")))
     assert inferred == ("edge", "per_edge")
 
 
 def test_infer_entity_grain_file_from_file_identity() -> None:
+    """Test infer entity grain file from file identity."""
     inferred = _infer_entity_grain_from_metadata(_row(join_keys=("file_id",)))
     assert inferred == ("file", "per_file")
 
 
 def test_infer_entity_grain_symbol_from_symbol_identity() -> None:
+    """Test infer entity grain symbol from symbol identity."""
     inferred = _infer_entity_grain_from_metadata(_row(join_keys=("qname",)))
     assert inferred == ("symbol", "per_symbol")
 
 
 def test_infer_entity_grain_entity_from_identity_group() -> None:
+    """Test infer entity grain entity from identity group."""
     inferred = _infer_entity_grain_from_metadata(_row(join_keys=("node_id",)))
     assert inferred == ("entity", "per_entity")

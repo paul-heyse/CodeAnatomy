@@ -14,6 +14,8 @@ from tools.cq.core.multilang_orchestrator import (
 )
 from tools.cq.core.schema import CqResult, Finding, RunMeta, Section
 
+PYTHON_ATTEMPTED_COUNT = 2
+
 
 def test_merge_step_results_adds_provenance() -> None:
     """Merged findings include source_step and source_macro details."""
@@ -121,6 +123,7 @@ def test_runmeta_for_scope_merge_builds_runmeta() -> None:
 
 
 def test_merge_language_results_preserves_front_door_insight() -> None:
+    """Test merge language results preserves front door insight."""
     run = RunMeta(
         macro="q",
         argv=["cq", "q"],
@@ -166,6 +169,7 @@ def test_merge_language_results_preserves_front_door_insight() -> None:
 
 
 def test_merge_language_results_marks_partial_when_language_missing_insight() -> None:
+    """Test merge language results marks partial when language missing insight."""
     run = RunMeta(
         macro="q",
         argv=["cq", "q"],
@@ -214,6 +218,7 @@ def test_merge_language_results_marks_partial_when_language_missing_insight() ->
 
 
 def test_merge_language_results_aggregates_semantic_telemetry() -> None:
+    """Test merge language results aggregates semantic telemetry."""
     run = RunMeta(
         macro="q",
         argv=["cq", "q"],
@@ -264,7 +269,7 @@ def test_merge_language_results_aggregates_semantic_telemetry() -> None:
     rust = merged.summary.get("rust_semantic_telemetry")
     assert isinstance(python_semantic, dict)
     assert isinstance(rust, dict)
-    assert python_semantic.get("attempted") == 2
+    assert python_semantic.get("attempted") == PYTHON_ATTEMPTED_COUNT
     assert python_semantic.get("applied") == 1
     assert python_semantic.get("failed") == 1
     assert rust.get("attempted") == 1

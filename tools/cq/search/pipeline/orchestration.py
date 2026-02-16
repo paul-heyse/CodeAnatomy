@@ -18,7 +18,11 @@ TPartition = TypeVar("TPartition")
 
 
 def assemble_result(assembly: SearchResultAssembly) -> CqResult:
-    """Assemble final CQ result from precomputed partition output."""
+    """Assemble final CQ result from precomputed partition output.
+
+    Returns:
+        CqResult: Function return value.
+    """
     from tools.cq.search.pipeline.smart_search import _assemble_smart_search_result
 
     pipeline = SearchPipeline(assembly.context)

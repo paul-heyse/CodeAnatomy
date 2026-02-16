@@ -314,7 +314,11 @@ def capability_diagnostics(
     features: list[str],
     lang_scope: QueryLanguageScope,
 ) -> list[dict[str, object]]:
-    """Build capability diagnostics as plain dictionaries."""
+    """Build capability diagnostics as plain dictionaries.
+
+    Returns:
+        list[dict[str, object]]: Function return value.
+    """
     rows = build_capability_diagnostics(features=features, lang_scope=lang_scope)
     return diagnostics_to_summary_payload(rows)
 

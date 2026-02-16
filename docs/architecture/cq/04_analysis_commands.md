@@ -1,6 +1,6 @@
 # Analysis Commands Architecture
 
-**Version**: 0.4.0
+**Version**: 0.5.0
 **Document Status**: Phase 3
 **Last Updated**: 2026-02-15
 
@@ -10,7 +10,7 @@ CQ analysis commands provide impact analysis, call site census, scope capture an
 
 Analysis commands (primarily `calls`) embed a `FrontDoorInsightV1` contract providing target identity, neighborhood preview, and risk assessment as the first output block. The Insight Card offers concise front-door grounding: target selection with location and signature, neighborhood slice totals with preview nodes, risk level with explicit drivers and counters, confidence scoring from evidence kind, degradation status, and budget controls.
 
-This document targets advanced LLM programmers seeking to propose architectural improvements. All line references are stable as of 2026-02-15.
+This document targets advanced LLM programmers seeking to understand the current architecture. All line references are accurate as of 2026-02-15.
 
 ## Module Map
 
@@ -26,18 +26,13 @@ This document targets advanced LLM programmers seeking to propose architectural 
 - `side_effects.py` (463 lines) - Import-time side effect detection
 - `imports.py` (619 lines) - Import structure and cycle analysis
 - `exceptions.py` (592 lines) - Exception handling pattern analysis
-- `scope_filters.py` (51 lines) - Shared scope filtering helpers for macro file enumeration
 
 **Shared Macro Infrastructure** (`tools/cq/macros/`):
-- `contracts.py` (64 lines) - Base request contracts: `MacroRequestBase`, `ScopedMacroRequestBase`
-- `scan_utils.py` (30 lines) - File scan helper with glob filters
-- `scoring_utils.py` (67 lines) - Normalized scoring payload builders
-- `target_resolution.py` (44 lines) - File/symbol target resolution
-- `common/` - Re-export package for shared contracts, scoring, targets
-
-**Cross-Language Fallback** (`tools/cq/macros/`):
-- `multilang_fallback.py` (82 lines) - Shared multilang summary assembly and diagnostics
+- `contracts.py` (65 lines) - Base request contracts: `MacroRequestBase`, `ScopedMacroRequestBase`, `MacroExecutionRequestV1`, `MacroTargetResolutionV1`, `MacroScorePayloadV1`
+- `shared.py` (202 lines) - Shared utilities: scope filtering, file scanning, target resolution, scoring
 - `_rust_fallback.py` (94 lines) - Shared Rust fallback search helper
+- `multilang_fallback.py` (82 lines) - Shared multilang summary assembly and diagnostics
+- `rust_fallback_policy.py` - Rust fallback policy configuration
 
 ### Supporting Infrastructure
 
@@ -46,6 +41,8 @@ This document targets advanced LLM programmers seeking to propose architectural 
 - `call_resolver.py` (352 lines) - Call expression → FnDecl resolution with confidence scoring
 - `arg_binder.py` (360 lines) - Argument → parameter binding for taint propagation
 - `graph_utils.py` - Strongly connected component detection for cycle analysis
+- `files.py` - File indexing and tabulation with gitignore support
+- `repo.py` - Repository context resolution
 
 **CLI Layer**:
 - `cli_app/commands/analysis.py` (361 lines) - CLI dispatch layer for all analysis macros
@@ -60,7 +57,7 @@ All analysis macros have been refactored to use common infrastructure for reques
 
 ### Base Request Contracts
 
-**MacroRequestBase** (`macros/contracts.py:16-22`):
+**MacroRequestBase** (`macros/contracts.py:16-21`):
 ```python
 class MacroRequestBase(CqStruct, frozen=True):
     """Base request envelope shared by macro entry points."""
@@ -82,13 +79,41 @@ class ScopedMacroRequestBase(MacroRequestBase, frozen=True):
 Macros that scan multiple files extend `ScopedMacroRequestBase` to inherit standard scope filtering capability.
 
 **Usage Hierarchy**:
-- `MacroRequestBase` ← `BytecodeSurfaceRequest`, `ScopeRequest`
-- `ScopedMacroRequestBase` ← `ExceptionsRequest`, `ImportRequest`, `SideEffectsRequest`
-- `MacroRequestBase` ← `ImpactRequest`, `SigImpactRequest` (no scope filtering needed)
+- `MacroRequestBase` ← Used by `bytecode`, `scopes`, `calls`, `calls_target`, `impact`, `sig_impact`
+- `ScopedMacroRequestBase` ← Used by `exceptions`, `imports`, `side_effects`
+
+### Scope Filtering
+
+**resolve_macro_files** (`macros/shared.py:33-60`):
+```python
+def resolve_macro_files(
+    *,
+    root: Path,
+    include: Sequence[str] | None,
+    exclude: Sequence[str] | None,
+    extensions: tuple[str, ...],
+) -> list[Path]:
+    """Resolve macro scan files using shared include/exclude semantics."""
+```
+
+**Resolution Strategy**:
+1. Build repository file index with gitignore awareness
+2. Apply include globs (direct patterns)
+3. Apply exclude globs (negated patterns prefixed with "!")
+4. Filter by file extensions
+5. Return matched file paths
+
+**iter_files** (`macros/shared.py:66-89`):
+Wrapper around `resolve_macro_files` with optional `max_files` truncation for scan limits.
+
+**Used By**:
+- `exceptions.py` - File iteration for exception analysis
+- `imports.py` - File iteration for import analysis
+- `side_effects.py` - File iteration for side-effect analysis
 
 ### Target Resolution
 
-**resolve_target_files** (`macros/target_resolution.py:10-42`):
+**resolve_target_files** (`macros/shared.py:95-126`):
 ```python
 def resolve_target_files(
     *,
@@ -105,37 +130,15 @@ def resolve_target_files(
 **Resolution Strategy**:
 1. **Explicit Path**: Check if target is absolute or relative path to existing file
 2. **Rooted Path**: Try `root / target` as file path
-3. **Symbol Search**: Scan files matching include/exclude/extensions for `def {target}` or `class {target}`
+3. **Symbol Search**: Use `find_symbol_definition_files` to scan for `def {target}` or `class {target}`
 
 **Used By**:
-- `bytecode.py:373` - Resolve bytecode analysis targets
-- `scopes.py:283` - Resolve scope analysis targets
-
-### File Scanning
-
-**iter_files** (`macros/scan_utils.py:10-27`):
-```python
-def iter_files(
-    *,
-    root: Path,
-    include: list[str] | None = None,
-    exclude: list[str] | None = None,
-    extensions: tuple[str, ...] = (".py",),
-    max_files: int | None = None,
-) -> list[Path]:
-    """Resolve files for macro scans with optional include/exclude globs."""
-```
-
-Wraps `resolve_macro_files` from `scope_filters.py` with optional max_files truncation.
-
-**Used By**:
-- `exceptions.py:284` - File iteration for exception analysis
-- `imports.py:285` - File iteration for import analysis
-- `side_effects.py:257` - File iteration for side-effect analysis
+- `bytecode.py` - Resolve bytecode analysis targets
+- `scopes.py` - Resolve scope analysis targets
 
 ### Scoring Utilities
 
-**macro_scoring_details** (`macros/scoring_utils.py:17-43`):
+**macro_scoring_details** (`macros/shared.py:132-164`):
 ```python
 def macro_scoring_details(
     *,
@@ -151,7 +154,7 @@ def macro_scoring_details(
 
 Constructs scoring payload from `ImpactSignals` and `ConfidenceSignals` with normalized bucket classification.
 
-**macro_score_payload** (`macros/scoring_utils.py:46-64`):
+**macro_score_payload** (`macros/shared.py:167-191`):
 ```python
 def macro_score_payload(*, files: int, findings: int) -> MacroScorePayloadV1:
     """Build a normalized macro scoring payload from simple counters."""
@@ -160,25 +163,13 @@ def macro_score_payload(*, files: int, findings: int) -> MacroScorePayloadV1:
 Convenience builder for simple file/finding count payloads.
 
 **Used By** (all macros):
-- `bytecode.py:400` - Bytecode scoring with `evidence_kind="bytecode"`
-- `exceptions.py:542` - Exception scoring with breakages count
-- `imports.py:555` - Import scoring with depth from cycle length
-- `scopes.py:309` - Scope scoring with `evidence_kind="resolved_ast"`
-- `side_effects.py:414` - Side-effect scoring
-- `impact.py:766` - Impact scoring with cross-file taint evidence
-- `sig_impact.py:376` - Signature impact scoring with breakages/ambiguities
-
-### Shared Macro Primitives
-
-Shared macro primitives are defined directly in the `tools/cq/macros/` package:
-
-**contracts.py** (`macros/contracts.py`):
-- Defines `MacroRequestBase`, `ScopedMacroRequestBase`, `MacroExecutionRequestV1`, `MacroTargetResolutionV1`, and `MacroScorePayloadV1`
-
-**shared.py** (`macros/shared.py`):
-- Defines `macro_score_payload` and `resolve_target_files`
-
-**Usage**: Macro implementations should import from `tools.cq.macros.contracts` and `tools.cq.macros.shared` directly.
+- `bytecode.py` - Bytecode scoring with `evidence_kind="bytecode"`
+- `exceptions.py` - Exception scoring with breakages count
+- `imports.py` - Import scoring with depth from cycle length
+- `scopes.py` - Scope scoring with `evidence_kind="resolved_ast"`
+- `side_effects.py` - Side-effect scoring
+- `impact.py` - Impact scoring with cross-file taint evidence
+- `sig_impact.py` - Signature impact scoring with breakages/ambiguities
 
 ## Architecture Patterns
 
@@ -281,37 +272,11 @@ class CallsTargetCacheV1(CqStruct):
 - Tracks unbound args and params (missing required params)
 - Returns binding results for taint propagation
 
-### 5. Scope Filtering
-
-All macros that scan multiple files support `--include` and `--exclude` globs for scope control.
-
-**Shared Infrastructure** (`scope_filters.py:20-48`):
-```python
-def resolve_macro_files(
-    *,
-    root: Path,
-    include: Sequence[str] | None,
-    exclude: Sequence[str] | None,
-    extensions: tuple[str, ...],
-) -> list[Path]:
-    # Uses tabulate_files with gitignore-aware semantics
-    # Include globs: direct patterns
-    # Exclude globs: negated patterns (prefixed with "!")
-```
-
-**Used By**:
-- `side_effects.py` - `--include src/ --exclude tests/`
-- `imports.py` - `--include src/ tools/`
-- `exceptions.py` - `--exclude scripts/`
-
-**Summary Telemetry**:
-All scoped macros report `scope_file_count` and `scope_filter_applied` in summary.
-
-### 6. Multilang Fallback Pattern
+### 5. Multilang Fallback Pattern
 
 Analysis commands append Rust fallback findings for cross-language coverage.
 
-**Shared Helper** (`_rust_fallback.py:19-94`):
+**Shared Helper** (`_rust_fallback.py:19-93`):
 ```python
 def rust_fallback_search(
     root: Path,
@@ -323,7 +288,7 @@ def rust_fallback_search(
     # Returns: (rust_findings, capability_diagnostics, partition_stats)
 ```
 
-**Application** (`multilang_fallback.py:34-77`):
+**Application** (`multilang_fallback.py:34-76`):
 ```python
 def apply_rust_macro_fallback(
     *,
@@ -343,11 +308,11 @@ def apply_rust_macro_fallback(
 - `impact`: Function name
 - `sig-impact`: Symbol name
 - `scopes`: Target symbol/file
-- `side-effects`: `static mut \|lazy_static\|thread_local\|unsafe `
+- `side-effects`: `static mut |lazy_static|thread_local|unsafe `
 - `imports`: `use ` or module filter
-- `exceptions`: `panic!\|unwrap\|expect\|Result<\|Err(`
+- `exceptions`: `panic!|unwrap|expect|Result<|Err(`
 
-### 7. Scoring System
+### 6. Scoring System
 
 **ImpactSignals** (`scoring.py:51-73`):
 - sites (45% weight, normalized by 100)
@@ -379,7 +344,7 @@ def apply_rust_macro_fallback(
 
 #### Data Structures
 
-**CallSite** (`calls.py:84-157`):
+**CallSite** (`calls.py:86-157`):
 ```python
 class CallSite(msgspec.Struct):
     file: str
@@ -1118,7 +1083,7 @@ def _has_matching_catch(raise_site: RaiseSite, catches: list[CatchSite]):
 
 #### Data Structures
 
-**ParamInfo** (`def_index.py:18-38`):
+**ParamInfo** (`def_index.py:19-39`):
 ```python
 @dataclass
 class ParamInfo:
@@ -1128,7 +1093,7 @@ class ParamInfo:
     kind: str  # POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL, ...
 ```
 
-**FnDecl** (`def_index.py:41-97`):
+**FnDecl** (`def_index.py:42-97`):
 ```python
 @dataclass
 class FnDecl:
@@ -1590,7 +1555,7 @@ This separate risk model provides more transparent, actionable risk assessment f
 
 ### 12. Scope Filter Coverage
 
-**Current Design** (`scope_filters.py:20-48`):
+**Current Design** (`shared.py:33-60`):
 - Shared `resolve_macro_files` with include/exclude globs
 - Used by side-effects, imports, exceptions macros
 - Not used by calls, impact, sig-impact (no scope filtering)

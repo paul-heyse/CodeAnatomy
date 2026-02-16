@@ -9,6 +9,10 @@ from tools.cq.cli_app.options import RunOptions, options_from_params
 from tools.cq.run.loader import load_run_plan
 from tools.cq.run.spec import CallsStep, NeighborhoodStep, QStep
 
+MULTI_STEP_PLAN_COUNT = 2
+DEFAULT_NEIGHBORHOOD_TOP_K = 10
+CUSTOM_NEIGHBORHOOD_TOP_K = 3
+
 
 def test_run_plan_inline_step() -> None:
     """Ensure --step JSON parses into a RunPlan."""
@@ -43,7 +47,7 @@ def test_run_plan_inline_steps_array() -> None:
     opts = bound.kwargs["opts"]
     options = options_from_params(opts, type_=RunOptions)
     plan = load_run_plan(options)
-    assert len(plan.steps) == 2
+    assert len(plan.steps) == MULTI_STEP_PLAN_COUNT
     assert isinstance(plan.steps[0], QStep)
     assert isinstance(plan.steps[1], CallsStep)
 
@@ -66,7 +70,7 @@ def test_run_plan_inline_neighborhood_step() -> None:
     assert isinstance(plan.steps[0], NeighborhoodStep)
     assert plan.steps[0].target == "tools/cq/search/python_analysis_session.py:1"
     assert plan.steps[0].lang == "python"
-    assert plan.steps[0].top_k == 10
+    assert plan.steps[0].top_k == DEFAULT_NEIGHBORHOOD_TOP_K
     assert plan.steps[0].no_semantic_enrichment is False
 
 
@@ -91,7 +95,7 @@ def test_run_plan_inline_neighborhood_steps_array() -> None:
     assert isinstance(plan.steps[0], NeighborhoodStep)
     assert plan.steps[0].target == "tools/cq/search/python_analysis_session.py:1"
     assert plan.steps[0].lang == "python"
-    assert plan.steps[0].top_k == 3
+    assert plan.steps[0].top_k == CUSTOM_NEIGHBORHOOD_TOP_K
     assert plan.steps[0].no_semantic_enrichment is True
 
 
@@ -112,7 +116,7 @@ def test_run_plan_inline_mixed_steps_array_with_neighborhood() -> None:
     opts = bound.kwargs["opts"]
     options = options_from_params(opts, type_=RunOptions)
     plan = load_run_plan(options)
-    assert len(plan.steps) == 2
+    assert len(plan.steps) == MULTI_STEP_PLAN_COUNT
     assert isinstance(plan.steps[0], QStep)
     assert isinstance(plan.steps[1], NeighborhoodStep)
 

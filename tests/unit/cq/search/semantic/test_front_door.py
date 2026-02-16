@@ -10,11 +10,13 @@ from tools.cq.search.semantic.models import LanguageSemanticEnrichmentRequest
 
 
 def test_fail_open_sets_reason() -> None:
+    """Test fail open sets reason."""
     outcome = front_door_module.fail_open("x")
     assert outcome.failure_reason == "x"
 
 
 def test_enrich_semantics_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test enrich semantics delegates."""
     monkeypatch.setattr(
         front_door_module,
         "enrich_with_language_semantics",

@@ -6,6 +6,7 @@ import importlib
 
 
 def test_consolidated_package_imports() -> None:
+    """Test consolidated package imports."""
     modules = [
         "tools.cq.search.rg",
         "tools.cq.search.pipeline",

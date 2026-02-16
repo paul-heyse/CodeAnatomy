@@ -12,6 +12,7 @@ from tools.cq.search.python import pipeline_support as orchestrator_module
 def test_run_python_enrichment_pipeline_merges_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test run python enrichment pipeline merges resolution."""
     monkeypatch.setattr(
         orchestrator_module,
         "extract_python_byte_range",

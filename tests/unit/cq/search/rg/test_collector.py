@@ -7,8 +7,12 @@ from tools.cq.search.pipeline.smart_search import RawMatch
 from tools.cq.search.rg.codec import RgEvent
 from tools.cq.search.rg.collector import collect_events
 
+MATCH_ABS_BYTE_START = 100
+MATCH_ABS_BYTE_END = 103
+
 
 def test_collect_events_builds_collector_state() -> None:
+    """Test collect events builds collector state."""
     events = [
         RgEvent(type="begin", data={"path": {"text": "src/foo.py"}}),
         RgEvent(
@@ -55,5 +59,5 @@ def test_collect_events_builds_collector_state() -> None:
     assert collector.files_completed == {"src/foo.py"}
     assert collector.binary_files == {"src/foo.py"}
     assert collector.context_lines["src/foo.py"][1] == "def foo():"
-    assert collector.matches[0].match_abs_byte_start == 100
-    assert collector.matches[0].match_abs_byte_end == 103
+    assert collector.matches[0].match_abs_byte_start == MATCH_ABS_BYTE_START
+    assert collector.matches[0].match_abs_byte_end == MATCH_ABS_BYTE_END

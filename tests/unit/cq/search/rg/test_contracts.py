@@ -13,6 +13,7 @@ from tools.cq.search.rg.runner import RgProcessResult
 
 
 def test_settings_from_request() -> None:
+    """Test settings from request."""
     request = RgRunRequest(
         root=Path(),
         pattern="foo",
@@ -35,6 +36,7 @@ def test_settings_from_request() -> None:
 
 
 def test_result_from_process() -> None:
+    """Test result from process."""
     process = RgProcessResult(
         command=["rg", "--json"],
         events=[RgEvent(type="summary", data={"stats": {"matches": 1}})],

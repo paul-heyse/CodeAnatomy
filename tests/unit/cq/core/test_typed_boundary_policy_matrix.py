@@ -20,6 +20,7 @@ class _PolicyContract(CqStruct, frozen=True):
     ],
 )
 def test_policy_matrix(payload: dict[str, object], strict_ok: object, lax_ok: object) -> None:
+    """Test policy matrix."""
     strict_expected = bool(strict_ok)
     lax_expected = bool(lax_ok)
     if strict_expected:

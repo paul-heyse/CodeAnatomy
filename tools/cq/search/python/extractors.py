@@ -2220,7 +2220,11 @@ def clear_python_enrichment_cache() -> None:
 
 
 def extract_python_node(request: PythonNodeEnrichmentRequest) -> dict[str, object]:
-    """Compatibility wrapper for node-anchored extraction."""
+    """Compatibility wrapper for node-anchored extraction.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     payload = enrich_python_context(request)
     return payload if isinstance(payload, dict) else {}
 
@@ -2228,7 +2232,11 @@ def extract_python_node(request: PythonNodeEnrichmentRequest) -> dict[str, objec
 def extract_python_byte_range(
     request: PythonByteRangeEnrichmentRequest,
 ) -> dict[str, object]:
-    """Compatibility wrapper for byte-range extraction."""
+    """Compatibility wrapper for byte-range extraction.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     payload = enrich_python_context_by_byte_range(request)
     return payload if isinstance(payload, dict) else {}
 

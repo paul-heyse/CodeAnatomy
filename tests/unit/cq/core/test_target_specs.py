@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from tools.cq.core.target_specs import parse_target_spec
 
+TARGET_LINE = 120
+TARGET_COLUMN = 4
+WINDOWS_TARGET_LINE = 10
+
 
 def test_parse_bundle_form() -> None:
     """Test parsing bundle kind:value form."""
@@ -18,24 +22,24 @@ def test_parse_bundle_form() -> None:
 
 def test_parse_anchor_form_with_line() -> None:
     """Test parsing file:line anchor form."""
-    spec = parse_target_spec("src/foo.py:120")
+    spec = parse_target_spec(f"src/foo.py:{TARGET_LINE}")
     assert spec.bundle_kind is None
     assert spec.bundle_value is None
     assert spec.target_name is None
     assert spec.target_file == "src/foo.py"
-    assert spec.target_line == 120
+    assert spec.target_line == TARGET_LINE
     assert spec.target_col is None
 
 
 def test_parse_anchor_form_with_line_col() -> None:
     """Test parsing file:line:col anchor form."""
-    spec = parse_target_spec("src/foo.py:120:4")
+    spec = parse_target_spec(f"src/foo.py:{TARGET_LINE}:{TARGET_COLUMN}")
     assert spec.bundle_kind is None
     assert spec.bundle_value is None
     assert spec.target_name is None
     assert spec.target_file == "src/foo.py"
-    assert spec.target_line == 120
-    assert spec.target_col == 4
+    assert spec.target_line == TARGET_LINE
+    assert spec.target_col == TARGET_COLUMN
 
 
 def test_parse_symbol_form() -> None:
@@ -77,7 +81,7 @@ def test_parse_file_with_colons() -> None:
     """Test parsing file path containing colons."""
     spec = parse_target_spec("C:/Users/foo/bar.py:10")
     assert spec.target_file == "C:/Users/foo/bar.py"
-    assert spec.target_line == 10
+    assert spec.target_line == WINDOWS_TARGET_LINE
 
 
 def test_parse_line_zero_clamped() -> None:

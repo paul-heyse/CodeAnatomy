@@ -13,22 +13,30 @@ from tools.cq.core.typed_boundary import (
     decode_yaml_strict,
 )
 
+CONVERTED_VALUE = 3
+JSON_VALUE = 4
+TOML_VALUE = 5
+YAML_VALUE = 6
+
 
 class _Contract(CqStruct, frozen=True):
     value: int
 
 
 def test_convert_strict_raises_boundary_error() -> None:
+    """Test convert strict raises boundary error."""
     with pytest.raises(BoundaryDecodeError):
         convert_strict({"value": "nope"}, type_=_Contract)
 
 
 def test_convert_lax_converts_numeric_string() -> None:
-    converted = convert_lax({"value": "3"}, type_=_Contract)
-    assert converted.value == 3
+    """Test convert lax converts numeric string."""
+    converted = convert_lax({"value": str(CONVERTED_VALUE)}, type_=_Contract)
+    assert converted.value == CONVERTED_VALUE
 
 
 def test_decode_json_toml_yaml_strict() -> None:
-    assert decode_json_strict(b'{"value": 4}', type_=_Contract).value == 4
-    assert decode_toml_strict(b"value = 5", type_=_Contract).value == 5
-    assert decode_yaml_strict(b"value: 6\n", type_=_Contract).value == 6
+    """Test decode json toml yaml strict."""
+    assert decode_json_strict(b'{"value": 4}', type_=_Contract).value == JSON_VALUE
+    assert decode_toml_strict(b"value = 5", type_=_Contract).value == TOML_VALUE
+    assert decode_yaml_strict(b"value: 6\n", type_=_Contract).value == YAML_VALUE

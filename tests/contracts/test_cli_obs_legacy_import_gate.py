@@ -22,6 +22,7 @@ def _import_targets(path: Path) -> set[str]:
 
 
 def test_cli_obs_do_not_import_legacy_hamilton_or_rustworkx_modules() -> None:
+    """Test cli obs do not import legacy hamilton or rustworkx modules."""
     offenders: list[str] = []
 
     for root in _SCAN_ROOTS:

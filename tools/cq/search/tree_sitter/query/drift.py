@@ -46,7 +46,11 @@ def _as_index(value: object) -> _SchemaIndexLike:
 
 
 def diff_schema(old_index: object, new_index: object) -> GrammarDiffV1:
-    """Build structural diff between two grammar-schema indexes."""
+    """Build structural diff between two grammar-schema indexes.
+
+    Returns:
+        GrammarDiffV1: Function return value.
+    """
     old = _as_index(old_index)
     new = _as_index(new_index)
     old_nodes = set(old.all_node_kinds)
@@ -90,7 +94,11 @@ def build_grammar_drift_report(
     language: str,
     query_sources: tuple[object, ...],
 ) -> GrammarDriftReportV1:
-    """Build compatibility report between grammar schema and query-pack set."""
+    """Build compatibility report between grammar schema and query-pack set.
+
+    Returns:
+        GrammarDriftReportV1: Function return value.
+    """
     from tools.cq.search.tree_sitter.query.contract_snapshot import (
         build_contract_snapshot,
         diff_snapshots,

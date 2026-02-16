@@ -9,6 +9,7 @@ from tools.cq.macros import shared
 
 
 def test_iter_files_applies_max_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test iter files applies max files."""
     files = [tmp_path / "a.py", tmp_path / "b.py", tmp_path / "c.py"]
     for path in files:
         path.write_text("pass\n", encoding="utf-8")

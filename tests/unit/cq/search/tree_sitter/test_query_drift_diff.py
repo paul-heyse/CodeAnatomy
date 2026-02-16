@@ -8,6 +8,7 @@ from tools.cq.search.tree_sitter.query.drift import diff_schema, has_breaking_ch
 
 
 def test_diff_schema_reports_added_and_removed_members() -> None:
+    """Test diff schema reports added and removed members."""
     old_index = SimpleNamespace(
         all_node_kinds={"function_item", "struct_item"},
         field_names={"name", "body"},

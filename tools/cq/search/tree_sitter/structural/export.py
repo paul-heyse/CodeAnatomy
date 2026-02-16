@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from tools.cq.search.tree_sitter.contracts.core_models import (
@@ -9,6 +10,7 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterStructuralExportV1,
     TreeSitterStructuralNodeV1,
 )
+from tools.cq.search.tree_sitter.schema.node_schema import load_grammar_schema
 from tools.cq.search.tree_sitter.structural.exports import export_cst_tokens
 
 if TYPE_CHECKING:
@@ -16,7 +18,11 @@ if TYPE_CHECKING:
 
 
 def build_node_id(*, file_path: str, node: object | None) -> str:
-    """Build a stable structural node identifier from file and byte span."""
+    """Build a stable structural node identifier from file and byte span.
+
+    Returns:
+        str: Function return value.
+    """
     if node is None:
         return f"{file_path}:::null"
     node_type = str(getattr(node, "type", "unknown"))
@@ -32,6 +38,8 @@ def _node_row(
     node: Node,
     field_name: str | None,
     child_index: int | None,
+    is_visible: bool | None,
+    is_supertype: bool | None,
 ) -> TreeSitterStructuralNodeV1:
     start_point = getattr(node, "start_point", (0, 0))
     end_point = getattr(node, "end_point", start_point)
@@ -46,6 +54,8 @@ def _node_row(
         end_col=int(end_point[1]),
         field_name=field_name,
         child_index=child_index,
+        is_visible=is_visible,
+        is_supertype=is_supertype,
     )
 
 
@@ -71,8 +81,19 @@ def _advance_cursor(
     node_id: str,
     parent_stack: list[str],
     child_index_stack: list[int],
+    scratch_cursor: Any | None = None,
 ) -> bool:
-    if cursor.goto_first_child():
+    target_byte = int(getattr(cursor.node, "start_byte", 0)) if cursor.node is not None else 0
+    if (
+        scratch_cursor is not None
+        and _reset_cursor_to(scratch_cursor, node=cursor.node)
+        and _advance_cursor_to_byte(scratch_cursor, target_byte)
+        and _reset_cursor_to(cursor, from_cursor=scratch_cursor)
+    ):
+        parent_stack.append(node_id)
+        child_index_stack.append(0)
+        return True
+    if _advance_cursor_to_byte(cursor, target_byte):
         parent_stack.append(node_id)
         child_index_stack.append(0)
         return True
@@ -89,6 +110,138 @@ def _advance_cursor(
             child_index_stack.pop()
 
 
+def _advance_cursor_to_byte(cursor: Any, target_byte: int) -> bool:
+    goto_for_byte = getattr(cursor, "goto_first_child_for_byte", None)
+    if callable(goto_for_byte):
+        try:
+            child_index = goto_for_byte(target_byte)
+        except (TypeError, ValueError, RuntimeError, AttributeError):
+            child_index = None
+        if child_index is not None:
+            return True
+    try:
+        return bool(cursor.goto_first_child())
+    except (TypeError, ValueError, RuntimeError, AttributeError):
+        return False
+
+
+def _fork_cursor(cursor: Any) -> Any | None:
+    copy_fn = getattr(cursor, "copy", None)
+    if not callable(copy_fn):
+        return None
+    try:
+        return copy_fn()
+    except (TypeError, RuntimeError, AttributeError):
+        return None
+
+
+def _reset_cursor_to(
+    cursor: Any,
+    *,
+    from_cursor: Any | None = None,
+    node: object | None = None,
+) -> bool:
+    reset_to_fn = getattr(cursor, "reset_to", None)
+    if from_cursor is not None and callable(reset_to_fn):
+        try:
+            reset_to_fn(from_cursor)
+        except (TypeError, RuntimeError, AttributeError):
+            pass
+        else:
+            return True
+    reset_fn = getattr(cursor, "reset", None)
+    if node is not None and callable(reset_fn):
+        try:
+            reset_fn(node)
+        except (TypeError, RuntimeError, AttributeError):
+            pass
+        else:
+            return True
+    return False
+
+
+def _language_name_for_root(root: Node) -> str | None:
+    tree = getattr(root, "tree", None)
+    language_obj = getattr(tree, "language", None) if tree is not None else None
+    language_name = getattr(language_obj, "name", None)
+    if isinstance(language_name, str) and language_name:
+        return language_name.strip().lower()
+    return None
+
+
+@lru_cache(maxsize=8)
+def _classification_map(
+    language: str,
+) -> dict[str, tuple[bool | None, bool | None]]:
+    schema = load_grammar_schema(language)
+    if schema is None:
+        return {}
+    return {
+        row.type: (row.is_visible, row.is_supertype)
+        for row in schema.node_types
+        if row.type and row.type != "__field_registry__"
+    }
+
+
+def _resolve_tokens_source(root: Node, source_bytes: bytes | None) -> bytes:
+    if source_bytes is not None:
+        return source_bytes
+    if not hasattr(root, "text"):
+        return b""
+    try:
+        raw_text = root.text
+    except (RuntimeError, TypeError, ValueError, AttributeError):
+        return b""
+    if isinstance(raw_text, (bytes, bytearray, memoryview)):
+        return bytes(raw_text)
+    return b""
+
+
+def _collect_structural_rows(
+    *,
+    file_path: str,
+    root: Node,
+    kind_classification: dict[str, tuple[bool | None, bool | None]],
+) -> tuple[list[TreeSitterStructuralNodeV1], list[TreeSitterStructuralEdgeV1]]:
+    nodes: list[TreeSitterStructuralNodeV1] = []
+    edges: list[TreeSitterStructuralEdgeV1] = []
+    cursor = root.walk()
+    scratch_cursor = _fork_cursor(cursor)
+    parent_stack: list[str] = []
+    child_index_stack: list[int] = [0]
+    while True:
+        node = cursor.node
+        if node is None:
+            return nodes, edges
+        field_name = cursor.field_name if isinstance(cursor.field_name, str) else None
+        node_kind = str(getattr(node, "type", "unknown"))
+        is_visible, is_supertype = kind_classification.get(node_kind, (None, None))
+        node_id = build_node_id(file_path=file_path, node=node)
+        child_index = child_index_stack[-1] if child_index_stack else None
+        nodes.append(
+            _node_row(
+                node_id=node_id,
+                node=node,
+                field_name=field_name,
+                child_index=child_index,
+                is_visible=is_visible,
+                is_supertype=is_supertype,
+            )
+        )
+        if parent_stack:
+            edges.append(
+                _edge_row(parent_id=parent_stack[-1], node_id=node_id, field_name=field_name)
+            )
+        if not _advance_cursor(
+            cursor=cursor,
+            node_id=node_id,
+            parent_stack=parent_stack,
+            child_index_stack=child_index_stack,
+            scratch_cursor=scratch_cursor,
+        ):
+            return nodes, edges
+
+
 def export_structural_rows(
     *,
     file_path: str,
@@ -100,56 +253,20 @@ def export_structural_rows(
     Returns:
         TreeSitterStructuralExportV1: A fully populated structural export payload.
     """
-    nodes: list[TreeSitterStructuralNodeV1] = []
-    edges: list[TreeSitterStructuralEdgeV1] = []
-    tokens_source = source_bytes
-    if tokens_source is None and hasattr(root, "text"):
-        try:
-            raw_text = root.text
-            if isinstance(raw_text, (bytes, bytearray, memoryview)):
-                tokens_source = bytes(raw_text)
-            else:
-                tokens_source = None
-        except (RuntimeError, TypeError, ValueError, AttributeError):
-            tokens_source = None
-    if tokens_source is None:
-        tokens_source = b""
+    tokens_source = _resolve_tokens_source(root, source_bytes)
     tokens = export_cst_tokens(
         file_path=file_path,
         root=root,
         source_bytes=tokens_source,
     )
-    cursor = root.walk()
-    parent_stack: list[str] = []
-    child_index_stack: list[int] = [0]
-
-    while True:
-        node = cursor.node
-        if node is None:
-            return TreeSitterStructuralExportV1(nodes=nodes, edges=edges, tokens=tokens)
-        field_name = cursor.field_name if isinstance(cursor.field_name, str) else None
-        node_id = build_node_id(file_path=file_path, node=node)
-        child_index = child_index_stack[-1] if child_index_stack else None
-        nodes.append(
-            _node_row(
-                node_id=node_id,
-                node=node,
-                field_name=field_name,
-                child_index=child_index,
-            )
-        )
-        if parent_stack:
-            edges.append(
-                _edge_row(parent_id=parent_stack[-1], node_id=node_id, field_name=field_name)
-            )
-
-        if not _advance_cursor(
-            cursor=cursor,
-            node_id=node_id,
-            parent_stack=parent_stack,
-            child_index_stack=child_index_stack,
-        ):
-            return TreeSitterStructuralExportV1(nodes=nodes, edges=edges, tokens=tokens)
+    language_name = _language_name_for_root(root)
+    kind_classification = _classification_map(language_name) if language_name else {}
+    nodes, edges = _collect_structural_rows(
+        file_path=file_path,
+        root=root,
+        kind_classification=kind_classification,
+    )
+    return TreeSitterStructuralExportV1(nodes=nodes, edges=edges, tokens=tokens)
 
 
 __all__ = ["build_node_id", "export_structural_rows"]

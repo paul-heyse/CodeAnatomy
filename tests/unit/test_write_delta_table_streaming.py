@@ -1,3 +1,5 @@
+"""Tests for test_write_delta_table_streaming."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,6 +19,7 @@ from semantics.incremental.write_helpers import (
 
 
 def test_write_delta_table_streaming_reader(monkeypatch: Any, tmp_path: Path) -> None:
+    """Write a streaming reader through pipeline and capture streaming request."""
     profile = DataFusionRuntimeProfile()
     runtime = IncrementalRuntime.build(
         IncrementalRuntimeBuildRequest(
@@ -47,6 +50,7 @@ def test_write_delta_table_streaming_reader(monkeypatch: Any, tmp_path: Path) ->
             _ = (sql_options, recorder, runtime_profile)
 
         def write(self, request: WriteRequest) -> WriteResult:
+            _ = self
             seen["request"] = request
             return WriteResult(
                 request=request,

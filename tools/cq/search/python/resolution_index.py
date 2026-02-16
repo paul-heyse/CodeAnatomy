@@ -241,7 +241,11 @@ def build_resolution_index(
     cache_key: str,
     session: object | None = None,
 ) -> dict[str, object]:
-    """Compatibility wrapper for native-resolution index building."""
+    """Compatibility wrapper for native-resolution index building.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     return enrich_python_resolution_by_byte_range(
         source=source_bytes.decode("utf-8", errors="replace"),
         source_bytes=source_bytes,

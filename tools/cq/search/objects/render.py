@@ -103,7 +103,11 @@ def is_applicability_not_applicable(reason: str | None) -> bool:
 
 
 def suppress_not_applicable_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Drop not-applicable rows from terminal-facing payload tables."""
+    """Drop not-applicable rows from terminal-facing payload tables.
+
+    Returns:
+        list[dict[str, object]]: Function return value.
+    """
     out: list[dict[str, object]] = []
     for row in rows:
         reason = row.get("reason") if isinstance(row, dict) else None
@@ -351,7 +355,11 @@ def build_resolved_object_sections(
     *,
     occurrences_by_object: dict[str, list[SearchOccurrenceV1]] | None = None,
 ) -> list[Section]:
-    """Build resolved-object sections list for result assembly."""
+    """Build resolved-object sections list for result assembly.
+
+    Returns:
+        list[Section]: Function return value.
+    """
     return [
         build_resolved_objects_section(
             summaries,
@@ -365,7 +373,11 @@ def build_occurrence_sections(
     *,
     object_symbols: dict[str, str],
 ) -> list[Section]:
-    """Build canonical occurrence section triplet for result assembly."""
+    """Build canonical occurrence section triplet for result assembly.
+
+    Returns:
+        list[Section]: Function return value.
+    """
     return [
         build_occurrences_section(occurrences, object_symbols=object_symbols),
         build_occurrence_kind_counts_section(occurrences),

@@ -20,6 +20,9 @@ from datafusion_engine.session.runtime import (
 )
 from extraction.runtime_profile import PROFILE_HASH_VERSION, runtime_profile_snapshot
 from obs.diagnostics import DiagnosticsCollector
+
+LISTING_CACHE_TTL_SECONDS = 12
+META_FETCH_CONCURRENCY = 5
 from tests.test_helpers.datafusion_runtime import df_profile
 
 HASH_LENGTH: int = 64
@@ -189,8 +192,8 @@ def test_session_startup_records_performance_policy_artifact() -> None:
     payload = cast("dict[str, object]", artifacts[-1])
     cache_payload = cast("dict[str, object]", payload["cache"])
     statistics_payload = cast("dict[str, object]", payload["statistics"])
-    assert cache_payload["listing_cache_ttl_seconds"] == 12
-    assert statistics_payload["meta_fetch_concurrency"] == 5
+    assert cache_payload["listing_cache_ttl_seconds"] == LISTING_CACHE_TTL_SECONDS
+    assert statistics_payload["meta_fetch_concurrency"] == META_FETCH_CONCURRENCY
     applied_knobs = cast("dict[str, object]", payload["applied_knobs"])
     assert applied_knobs["datafusion.runtime.list_files_cache_ttl"] == "12s"
     assert applied_knobs["datafusion.execution.meta_fetch_concurrency"] == "5"

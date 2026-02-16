@@ -24,6 +24,7 @@ def _payload(result: CliResult) -> dict[str, object]:
 
 
 def test_admin_index_json_output(tmp_path: Path) -> None:
+    """Test admin index json output."""
     ctx = _json_ctx(tmp_path)
     result = admin.index(ctx=ctx)
     assert isinstance(result, CliResult)
@@ -35,6 +36,7 @@ def test_admin_index_json_output(tmp_path: Path) -> None:
 
 
 def test_admin_cache_json_output(tmp_path: Path) -> None:
+    """Test admin cache json output."""
     ctx = _json_ctx(tmp_path)
     result = admin.cache(ctx=ctx)
     assert isinstance(result, CliResult)
@@ -46,6 +48,7 @@ def test_admin_cache_json_output(tmp_path: Path) -> None:
 
 
 def test_admin_schema_result_json_output(tmp_path: Path) -> None:
+    """Test admin schema result json output."""
     ctx = _json_ctx(tmp_path)
     result = admin.schema(kind=SchemaKind.result, ctx=ctx)
     assert isinstance(result, CliResult)
@@ -56,6 +59,7 @@ def test_admin_schema_result_json_output(tmp_path: Path) -> None:
 
 
 def test_admin_schema_components_json_output(tmp_path: Path) -> None:
+    """Test admin schema components json output."""
     ctx = _json_ctx(tmp_path)
     result = admin.schema(kind=SchemaKind.components, ctx=ctx)
     assert isinstance(result, CliResult)

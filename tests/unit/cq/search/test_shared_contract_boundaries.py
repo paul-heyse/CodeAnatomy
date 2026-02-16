@@ -10,8 +10,11 @@ from tools.cq.search._shared.core import (
     has_runtime_only_keys,
 )
 
+QUERY_BUDGET_MS = 25
+
 
 def test_python_node_request_splits_settings_and_runtime() -> None:
+    """Test python node request splits settings and runtime."""
     request = PythonNodeEnrichmentRequest(
         sg_root=object(),
         node=object(),
@@ -19,7 +22,7 @@ def test_python_node_request_splits_settings_and_runtime() -> None:
         line=1,
         col=0,
         cache_key="k",
-        query_budget_ms=25,
+        query_budget_ms=QUERY_BUDGET_MS,
         session=object(),
     )
 
@@ -27,12 +30,13 @@ def test_python_node_request_splits_settings_and_runtime() -> None:
     runtime = request.to_runtime()
 
     assert settings.cache_key == "k"
-    assert settings.query_budget_ms == 25
+    assert settings.query_budget_ms == QUERY_BUDGET_MS
     assert runtime.sg_root is request.sg_root
     assert runtime.node is request.node
 
 
 def test_python_byte_range_request_splits_settings_and_runtime() -> None:
+    """Test python byte range request splits settings and runtime."""
     request = PythonByteRangeEnrichmentRequest(
         sg_root=object(),
         source_bytes=b"print('x')\n",
@@ -52,6 +56,7 @@ def test_python_byte_range_request_splits_settings_and_runtime() -> None:
 
 
 def test_runtime_boundary_assertion_rejects_runtime_keys() -> None:
+    """Test runtime boundary assertion rejects runtime keys."""
     payload = {"sg_root": object(), "cache_key": "k"}
     assert has_runtime_only_keys(payload)
     with pytest.raises(TypeError):

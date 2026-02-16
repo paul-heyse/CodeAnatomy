@@ -21,6 +21,7 @@ from tools.cq.astgrep.sgpy_scanner import RuleSpec
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 SGCONFIG_PATH = REPO_ROOT / "tools" / "cq" / "astgrep" / "sgconfig.yml"
+EXPECTED_ASTGREP_RULE_FILES = 23
 
 
 @pytest.fixture(scope="module")
@@ -52,7 +53,9 @@ def test_astgrep_rules_exist() -> None:
     assert rules_dir.exists(), f"Rules directory not found: {rules_dir}"
 
     rule_files = list(rules_dir.glob("*.yml"))
-    assert len(rule_files) == 23, f"Expected 23 rule files, found {len(rule_files)}"
+    assert len(rule_files) == EXPECTED_ASTGREP_RULE_FILES, (
+        f"Expected {EXPECTED_ASTGREP_RULE_FILES} rule files, found {len(rule_files)}"
+    )
 
     # Check key rule categories exist
     rule_names = {f.stem for f in rule_files}
@@ -240,7 +243,7 @@ class TestRustRuleSpecs:
 
     @pytest.mark.smoke
     def test_rules_by_record_type_has_module(self) -> None:
-        """Verify rs_def_module is available in def-record dispatch."""
+        """Verify ``def`` rules include the rs_def_module spec."""
         def_rules = get_rules_for_types({"def"}, lang="rust")
         assert any(rule.rule_id == "rs_def_module" for rule in def_rules)
 

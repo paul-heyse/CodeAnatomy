@@ -11,6 +11,8 @@ from datafusion_engine.delta.protocol import (
 )
 from serde_artifacts import DeltaProtocolArtifact
 
+SCHEMA_FINGERPRINT_LENGTH = 32
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -180,4 +182,4 @@ class TestDeltaProtocolArtifactSpec:
 
         assert DELTA_PROTOCOL_ARTIFACT_SPEC.payload_type is DeltaProtocolArtifact
         assert DELTA_PROTOCOL_ARTIFACT_SPEC.canonical_name == "delta_protocol_compatibility_v1"
-        assert len(DELTA_PROTOCOL_ARTIFACT_SPEC.schema_fingerprint) == 32
+        assert len(DELTA_PROTOCOL_ARTIFACT_SPEC.schema_fingerprint) == SCHEMA_FINGERPRINT_LENGTH

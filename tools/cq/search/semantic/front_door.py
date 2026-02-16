@@ -504,7 +504,11 @@ def fail_open(reason: str) -> SemanticOutcomeV1:
 
 
 def enrich_semantics(request: LanguageSemanticEnrichmentRequest) -> SemanticOutcomeV1:
-    """Execute semantic enrichment via shared language front door."""
+    """Execute semantic enrichment via shared language front door.
+
+    Returns:
+        SemanticOutcomeV1: Function return value.
+    """
     outcome = enrich_with_language_semantics(request)
     return SemanticOutcomeV1(
         payload=dict(outcome.payload) if isinstance(outcome.payload, dict) else None,

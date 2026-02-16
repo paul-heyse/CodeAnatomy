@@ -37,7 +37,11 @@ def build_autotune_plan(
     default_budget_ms: int,
     default_match_limit: int,
 ) -> QueryAutotunePlanV1:
-    """Build an execution tuning plan from runtime snapshot telemetry."""
+    """Build an execution tuning plan from runtime snapshot telemetry.
+
+    Returns:
+        QueryAutotunePlanV1: Function return value.
+    """
     average_latency_ms = max(0.0, float(snapshot.average_latency_ms))
     budget = max(50, min(2_000, int(max(float(default_budget_ms), average_latency_ms * 4.0))))
     if average_latency_ms >= _HIGH_LATENCY_MS:

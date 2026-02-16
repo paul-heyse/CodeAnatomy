@@ -14,6 +14,9 @@ from tools.cq.core.cache.base_contracts import CacheRuntimeTuningV1
 from tools.cq.core.cache.policy import CqCachePolicyV1
 from tools.cq.core.runtime.execution_policy import RuntimeExecutionPolicy
 from tools.cq.core.settings_factory import SettingsFactory
+
+RUNTIME_CPU_WORKERS = 2
+CACHE_CULL_LIMIT = 32
 from tools.cq.search.tree_sitter.core.infrastructure import ParserControlSettingsV1
 
 
@@ -55,9 +58,9 @@ def test_runtime_policy_respects_environment_max_workers() -> None:
     """Test that runtime_policy respects CQ_RUNTIME_CPU_WORKERS."""
     old_value = os.getenv("CQ_RUNTIME_CPU_WORKERS")
     try:
-        os.environ["CQ_RUNTIME_CPU_WORKERS"] = "2"
+        os.environ["CQ_RUNTIME_CPU_WORKERS"] = str(RUNTIME_CPU_WORKERS)
         policy = SettingsFactory.runtime_policy()
-        assert policy.parallelism.cpu_workers == 2
+        assert policy.parallelism.cpu_workers == RUNTIME_CPU_WORKERS
     finally:
         if old_value is not None:
             os.environ["CQ_RUNTIME_CPU_WORKERS"] = old_value
@@ -83,10 +86,10 @@ def test_cache_runtime_tuning_respects_environment_cull_limit(tmp_path: Path) ->
     """Test that cache_runtime_tuning respects CQ_CACHE_CULL_LIMIT."""
     old_value = os.getenv("CQ_CACHE_CULL_LIMIT")
     try:
-        os.environ["CQ_CACHE_CULL_LIMIT"] = "32"
+        os.environ["CQ_CACHE_CULL_LIMIT"] = str(CACHE_CULL_LIMIT)
         policy = SettingsFactory.cache_policy(root=tmp_path)
         tuning = SettingsFactory.cache_runtime_tuning(policy)
-        assert tuning.cull_limit == 32
+        assert tuning.cull_limit == CACHE_CULL_LIMIT
     finally:
         if old_value is not None:
             os.environ["CQ_CACHE_CULL_LIMIT"] = old_value

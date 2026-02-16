@@ -9,6 +9,7 @@ from tools.cq.astgrep.sgpy_scanner import RuleSpec, scan_files
 
 
 def test_load_utils_groups_by_language() -> None:
+    """Test load utils groups by language."""
     utils = load_utils(Path("tools/cq/astgrep/utils"))
 
     assert "python" in utils
@@ -19,6 +20,7 @@ def test_load_utils_groups_by_language() -> None:
 
 
 def test_scan_files_supports_utils_matches_config(tmp_path: Path) -> None:
+    """Test scan files supports utils matches config."""
     test_file = tmp_path / "calls.py"
     test_file.write_text("print('hello')\ncustom('x')\n", encoding="utf-8")
 

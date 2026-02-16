@@ -20,6 +20,13 @@ from semantics.joins.strategies import make_fk_strategy, make_symbol_match_strat
 from semantics.types import AnnotatedSchema
 from tests.test_helpers.immutability import assert_immutable_assignment
 
+SPAN_CONFIDENCE = 0.95
+FK_CONFIDENCE = 0.85
+SYMBOL_CONFIDENCE = 0.75
+EQUI_JOIN_CONFIDENCE = 0.6
+HIGH_CONFIDENCE_THRESHOLD = 0.8
+LOW_CONFIDENCE_THRESHOLD = 0.5
+
 
 class TestJoinStrategyType:
     """Test JoinStrategyType enum."""
@@ -160,7 +167,7 @@ class TestInferJoinStrategy:
 
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.SPAN_OVERLAP
-        assert strategy.confidence == 0.95
+        assert strategy.confidence == SPAN_CONFIDENCE
 
     def test_infer_span_contains_with_hint(self) -> None:
         """Force span contains with hint."""
@@ -187,7 +194,7 @@ class TestInferJoinStrategy:
 
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.SPAN_CONTAINS
-        assert strategy.confidence == 0.95
+        assert strategy.confidence == SPAN_CONFIDENCE
 
     def test_infer_fk_join(self) -> None:
         """Infer FK join when left has FK and right has entity_id."""
@@ -203,7 +210,7 @@ class TestInferJoinStrategy:
         assert strategy.strategy_type == JoinStrategyType.FOREIGN_KEY
         assert strategy.left_keys == ("def_id",)
         assert strategy.right_keys == ("entity_id",)
-        assert strategy.confidence == 0.85
+        assert strategy.confidence == FK_CONFIDENCE
 
     def test_infer_symbol_join(self) -> None:
         """Infer symbol join when both have symbols."""
@@ -220,7 +227,7 @@ class TestInferJoinStrategy:
 
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.SYMBOL_MATCH
-        assert strategy.confidence == 0.75
+        assert strategy.confidence == SYMBOL_CONFIDENCE
 
     def test_infer_file_equi_join(self) -> None:
         """Infer file equi-join when both have file_id but no spans."""
@@ -234,7 +241,7 @@ class TestInferJoinStrategy:
 
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.EQUI_JOIN
-        assert strategy.confidence == 0.6
+        assert strategy.confidence == EQUI_JOIN_CONFIDENCE
 
     def test_infer_none_no_common(self) -> None:
         """Return None when no common join capability."""
@@ -337,7 +344,7 @@ class TestBuildJoinInferenceConfidence:
         confidence = build_join_inference_confidence(strategy)
 
         assert confidence is not None
-        assert confidence.confidence_score >= 0.8
+        assert confidence.confidence_score >= HIGH_CONFIDENCE_THRESHOLD
         assert confidence.decision_type == "join_strategy"
         assert confidence.decision_value == "span_overlap"
         assert confidence.fallback_reason is None
@@ -349,11 +356,11 @@ class TestBuildJoinInferenceConfidence:
         # FK confidence is 0.85 in the inference module
         from dataclasses import replace
 
-        strategy = replace(strategy, confidence=0.85)
+        strategy = replace(strategy, confidence=FK_CONFIDENCE)
         confidence = build_join_inference_confidence(strategy)
 
         assert confidence is not None
-        assert confidence.confidence_score >= 0.8
+        assert confidence.confidence_score >= HIGH_CONFIDENCE_THRESHOLD
         assert confidence.decision_type == "join_strategy"
         assert confidence.decision_value == "foreign_key"
 
@@ -361,11 +368,11 @@ class TestBuildJoinInferenceConfidence:
         """Equi-join strategy should produce low confidence (0.6 < 0.8 threshold)."""
         from dataclasses import replace
 
-        strategy = replace(FILE_EQUI_JOIN, confidence=0.6)
+        strategy = replace(FILE_EQUI_JOIN, confidence=EQUI_JOIN_CONFIDENCE)
         confidence = build_join_inference_confidence(strategy)
 
         assert confidence is not None
-        assert confidence.confidence_score < 0.5
+        assert confidence.confidence_score < LOW_CONFIDENCE_THRESHOLD
         assert confidence.decision_type == "join_strategy"
         assert confidence.decision_value == "equi_join"
         assert confidence.fallback_reason == "weak_schema_evidence"
@@ -374,13 +381,13 @@ class TestBuildJoinInferenceConfidence:
         """Evidence sources differ by strategy type."""
         from dataclasses import replace
 
-        span_strategy = replace(SPAN_OVERLAP_STRATEGY, confidence=0.95)
+        span_strategy = replace(SPAN_OVERLAP_STRATEGY, confidence=SPAN_CONFIDENCE)
         span_conf = build_join_inference_confidence(span_strategy)
         assert span_conf is not None
         assert "semantic_type" in span_conf.evidence_sources
         assert "compatibility_group" in span_conf.evidence_sources
 
-        symbol_strategy = replace(make_symbol_match_strategy(), confidence=0.75)
+        symbol_strategy = replace(make_symbol_match_strategy(), confidence=SYMBOL_CONFIDENCE)
         sym_conf = build_join_inference_confidence(symbol_strategy)
         assert sym_conf is not None
         assert "compatibility_group" in sym_conf.evidence_sources
@@ -413,7 +420,7 @@ class TestInferJoinStrategyWithConfidence:
         assert result is not None
         assert isinstance(result, JoinStrategyResult)
         assert result.strategy.strategy_type == JoinStrategyType.SPAN_OVERLAP
-        assert result.confidence.confidence_score >= 0.8
+        assert result.confidence.confidence_score >= HIGH_CONFIDENCE_THRESHOLD
         assert result.confidence.decision_type == "join_strategy"
 
     def test_returns_none_when_no_strategy(self) -> None:

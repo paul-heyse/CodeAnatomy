@@ -10,6 +10,8 @@ from tools.cq.search.tree_sitter.core.node_utils import (
     node_text,
 )
 
+TRUNCATED_TEXT_LENGTH = 10
+
 
 @dataclass
 class MockNode:
@@ -69,9 +71,9 @@ class TestNodeText:
         """Truncate text and add ellipsis when max_len exceeded."""
         source = b"def very_long_function_name():"
         node = MockNode(0, 30)
-        result = node_text(node, source, max_len=10)
+        result = node_text(node, source, max_len=TRUNCATED_TEXT_LENGTH)
         assert result == "def ver..."
-        assert len(result) == 10
+        assert len(result) == TRUNCATED_TEXT_LENGTH
 
     def test_no_truncation_when_under_max_len(self) -> None:
         """Do not truncate when text is under max_len."""

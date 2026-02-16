@@ -20,6 +20,11 @@ from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMe
 _RenderEnrichTask = RenderEnrichmentTask
 _RenderEnrichResult = RenderEnrichmentResult
 
+EXPECTED_ENRICHMENT_TASKS = 6
+EXPECTED_TIMEOUT_SECONDS = 6.0
+EXPECTED_MAX_WORKERS = 4
+MIN_PARALLEL_PIDS = 2
+
 
 def _run_meta() -> RunMeta:
     return RunMeta(
@@ -97,6 +102,7 @@ def _sleeping_pid_worker(
 
 
 def test_render_summary_compacts_output() -> None:
+    """Test render summary compacts output."""
     run = RunMeta(
         macro="q",
         argv=["cq", "q", "entity=function name=build_graph"],
@@ -128,6 +134,7 @@ def test_render_summary_compacts_output() -> None:
 
 
 def test_render_search_hides_summary_and_context_blocks() -> None:
+    """Test render search hides summary and context blocks."""
     finding = Finding(
         category="definition",
         message="build_graph (src/module.py)",
@@ -152,6 +159,7 @@ def test_render_search_hides_summary_and_context_blocks() -> None:
 
 
 def test_render_finding_includes_enrichment_tables() -> None:
+    """Test render finding includes enrichment tables."""
     finding = Finding(
         category="definition",
         message="build_graph (src/module.py)",
@@ -184,6 +192,7 @@ def test_render_finding_includes_enrichment_tables() -> None:
 
 
 def test_render_includes_python_semantic_overview_and_code_facts() -> None:
+    """Test render includes python semantic overview and code facts."""
     finding = Finding(
         category="callsite",
         message="target call",
@@ -236,6 +245,7 @@ def test_render_includes_python_semantic_overview_and_code_facts() -> None:
 
 
 def test_render_enrichment_parameters_uses_params_alias() -> None:
+    """Test render enrichment parameters uses params alias."""
     finding = Finding(
         category="definition",
         message="function: target",
@@ -268,6 +278,7 @@ def test_render_enrichment_parameters_uses_params_alias() -> None:
 
 
 def test_render_hides_unresolved_facts_by_default() -> None:
+    """Test render hides unresolved facts by default."""
     finding = Finding(
         category="definition",
         message="function: target",
@@ -294,6 +305,7 @@ def test_render_hides_unresolved_facts_by_default() -> None:
 def test_render_can_show_unresolved_facts_with_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test render can show unresolved facts with env."""
     monkeypatch.setenv("CQ_SHOW_UNRESOLVED_FACTS", "1")
     finding = Finding(
         category="definition",
@@ -318,6 +330,7 @@ def test_render_can_show_unresolved_facts_with_env(
 
 
 def test_render_falls_back_to_top_level_enrichment_when_nested_language_payload_empty() -> None:
+    """Test render falls back to top level enrichment when nested language payload empty."""
     finding = Finding(
         category="reference",
         message="reference: stable_id",
@@ -339,6 +352,7 @@ def test_render_falls_back_to_top_level_enrichment_when_nested_language_payload_
 
 
 def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None:
+    """Test render query import finding attaches code facts."""
     repo = tmp_path / "repo"
     src = repo / "src"
     src.mkdir(parents=True)
@@ -370,6 +384,7 @@ def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None
 def test_render_query_finding_attaches_enrichment_without_context_by_default(
     tmp_path: Path,
 ) -> None:
+    """Test render query finding attaches enrichment without context by default."""
     repo = tmp_path / "repo"
     src = repo / "src"
     src.mkdir(parents=True)
@@ -402,6 +417,7 @@ def test_render_query_finding_attaches_enrichment_without_context_by_default(
 
 
 def test_render_code_overview_falls_back_for_run_query_mode() -> None:
+    """Test render code overview falls back for run query mode."""
     run = RunMeta(
         macro="run",
         argv=["cq", "run"],
@@ -420,6 +436,7 @@ def test_render_code_overview_falls_back_for_run_query_mode() -> None:
 
 
 def test_render_code_overview_derives_language_scope_from_step_summaries() -> None:
+    """Test render code overview derives language scope from step summaries."""
     run = RunMeta(
         macro="run",
         argv=["cq", "run"],
@@ -442,6 +459,7 @@ def test_render_code_overview_derives_language_scope_from_step_summaries() -> No
 
 
 def test_render_code_overview_falls_back_for_macro_query_mode() -> None:
+    """Test render code overview falls back for macro query mode."""
     run = RunMeta(
         macro="calls",
         argv=["cq", "calls", "build_graph"],
@@ -460,6 +478,7 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test render enrichment uses fixed process pool workers."""
     report_module = importlib.import_module("tools.cq.core.report")
     result = _build_enrichment_result(tmp_path, file_count=6)
 
@@ -512,15 +531,19 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
     render_markdown(result)
 
     assert collect_called
-    assert submit_count == 6
-    assert timeout_seconds_seen == 6.0
-    assert min(6, report_module.MAX_RENDER_ENRICH_WORKERS) == 4
+    assert submit_count == EXPECTED_ENRICHMENT_TASKS
+    assert timeout_seconds_seen == EXPECTED_TIMEOUT_SECONDS
+    assert (
+        min(EXPECTED_ENRICHMENT_TASKS, report_module.MAX_RENDER_ENRICH_WORKERS)
+        == EXPECTED_MAX_WORKERS
+    )
 
 
 def test_render_enrichment_parallelization_workers_1_vs_4(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test render enrichment parallelization workers 1 vs 4."""
     report_module = importlib.import_module("tools.cq.core.report")
 
     monkeypatch.setattr(report_module, "_compute_render_enrichment_worker", _sleeping_pid_worker)
@@ -540,11 +563,12 @@ def test_render_enrichment_parallelization_workers_1_vs_4(
     parallel_pids = _extract_python_enrichment_pids(parallel_result)
 
     assert len(serial_pids) == 1
-    assert len(parallel_pids) >= 2
+    assert len(parallel_pids) >= MIN_PARALLEL_PIDS
     assert parallel_elapsed < serial_elapsed * 0.8
 
 
 def test_render_markdown_keeps_compact_diagnostics_without_payload_dump() -> None:
+    """Test render markdown keeps compact diagnostics without payload dump."""
     run = RunMeta(
         macro="q",
         argv=["cq", "q", "entity=function name=target"],

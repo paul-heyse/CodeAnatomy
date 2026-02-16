@@ -11,6 +11,7 @@ from tools.cq.core.cache.fragment_codecs import (
 
 
 def test_fragment_codec_roundtrip_via_msgpack_bytes() -> None:
+    """Test fragment codec roundtrip via msgpack bytes."""
     payload = SearchCandidatesCacheV1(
         pattern=r"\btarget\b",
         raw_matches=[{"file": "module.py", "line": 1}],
@@ -29,6 +30,7 @@ def test_fragment_codec_roundtrip_via_msgpack_bytes() -> None:
 
 
 def test_fragment_codec_decodes_dict_fallback_payload() -> None:
+    """Test fragment codec decodes dict fallback payload."""
     payload = {
         "pattern": "x",
         "raw_matches": [{"file": "f.py"}],

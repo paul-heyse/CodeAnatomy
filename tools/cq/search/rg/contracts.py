@@ -35,7 +35,11 @@ class RgProcessResultV1(CqOutputStruct, frozen=True):
 
 
 def settings_from_request(request: RgRunRequest) -> RgRunSettingsV1:
-    """Build serializable run settings from the existing request contract."""
+    """Build serializable run settings from the existing request contract.
+
+    Returns:
+        RgRunSettingsV1: Function return value.
+    """
     return RgRunSettingsV1(
         pattern=request.pattern,
         mode=request.mode.value,
@@ -49,7 +53,11 @@ def settings_from_request(request: RgRunRequest) -> RgRunSettingsV1:
 
 
 def result_from_process(result: RgProcessResult) -> RgProcessResultV1:
-    """Convert native process result into a transport-safe output contract."""
+    """Convert native process result into a transport-safe output contract.
+
+    Returns:
+        RgProcessResultV1: Function return value.
+    """
     return RgProcessResultV1(
         command=tuple(result.command),
         timed_out=bool(result.timed_out),

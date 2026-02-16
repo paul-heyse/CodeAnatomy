@@ -42,17 +42,20 @@ def _build_finding(match: EnrichedMatch, _root: Path) -> Finding:
 
 
 def test_definition_name_parses_pub_crate_fn() -> None:
+    """Test definition name parses pub crate fn."""
     text = "pub(crate) async fn compile_target(input: &str) -> String {"
     assert definition_name_from_text(text, fallback="fallback") == "compile_target"
     assert definition_kind_from_text(text) == "function"
 
 
 def test_is_definition_candidate_match_accepts_definition_text() -> None:
+    """Test is definition candidate match accepts definition text."""
     match = _build_match(text="pub(crate) fn compile_target(input: &str) -> String {")
     assert is_definition_candidate_match(match) is True
 
 
 def test_build_definition_candidate_finding_promotes_rust_visibility_forms() -> None:
+    """Test build definition candidate finding promotes rust visibility forms."""
     match = _build_match(
         text="pub(crate) async unsafe fn compile_target(input: &str) -> String {",
         category="reference",

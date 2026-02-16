@@ -10,6 +10,8 @@ from tools.cq.query import batch_spans
 from tools.cq.run.runner import execute_run_plan
 from tools.cq.run.spec import QStep, RunPlan
 
+EXPECTED_PARSE_CALLS = 2
+
 
 def test_relational_batching_parses_each_file_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -43,7 +45,7 @@ def test_relational_batching_parses_each_file_once(
     )
     result = execute_run_plan(plan, ctx)
 
-    assert parse_calls == 2
+    assert parse_calls == EXPECTED_PARSE_CALLS
     files = {
         Path(finding.anchor.file).name
         for finding in result.key_findings
@@ -85,4 +87,4 @@ def test_relational_batching_auto_scope_still_uses_shared_parse(
     execute_run_plan(plan, ctx)
 
     # Python partition parses each file once.
-    assert parse_calls == 2
+    assert parse_calls == EXPECTED_PARSE_CALLS

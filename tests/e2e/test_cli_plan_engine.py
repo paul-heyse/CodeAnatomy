@@ -126,6 +126,7 @@ def _wire_plan_command_stubs(
 def test_plan_text_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Test plan text output."""
     _wire_plan_command_stubs(monkeypatch, repo_root=tmp_path)
 
     exit_code = plan_command(
@@ -145,6 +146,7 @@ def test_plan_text_output(
 def test_plan_json_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Test plan json output."""
     _wire_plan_command_stubs(monkeypatch, repo_root=tmp_path)
 
     exit_code = plan_command(
@@ -165,6 +167,7 @@ def test_plan_json_output(
 def test_plan_dot_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Test plan dot output."""
     _wire_plan_command_stubs(monkeypatch, repo_root=tmp_path)
 
     exit_code = plan_command(
@@ -184,6 +187,7 @@ def test_plan_tier1_fields_present(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Test plan tier1 fields present."""
     _wire_plan_command_stubs(monkeypatch, repo_root=tmp_path)
 
     exit_code = plan_command(

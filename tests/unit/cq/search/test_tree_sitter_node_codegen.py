@@ -10,6 +10,7 @@ from tools.cq.search.tree_sitter.schema.node_schema import (
 
 
 def test_render_node_types_module_emits_python_source() -> None:
+    """Test render node types module emits python source."""
     schema = GrammarSchemaV1(
         language="python",
         node_types=(

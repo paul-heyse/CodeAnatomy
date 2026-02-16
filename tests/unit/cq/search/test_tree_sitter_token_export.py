@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 @pytest.mark.skipif(tree_sitter_python is None, reason="tree-sitter-python is unavailable")
 def test_export_cst_tokens_returns_leaf_tokens() -> None:
+    """Test export cst tokens returns leaf tokens."""
     assert Language is not None
     assert Parser is not None
     assert tree_sitter_python is not None

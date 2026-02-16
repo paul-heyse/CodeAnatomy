@@ -14,6 +14,10 @@ from tools.cq.query.ir import CompositeRule
 
 _ = CompositeRule  # Re-export for type checking
 
+TWO_PATTERNS = 2
+THREE_PATTERNS = 3
+FOUR_PATTERNS = 4
+
 
 class TestCompositeRuleDataclass:
     """Tests for CompositeRule dataclass."""
@@ -25,7 +29,7 @@ class TestCompositeRuleDataclass:
             patterns=("pattern1", "pattern2"),
         )
         assert rule.operator == "all"
-        assert len(rule.patterns) == 2
+        assert len(rule.patterns) == TWO_PATTERNS
 
     def test_composite_rule_any_operator(self) -> None:
         """CompositeRule with 'any' operator."""
@@ -34,7 +38,7 @@ class TestCompositeRuleDataclass:
             patterns=("logger.$M", "print($$$)"),
         )
         assert rule.operator == "any"
-        assert len(rule.patterns) == 2
+        assert len(rule.patterns) == TWO_PATTERNS
 
     def test_composite_rule_not_operator(self) -> None:
         """CompositeRule with 'not' operator."""
@@ -67,7 +71,7 @@ class TestCompositeRuleToAstGrep:
         result = cast("Mapping[str, object]", rule.to_ast_grep_dict())
         assert "all" in result
         all_rules = cast("list[object]", result["all"])
-        assert len(all_rules) == 2
+        assert len(all_rules) == TWO_PATTERNS
 
     def test_any_rule_to_yaml(self) -> None:
         """Convert 'any' rule to ast-grep dict."""
@@ -78,7 +82,7 @@ class TestCompositeRuleToAstGrep:
         result = cast("Mapping[str, object]", rule.to_ast_grep_dict())
         assert "any" in result
         any_rules = cast("list[object]", result["any"])
-        assert len(any_rules) == 2
+        assert len(any_rules) == TWO_PATTERNS
 
     def test_not_rule_to_yaml(self) -> None:
         """Convert 'not' rule to ast-grep dict."""
@@ -98,14 +102,14 @@ class TestCompositeQueryParsing:
         query = parse_query("pattern='$X' all='p1,p2'")
         assert query.composite is not None
         assert query.composite.operator == "all"
-        assert len(query.composite.patterns) == 2
+        assert len(query.composite.patterns) == TWO_PATTERNS
 
     def test_parse_any_rule(self) -> None:
         """Parse 'any' composite rule from query string."""
         query = parse_query("pattern='$X' any='logger.$M,print($$$)'")
         assert query.composite is not None
         assert query.composite.operator == "any"
-        assert len(query.composite.patterns) == 2
+        assert len(query.composite.patterns) == TWO_PATTERNS
 
     def test_parse_not_rule(self) -> None:
         """Parse 'not' composite rule from query string."""
@@ -151,7 +155,7 @@ class TestAnyCompositeRule:
         yaml_map = cast("Mapping[str, object]", yaml_dict)
         assert "any" in yaml_map
         any_rules = cast("list[object]", yaml_map["any"])
-        assert len(any_rules) == 3
+        assert len(any_rules) == THREE_PATTERNS
 
 
 class TestNotCompositeRule:
@@ -202,5 +206,5 @@ class TestNestedComposites:
         patterns = "a,b,c,d"
         query = parse_query(f"pattern='$X' any='{patterns}'")
         assert query.composite is not None
-        assert len(query.composite.patterns) == 4
+        assert len(query.composite.patterns) == FOUR_PATTERNS
         assert query.composite.patterns == ("a", "b", "c", "d")

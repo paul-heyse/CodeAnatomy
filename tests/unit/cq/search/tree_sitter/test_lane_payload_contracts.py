@@ -9,6 +9,7 @@ from tools.cq.search.tree_sitter.contracts.lane_payloads import (
 
 
 def test_python_lane_payload_canonicalizes_legacy_diagnostics_key() -> None:
+    """Test python lane payload canonicalizes legacy diagnostics key."""
     payload: dict[str, object] = {
         "tree_sitter_diagnostics": [{"kind": "ERROR"}],
         "node_kind": "identifier",
@@ -20,6 +21,7 @@ def test_python_lane_payload_canonicalizes_legacy_diagnostics_key() -> None:
 
 
 def test_rust_lane_payload_defaults_empty_cst_fields() -> None:
+    """Test rust lane payload defaults empty cst fields."""
     payload: dict[str, object] = {"language": "rust", "scope_chain": ["function_item:main"]}
     normalized = canonicalize_rust_lane_payload(payload)
     assert normalized["cst_diagnostics"] == []

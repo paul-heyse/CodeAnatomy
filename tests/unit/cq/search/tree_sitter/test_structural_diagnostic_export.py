@@ -7,6 +7,7 @@ from tools.cq.search.tree_sitter.structural.exports import export_diagnostic_row
 
 
 def test_export_diagnostic_rows_filters_to_typed_rows() -> None:
+    """Test export diagnostic rows filters to typed rows."""
     typed = TreeSitterDiagnosticV1(
         kind="ERROR",
         start_byte=0,

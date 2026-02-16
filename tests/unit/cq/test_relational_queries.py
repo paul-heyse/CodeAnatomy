@@ -15,6 +15,8 @@ from tools.cq.query.ir import Query, RelationalConstraint
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 
+RELATIONAL_CONSTRAINT_COUNT = 2
+
 
 class TestRelationalConstraint:
     """Tests for RelationalConstraint dataclass."""
@@ -106,7 +108,7 @@ class TestRelationalQueryParsing:
     def test_multiple_constraints_parsing(self) -> None:
         """Parse query with multiple relational constraints."""
         query = parse_query("entity=function inside='class $C' has='await $X'")
-        assert len(query.relational) == 2
+        assert len(query.relational) == RELATIONAL_CONSTRAINT_COUNT
 
         ops = {c.operator for c in query.relational}
         assert ops == {"inside", "has"}
@@ -149,7 +151,7 @@ class TestRelationalQueryIR:
         query = Query(entity="function")
         query = query.with_relational(RelationalConstraint(operator="inside", pattern="class A"))
         query = query.with_relational(RelationalConstraint(operator="has", pattern="return $X"))
-        assert len(query.relational) == 2
+        assert len(query.relational) == RELATIONAL_CONSTRAINT_COUNT
 
 
 class TestRelationalQueryPlanning:

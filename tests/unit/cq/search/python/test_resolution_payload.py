@@ -9,6 +9,7 @@ from tools.cq.search.python.pipeline_support import (
 
 
 def test_coerce_resolution_payload() -> None:
+    """Test coerce resolution payload."""
     payload = coerce_resolution_payload(
         {
             "symbol": "foo",

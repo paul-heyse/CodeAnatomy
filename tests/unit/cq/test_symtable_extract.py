@@ -18,6 +18,9 @@ from tools.cq.introspection.symtable_extract import (
     is_closure,
 )
 
+MIN_SCOPES_WITH_FUNCTION = 2
+SCOPE_LINE_NUMBER = 5
+
 
 class TestExtractScopeGraph:
     """Tests for extract_scope_graph function."""
@@ -30,7 +33,7 @@ def foo():
     return x
 """
         graph = extract_scope_graph(source, "test.py")
-        assert len(graph.scopes) >= 2  # module + foo
+        assert len(graph.scopes) >= MIN_SCOPES_WITH_FUNCTION  # module + foo
 
         # Find the foo scope
         foo_scope = graph.scope_by_name.get("foo")
@@ -109,11 +112,11 @@ class TestScopeFact:
         scope = ScopeFact(
             name="foo",
             scope_type=ScopeType.FUNCTION,
-            lineno=5,
+            lineno=SCOPE_LINE_NUMBER,
         )
         assert scope.name == "foo"
         assert scope.scope_type == ScopeType.FUNCTION
-        assert scope.lineno == 5
+        assert scope.lineno == SCOPE_LINE_NUMBER
 
     def test_scope_fact_defaults(self) -> None:
         """ScopeFact has correct defaults."""

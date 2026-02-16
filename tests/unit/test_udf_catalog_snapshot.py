@@ -19,6 +19,7 @@ def _sample_spec(func_id: str) -> DataFusionUdfSpec:
 
 
 def test_udf_catalog_snapshot_includes_hash() -> None:
+    """Test udf catalog snapshot includes hash."""
     catalog = UdfCatalog(udf_specs={"alpha": _sample_spec("alpha")})
     adapter = UdfCatalogAdapter(catalog, function_factory_hash="hash-1")
 
@@ -31,6 +32,7 @@ def test_udf_catalog_snapshot_includes_hash() -> None:
 
 
 def test_udf_catalog_restore_rejects_hash_mismatch() -> None:
+    """Test udf catalog restore rejects hash mismatch."""
     catalog = UdfCatalog()
     adapter = UdfCatalogAdapter(catalog, function_factory_hash="hash-1")
     snapshot = {
@@ -43,6 +45,7 @@ def test_udf_catalog_restore_rejects_hash_mismatch() -> None:
 
 
 def test_udf_catalog_restore_accepts_hash_match() -> None:
+    """Test udf catalog restore accepts hash match."""
     catalog = UdfCatalog()
     adapter = UdfCatalogAdapter(catalog, function_factory_hash="hash-1")
     snapshot = {

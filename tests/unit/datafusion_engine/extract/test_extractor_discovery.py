@@ -11,6 +11,11 @@ from datafusion_engine.extract.templates import (
     template,
 )
 
+EXPECTED_TEMPLATE_COUNT = 9
+DUPLICATE_RANK = 7
+DUPLICATE_RANK_COUNT = 2
+EXPECTED_CONFIG_COUNT = 11
+
 _EXPECTED_TEMPLATE_KEYS: frozenset[str] = frozenset(
     {
         "ast",
@@ -40,7 +45,7 @@ class TestTemplateDiscovery:
     def test_templates_count(self) -> None:
         """Verify all expected template names resolve."""
         resolved = {key: template(key) for key in _EXPECTED_TEMPLATE_KEYS}
-        assert len(resolved) == 9
+        assert len(resolved) == EXPECTED_TEMPLATE_COUNT
 
     def test_templates_keys(self) -> None:
         """Verify every expected template key resolves."""
@@ -80,8 +85,8 @@ class TestTemplateDiscovery:
             rank_counts[r] = rank_counts.get(r, 0) + 1
         # Only rank 7 should have duplicates (python_imports + python_external)
         for rank, count in rank_counts.items():
-            if rank == 7:
-                assert count == 2, "Rank 7 should have exactly 2 extractors"
+            if rank == DUPLICATE_RANK:
+                assert count == DUPLICATE_RANK_COUNT, "Rank 7 should have exactly 2 extractors"
             else:
                 assert count == 1, f"Rank {rank} has {count} extractors (expected 1)"
 
@@ -98,7 +103,7 @@ class TestConfigDiscovery:
     def test_configs_count(self) -> None:
         """Verify all expected config names resolve."""
         resolved = {key: config(key) for key in _EXPECTED_CONFIG_KEYS}
-        assert len(resolved) == 11
+        assert len(resolved) == EXPECTED_CONFIG_COUNT
 
     def test_configs_keys(self) -> None:
         """Verify all expected config keys resolve."""

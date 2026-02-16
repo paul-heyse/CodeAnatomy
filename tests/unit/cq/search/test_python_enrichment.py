@@ -32,6 +32,10 @@ from tools.cq.search.python.extractors import (
     enrich_python_context_by_byte_range,
 )
 
+TRUNCATION_MAX_CHARS = 20
+MIN_SCOPE_CHAIN_LENGTH = 2
+MAX_SIGNATURE_CHARS = 200
+
 _PYTHON_SAMPLE = '''\
 from __future__ import annotations
 
@@ -151,8 +155,8 @@ class TestTruncation:
 
     def test_truncation_long(self) -> None:
         """Test truncation long."""
-        result = _truncate("a" * 50, 20)
-        assert len(result) <= 20
+        result = _truncate("a" * 50, TRUNCATION_MAX_CHARS)
+        assert len(result) <= TRUNCATION_MAX_CHARS
         assert result.endswith("...")
 
     def test_truncation_exact_boundary(self) -> None:
@@ -444,7 +448,7 @@ class TestScopeChain:
         assert isinstance(chain, list)
         assert "module" in chain
         # Should contain class and method names
-        assert len(chain) >= 2
+        assert len(chain) >= MIN_SCOPE_CHAIN_LENGTH
 
     def test_scope_chain_free_function(self) -> None:
         """Test scope chain free function."""
@@ -906,7 +910,7 @@ class TestPayloadTruncation:
         result = _extract_signature(node, source.encode())
         sig = result.get("signature")
         if isinstance(sig, str):
-            assert len(sig) <= 200
+            assert len(sig) <= MAX_SIGNATURE_CHARS
 
 
 class TestUnwrapDecorated:

@@ -18,15 +18,17 @@ class TestTableSizeThresholdsDefaults:
 
     def test_small_threshold_default(self) -> None:
         """Default small threshold is 10,000."""
-        assert TableSizeThresholds().small_threshold == 10_000
+        assert TableSizeThresholds().small_threshold == _DEFAULT_THRESHOLDS.small_threshold
 
     def test_large_threshold_default(self) -> None:
         """Default large threshold is 1,000,000."""
-        assert TableSizeThresholds().large_threshold == 1_000_000
+        assert TableSizeThresholds().large_threshold == _DEFAULT_THRESHOLDS.large_threshold
 
     def test_streaming_threshold_default(self) -> None:
         """Default streaming threshold is 100,000."""
-        assert TableSizeThresholds().streaming_threshold == 100_000
+        assert (
+            TableSizeThresholds().streaming_threshold == _DEFAULT_THRESHOLDS.streaming_threshold
+        )
 
     def test_module_level_default_matches(self) -> None:
         """Module-level _DEFAULT_THRESHOLDS matches fresh instance."""

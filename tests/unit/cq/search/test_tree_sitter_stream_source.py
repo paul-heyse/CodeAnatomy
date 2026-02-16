@@ -25,6 +25,7 @@ class _Parser:
 
 
 def test_build_stream_reader_chunks_data() -> None:
+    """Test build stream reader chunks data."""
     reader = build_stream_reader(b"abcdef", chunk_size=2)
     assert reader(0, (0, 0)) == b"ab"
     assert reader(2, (0, 2)) == b"cd"
@@ -32,6 +33,7 @@ def test_build_stream_reader_chunks_data() -> None:
 
 
 def test_parse_streaming_source_prefers_stream_callback() -> None:
+    """Test parse streaming source prefers stream callback."""
     parser = _Parser()
     tree = parse_streaming_source(parser, b"hello world")
     assert tree == "tree_from_stream"

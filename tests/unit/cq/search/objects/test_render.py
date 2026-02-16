@@ -11,6 +11,7 @@ from tools.cq.search.objects import render as render_module
 def test_build_resolved_object_sections_wraps_single_section(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test build resolved object sections wraps single section."""
     monkeypatch.setattr(
         render_module,
         "build_resolved_objects_section",
@@ -25,6 +26,7 @@ def test_build_resolved_object_sections_wraps_single_section(
 def test_build_occurrence_sections_wraps_three_sections(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test build occurrence sections wraps three sections."""
     monkeypatch.setattr(
         render_module,
         "build_occurrences_section",

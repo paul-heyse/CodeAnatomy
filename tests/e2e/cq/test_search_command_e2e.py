@@ -26,6 +26,7 @@ def test_search_python_workspace_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test search python workspace golden."""
     result = run_cq_result(
         [
             "search",
@@ -61,6 +62,7 @@ def test_search_rust_workspace_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test search rust workspace golden."""
     result = run_cq_result(
         [
             "search",
@@ -110,6 +112,7 @@ def test_search_mixed_workspace_auto_lang_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test search mixed workspace auto lang golden."""
     result = run_cq_result(
         [
             "search",
@@ -145,6 +148,7 @@ def test_search_mixed_monorepo_rust_nested_workspace_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test search mixed monorepo rust nested workspace golden."""
     result = run_cq_result(
         [
             "search",
@@ -181,6 +185,7 @@ def test_search_mixed_monorepo_python_nested_workspace_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test search mixed monorepo python nested workspace golden."""
     result = run_cq_result(
         [
             "search",

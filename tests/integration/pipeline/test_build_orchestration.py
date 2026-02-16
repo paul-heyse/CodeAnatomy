@@ -13,6 +13,10 @@ from unittest.mock import Mock
 
 import pytest
 
+from graph.product_build import GraphProductBuildRequest, build_graph_product
+
+MIN_PHASE_EVENTS = 2
+
 
 def _stub_build_result(repo_root: Path) -> object:
     from graph.build_pipeline import BuildResult
@@ -92,8 +96,6 @@ def test_heartbeat_starts_before_execution(
     The heartbeat should start before _execute_build is called and stop in the
     finally block, ensuring it runs throughout the entire build lifecycle.
     """
-    from graph.product_build import GraphProductBuildRequest, build_graph_product
-
     heartbeat_calls: list[str] = []
     mock_heartbeat = Mock()
     mock_heartbeat.stop = Mock()
@@ -328,7 +330,7 @@ def test_build_phase_start_and_end_events(
         if e["event_name"] in {"build.phase.start", "build.phase.end"}
     ]
 
-    assert len(phase_events) >= 2, "Should have phase start and end events"
+    assert len(phase_events) >= MIN_PHASE_EVENTS, "Should have phase start and end events"
     start_events = [e for e in phase_events if e["event_name"] == "build.phase.start"]
     end_events = [e for e in phase_events if e["event_name"] == "build.phase.end"]
     assert len(start_events) > 0, "Should have at least one phase start event"

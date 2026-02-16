@@ -6,6 +6,7 @@ from tools.cq.search.rust.evidence import build_macro_expansion_evidence
 
 
 def test_build_macro_expansion_evidence_from_call_facts() -> None:
+    """Test build macro expansion evidence from call facts."""
     payload: dict[str, object] = {
         "rust_tree_sitter_facts": {
             "calls": ["sql!", "helper_fn", "regex!"],
@@ -19,6 +20,7 @@ def test_build_macro_expansion_evidence_from_call_facts() -> None:
 
 
 def test_build_macro_expansion_evidence_prefers_bridge_results() -> None:
+    """Test build macro expansion evidence prefers bridge results."""
     payload: dict[str, object] = {
         "macro_expansion_results": [
             {

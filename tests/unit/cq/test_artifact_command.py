@@ -34,6 +34,7 @@ def _seed_search_artifact(tmp_path: Path) -> None:
 
 
 def test_artifact_list_and_get_json(tmp_path: Path) -> None:
+    """Test artifact list and get json."""
     _seed_search_artifact(tmp_path)
     ctx = CliContext.build(
         argv=["artifact", "list"],

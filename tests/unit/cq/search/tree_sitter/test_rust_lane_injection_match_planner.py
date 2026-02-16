@@ -26,6 +26,7 @@ class _FakeQuery:
 
 
 def test_build_injection_plan_from_matches_uses_pattern_settings_and_macro_profile() -> None:
+    """Test build injection plan from matches uses pattern settings and macro profile."""
     query = _FakeQuery(
         {
             0: {
@@ -59,6 +60,7 @@ def test_build_injection_plan_from_matches_uses_pattern_settings_and_macro_profi
 
 
 def test_build_injection_plan_from_matches_reads_captured_language() -> None:
+    """Test build injection plan from matches reads captured language."""
     query = _FakeQuery({0: {}})
     source = b"lang!(python, code)"
     matches = [

@@ -7,11 +7,16 @@ from pathlib import Path
 import pytest
 from tools.cq.search.pipeline.profiles import SearchLimits
 from tools.cq.search.rg.adapter import (
+    FilePatternSearchOptions,
     find_call_candidates,
     find_callers,
     find_files_with_pattern,
     search_content,
 )
+
+MIN_CALL_CANDIDATES = 2
+MIN_CALLER_RESULTS = 2
+MAX_GLOB_FILTERED_RESULTS = 2
 
 
 @pytest.fixture
@@ -139,7 +144,7 @@ class TestFindFilesWithPattern:
         files = find_files_with_pattern(
             sample_repo,
             pattern=r"def ",
-            include_globs=["**/src/**/*.py"],
+            options=FilePatternSearchOptions(include_globs=("**/src/**/*.py",)),
         )
         file_names = {f.name for f in files}
 
@@ -154,7 +159,9 @@ class TestFindFilesWithPattern:
         files = find_files_with_pattern(
             sample_repo,
             pattern=r"def ",
-            exclude_globs=["**/excluded/**", "**/__init__.py"],
+            options=FilePatternSearchOptions(
+                exclude_globs=("**/excluded/**", "**/__init__.py"),
+            ),
         )
         file_names = {f.name for f in files}
 
@@ -168,8 +175,10 @@ class TestFindFilesWithPattern:
         files = find_files_with_pattern(
             sample_repo,
             pattern=r"def ",
-            include_globs=["**/src/**/*.py"],
-            exclude_globs=["**/__init__.py"],
+            options=FilePatternSearchOptions(
+                include_globs=("**/src/**/*.py",),
+                exclude_globs=("**/__init__.py",),
+            ),
         )
         file_names = {f.name for f in files}
 
@@ -194,7 +203,11 @@ class TestFindFilesWithPattern:
     def test_respects_max_files(self, sample_repo: Path) -> None:
         """Test max_files limit is respected."""
         limits = SearchLimits(max_files=1, max_total_matches=100)
-        files = find_files_with_pattern(sample_repo, pattern=r"def ", limits=limits)
+        files = find_files_with_pattern(
+            sample_repo,
+            pattern=r"def ",
+            options=FilePatternSearchOptions(limits=limits),
+        )
         assert len(files) <= 1
 
     def test_timeout_returns_empty(
@@ -209,7 +222,11 @@ class TestFindFilesWithPattern:
 
         monkeypatch.setattr(adapter_module, "search_sync_with_timeout", _raise_timeout)
         limits = SearchLimits(timeout_seconds=0.001)
-        files = find_files_with_pattern(sample_repo, pattern=r"def ", limits=limits)
+        files = find_files_with_pattern(
+            sample_repo,
+            pattern=r"def ",
+            options=FilePatternSearchOptions(limits=limits),
+        )
         assert files == []
 
 
@@ -226,7 +243,7 @@ class TestFindCallCandidates:
         )
 
         # Should find calls in helpers.py and test_module.py
-        assert len(results) >= 2
+        assert len(results) >= MIN_CALL_CANDIDATES
         file_names = {r[0].name for r in results}
         assert "helpers.py" in file_names
         assert "test_module.py" in file_names
@@ -270,7 +287,7 @@ class TestFindCallers:
         )
 
         # Should find callers in helpers.py and test_module.py
-        assert len(results) >= 2
+        assert len(results) >= MIN_CALLER_RESULTS
         file_names = {r[0].name for r in results}
         assert "helpers.py" in file_names
         assert "test_module.py" in file_names
@@ -362,7 +379,7 @@ class TestSearchContent:
             limits=limits,
         )
 
-        assert len(results) <= 2
+        assert len(results) <= MAX_GLOB_FILTERED_RESULTS
 
     def test_empty_result(self, sample_repo: Path) -> None:
         """Test search with no matches."""
@@ -440,7 +457,7 @@ class TestEdgeCases:
         files = find_files_with_pattern(
             sample_repo,
             pattern=r"def ",
-            include_globs=[glob_pattern],
+            options=FilePatternSearchOptions(include_globs=(glob_pattern,)),
         )
         # Should not raise, and should return some results for valid patterns
         assert isinstance(files, list)

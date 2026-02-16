@@ -17,15 +17,18 @@ class _Payload(CqStruct, frozen=True):
 
 
 def test_encode_json_is_deterministic() -> None:
+    """Test encode json is deterministic."""
     encoded = encode_json(_Payload(a=1, b=2), indent=None)
     assert encoded == '{"a":1,"b":2}'
 
 
 def test_to_contract_builtins_normalizes_struct() -> None:
+    """Test to contract builtins normalizes struct."""
     payload = to_contract_builtins(_Payload(a=1, b=2))
     assert payload == {"a": 1, "b": 2}
 
 
 def test_require_mapping_raises_for_non_mapping() -> None:
+    """Test require mapping raises for non mapping."""
     with pytest.raises(TypeError, match="Expected mapping payload"):
         require_mapping(["x", "y"])

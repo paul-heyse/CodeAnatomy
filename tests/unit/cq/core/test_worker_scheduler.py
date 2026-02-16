@@ -10,6 +10,7 @@ from tools.cq.core.runtime.worker_scheduler import WorkerScheduler
 
 
 def test_submit_semantic_respects_semantic_request_workers_limit() -> None:
+    """Test submit semantic respects semantic request workers limit."""
     scheduler = WorkerScheduler(
         ParallelismPolicy(
             cpu_workers=1,

@@ -104,7 +104,11 @@ class SemanticRequestBudgetV1(CqStruct, frozen=True):
 def derive_semantic_contract_state(
     input_state: SemanticContractStateInputV1,
 ) -> SemanticContractStateV1:
-    """Derive canonical semantic state from capability + attempt telemetry."""
+    """Derive canonical semantic state from capability + attempt telemetry.
+
+    Returns:
+        SemanticContractStateV1: Function return value.
+    """
     attempted_count = max(0, int(input_state.attempted))
     applied_count = max(0, int(input_state.applied))
     failed_count = max(0, int(input_state.failed))
@@ -152,7 +156,11 @@ def derive_semantic_contract_state(
 
 
 def compile_globs(globs: list[str]) -> PathSpec:
-    """Compile deterministic gitwildmatch glob filters."""
+    """Compile deterministic gitwildmatch glob filters.
+
+    Returns:
+        PathSpec: Function return value.
+    """
     return PathSpec.from_lines("gitwildmatch", cast("Any", globs))
 
 
@@ -287,7 +295,11 @@ def build_static_semantic_planes(
     language: QueryLanguage,
     payload: Mapping[str, object] | None,
 ) -> dict[str, object]:
-    """Build semantic planes v2 payload from static enrichment output."""
+    """Build semantic planes v2 payload from static enrichment output.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     if payload is None:
         return {
             "version": _SEMANTIC_PLANES_VERSION,
@@ -340,7 +352,11 @@ def call_with_retry(
     max_attempts: int,
     retry_backoff_ms: int,
 ) -> tuple[object | None, bool]:
-    """Call a function with timeout-only retry semantics."""
+    """Call a function with timeout-only retry semantics.
+
+    Returns:
+        tuple[object | None, bool]: Function return value.
+    """
     timed_out = False
     attempts = max(1, int(max_attempts))
     backoff_ms = max(0, int(retry_backoff_ms))
@@ -422,7 +438,11 @@ def resolve_language_provider_root(
     command_root: Path,
     file_path: Path,
 ) -> Path:
-    """Resolve the effective workspace root for a static semantic request."""
+    """Resolve the effective workspace root for a static semantic request.
+
+    Returns:
+        Path: Function return value.
+    """
     normalized_command_root = command_root.resolve()
     target_path = _normalize_target_path(normalized_command_root, file_path)
     markers = _PYTHON_ROOT_MARKERS if language == "python" else _RUST_ROOT_MARKERS
@@ -443,7 +463,11 @@ def semantic_runtime_enabled() -> bool:
 
 
 def infer_language_for_path(file_path: Path) -> QueryLanguage | None:
-    """Infer CQ language from file suffix."""
+    """Infer CQ language from file suffix.
+
+    Returns:
+        QueryLanguage | None: Function return value.
+    """
     if file_path.suffix in {".py", ".pyi"}:
         return "python"
     if file_path.suffix == ".rs":
@@ -452,7 +476,11 @@ def infer_language_for_path(file_path: Path) -> QueryLanguage | None:
 
 
 def provider_for_language(language: QueryLanguage | str) -> SemanticProvider:
-    """Map CQ language to canonical static semantic provider id."""
+    """Map CQ language to canonical static semantic provider id.
+
+    Returns:
+        SemanticProvider: Function return value.
+    """
     if language == "python":
         return "python_static"
     if language == "rust":
@@ -481,7 +509,11 @@ def fail_open(reason: str) -> SemanticOutcomeV1:
 
 
 def enrich_semantics(request: LanguageSemanticEnrichmentRequest) -> SemanticOutcomeV1:
-    """Execute semantic enrichment via the shared language front door."""
+    """Execute semantic enrichment via the shared language front door.
+
+    Returns:
+        SemanticOutcomeV1: Function return value.
+    """
     outcome = enrich_with_language_semantics(request)
     return SemanticOutcomeV1(
         payload=dict(outcome.payload) if isinstance(outcome.payload, dict) else None,

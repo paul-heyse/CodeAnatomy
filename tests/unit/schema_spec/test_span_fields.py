@@ -24,6 +24,8 @@ from schema_spec.specs import (
     stmt_span_bundle,
 )
 
+SPAN_FIELD_COUNT = 2
+
 
 class TestSpanFieldNames:
     """Tests for span_field_names function."""
@@ -113,7 +115,7 @@ class TestMakeSpanPaTuples:
     def test_returns_tuples(self) -> None:
         """Function returns tuple of tuples."""
         result = make_span_pa_tuples("")
-        assert len(result) == 2
+        assert len(result) == SPAN_FIELD_COUNT
         assert all(isinstance(item, tuple) for item in result)
 
     def test_tuple_structure(self) -> None:

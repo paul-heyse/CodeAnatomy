@@ -18,6 +18,7 @@ def _write_file(path: Path, content: str) -> None:
 
 
 def test_import_query_does_not_duplicate_from_import_multi(tmp_path: Path) -> None:
+    """Test import query does not duplicate from import multi."""
     tc = Toolchain.detect()
     if not tc.has_sgpy:
         pytest.skip("ast-grep-py not available")
@@ -56,6 +57,7 @@ def test_import_query_does_not_duplicate_from_import_multi(tmp_path: Path) -> No
 
 
 def test_import_query_ignores_commas_in_inline_comments(tmp_path: Path) -> None:
+    """Test import query ignores commas in inline comments."""
     tc = Toolchain.detect()
     if not tc.has_sgpy:
         pytest.skip("ast-grep-py not available")

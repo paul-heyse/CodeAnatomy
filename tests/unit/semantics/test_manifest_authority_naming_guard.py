@@ -87,6 +87,7 @@ class _CanonicalCallVisitor(ast.NodeVisitor):
 
 
 def test_post_compile_canonical_output_name_calls_require_manifest() -> None:
+    """Test post compile canonical output name calls require manifest."""
     repo_root = Path(__file__).resolve().parents[3]
     src_root = repo_root / "src"
     violations: list[_Violation] = []

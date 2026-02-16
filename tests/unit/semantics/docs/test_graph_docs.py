@@ -35,6 +35,7 @@ def _sample_explain_payload() -> dict[str, object]:
 
 
 def test_generate_mermaid_diagram_renders_edges() -> None:
+    """Test generate mermaid diagram renders edges."""
     payload = _sample_explain_payload()
     diagram = generate_mermaid_diagram(payload)
     assert diagram.startswith("```mermaid")
@@ -45,6 +46,7 @@ def test_generate_mermaid_diagram_renders_edges() -> None:
 
 
 def test_generate_markdown_docs_from_payload() -> None:
+    """Test generate markdown docs from payload."""
     payload = _sample_explain_payload()
     docs = generate_markdown_docs(explain_payload=payload)
     assert docs.startswith("# Semantic Explain Plan")
@@ -54,6 +56,7 @@ def test_generate_markdown_docs_from_payload() -> None:
 
 
 def test_generate_markdown_docs_with_report_payload() -> None:
+    """Test generate markdown docs with report payload."""
     payload = _sample_explain_payload()
     report_payload = {"markdown": "# Report Header"}
     docs = generate_markdown_docs(
@@ -65,6 +68,7 @@ def test_generate_markdown_docs_with_report_payload() -> None:
 
 
 def test_export_graph_documentation_writes_file() -> None:
+    """Test export graph documentation writes file."""
     payload = _sample_explain_payload()
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "graph.md"

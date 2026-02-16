@@ -11,6 +11,7 @@ from tools.cq.run.spec import QStep
 
 
 def test_load_run_plan_decodes_toml_via_msgspec(tmp_path: Path) -> None:
+    """Test load run plan decodes toml via msgspec."""
     plan_path = tmp_path / "plan.toml"
     plan_path.write_text(
         "\n".join(
@@ -30,6 +31,7 @@ def test_load_run_plan_decodes_toml_via_msgspec(tmp_path: Path) -> None:
 
 
 def test_load_run_plan_raises_on_invalid_toml(tmp_path: Path) -> None:
+    """Test load run plan raises on invalid toml."""
     plan_path = tmp_path / "broken.toml"
     plan_path.write_text(
         "\n".join(

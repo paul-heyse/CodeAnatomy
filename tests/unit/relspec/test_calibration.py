@@ -17,6 +17,22 @@ from relspec.policy_calibrator import (
 )
 from tests.test_helpers.immutability import assert_immutable_assignment
 
+DEFAULT_HIGH_FANOUT_MAX = 10
+DEFAULT_SMALL_TABLE_MIN = 1_000
+DEFAULT_SMALL_TABLE_MAX = 100_000
+DEFAULT_LARGE_TABLE_MIN = 100_000
+DEFAULT_LARGE_TABLE_MAX = 10_000_000
+THREE_ERRORS = 3
+DEFAULT_HIGH_FANOUT_THRESHOLD = 2
+DEFAULT_ROW_THRESHOLD_SMALL = 10_000
+DEFAULT_ROW_THRESHOLD_LARGE = 1_000_000
+CUSTOM_HIGH_FANOUT_THRESHOLD = 5
+CUSTOM_ROW_THRESHOLD_SMALL = 5_000
+CUSTOM_ROW_THRESHOLD_LARGE = 500_000
+HIGH_CONFIDENCE_FLOOR = 0.8
+LOW_CONFIDENCE_CEILING = 0.5
+LOW_CONFIDENCE_OBSERVE_CEILING = 0.5
+
 # ---------------------------------------------------------------------------
 # CalibrationBounds
 # ---------------------------------------------------------------------------
@@ -29,19 +45,19 @@ class TestCalibrationBoundsDefaults:
         """Default high-fanout bounds are [1, 10]."""
         b = CalibrationBounds()
         assert b.min_high_fanout_threshold == 1
-        assert b.max_high_fanout_threshold == 10
+        assert b.max_high_fanout_threshold == DEFAULT_HIGH_FANOUT_MAX
 
     def test_small_table_defaults(self) -> None:
         """Default small-table bounds are [1_000, 100_000]."""
         b = CalibrationBounds()
-        assert b.min_small_table_row_threshold == 1_000
-        assert b.max_small_table_row_threshold == 100_000
+        assert b.min_small_table_row_threshold == DEFAULT_SMALL_TABLE_MIN
+        assert b.max_small_table_row_threshold == DEFAULT_SMALL_TABLE_MAX
 
     def test_large_table_defaults(self) -> None:
         """Default large-table bounds are [100_000, 10_000_000]."""
         b = CalibrationBounds()
-        assert b.min_large_table_row_threshold == 100_000
-        assert b.max_large_table_row_threshold == 10_000_000
+        assert b.min_large_table_row_threshold == DEFAULT_LARGE_TABLE_MIN
+        assert b.max_large_table_row_threshold == DEFAULT_LARGE_TABLE_MAX
 
     def test_frozen(self) -> None:
         """CalibrationBounds struct is immutable."""
@@ -137,7 +153,7 @@ class TestValidateCalibrationBounds:
             max_large_table_row_threshold=100_000,
         )
         errors = validate_calibration_bounds(bounds)
-        assert len(errors) == 3
+        assert len(errors) == THREE_ERRORS
 
 
 # ---------------------------------------------------------------------------
@@ -151,20 +167,20 @@ class TestCalibrationThresholds:
     def test_defaults(self) -> None:
         """Default thresholds match canonical project values."""
         t = CalibrationThresholds()
-        assert t.high_fanout_threshold == 2
-        assert t.small_table_row_threshold == 10_000
-        assert t.large_table_row_threshold == 1_000_000
+        assert t.high_fanout_threshold == DEFAULT_HIGH_FANOUT_THRESHOLD
+        assert t.small_table_row_threshold == DEFAULT_ROW_THRESHOLD_SMALL
+        assert t.large_table_row_threshold == DEFAULT_ROW_THRESHOLD_LARGE
 
     def test_custom_values(self) -> None:
         """Custom thresholds are preserved."""
         t = CalibrationThresholds(
-            high_fanout_threshold=5,
-            small_table_row_threshold=5_000,
-            large_table_row_threshold=500_000,
+            high_fanout_threshold=CUSTOM_HIGH_FANOUT_THRESHOLD,
+            small_table_row_threshold=CUSTOM_ROW_THRESHOLD_SMALL,
+            large_table_row_threshold=CUSTOM_ROW_THRESHOLD_LARGE,
         )
-        assert t.high_fanout_threshold == 5
-        assert t.small_table_row_threshold == 5_000
-        assert t.large_table_row_threshold == 500_000
+        assert t.high_fanout_threshold == CUSTOM_HIGH_FANOUT_THRESHOLD
+        assert t.small_table_row_threshold == CUSTOM_ROW_THRESHOLD_SMALL
+        assert t.large_table_row_threshold == CUSTOM_ROW_THRESHOLD_LARGE
 
     def test_frozen(self) -> None:
         """CalibrationThresholds is immutable."""
@@ -274,7 +290,7 @@ class TestCalibrateObserve:
             bounds=DEFAULT_CALIBRATION_BOUNDS,
             mode="observe",
         )
-        assert result.calibration_confidence.confidence_score >= 0.8
+        assert result.calibration_confidence.confidence_score >= HIGH_CONFIDENCE_FLOOR
 
     def test_observe_confidence_with_few_observations(self) -> None:
         """Few observations produce low confidence."""
@@ -288,7 +304,7 @@ class TestCalibrateObserve:
             bounds=DEFAULT_CALIBRATION_BOUNDS,
             mode="observe",
         )
-        assert result.calibration_confidence.confidence_score < 0.5
+        assert result.calibration_confidence.confidence_score < LOW_CONFIDENCE_OBSERVE_CEILING
 
 
 # ---------------------------------------------------------------------------
@@ -536,7 +552,7 @@ class TestCalibrationConfidence:
             mode="apply",
         )
         conf = result.calibration_confidence
-        assert conf.confidence_score >= 0.8
+        assert conf.confidence_score >= HIGH_CONFIDENCE_FLOOR
         assert "execution_metrics" in conf.evidence_sources
         assert "duration" in conf.evidence_sources
         assert "row_count" in conf.evidence_sources
@@ -555,7 +571,7 @@ class TestCalibrationConfidence:
             mode="apply",
         )
         conf = result.calibration_confidence
-        assert conf.confidence_score < 0.5
+        assert conf.confidence_score < LOW_CONFIDENCE_CEILING
         assert conf.fallback_reason is not None
         assert "insufficient" in conf.fallback_reason
 

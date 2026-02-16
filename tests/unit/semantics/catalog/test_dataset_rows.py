@@ -22,6 +22,9 @@ from semantics.catalog.dataset_rows import (
 )
 from semantics.ir_pipeline import build_semantic_ir
 
+FULL_ROW_SCHEMA_VERSION = 2
+MIN_ROWS_FOR_MULTI_SELECT = 2
+
 
 @cache
 def _ir_rows() -> tuple[SemanticDatasetRow, ...]:
@@ -70,7 +73,7 @@ class TestSemanticDatasetRow:
             source_dataset="base_dataset",
         )
         assert row.name == "full_dataset_v1"
-        assert row.version == 2
+        assert row.version == FULL_ROW_SCHEMA_VERSION
         assert row.category == "analysis"
         assert row.supports_cdf is False
         assert row.partition_cols == ("path",)
@@ -153,10 +156,10 @@ class TestDatasetRows:
     def test_dataset_rows_returns_matching(self) -> None:
         """dataset_rows returns matching rows."""
         all_rows = _ir_rows()
-        if len(all_rows) >= 2:
+        if len(all_rows) >= MIN_ROWS_FOR_MULTI_SELECT:
             names = [all_rows[0].name, all_rows[1].name]
             result = dataset_rows(names)
-            assert len(result) == 2
+            assert len(result) == MIN_ROWS_FOR_MULTI_SELECT
             assert result[0].name == names[0]
             assert result[1].name == names[1]
 

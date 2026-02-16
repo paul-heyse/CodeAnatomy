@@ -15,6 +15,7 @@ from tools.cq.search.objects.render import ResolvedObjectRef, SearchObjectSummar
 
 
 def test_save_and_load_search_artifact_bundle(tmp_path: Path) -> None:
+    """Test save and load search artifact bundle."""
     run = RunMeta(
         macro="search",
         argv=["cq", "search", "build_graph"],

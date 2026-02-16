@@ -15,6 +15,8 @@ from tools.cq.query.ir import Query
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
 
+EXPECTED_VARIADIC_CAPTURE_NODES = 2
+
 
 def _execute_query(tmp_path: Path, query_text: str) -> tuple[Query, ToolPlan, CqResult]:
     query = parse_query(query_text)
@@ -34,6 +36,7 @@ def _execute_query(tmp_path: Path, query_text: str) -> tuple[Query, ToolPlan, Cq
 
 
 def test_pattern_runtime_findings_and_spans_share_filter_semantics(tmp_path: Path) -> None:
+    """Test pattern runtime findings and spans share filter semantics."""
     (tmp_path / "a.py").write_text("print(1)\nprint(2)\n", encoding="utf-8")
 
     query, plan, result = _execute_query(
@@ -58,6 +61,7 @@ def test_pattern_runtime_findings_and_spans_share_filter_semantics(tmp_path: Pat
 
 
 def test_pattern_runtime_emits_variadic_metavar_captures(tmp_path: Path) -> None:
+    """Test pattern runtime emits variadic metavar captures."""
     (tmp_path / "a.py").write_text("print(1, 2)\n", encoding="utf-8")
 
     _query, _plan, result = _execute_query(
@@ -73,10 +77,11 @@ def test_pattern_runtime_emits_variadic_metavar_captures(tmp_path: Path) -> None
     assert multi.get("kind") == "multi"
     nodes = multi.get("nodes")
     assert isinstance(nodes, list)
-    assert len(nodes) == 2
+    assert len(nodes) == EXPECTED_VARIADIC_CAPTURE_NODES
 
 
 def test_pattern_runtime_executes_inline_rule_for_non_default_strictness(tmp_path: Path) -> None:
+    """Test pattern runtime executes inline rule for non default strictness."""
     (tmp_path / "a.py").write_text("print(1)\n", encoding="utf-8")
 
     _query, _plan, result = _execute_query(

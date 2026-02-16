@@ -22,6 +22,11 @@ from tools.cq.cli_app.telemetry import invoke_with_telemetry
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.schema import CqResult, RunMeta
 
+INT_RESULT_EXIT_CODE = 42
+PASSTHROUGH_EXIT_CODE = 7
+WRAPPED_INT_RESULT = 5
+CLI_PARSE_ERROR_EXIT_CODE = 2
+
 
 class TestFilterConfig:
     """Tests for FilterConfig dataclass."""
@@ -132,8 +137,8 @@ class TestCliResult:
     def test_exit_code_from_int_result(self, tmp_path: Path) -> None:
         """Test getting exit code from int result."""
         ctx = CliContext.build(argv=["test"], root=tmp_path)
-        result = CliResult(result=42, context=ctx)
-        assert result.get_exit_code() == 42
+        result = CliResult(result=INT_RESULT_EXIT_CODE, context=ctx)
+        assert result.get_exit_code() == INT_RESULT_EXIT_CODE
 
     def test_explicit_exit_code_overrides(self, tmp_path: Path) -> None:
         """Test that explicit exit code overrides result."""
@@ -161,19 +166,19 @@ class TestResultAction:
 
     def test_result_action_passes_int(self) -> None:
         """Test int passthrough behavior."""
-        assert cq_result_action(7) == 7
+        assert cq_result_action(PASSTHROUGH_EXIT_CODE) == PASSTHROUGH_EXIT_CODE
 
     def test_result_action_handles_cli_result_int(self, tmp_path: Path) -> None:
         """Test CliResult wrapper handling for integer payloads."""
         ctx = CliContext.build(argv=["cq", "cache"], root=tmp_path)
-        wrapped = CliResult(result=5, context=ctx)
-        assert cq_result_action(wrapped) == 5
+        wrapped = CliResult(result=WRAPPED_INT_RESULT, context=ctx)
+        assert cq_result_action(wrapped) == WRAPPED_INT_RESULT
 
     def test_apply_result_action_pipeline_default(self, tmp_path: Path) -> None:
         """Test default result-action pipeline returns a normalized exit code."""
         ctx = CliContext.build(argv=["cq", "cache"], root=tmp_path)
-        wrapped = CliResult(result=5, context=ctx)
-        assert apply_result_action(wrapped, CQ_DEFAULT_RESULT_ACTION) == 5
+        wrapped = CliResult(result=WRAPPED_INT_RESULT, context=ctx)
+        assert apply_result_action(wrapped, CQ_DEFAULT_RESULT_ACTION) == WRAPPED_INT_RESULT
 
 
 class TestInvokeWithTelemetry:
@@ -194,7 +199,7 @@ class TestInvokeWithTelemetry:
         """Test parse-failure telemetry."""
         ctx = CliContext.build(argv=["cq", "unknown"], root=tmp_path)
         exit_code, event = invoke_with_telemetry(app, ["unknown-command"], ctx=ctx)
-        assert exit_code == 2
+        assert exit_code == CLI_PARSE_ERROR_EXIT_CODE
         assert event.ok is False
         assert event.error_stage is not None
         assert event.event_id is not None

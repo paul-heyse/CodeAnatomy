@@ -20,6 +20,8 @@ from semantics.pipeline import (
 from semantics.spec_registry import SemanticSpecIndex
 from semantics.view_kinds import ViewKindStr
 
+CONSOLIDATED_HANDLER_COUNT = 6
+
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
@@ -199,7 +201,7 @@ class TestBuilderHandlersTable:
 
     def test_handler_count_matches_spec_kinds(self) -> None:
         """Handler table has exactly 6 entries (one per consolidated kind)."""
-        assert len(_CONSOLIDATED_BUILDER_HANDLERS) == 6
+        assert len(_CONSOLIDATED_BUILDER_HANDLERS) == CONSOLIDATED_HANDLER_COUNT
 
     def test_all_handlers_are_callable(self) -> None:
         """Every handler in the table must be callable."""

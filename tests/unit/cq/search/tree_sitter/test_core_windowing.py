@@ -15,6 +15,7 @@ from tools.cq.search.tree_sitter.core.runtime_support import (
 
 
 def test_apply_byte_window_prefers_containing_range_when_supported() -> None:
+    """Test apply byte window prefers containing range when supported."""
     calls: list[tuple[str, int, int]] = []
     cursor = SimpleNamespace(
         set_containing_byte_range=lambda start, end: calls.append(("containing", start, end)),
@@ -30,6 +31,7 @@ def test_apply_byte_window_prefers_containing_range_when_supported() -> None:
 
 
 def test_apply_byte_window_required_without_support_returns_false() -> None:
+    """Test apply byte window required without support returns false."""
     calls: list[tuple[int, int]] = []
     cursor = SimpleNamespace(
         set_byte_range=lambda start, end: calls.append((start, end)),
@@ -44,6 +46,7 @@ def test_apply_byte_window_required_without_support_returns_false() -> None:
 
 
 def test_apply_point_window_falls_back_to_intersection_when_preferred() -> None:
+    """Test apply point window falls back to intersection when preferred."""
     calls: list[tuple[tuple[int, int], tuple[int, int]]] = []
     cursor = SimpleNamespace(
         set_point_range=lambda start, end: calls.append((start, end)),

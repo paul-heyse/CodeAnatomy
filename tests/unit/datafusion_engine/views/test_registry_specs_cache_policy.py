@@ -126,6 +126,7 @@ def test_semantic_cache_policy_for_row(
     profile: DataFusionRuntimeProfile,
     expected: str,
 ) -> None:
+    """Test semantic cache policy for row."""
     assert (
         _semantic_cache_policy_for_row(
             row,

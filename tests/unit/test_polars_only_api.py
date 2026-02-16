@@ -9,6 +9,7 @@ from tests.test_helpers.datafusion_runtime import df_profile
 
 
 def test_streaming_execution_to_polars() -> None:
+    """Test streaming execution to polars."""
     profile = df_profile()
     ctx = profile.session_context()
     df = ctx.from_pylist([{"id": 1}])
@@ -21,6 +22,7 @@ def test_streaming_execution_to_polars() -> None:
 
 
 def test_datafusion_api_has_no_pandas_methods() -> None:
+    """Test datafusion api has no pandas methods."""
     profile = df_profile()
     ctx = profile.session_context()
     df = ctx.from_pylist([{"id": 1}])

@@ -13,6 +13,9 @@ from tools.cq.search.pipeline.orchestration import (
     insert_target_candidates,
 )
 
+SECTIONS_WITH_CANDIDATES = 2
+SECTIONS_WITH_PREVIEW = 3
+
 
 class TestInsertTargetCandidates:
     """Tests for insert_target_candidates."""
@@ -23,7 +26,7 @@ class TestInsertTargetCandidates:
         candidates = [Finding(category="definition", message="candidate")]
         insert_target_candidates(sections, candidates=candidates)
         assert sections[0].title == "Target Candidates"
-        assert len(sections) == 2
+        assert len(sections) == SECTIONS_WITH_CANDIDATES
 
     def test_noop_when_no_candidates(self) -> None:
         """Verify no insertion when candidates list is empty."""
@@ -47,7 +50,7 @@ class TestInsertNeighborhoodPreview:
             has_target_candidates=True,
         )
         assert sections[1].title == "Neighborhood Preview"
-        assert len(sections) == 3
+        assert len(sections) == SECTIONS_WITH_PREVIEW
 
     def test_inserts_at_top_when_no_candidates(self) -> None:
         """Verify insertion at index 0 when no target candidates."""

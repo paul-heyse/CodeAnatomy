@@ -19,6 +19,7 @@ def test_neighborhood_symbol_target_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test neighborhood symbol target golden."""
     result = run_cq_result(
         [
             "neighborhood",
@@ -49,6 +50,7 @@ def test_neighborhood_symbol_target_golden(
 def test_neighborhood_cli_and_run_step_parity(
     run_cq_result: Callable[..., CqResult],
 ) -> None:
+    """Test neighborhood cli and run step parity."""
     target = "tests/e2e/cq/_golden_workspace/python_project/app/api.py:13"
     step_payload = {
         "type": "neighborhood",

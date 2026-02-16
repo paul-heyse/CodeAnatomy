@@ -211,7 +211,7 @@ class TestConfigIntegration:
         assert config.cursor_store_path == state_dir / "cursors"
 
     def test_config_defaults_are_consistent(self) -> None:
-        """Config defaults are consistent across creation methods."""
+        """Keep safe defaults when incremental processing is disabled."""
         default_config = SemanticIncrementalConfig()
         # When disabled, should have safe defaults
         assert default_config.enabled is False

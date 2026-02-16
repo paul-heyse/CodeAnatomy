@@ -16,6 +16,9 @@ from datafusion_engine.delta.store_policy import DeltaStorePolicy
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
 from storage.deltalake.delta import DeltaReadRequest
 
+DELTA_VERSION = 7
+FINGERPRINT_LENGTH = 16
+
 
 def test_delta_service_table_version_resolves_store_policy(
     monkeypatch: pytest.MonkeyPatch,
@@ -50,7 +53,7 @@ def test_delta_service_table_version_resolves_store_policy(
         log_storage_options={"log": "2", "extra": "x"},
     )
 
-    assert version == 7
+    assert version == DELTA_VERSION
     assert captured["storage_options"] == {"policy": "1", "request": "2"}
     assert captured["log_storage_options"] == {"log": "2", "extra": "x"}
 
@@ -136,8 +139,8 @@ def test_delta_service_provider_artifact_payload_includes_canonical_fields() -> 
     assert payload["probe_result"] == "ok"
     snapshot_key = payload.get("snapshot_key")
     assert isinstance(snapshot_key, dict)
-    assert snapshot_key["resolved_version"] == 7
+    assert snapshot_key["resolved_version"] == DELTA_VERSION
     assert snapshot_key["canonical_uri"] == "s3://example-bucket/path/table"
     fingerprint = payload.get("storage_profile_fingerprint")
     assert isinstance(fingerprint, str)
-    assert len(fingerprint) == 16
+    assert len(fingerprint) == FINGERPRINT_LENGTH

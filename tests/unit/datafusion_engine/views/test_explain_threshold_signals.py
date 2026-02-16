@@ -9,6 +9,9 @@ import pytest
 
 from datafusion_engine.plan.signals import PlanSignals
 from datafusion_engine.views import graph as graph_module
+
+EXPLAIN_DURATION_MS = 25.0
+EXPLAIN_OUTPUT_ROWS = 11
 from serde_artifact_specs import VIEW_EXPLAIN_ANALYZE_THRESHOLD_SPEC
 
 if TYPE_CHECKING:
@@ -80,8 +83,8 @@ def test_maybe_record_explain_analyze_threshold_uses_plan_signals(
     assert len(captured) == 1
     event_name, payload = captured[0]
     assert event_name is VIEW_EXPLAIN_ANALYZE_THRESHOLD_SPEC
-    assert payload["duration_ms"] == 25.0
-    assert payload["output_rows"] == 11
+    assert payload["duration_ms"] == EXPLAIN_DURATION_MS
+    assert payload["output_rows"] == EXPLAIN_OUTPUT_ROWS
 
 
 def test_maybe_record_explain_analyze_threshold_skips_below_threshold(

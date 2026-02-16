@@ -16,6 +16,7 @@ from tools.cq.search.rg.codec import RgEvent
 def test_list_candidate_files_uses_files_operation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Test list candidate files uses files operation."""
     monkeypatch.setattr(
         adapter,
         "run_with_settings",
@@ -36,6 +37,7 @@ def test_list_candidate_files_uses_files_operation(
 def test_find_call_candidates_uses_identifier_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Test find call candidates uses identifier mode."""
     captured: dict[str, object] = {}
 
     def _fake_search(

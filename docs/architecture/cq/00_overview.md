@@ -28,7 +28,7 @@ CQ is a code query tool that occupies a specific niche: **AST-aware code analysi
 
 **Core value proposition:**
 - Structural precision: AST-based matching eliminates false positives from strings, comments, and variable names
-- Enrichment depth: Multi-source evidence (ast-grep, Python AST, import detail, python resolution, tree-sitter, symtable, bytecode, Pyrefly LSP) with cross-source agreement tracking
+- Enrichment depth: Multi-source evidence (ast-grep, Python AST, import detail, LibCST, tree-sitter, symtable, bytecode, Pyrefly LSP, rust-analyzer LSP) with cross-source agreement tracking
 - Impact awareness: Call graph traversal, data flow taint analysis, and signature change simulation
 - Workflow composition: Multi-step execution with shared scan infrastructure
 - Contextual neighborhoods: Semantic neighborhood assembly with capability-gated LSP enrichment and progressive disclosure via LDMD
@@ -42,11 +42,24 @@ CQ is a code query tool that occupies a specific niche: **AST-aware code analysi
 - Text search: ripgrep for fast candidate generation
 - Tree-sitter: Multi-language AST parsing with bounded query execution
 - Parallelism: multiprocessing with `spawn` context (not `fork`)
-- Type enrichment: Pyrefly LSP for semantic hover data
+- Type enrichment: Pyrefly LSP for Python semantic hover/type data, rust-analyzer for Rust enrichment
 - Progressive disclosure: LDMD format for long document navigation
 - DiskCache: Persistent workspace-scoped caching (diskcache FanoutCache)
 - Hexagonal ports: Protocol-based service boundaries (SearchServicePort, EntityServicePort, etc.)
 - WorkerScheduler: Dual-pool CPU/IO worker scheduling
+
+**System scale (LOC estimates, 2026-02-15):**
+- CLI framework: ~3,700 LOC
+- Search subsystem: ~8,000 LOC
+- Query subsystem: ~3,500 LOC
+- Analysis commands: ~6,000 LOC
+- Multi-step execution: ~1,800 LOC
+- Cross-cutting contracts: ~3,000 LOC
+- Tree-sitter engine: ~8,100 LOC
+- Neighborhood subsystem: ~2,500 LOC
+- LDMD format: ~1,200 LOC
+- Runtime services: ~2,000 LOC
+- **Total: ~40,000 LOC** across 10 major subsystems
 
 ---
 
@@ -82,35 +95,35 @@ CQ is organized as a layered system with four execution tiers, cross-cutting inf
 
 ### 2.1 Execution Tiers
 
-**Tier 1: Search** (`tools/cq/search/`)
-Entry point for code discovery. Ripgrep generates candidates; a 3-tier classification pipeline (heuristic -> AST node -> record-based) categorizes matches; a 5-stage enrichment pipeline (ast-grep -> Python AST -> import detail -> python resolution -> tree-sitter) adds structural metadata. Output groups findings by containing function with cross-source agreement indicators.
+**Tier 1: Search** (`tools/cq/search/`, ~8,000 LOC)
+Entry point for code discovery. Ripgrep generates candidates; a 3-tier classification pipeline (heuristic → AST node → record-based) categorizes matches; a 5-stage enrichment pipeline (ast-grep → Python AST → import detail → LibCST → tree-sitter) adds structural metadata. Output groups findings by containing function with cross-source agreement indicators. Parallel classification uses multiprocessing `spawn` context (up to 4 workers, fail-open to sequential). Render-time enrichment for findings missing enrichment during initial collection.
 
-**Tier 2: Query** (`tools/cq/query/`)
-Declarative code queries via a token-based DSL. Follows classic compiler architecture: parse (DSL -> Query IR), compile (IR -> ToolPlan), execute (ToolPlan -> CqResult). Supports entity queries (`entity=function name=~^build`), structural pattern queries (`pattern='getattr($X, $Y)'`), relational constraints (`inside`, `has`, `precedes`, `follows`), and composite logic (`all`, `any`, `not`).
+**Tier 2: Query** (`tools/cq/query/`, ~3,500 LOC)
+Declarative code queries via a token-based DSL. Follows classic compiler architecture: parse (DSL → Query IR), compile (IR → ToolPlan), execute (ToolPlan → CqResult). Supports entity queries (`entity=function name=~^build`), structural pattern queries (`pattern='getattr($X, $Y)'`), relational constraints (`inside`, `has`, `precedes`, `follows`), and composite logic (`all`, `any`, `not`). Batch execution via `BatchEntityQuerySession` for shared scans across multiple Q-steps.
 
-**Tier 3: Analysis** (`tools/cq/macros/`)
-Pre-built analysis commands: `calls` (call site census), `impact` (taint/data flow), `sig-impact` (signature change simulation), `scopes` (closure capture), `bytecode` (bytecode surface), `side-effects` (import-time effects), `imports` (structure/cycles), `exceptions` (handling patterns). Each uses two-stage collection (fast ripgrep pre-filter -> precise AST parse).
+**Tier 3: Analysis** (`tools/cq/macros/`, ~6,000 LOC)
+Pre-built analysis commands: `calls` (call site census), `impact` (taint/data flow), `sig-impact` (signature change simulation), `scopes` (closure capture), `bytecode-surface` (bytecode dependencies), `side-effects` (import-time effects), `imports` (structure/cycles), `exceptions` (handling patterns). Each uses two-stage collection (fast ripgrep pre-filter → precise AST parse). Python-centric with Rust fallback stubs for limited support.
 
-**Tier 4: Neighborhood** (`tools/cq/neighborhood/`)
-Targeted semantic neighborhood analysis around code anchors. A 4-phase pipeline resolves a target (file:line:col or symbol), collects structural AST neighbors via tree-sitter, enriches with LSP evidence (capability-gated), and emits a typed `SemanticNeighborhoodBundleV1`. Output is rendered to markdown with a deterministic 17-slot section layout or to LDMD for progressive disclosure.
+**Tier 4: Neighborhood** (`tools/cq/neighborhood/`, ~2,500 LOC)
+Targeted semantic neighborhood analysis around code anchors. A 4-phase pipeline resolves a target (file:line:col or symbol), collects structural AST neighbors via tree-sitter, enriches with LSP evidence (capability-gated: Pyrefly for Python, rust-analyzer for Rust), and emits a typed `SemanticNeighborhoodBundleV1`. Output is rendered to markdown with a deterministic 17-slot section layout or to LDMD for progressive disclosure.
 
 ### 2.2 Cross-Cutting Infrastructure
 
-**Tree-Sitter Engine** (`tools/cq/search/tree_sitter/`)
-Multi-language AST parsing engine (~7,600 LOC) providing bounded query execution, language-specific enrichment lanes (Python/Rust), diagnostic collection, and structural exports. Serves as the foundation for search enrichment stage 5 and neighborhood structural collection. Features include windowing, autotune, budget management, and injection runtime for Rust macro expansion.
+**Tree-Sitter Engine** (`tools/cq/search/tree_sitter/`, ~8,100 LOC)
+Multi-language AST parsing engine providing bounded query execution, language-specific enrichment lanes (Python/Rust), diagnostic collection, and structural exports. Serves as the foundation for search enrichment stage 5 and neighborhood structural collection. Features include windowing, autotune, budget management, injection runtime for Rust macro expansion, and comprehensive telemetry. Python lane includes locals index, facts collector, and fallback support. Rust lane includes injection runtime for docstrings, function signatures, and `macro_rules!` patterns.
 
-**FrontDoor Insight** (`tools/cq/core/front_door_insight.py`)
-Canonical cross-subsystem contract providing unified high-level analysis results across search/calls/entity commands. Embeds target identity, neighborhood preview, risk assessment, confidence metrics, degradation status, budget controls, and artifact references in a single compact schema.
+**FrontDoor Insight** (`tools/cq/core/front_door_insight.py`, ~1,200 LOC)
+Canonical cross-subsystem contract providing unified high-level analysis results across search/calls/entity commands. Embeds target identity, neighborhood preview (callers, callees, references, hierarchy/scope with total + bounded preview + availability + source), risk assessment (level, drivers, counters), confidence metrics (evidence kind, score, bucket), degradation status (per-subsystem: lsp, scan, scope_filter), budget controls (top_candidates, preview_per_slice, semantic_targets), and artifact references (diagnostics, neighborhood_overflow, telemetry) in a single compact schema.
 
-**LDMD Progressive Disclosure** (`tools/cq/ldmd/`)
-Structured markdown format with embedded section markers, byte-offset indexing, and protocol commands (index/get/search/neighbors). Enables random-access retrieval of large analysis artifacts without loading entire documents. Supports three extraction modes (full/preview/tldr) with depth control.
+**LDMD Progressive Disclosure** (`tools/cq/ldmd/`, ~1,200 LOC)
+Structured markdown format with embedded section markers (`<!--LDMD:BEGIN-->` / `<!--LDMD:END-->`), byte-offset indexing, and protocol commands (index/get/search/neighbors). Enables random-access retrieval of large analysis artifacts without loading entire documents. Supports three extraction modes (full/preview/tldr) with depth control. Stack-validated parsing prevents malformed nesting.
 
-**Runtime Services** (`tools/cq/core/runtime/`)
-Process-global infrastructure providing execution policy management, dual-pool worker scheduling (CPU process-based, I/O thread-based), persistent disk-backed caching with fail-open semantics, and LSP runtime coordination. Central `CqRuntimeServices` composition root wires dependencies.
+**Runtime Services** (`tools/cq/core/runtime/`, ~2,000 LOC)
+Process-global infrastructure providing execution policy management, dual-pool worker scheduling (CPU process-based via multiprocessing `spawn`, I/O thread-based), persistent disk-backed caching with fail-open semantics (workspace-scoped DiskCache FanoutCache, TTL-based eviction with default 900s), and LSP runtime coordination (Pyrefly for Python, rust-analyzer for Rust). Central `CqRuntimeServices` composition root wires dependencies. Fail-open architecture: cache/LSP unavailability never blocks execution.
 
 ### 2.3 Multi-Step Composition
 
-The `run` and `chain` subsystems (`tools/cq/run/`) compose tiers into workflows. A `RunPlan` contains ordered steps that can mix search, query, analysis, and neighborhood commands (11 step types total). Multiple Q-steps sharing the same language scope are batched into a single ast-grep scan via `BatchEntityQuerySession`, avoiding redundant file I/O. NeighborhoodStep enables targeted semantic neighborhood analysis within automated workflows.
+The `run` and `chain` subsystems (`tools/cq/run/`, ~1,800 LOC) compose tiers into workflows. A `RunPlan` contains ordered steps that can mix search, query, analysis, and neighborhood commands (11 step types total). Multiple Q-steps sharing the same language scope are batched into a single ast-grep scan via `BatchEntityQuerySession`, avoiding redundant file I/O. NeighborhoodStep enables targeted semantic neighborhood analysis within automated workflows. TOML plan files provide human-readable workflow definitions; inline JSON steps support agent-driven automation.
 
 ---
 
@@ -124,7 +137,7 @@ Understanding the full data flow from user input to rendered output reveals the 
 User Input (CLI args)
     |
     v
-Config Resolution (CLI -> env -> .cq.toml -> defaults)
+Config Resolution (CLI → env → .cq.toml → defaults)
     |
     v
 CliContext Construction (root, toolchain, format, options)
@@ -137,13 +150,14 @@ Command Dispatch (cyclopts @app.command routing)
     |
     v
 +-- Search Path --------+-- Query Path ----------+-- Analysis Path ------+
-| ripgrep candidates     | DSL parse -> Query IR  | ripgrep pre-filter    |
-| 3-tier classification  | compile -> ToolPlan    | ast-grep/AST parse    |
-| 5-stage enrichment     | execute -> scan        | DefIndex lookup       |
-| parallel ProcessPool   | entity/pattern match   | CallResolver binding  |
-| cross-source agreement | relational filtering   | taint propagation     |
-| Pyrefly LSP hover      | metavar extraction     | scoring               |
-| tree-sitter stage 5    | tree-sitter queries    | front-door insight    |
+| ripgrep candidates     | DSL parse → Query IR  | ripgrep pre-filter    |
+| 3-tier classification  | compile → ToolPlan    | ast-grep/AST parse    |
+| 5-stage enrichment     | execute → scan        | DefIndex lookup       |
+| parallel ProcessPool   | entity/pattern match  | CallResolver binding  |
+| cross-source agreement | relational filtering  | taint propagation     |
+| Pyrefly LSP hover      | metavar extraction    | scoring               |
+| tree-sitter stage 5    | tree-sitter queries   | front-door insight    |
+| render-time enrichment | batch optimization    | neighborhood preview  |
 +------------------------+------------------------+-----------------------+
                               |
                               v
@@ -168,13 +182,13 @@ RunPlan (TOML/JSON/inline steps)
 Step Classification (Q-steps vs analysis steps vs search steps vs neighborhood)
     |
     v
-Q-Step Batching (same lang-scope steps -> BatchEntityQuerySession)
+Q-Step Batching (same lang-scope steps → BatchEntityQuerySession)
     |
     v
 Single ast-grep scan (shared across batched steps)
     |
     v
-Per-Step Execution (query IR -> ToolPlan -> results)
+Per-Step Execution (query IR → ToolPlan → results)
     |
     v
 Result Merging (provenance tracking, step_id tagging)
@@ -187,19 +201,19 @@ Merged CqResult (aggregated findings, per-step sections)
 
 | Boundary | Type | Direction |
 |----------|------|-----------|
-| User -> System | CLI args, `SearchRequest`, `Query` string | Input |
-| Config -> Runtime | `CqConfig`, `CliContext`, `RuntimeExecutionPolicy` | Internal |
-| Search -> Enrichment | `RgCandidate`, `PythonNodeEnrichmentRequest` | Internal |
-| Query Parser -> Planner | `Query` (IR) | Internal |
-| Planner -> Executor | `ToolPlan` | Internal |
-| Executor -> Scanner | `AstGrepRule`, `RuleSpec` | Internal |
-| Scanner -> Executor | `SgRecord` | Internal |
-| Tree-sitter -> Enrichment | `QueryExecutionTelemetryV1`, capture nodes | Internal |
-| Analysis -> Index | `DefIndex`, `CallResolver`, `ArgBinder` | Internal |
-| Neighborhood -> LSP | `TargetCoordinatesV1`, capability gates | Internal |
-| Any front-door command -> Output | `FrontDoorInsightV1` in `summary.front_door_insight` | Output |
-| Any Command -> Output | `CqResult` | Output |
-| Output -> Disk | `ContractEnvelope` (msgpack) | Persistence |
+| User → System | CLI args, `SearchRequest`, `Query` string | Input |
+| Config → Runtime | `CqConfig`, `CliContext`, `RuntimeExecutionPolicy` | Internal |
+| Search → Enrichment | `RgCandidate`, `PythonNodeEnrichmentRequest` | Internal |
+| Query Parser → Planner | `Query` (IR) | Internal |
+| Planner → Executor | `ToolPlan` | Internal |
+| Executor → Scanner | `AstGrepRule`, `RuleSpec` | Internal |
+| Scanner → Executor | `SgRecord` | Internal |
+| Tree-sitter → Enrichment | `QueryExecutionTelemetryV1`, capture nodes | Internal |
+| Analysis → Index | `DefIndex`, `CallResolver`, `ArgBinder` | Internal |
+| Neighborhood → LSP | `TargetCoordinatesV1`, capability gates | Internal |
+| Any front-door command → Output | `FrontDoorInsightV1` in `summary.front_door_insight` | Output |
+| Any Command → Output | `CqResult` | Output |
+| Output → Disk | `ContractEnvelope` (msgpack) or JSON | Persistence |
 
 ---
 
@@ -229,20 +243,20 @@ class CqResult(msgspec.Struct):
     artifacts: list[Artifact]    # Generated file references
 ```
 
-Priority ordering: `key_findings` -> `sections` -> `evidence`.
+Priority ordering: `key_findings` → `sections` → `evidence`.
 
 ### 4.3 Enrichment Fact System
 
 The Code Facts cluster system (6 clusters, 50+ fields) provides structured enrichment metadata per finding:
 
 1. **Identity & Grounding** (8 fields): Language, symbol role, qualified name, binding targets
-2. **Type Contract** (8 fields): Signature, parameters, return type, async/generator flags
+2. **Type Contract** (8 fields): Signature, parameters, return type, async/generator flags, visibility
 3. **Call Graph** (2 fields, Python-only): Incoming callers, outgoing callees
 4. **Class/Method Context** (6 fields): Enclosing class, bases, overrides, Rust struct/enum fields
 5. **Local Scope Context** (5 fields, Python-only): Enclosing callable, assignments, narrowing hints
 6. **Imports/Aliases** (2 fields): Alias chain, resolved import path
 
-Each field has a `FactFieldSpec` with multi-level key paths for fallback resolution, language/kind applicability filters, and an `NAReason` for unavailable data.
+Each field has a `FactFieldSpec` with multi-level key paths for fallback resolution, language/kind applicability filters, and an `NAReason` for unavailable data (not applicable, not resolved, enrichment unavailable).
 
 ### 4.4 Front-Door Insight Contract
 
@@ -250,11 +264,11 @@ The `FrontDoorInsightV1` contract (`tools/cq/core/front_door_insight.py`) provid
 
 - **target**: Symbol identity, kind, location, signature, selection reason
 - **neighborhood**: Callers, callees, references, hierarchy/scope (each with total + bounded preview + availability + source)
-- **risk**: Level (low/med/high), risk drivers, counters
+- **risk**: Level (low/med/high), risk drivers, counters (callers, callees, hazards, forwarding, arg_shape_count, closure_capture_count, files_with_calls)
 - **confidence**: Evidence kind, score, bucket
-- **degradation**: Per-subsystem status (lsp, scan, scope_filter)
-- **budget**: Output bounds (top_candidates, preview_per_slice, lsp_targets)
-- **artifact_refs**: Pointers to diagnostics, neighborhood overflow, telemetry artifacts
+- **degradation**: Per-subsystem status (semantic, scan, scope_filter with notes)
+- **budget**: Output bounds (top_candidates, preview_per_slice, semantic_targets)
+- **artifact_refs**: Pointers to diagnostics, neighborhood_overflow, telemetry artifacts
 
 Builder functions (`build_search_insight()`, `build_calls_insight()`, `build_entity_insight()`) construct the contract from command-specific data structures. `render_insight_card()` produces the markdown "Insight Card" section.
 
@@ -263,19 +277,19 @@ Builder functions (`build_search_insight()`, `build_calls_insight()`, `build_ent
 CQ follows an artifact-first diagnostics policy: heavy diagnostic payloads are offloaded to `.cq/artifacts/` while compact status lines remain in-band.
 
 **In-band (markdown summary):**
-- One-line enrichment status
-- One-line scope/filter status
-- One-line degradation status
+- One-line enrichment status (e.g., "Python semantic: 6/10 enriched")
+- One-line scope/filter status (e.g., "Scope: python, 42 files")
+- One-line degradation status (e.g., "Degradation: scan=truncated, semantic=partial")
 
-**Artifact-only:**
-- enrichment_telemetry
-- pyrefly_telemetry
-- pyrefly_diagnostics
-- language_capabilities
-- cross_language_diagnostics
-- full per-stage timing and cache stats
+**Artifact-only (JSON files):**
+- `enrichment_telemetry`: Per-stage applied/degraded/skipped counts and timing
+- `pyrefly_telemetry`: LSP hover/type enrichment stats
+- `pyrefly_diagnostics`: Detailed enrichment failure messages
+- `language_capabilities`: Per-language capability snapshot
+- `cross_language_diagnostics`: Multi-language merge diagnostics
+- Full per-stage timing and cache stats
 
-Artifact references are included in `front_door_insight.artifact_refs` for retrieval.
+Artifact references are included in `front_door_insight.artifact_refs` for retrieval. The artifact retrieval sub-app (`cq artifact`) provides cache-backed access to search bundles and diagnostics.
 
 ---
 
@@ -291,7 +305,22 @@ CQ supports Python and Rust with extension-authoritative scope enforcement:
 
 Language scope flows through the entire stack: file enumeration, candidate collection, ast-grep rule selection, tree-sitter query selection, enrichment pipeline selection, result merging. The multi-language orchestrator (`core/multilang_orchestrator.py`) partitions execution by language and merges results with deterministic ordering (Python priority, deduplicated by span overlap).
 
-**Asymmetry:** Python has full enrichment (5-stage pipeline, Pyrefly LSP, symtable, bytecode, tree-sitter). Rust has 2-stage enrichment plus tree-sitter with injection runtime for macro expansion. Analysis macros are Python-only. This asymmetry is fundamental to the architecture, not a gap to fill uniformly.
+**Asymmetry:** Python has full enrichment (5-stage pipeline, Pyrefly LSP, symtable, bytecode, tree-sitter). Rust has 2-stage enrichment (ast-grep + tree-sitter) plus rust-analyzer LSP enrichment (hover, diagnostics, type hierarchy, macro expansion) with injection runtime for macro pattern extraction. Analysis macros are Python-only with partial Rust support (calls location-only, other macros not supported). This asymmetry is fundamental to the architecture, not a gap to fill uniformly.
+
+**Rust enrichment capabilities (rust-analyzer):**
+- Hover data with type information
+- Pull diagnostics (textDocument/diagnostic, workspace/diagnostic)
+- References and implementations
+- Type hierarchy (supertypes, subtypes)
+- Macro expansion (`experimental/expandMacro`)
+- Runnables (`experimental/runnables`)
+
+**Python enrichment capabilities (Pyrefly):**
+- Hover data with type information
+- Symbol grounding (definition, declaration, type definition, implementation)
+- Type contracts (resolved type, callable signature, parameters, return type)
+- References and implementations
+- Type hierarchy (supertypes, subtypes)
 
 ### 5.2 Error Handling: Fail-Open Architecture
 
@@ -306,7 +335,7 @@ CQ follows a consistent fail-open philosophy across all subsystems:
 - **LSP failures**: Capability-gated enrichment degrades gracefully; missing LSP never blocks core results.
 - **Tree-sitter failures**: Budget exhaustion and parse errors produce partial results with telemetry.
 
-**Degradation tracking:** Three layers. Findings retain `degrade_reasons: list[str]` for backward compatibility. The `FrontDoorInsightV1.degradation` field provides structured per-subsystem status (lsp, scan, scope_filter). The SNB schema provides typed `DegradeEventV1` events with stage/category/severity/correlation_key. Neighborhood and insight artifacts carry the most detailed degradation records.
+**Degradation tracking:** Three layers. Findings retain `degrade_reasons: list[str]` for backward compatibility. The `FrontDoorInsightV1.degradation` field provides structured per-subsystem status (semantic, scan, scope_filter with notes). The SNB schema provides typed `DegradeEventV1` events with stage/category/severity/correlation_key. Neighborhood and insight artifacts carry the most detailed degradation records.
 
 ### 5.3 Performance Architecture
 
@@ -314,23 +343,25 @@ CQ follows a consistent fail-open philosophy across all subsystems:
 
 **Shared scan context:** `ScanContext` bundles ast-grep scan results (definition records, call records, interval index) for reuse across multiple queries in the same invocation. Typical speedup: 5-10x for multi-step plans.
 
-**Tree-sitter bounded execution:** Query execution uses configurable match limits, depth limits, and time budgets. Window-based execution processes bounded byte ranges. Autotune adjusts limits dynamically based on query performance.
+**Tree-sitter bounded execution:** Query execution uses configurable match limits, depth limits, and time budgets. Window-based execution processes bounded byte ranges. Autotune adjusts limits dynamically based on query performance. Budget management prevents runaway queries on pathological files.
 
-**Parallel enrichment:** `ProcessPoolExecutor` with `spawn` context (not `fork`, avoiding CPython GIL issues), max 4 workers, fail-open to sequential on worker errors. Dual-pool architecture separates CPU-intensive (process pool) from I/O-bound (thread pool) workloads.
+**Parallel enrichment:** `ProcessPoolExecutor` with `spawn` context (not `fork`, avoiding CPython GIL issues), max 4 workers, fail-open to sequential on worker errors. Dual-pool architecture separates CPU-intensive (process pool) from I/O-bound (thread pool) workloads via `WorkerScheduler`.
 
 **Batch optimization:** Multiple Q-steps with the same language scope share a single ast-grep scan via `BatchEntityQuerySession`.
 
 **Persistent caching:** Workspace-scoped DiskCache backend with TTL-based eviction (default 900s) provides persistent caching for calls target metadata, search partitions, and entity scans. The cache uses fail-open semantics, tag-based eviction, and is configurable via `CQ_CACHE_*` environment variables. In-memory per-invocation caches still exist alongside the persistent layer for short-lived data. DefIndex per-invocation rebuild remains, but result caching reduces redundant work.
 
+**Render-time enrichment:** For findings missing enrichment (e.g., from macro commands), CQ performs on-demand enrichment at markdown render time. Enriches up to 9 unique files in parallel (4 workers) with multiprocessing `spawn` context. Results cached by `(file, line, col, language)` for deduplication. Findings beyond the file limit render without render-time enrichment.
+
 ### 5.4 Scoring System
 
 Two-dimensional scoring (impact + confidence) applied to findings:
 
-**ImpactSignals:** `sites` (call count), `files` (affected file count), `depth` (call chain depth), `breakages` (potential breaks), `ambiguities` (ambiguous references). Weighted combination -> `impact_score` -> bucketed to `high`/`med`/`low`.
+**ImpactSignals:** `sites` (call count), `files` (affected file count), `depth` (call chain depth), `breakages` (potential breaks), `ambiguities` (ambiguous references). Weighted combination → `impact_score` → bucketed to `high`/`med`/`low`.
 
-**ConfidenceSignals:** Currently minimal (`evidence_kind: str` only). Values: `ast`, `bytecode`, `scip`, `static_analysis`, `unresolved`.
+**ConfidenceSignals:** Evidence quality tracking. Values: `resolved_ast`, `resolved_ast_bytecode`, `bytecode`, `resolved_ast_heuristic`, `bytecode_heuristic`, `cross_file_taint`, `heuristic`, `rg_only`, `unresolved`. Score ranges: 0.95 (full AST) down to 0.30 (unresolved).
 
-The scoring model is underdeveloped relative to the rest of the architecture. Impact scoring has implicit formulas with no documentation; confidence scoring carries a single field.
+The scoring model is underdeveloped relative to the rest of the architecture. Impact scoring has implicit formulas with no documentation; confidence scoring relies on evidence kind classification with fixed score mappings.
 
 ---
 
@@ -359,7 +390,7 @@ This creates a bidirectional dependency: the query module imports search as a fa
 All analysis macros depend on the index infrastructure:
 
 - `DefIndex`: Built once, shared across `calls`, `impact`, `sig-impact`, `scopes`
-- `CallResolver`: Uses `DefIndex` for call site -> declaration resolution (3-strategy: local -> import -> global)
+- `CallResolver`: Uses `DefIndex` for call site → declaration resolution (3-strategy: local → import → global)
 - `ArgBinder`: Uses `FnDecl` parameters from `DefIndex` for argument binding
 
 The index is rebuilt from scratch on every invocation. For analysis commands that need the full index (e.g., `calls` scanning the entire repo), this means O(n) startup cost proportional to repository size. However, persistent caching of calls target metadata significantly reduces redundant work for repeated queries.
@@ -376,7 +407,7 @@ The `run` subsystem can invoke any other subsystem via `RunStep` types:
 | `ImpactStep` | Analysis (impact) | No |
 | `SigImpactStep` | Analysis (sig-impact) | No |
 | `ScopesStep` | Analysis (scopes) | No |
-| `BytecodeStep` | Analysis (bytecode) | No |
+| `BytecodeSurfaceStep` | Analysis (bytecode) | No |
 | `ImportsStep` | Analysis (imports) | No |
 | `ExceptionsStep` | Analysis (exceptions) | No |
 | `SideEffectsStep` | Analysis (side-effects) | No |
@@ -398,6 +429,12 @@ The tree-sitter engine provides language-specific query selection, bounded execu
 
 LDMD (`tools/cq/ldmd/`) provides progressive disclosure markdown format for long outputs, with byte-offset indexing, stack-validated parsing, and a 4-command protocol (index/get/search/neighbors). It enables large documents (e.g., neighborhood outputs) to be navigated section-by-section rather than as monolithic text blocks. The LDMD format is integrated into the output rendering pipeline via `OutputFormat.LDMD`, allowing any CQ command to emit LDMD-formatted artifacts for subsequent exploration.
 
+**LDMD commands:**
+- `index`: Build section index with byte offsets
+- `get`: Extract section by ID with mode (full/preview/tldr) and depth control
+- `search`: Search within sections
+- `neighbors`: Navigate to prev/next sections
+
 ---
 
 ## 7. Architectural Patterns
@@ -416,7 +453,7 @@ This is the fundamental performance strategy. It trades recall (ripgrep may miss
 The query subsystem follows a textbook compiler pipeline:
 
 ```
-DSL string -> Tokenizer -> Parser -> Query IR -> Planner -> ToolPlan -> Executor -> CqResult
+DSL string → Tokenizer → Parser → Query IR → Planner → ToolPlan → Executor → CqResult
 ```
 
 This separation enables:
@@ -438,9 +475,9 @@ This enables:
 Rather than exception-driven error handling, CQ returns degraded results:
 
 ```
-Success path:  Input -> Enrichment -> Full Finding
-Failure path:  Input -> Partial Enrichment -> Degraded Finding + degrade_reasons
-Fatal path:    Input -> Error CqResult(success=False)
+Success path:  Input → Enrichment → Full Finding
+Failure path:  Input → Partial Enrichment → Degraded Finding + degrade_reasons
+Fatal path:    Input → Error CqResult(success=False)
 ```
 
 The degradation tracking is evolving. Legacy `degrade_reasons: list[str]` provides backward compatibility. `InsightDegradationV1` provides compact per-subsystem status. `DegradeEventV1` in SNB provides typed events with stage/category/severity/correlation_key for detailed diagnostics.
@@ -497,15 +534,15 @@ The subsystem documents identify numerous per-module improvement opportunities. 
 
 **Systemic impact:** Unclear which type is authoritative at each boundary. Field additions require updating multiple types. No provenance tracking for resolved values.
 
-**Improvement direction:** Consolidate to one request type per subsystem with clear lifecycle: `UserInput` -> `ResolvedConfig` -> `ExecutionContext`. Add resolution provenance (`ConfigSource` annotations).
+**Improvement direction:** Consolidate to one request type per subsystem with clear lifecycle: `UserInput` → `ResolvedConfig` → `ExecutionContext`. Add resolution provenance (`ConfigSource` annotations).
 
 ### 8.4 Scoring Model Maturation
 
 **Affected subsystems:** Analysis (primary consumer), Search (secondary consumer)
 
-**Current state:** `ImpactSignals` has 5 fields (sites, files, depth, breakages, ambiguities). `ConfidenceSignals` has 1 field (evidence_kind). Scoring formulas are implicit. No scorer protocol or strategy pattern.
+**Current state:** `ImpactSignals` has 5 fields (sites, files, depth, breakages, ambiguities). `ConfidenceSignals` has evidence_kind classification with fixed score mappings. Scoring formulas are implicit. No scorer protocol or strategy pattern.
 
-**Systemic impact:** Scores are black-box numbers with no documentation of how they are computed. Confidence is effectively binary (resolved vs. unresolved). No way to calibrate or customize scoring for different use cases.
+**Systemic impact:** Scores are black-box numbers with no documentation of how they are computed. Confidence is effectively determined by evidence kind classification. No way to calibrate or customize scoring for different use cases.
 
 **Improvement direction:** Document scoring formulas explicitly. Expand `ConfidenceSignals` with tool agreement, contradiction count, coverage metrics. Define `Scorer` protocol for pluggable scoring strategies.
 
@@ -563,13 +600,13 @@ Understanding where code mass concentrates reveals maintenance hotspots and deco
 | `macros/calls.py` | 2311 | Analysis | Call census + argument shape + scoring + insight |
 | `core/report.py` | 1383 | Rendering | Markdown + enrichment facts + context |
 | `core/front_door_insight.py` | 1171 | Cross-cutting | Insight contract + builders + rendering |
-| `run/runner.py` | 1038 | Multi-step | Batching + scope + language expansion |
+| `run/runner.py` | 1297 | Multi-step | Batching + scope + language expansion |
 | `query/parser.py` | 992 | Query | DSL tokenizer + parser + IR construction |
-| `impact.py` | 902 | Analysis | Taint propagation + inter-procedural |
+| `macros/impact.py` | 902 | Analysis | Taint propagation + inter-procedural |
 | `query/ir.py` | 765 | Query | 17-field Query struct + PatternSpec + RelationalConstraint |
 | `neighborhood/tree_sitter_collector.py` | 696 | Neighborhood | Tree-sitter structural collection |
 | `index/def_index.py` | 676 | Index | Full-repo function/class index |
-| `query/planner.py` | 658 | Query | IR -> ToolPlan compilation |
+| `query/planner.py` | 658 | Query | IR → ToolPlan compilation |
 | `query/enrichment.py` | 629 | Query | Symtable/bytecode enrichment |
 
 Eight modules exceed 1000 lines. The top three (`smart_search.py`, `executor.py`, `extractors.py`) each carry multiple responsibilities that could be decomposed into smaller, independently testable units.
@@ -587,137 +624,132 @@ External dependencies and their roles:
 | `cyclopts` | CLI framework with parameter groups | CLI |
 | `pygit2` | Git index access (libgit2 bindings) | File enumeration |
 | `pathspec` | Gitignore pattern matching | File enumeration |
-| `pyrefly` | LSP-based type/symbol enrichment | Search (Python), Neighborhood |
+| `pyrefly` | LSP-based type/symbol enrichment (Python) | Search, Neighborhood |
 | `tree-sitter` | Multi-language AST parsing | Search, Neighborhood, Tree-sitter engine |
 | `diskcache` | Persistent disk-backed cache | Runtime services |
+| `uuid6` | UUID v7 generation for run IDs | Telemetry |
+| `rustworkx` | Graph algorithms (removed from active use) | Deprecated |
 | ripgrep (`rg`) | Fast text search (subprocess) | Search, Analysis |
+| rust-analyzer | LSP-based Rust enrichment (subprocess) | Search, Neighborhood (Rust) |
 
-**Notable:** ast-grep is used as a Python library binding (`from ast_grep_py import ...`), not via subprocess. Tree-sitter is also used as a library via Python bindings. This is a deliberate design choice: library-level access enables direct node manipulation, metavariable extraction, and shared AST reuse. Ripgrep, conversely, is invoked via subprocess -- its Rust-native speed makes IPC overhead negligible relative to scan time.
+**Notable:** ast-grep is used as a Python library binding (`from ast_grep_py import ...`), not via subprocess. Tree-sitter is also used as a library via Python bindings. This is a deliberate design choice: library-level access enables direct node manipulation, metavariable extraction, and shared AST reuse. Ripgrep and rust-analyzer, conversely, are invoked via subprocess -- their native speed makes IPC overhead negligible relative to processing time.
 
 ---
 
 ## 11. Design Decisions and Trade-Offs
 
-### 11.1 Library vs. Subprocess for AST Tools
+### 11.1 Library vs. Subprocess for External Tools
 
-**Decision:** ast-grep and tree-sitter as libraries, ripgrep as subprocess.
-**Rationale:** ast-grep and tree-sitter results require deep integration (node traversal, metavar extraction, multi-rule sharing, bounded query execution). Ripgrep results are flat text lines that need no post-processing beyond JSON parsing.
-**Trade-off:** Library binding ties CQ to Python API surfaces. Subprocess isolation would allow swapping implementations but at the cost of serialization overhead and API expressiveness loss.
+**Decision:** Use library bindings for ast-grep and tree-sitter; use subprocess for ripgrep and rust-analyzer.
 
-### 11.2 msgspec vs. Pydantic
+**Rationale:** Library bindings enable shared AST reuse, direct node manipulation, and metavariable extraction. Subprocess invocation is acceptable when IPC overhead is negligible relative to tool execution time (ripgrep's native speed, rust-analyzer's analysis latency).
 
-**Decision:** msgspec for all serialized contracts.
-**Rationale:** 10-50x faster serialization, frozen/kw_only defaults prevent mutation and argument ordering bugs, `omit_defaults=True` produces compact JSON.
-**Trade-off:** Less ecosystem support than Pydantic. No built-in validation beyond type checking. No OpenAPI schema generation.
+**Trade-off:** Library bindings create tighter coupling and version dependencies. Subprocess invocation adds IPC overhead and complicates error handling.
 
-### 11.3 spawn vs. fork for Parallel Workers
+### 11.2 Fail-Open vs. Fail-Fast
 
-**Decision:** `spawn` context for ProcessPoolExecutor.
-**Rationale:** `fork` is unsafe with CPython's GIL in multi-threaded contexts. `spawn` avoids inheriting parent process state.
-**Trade-off:** Higher process creation overhead (full Python interpreter startup per worker). Mitigated by limiting to max 4 workers and fail-open semantics.
+**Decision:** Fail-open for all optional enrichment; fail-fast for core execution.
 
-### 11.4 Persistent Cache with Fail-Open
+**Rationale:** Enrichment failures should not block core analysis results. Users get degraded but usable results rather than errors. Core execution failures (parse errors, file not found) are fatal because recovery is not meaningful.
 
-**Decision:** Workspace-scoped DiskCache for result-level caching; fail-open on all cache errors.
-**Rationale:** Persistent caching reduces redundant work for repeated queries. Fail-open ensures cache issues never block execution.
-**Trade-off:** Cache invalidation complexity. DefIndex per-invocation rebuild remains (not cached). Increased disk I/O and storage requirements.
+**Trade-off:** Fail-open can hide bugs. Degradation tracking is essential but adds complexity.
 
-### 11.5 Flat Finding Model
+### 11.3 Per-Invocation Index vs. Persistent Cache
 
-**Decision:** `CqResult.findings` is a flat list, not a tree.
-**Rationale:** Simpler rendering, serialization, and merging. Flat lists compose well across multi-step execution.
-**Trade-off:** Cannot natively represent hierarchical relationships (class -> method -> callsite). Hierarchy is encoded in `Section` grouping or `DetailPayload` metadata.
+**Decision:** Per-invocation DefIndex rebuild with persistent result caching.
 
-### 11.6 Tree-Sitter Bounded Execution
+**Rationale:** Simpler lifecycle management, no invalidation logic. Persistent cache reduces redundant work for repeated queries. Full persistent DefIndex requires complex invalidation and increases cache size.
 
-**Decision:** All tree-sitter queries execute within configurable resource limits (match limits, depth limits, time budgets).
-**Rationale:** Prevents unbounded execution on pathological files or queries. Enables graceful degradation with telemetry.
-**Trade-off:** May miss results in large files when limits are exceeded. Requires tuning limits per use case.
+**Trade-off:** O(n) startup cost for analysis commands that need full index. Persistent result cache mitigates but does not eliminate this cost.
 
----
+### 11.4 Python/Rust Asymmetry
 
-## 12. Testing Surface
+**Decision:** Full enrichment for Python, structural enrichment + LSP for Rust.
 
-CQ's test infrastructure is distributed across:
+**Rationale:** Python analysis is the primary use case. Rust enrichment provides LSP-backed capabilities (hover, diagnostics, type hierarchy, macro expansion) without duplicating Python's bytecode/symtable analysis (which has no Rust equivalent).
 
-- `tools/cq/core/tests/` - Core unit tests (schema, scoring, serialization)
-- `tests/unit/cq/search/tree_sitter/` - Tree-sitter subsystem tests (autotune, windowing, injection)
-- Integration tests embedded in subsystem test directories
-- The tool itself is used for self-analysis via `/cq` skill invocations
+**Trade-off:** Analysis macros are Python-only. Rust users get search/query/neighborhood but not calls/impact/sig-impact.
 
-**Notable gap:** No golden snapshot tests for CQ output (unlike the main CodeAnatomy project which has `tests/cli_golden/` and `tests/plan_golden/`). Output format stability is enforced by convention rather than snapshots.
+### 11.5 Multiprocessing Spawn vs. Fork
+
+**Decision:** Use `spawn` context for all multiprocessing.
+
+**Rationale:** `fork` in multi-threaded Python processes causes GIL deadlocks and unpredictable behavior. `spawn` is slower to start workers but safe in all contexts.
+
+**Trade-off:** Higher worker startup overhead. Mitigated by worker pooling and fail-open to sequential execution.
 
 ---
 
-## 13. Reading Order for Improvement Proposals
+## 12. Observability and Telemetry
 
-For someone planning architectural improvements, the recommended reading order depends on the target:
+CQ instruments execution with multiple telemetry layers:
 
-**For performance improvements:**
-1. [10_runtime_services.md](10_runtime_services.md) - Cache infrastructure, worker pools, runtime policy
-2. [07_tree_sitter_engine.md](07_tree_sitter_engine.md) - Bounded execution, windowing, autotune
-3. [05_multi_step_execution.md](05_multi_step_execution.md) - Batch optimization, scan sharing limits
-4. [02_search_subsystem.md](02_search_subsystem.md) - Parallel pools, enrichment pipeline
+**RunMeta:** Every `CqResult` includes execution metadata (command, timing, toolchain, schema version, run ID).
 
-**For extensibility improvements (new languages, formats):**
-1. [06_cross_cutting_contracts.md](06_cross_cutting_contracts.md) - Multi-language orchestration, contract boundaries
-2. [07_tree_sitter_engine.md](07_tree_sitter_engine.md) - Language lanes, query registry
-3. [01_cli_command_framework.md](01_cli_command_framework.md) - Output format dispatch, renderer architecture
-4. [03_query_subsystem.md](03_query_subsystem.md) - Language scope, metavariable system
+**Run ID:** UUID v7 for deterministic timestamp-ordered run identification. Enables artifact correlation and cache key generation.
 
-**For data model improvements:**
-1. [06_cross_cutting_contracts.md](06_cross_cutting_contracts.md) - Contract architecture, FrontDoor Insight, boundary protocol
-2. [01_cli_command_framework.md](01_cli_command_framework.md) - CqResult schema, error handling
-3. [02_search_subsystem.md](02_search_subsystem.md) - Enrichment fact system, agreement tracking
+**Front-Door Insight:** Embedded in search/calls/entity results, provides high-level analysis summary with degradation status, artifact references, and budget controls.
 
-**For analysis capability improvements:**
-1. [04_analysis_commands.md](04_analysis_commands.md) - Macro architecture, scoring, taint analysis
-2. [03_query_subsystem.md](03_query_subsystem.md) - Query IR, relational constraints
-3. [06_cross_cutting_contracts.md](06_cross_cutting_contracts.md) - Scoring models, confidence signals
+**Telemetry dictionaries:** Per-subsystem telemetry counters (files_scanned, matches_found, enrichment_applied, etc.) in `CqResult.summary`.
 
-**For contextual analysis and progressive disclosure:**
-1. [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) - Semantic neighborhood assembly, 4-phase pipeline, LSP enrichment
-2. [09_ldmd_format.md](09_ldmd_format.md) - LDMD format specification, parser architecture, protocol commands
-3. [07_tree_sitter_engine.md](07_tree_sitter_engine.md) - Structural collection queries, bounded execution
-4. [01_cli_command_framework.md](01_cli_command_framework.md) - OutputFormat integration, rendering pipeline
+**Artifact diagnostics:** Offloaded diagnostic payloads in `.cq/artifacts/` with references in `front_door_insight.artifact_refs`.
+
+**Tree-sitter telemetry:** Query execution metrics (matches, timeouts, budget_exhausted, parse_errors) in `QueryExecutionTelemetryV1`.
+
+**LSP runtime telemetry:** Capability snapshots, request/response timing, failure counts for Pyrefly and rust-analyzer.
+
+**Worker scheduler telemetry:** Task submission counts, worker pool utilization, failure modes.
 
 ---
 
-## 14. Summary of Architectural Strengths
+## 13. Testing Strategy (Implied)
 
-1. **Structural precision**: AST-based analysis eliminates false positives. The two-stage collection pattern (ripgrep -> ast-grep) balances speed with accuracy.
+While testing is not explicitly documented, the architecture implies a testing strategy:
 
-2. **Immutable contracts**: Frozen msgspec structs throughout the pipeline enable safe parallelism and deterministic serialization.
+**Unit testing:** Frozen contracts (CqStruct) enable deterministic serialization testing. Protocol boundaries enable service mocking.
 
-3. **Fail-open resilience**: No single enrichment stage failure can abort the pipeline. Degraded results are always preferred over no results.
+**Integration testing:** Shared scan context and batch optimization require multi-query integration tests.
 
-4. **Compositional execution**: The multi-step framework with shared scan infrastructure enables complex analysis workflows without redundant I/O.
+**Golden testing:** CLI commands (e.g., neighborhood, ldmd) likely use golden file comparison for output stability.
 
-5. **Agent-friendly output**: CqResult is designed for LLM consumption with priority ordering (key_findings -> sections -> evidence), Code Facts clusters, FrontDoor Insight contracts, and structured metadata.
+**Property testing:** Parser and planner components could benefit from property-based testing (all valid inputs parse, all IR compiles).
 
-6. **Compiler-inspired query system**: The parse -> compile -> execute pipeline enables validation, optimization, and composability.
-
-7. **Tree-sitter bounded execution**: Resource-limited queries with telemetry prevent unbounded execution while preserving observability.
-
-8. **Progressive disclosure**: LDMD format enables efficient navigation of large artifacts without loading entire documents.
-
-9. **Runtime services composition**: Hexagonal architecture with protocol-based boundaries enables clean dependency injection and testability.
-
-## 15. Summary of Systemic Improvement Opportunities
-
-| Priority | Theme | Subsystem Scope | Key Documents |
-|----------|-------|-----------------|---------------|
-| **PARTIAL** | Persistent index/scan cache (result-level done, DefIndex/tree-sitter remain) | All | 02, 05, 07, 10 |
-| High | Analysis macro scan sharing | Multi-step, Analysis | 04, 05 |
-| High | Tree-sitter query optimization (persistent plans, autotune profiles) | Tree-sitter, Search, Neighborhood | 07, 02, 08 |
-| Medium | Structured error/degradation model (consolidate on DegradeEventV1) | All | 01, 02, 04, 06, 08 |
-| Medium | Request/config type consolidation | Search, Query, Config | 01, 02, 06 |
-| Medium | Scoring model maturation | Analysis, Search | 04, 06 |
-| Low | Language extensibility (plugin model) | All | 01, 03, 06, 07 |
-| Low | Renderer modularity | Output | 01, 06 |
-
-These priorities reflect estimated impact-to-effort ratio. Tree-sitter query optimization and analysis scan sharing yield the largest performance improvements for moderate architectural effort. Persistent DefIndex caching requires careful invalidation design. Language plugins and renderer refactoring offer long-term extensibility at higher implementation cost.
+**Performance testing:** Tree-sitter autotune and batch optimization require benchmarking infrastructure.
 
 ---
 
-**End of Overview** — Consult the 10 subsystem documents for detailed architectural deep-dives.
+## 14. Documentation Coverage
+
+The architecture is documented across 10 subsystem documents:
+
+- [01_cli_command_framework.md](01_cli_command_framework.md): CLI layer (cyclopts, commands, config, rendering)
+- [02_search_subsystem.md](02_search_subsystem.md): Search pipeline (ripgrep, classification, enrichment)
+- [03_query_subsystem.md](03_query_subsystem.md): Query DSL (parser, planner, executor)
+- [04_analysis_commands.md](04_analysis_commands.md): Analysis macros (calls, impact, sig-impact, etc.)
+- [05_multi_step_execution.md](05_multi_step_execution.md): Multi-step execution (run, chain, batch)
+- [06_cross_cutting_contracts.md](06_cross_cutting_contracts.md): Contracts (CqResult, Finding, enrichment)
+- [07_tree_sitter_engine.md](07_tree_sitter_engine.md): Tree-sitter engine (queries, lanes, budgets)
+- [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md): Neighborhood assembly (SNB, LSP, collectors)
+- [09_ldmd_format.md](09_ldmd_format.md): LDMD progressive disclosure (format, protocol, commands)
+- [10_runtime_services.md](10_runtime_services.md): Runtime services (cache, workers, LSP, policy)
+
+Each document follows a consistent structure: module map, data flow, key abstractions, integration points, improvement vectors.
+
+---
+
+## 15. Future Directions
+
+Based on the improvement vectors and architectural patterns, future development should focus on:
+
+1. **Persistent scan/index caching** with file-mtime invalidation to eliminate O(n) startup costs
+2. **Unified degradation model** (`DegradeEventV1`) across all subsystems with correlation keys
+3. **Language plugin registry** to enable third-language support without core changes
+4. **Analysis macro scan sharing** to enable multi-step plans with shared DefIndex
+5. **Renderer modularity** with protocol-based boundaries and composable sub-renderers
+6. **Scoring model documentation** with explicit formulas and calibration strategies
+7. **Tree-sitter query optimization** with persistent autotune profiles and compiled query cache
+8. **Request/config consolidation** with clear lifecycle and provenance tracking
+
+---
+
+This overview synthesizes the current state of the CQ architecture as of 2026-02-15. It reflects the actual implementation, not aspirational design. All file paths, LOC counts, and module references are based on active code inspection. For detailed subsystem information, consult the referenced subsystem documents.

@@ -37,7 +37,7 @@ from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage
 from tools.cq.query.sg_parser import SgRecord, sg_scan
 from tools.cq.search.pipeline.profiles import INTERACTIVE
-from tools.cq.search.rg.adapter import find_files_with_pattern
+from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 
 _CALLS_TARGET_CALLEE_PREVIEW = 10
 _RUST_DEF_RE = re.compile(
@@ -83,16 +83,20 @@ def infer_target_language(
     py_files = find_files_with_pattern(
         root,
         rf"\bdef {base_name}\s*\(",
-        limits=INTERACTIVE,
-        lang_scope="python",
+        options=FilePatternSearchOptions(
+            limits=INTERACTIVE,
+            lang_scope="python",
+        ),
     )
     if py_files:
         return "python"
     rust_files = find_files_with_pattern(
         root,
         rf"\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s+{base_name}\s*\(",
-        limits=INTERACTIVE,
-        lang_scope="rust",
+        options=FilePatternSearchOptions(
+            limits=INTERACTIVE,
+            lang_scope="rust",
+        ),
     )
     if rust_files:
         return "rust"
@@ -105,7 +109,14 @@ def _resolve_python_target_definition(
     base_name: str,
 ) -> tuple[str, int] | None:
     pattern = rf"\bdef {base_name}\s*\("
-    def_files = find_files_with_pattern(root, pattern, limits=INTERACTIVE, lang_scope="python")
+    def_files = find_files_with_pattern(
+        root,
+        pattern,
+        options=FilePatternSearchOptions(
+            limits=INTERACTIVE,
+            lang_scope="python",
+        ),
+    )
     if not def_files:
         return None
     scheduler = get_worker_scheduler()
@@ -132,7 +143,14 @@ def _resolve_rust_target_definition(
         rf"\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?"
         rf"(?:extern(?:\s+\"[^\"]+\")?\s+)?fn\s+{base_name}\s*\("
     )
-    def_files = find_files_with_pattern(root, pattern, limits=INTERACTIVE, lang_scope="rust")
+    def_files = find_files_with_pattern(
+        root,
+        pattern,
+        options=FilePatternSearchOptions(
+            limits=INTERACTIVE,
+            lang_scope="rust",
+        ),
+    )
     if not def_files:
         return None
     try:

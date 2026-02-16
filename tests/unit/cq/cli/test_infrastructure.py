@@ -20,6 +20,8 @@ from tools.cq.cli_app.infrastructure import (
     setup_group,
 )
 
+ASYNC_DISPATCH_RESULT = 10
+
 
 class TestBuildConfigChain:
     """Tests for build_config_chain function."""
@@ -109,7 +111,7 @@ class TestDispatchBoundCommand:
 
         bound = inspect.signature(async_command).bind(5)
         result = dispatch_bound_command(async_command, bound)
-        assert result == 10
+        assert result == ASYNC_DISPATCH_RESULT
 
     def test_dispatch_async_command_with_running_loop_raises(
         self, monkeypatch: pytest.MonkeyPatch

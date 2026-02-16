@@ -10,6 +10,9 @@ import pytest
 from tools.cq.cli_app.app import app
 from tools.cq.cli_app.types import OutputFormat
 
+IMPACT_DEPTH = 10
+CALLS_LIMIT = 50
+
 
 class TestImpactCommandParsing:
     """Tests for impact command argument parsing."""
@@ -22,10 +25,12 @@ class TestImpactCommandParsing:
 
     def test_impact_with_depth(self) -> None:
         """Test parsing impact command with depth option."""
-        _cmd, bound, _extra = app.parse_args(["impact", "foo", "--param", "bar", "--depth", "10"])
+        _cmd, bound, _extra = app.parse_args(
+            ["impact", "foo", "--param", "bar", "--depth", str(IMPACT_DEPTH)]
+        )
         assert bound.args[0] == "foo"  # positional arg
         assert bound.kwargs["opts"].param == "bar"
-        assert bound.kwargs["opts"].depth == 10
+        assert bound.kwargs["opts"].depth == IMPACT_DEPTH
 
     def test_impact_with_format(self) -> None:
         """Test parsing impact command with format option (global option via meta app)."""
@@ -60,14 +65,14 @@ class TestCallsCommandParsing:
                 "--exclude",
                 "tests/",
                 "--limit",
-                "50",
+                str(CALLS_LIMIT),
             ]
         )
         assert bound.args[0] == "foo"  # positional arg
         opts = bound.kwargs["opts"]
         assert opts.include == ["src/"]
         assert opts.exclude == ["tests/"]
-        assert opts.limit == 50
+        assert opts.limit == CALLS_LIMIT
 
     def test_calls_empty_include_flag_rejected(self) -> None:
         """Test that deprecated iterable empty flags are not exposed."""

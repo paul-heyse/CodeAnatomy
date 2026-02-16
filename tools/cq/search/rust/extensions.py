@@ -29,7 +29,11 @@ def _to_document_uri(file_path: str) -> str:
 def expand_macro(
     client: object, request: RustMacroExpansionRequestV1
 ) -> RustMacroExpansionResultV1:
-    """Request macro expansion from rust-analyzer when client supports ``request``."""
+    """Request macro expansion from rust-analyzer when client supports ``request``.
+
+    Returns:
+        RustMacroExpansionResultV1: Function return value.
+    """
     request_fn = getattr(client, "request", None)
     if not callable(request_fn):
         return RustMacroExpansionResultV1(macro_call_id=request.macro_call_id)
@@ -71,7 +75,11 @@ def expand_macros(
     client: object,
     requests: tuple[RustMacroExpansionRequestV1, ...],
 ) -> tuple[RustMacroExpansionResultV1, ...]:
-    """Expand a batch of macro requests with fail-open behavior."""
+    """Expand a batch of macro requests with fail-open behavior.
+
+    Returns:
+        tuple[RustMacroExpansionResultV1, ...]: Function return value.
+    """
     return tuple(expand_macro(client, request) for request in requests)
 
 
@@ -148,7 +156,11 @@ def build_module_graph(
     module_rows: list[dict[str, object]],
     import_rows: list[dict[str, object]],
 ) -> dict[str, object]:
-    """Build normalized module graph payload from loose fact rows."""
+    """Build normalized module graph payload from loose fact rows.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     modules = _normalize_modules(module_rows)
     edges = _normalize_import_edges(import_rows, modules)
     graph = RustModuleGraphV1(

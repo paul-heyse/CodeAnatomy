@@ -24,6 +24,7 @@ class _Parser:
 
 
 def test_apply_parser_controls_respects_flags(tmp_path: Path) -> None:
+    """Test apply parser controls respects flags."""
     parser = _Parser()
     settings = ParserControlSettingsV1(
         reset_before_parse=True,

@@ -149,27 +149,25 @@ def _lint_language(language: str) -> tuple[str, ...]:
         sources = load_query_pack_sources(language, include_distribution=False)
     except (RuntimeError, TypeError, ValueError):
         return (f"{language}:query_registry_unavailable:failed to load query pack sources",)
-    if not sources:
-        return ()
-    drift_report = build_grammar_drift_report(language=language, query_sources=sources)
 
     language_obj = load_tree_sitter_language(language)
-    if language_obj is None:
+    if not sources or language_obj is None:
         return ()
+    drift_report = build_grammar_drift_report(language=language, query_sources=sources)
     language_runtime = cast("Language", language_obj)
 
     def compile_for_language(query_source: str) -> Query:
         return _compile_query(language_runtime, query_source)
 
-    errors = _lint_pack_sources(
+    lint_errors = _lint_pack_sources(
         language=language,
         sources=sources,
         schema_index=schema_index,
         compile_query=compile_for_language,
     )
     if not drift_report.compatible:
-        errors.extend(f"{language}:grammar_drift:{error}" for error in drift_report.errors)
-    return tuple(errors)
+        lint_errors.extend(f"{language}:grammar_drift:{error}" for error in drift_report.errors)
+    return tuple(lint_errors)
 
 
 def lint_search_query_packs() -> QueryPackLintResultV1:

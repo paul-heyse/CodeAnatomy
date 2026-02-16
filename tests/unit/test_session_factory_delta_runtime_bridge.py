@@ -15,6 +15,9 @@ from datafusion_engine.session.delta_session_builder import (
 )
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
 
+LEGACY_BRIDGE_ARG_COUNT = 3
+RUNTIME_BRIDGE_ARG_COUNT = 4
+
 
 class _RuntimePolicyOptions:
     def __init__(self) -> None:
@@ -44,7 +47,7 @@ class _LegacyBridgeModule(ModuleType):
         self.delta_session_context = self._legacy_builder
 
     def _legacy_builder(self, *args: object) -> SessionContext:
-        if len(args) != 3:
+        if len(args) != LEGACY_BRIDGE_ARG_COUNT:
             msg = "delta_session_context() takes 3 positional arguments but 4 were given"
             raise TypeError(msg)
         self.calls.append(args)
@@ -64,6 +67,7 @@ def _import_override(module: ModuleType) -> object:
 def test_delta_session_factory_bridges_runtime_settings_to_options(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test delta session factory bridges runtime settings to options."""
     module = _BridgeModule()
     monkeypatch.setattr(importlib, "import_module", _import_override(module))
     profile = DataFusionRuntimeProfile(
@@ -77,7 +81,7 @@ def test_delta_session_factory_bridges_runtime_settings_to_options(
     assert result.error is None
     assert module.calls
     call = module.calls[-1]
-    assert len(call) == 4
+    assert len(call) == RUNTIME_BRIDGE_ARG_COUNT
     runtime_policy = call[3]
     assert isinstance(runtime_policy, _RuntimePolicyOptions)
     assert runtime_policy.metadata_cache_limit == int(
@@ -99,6 +103,7 @@ def test_delta_session_factory_bridges_runtime_settings_to_options(
 def test_delta_session_factory_falls_back_to_legacy_builder_signature(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test delta session factory falls back to legacy builder signature."""
     module = _LegacyBridgeModule()
     monkeypatch.setattr(importlib, "import_module", _import_override(module))
     profile = DataFusionRuntimeProfile(
@@ -111,7 +116,7 @@ def test_delta_session_factory_falls_back_to_legacy_builder_signature(
     assert result.error is None
     assert module.calls
     call = module.calls[-1]
-    assert len(call) == 3
+    assert len(call) == LEGACY_BRIDGE_ARG_COUNT
     assert result.runtime_policy_bridge is not None
     assert result.runtime_policy_bridge.get("reason") == "legacy_builder_signature"
 

@@ -9,6 +9,7 @@ from tools.cq.macros import shared
 
 
 def test_resolve_target_files_prefers_existing_path(tmp_path: Path) -> None:
+    """Test resolve target files prefers existing path."""
     target = tmp_path / "module.py"
     target.write_text("def foo():\n    pass\n", encoding="utf-8")
     rows = shared.resolve_target_files(
@@ -23,6 +24,7 @@ def test_resolve_target_files_scans_symbol_candidates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Test resolve target files scans symbol candidates."""
     candidate = tmp_path / "candidate.py"
     candidate.write_text("def interesting_symbol():\n    pass\n", encoding="utf-8")
     observed: dict[str, object] = {}

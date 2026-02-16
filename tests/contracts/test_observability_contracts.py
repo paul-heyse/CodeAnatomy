@@ -15,6 +15,9 @@ from planning_engine.spec_contracts import (
     ViewDefinition,
 )
 
+ENGINE_OUTPUT_EVENT_COUNT = 2
+EXPECTED_TASK_COUNT = 2
+
 
 def _spec_fixture() -> SemanticExecutionSpec:
     return SemanticExecutionSpec(
@@ -87,6 +90,7 @@ def _run_result_fixture() -> dict[str, object]:
 def test_record_observability_emits_required_engine_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test record observability emits required engine events."""
     from graph import build_pipeline as orchestrator_mod
 
     events: list[tuple[str, dict[str, object], str]] = []
@@ -110,7 +114,7 @@ def test_record_observability_emits_required_engine_events(
     event_names = [event_name for event_name, _, _ in events]
     assert "engine_spec_summary_v1" in event_names
     assert "engine_execution_summary_v1" in event_names
-    assert event_names.count("engine_output_v1") == 2
+    assert event_names.count("engine_output_v1") == ENGINE_OUTPUT_EVENT_COUNT
 
     spec_payload = next(payload for name, payload, _ in events if name == "engine_spec_summary_v1")
     assert {"view_count", "view_names", "output_target_count"} <= set(spec_payload)
@@ -122,6 +126,7 @@ def test_record_observability_emits_required_engine_events(
 
 
 def test_diagnostics_report_plan_execution_diff_uses_engine_events() -> None:
+    """Test diagnostics report plan execution diff uses engine events."""
     spans: list[dict[str, object]] = []
     gauges: dict[str, object] = {}
     snapshot = {
@@ -154,7 +159,7 @@ def test_diagnostics_report_plan_execution_diff_uses_engine_events() -> None:
 
     report = build_diagnostics_report(snapshot)
 
-    assert report.plan_execution_diff["expected_task_count"] == 2
-    assert report.plan_execution_diff["executed_task_count"] == 2
+    assert report.plan_execution_diff["expected_task_count"] == EXPECTED_TASK_COUNT
+    assert report.plan_execution_diff["executed_task_count"] == EXPECTED_TASK_COUNT
     assert report.plan_execution_diff["missing_task_count"] == 0
     assert report.plan_execution_diff["unexpected_task_count"] == 0

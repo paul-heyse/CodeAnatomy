@@ -82,7 +82,11 @@ def build_match_rows_with_query_hits(
     source_bytes: bytes,
     query_name: str,
 ) -> tuple[tuple[ObjectEvidenceRowV1, ...], tuple[TreeSitterQueryHitV1, ...]]:
-    """Build metadata evidence rows and typed query-hit rows together."""
+    """Build metadata evidence rows and typed query-hit rows together.
+
+    Returns:
+        tuple[tuple[ObjectEvidenceRowV1, ...], tuple[TreeSitterQueryHitV1, ...]]: Function return value.
+    """
     return (
         build_match_rows(query=query, matches=matches, source_bytes=source_bytes),
         export_query_hits(file_path=query_name, matches=matches),

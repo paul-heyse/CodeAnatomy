@@ -21,6 +21,7 @@ def _clear_tree_cache() -> None:
     reason="tree-sitter-python is not available in this environment",
 )
 def test_lint_python_query_packs_has_no_errors() -> None:
+    """Test lint python query packs has no errors."""
     result = lint_search_query_packs()
     python_errors = [row for row in result.errors if row.startswith("python:")]
     assert python_errors == []
@@ -31,6 +32,7 @@ def test_lint_python_query_packs_has_no_errors() -> None:
     reason="tree-sitter-python is not available in this environment",
 )
 def test_tree_sitter_resolution_fields_for_import_alias_span() -> None:
+    """Test tree sitter resolution fields for import alias span."""
     source = (
         "import pkg.mod as alias\n"
         "\n"
@@ -60,6 +62,7 @@ def test_tree_sitter_resolution_fields_for_import_alias_span() -> None:
     reason="tree-sitter-python is not available in this environment",
 )
 def test_tree_sitter_resolution_fields_for_call_span() -> None:
+    """Test tree sitter resolution fields for call span."""
     source = (
         "import pkg.mod as alias\n"
         "\n"

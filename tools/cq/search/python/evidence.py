@@ -71,7 +71,11 @@ def build_agreement_summary(
     native_fields: Mapping[str, object] | None = None,
     tree_sitter_fields: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """Build deterministic agreement summary across enrichment sources."""
+    """Build deterministic agreement summary across enrichment sources.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     ast_rows = _as_mapping(ast_grep_fields)
     native_rows = _as_mapping(native_fields)
     tree_rows = _as_mapping(tree_sitter_fields)

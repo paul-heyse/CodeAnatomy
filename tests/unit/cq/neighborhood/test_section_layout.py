@@ -18,6 +18,8 @@ from tools.cq.neighborhood.section_layout import (
     materialize_section_layout,
 )
 
+EXPECTED_DIAGNOSTIC_ITEMS = 2
+
 
 def test_section_order_is_deterministic() -> None:
     """Test that section ordering matches SECTION_ORDER regardless of slice order."""
@@ -207,7 +209,7 @@ def test_diagnostics_section_from_degrade_events() -> None:
     assert diag_section.collapsed
 
     # Check items include both events
-    assert len(diag_section.items) == 2
+    assert len(diag_section.items) == EXPECTED_DIAGNOSTIC_ITEMS
 
     items_text = " ".join(diag_section.items)
     assert "semantic.rust" in items_text

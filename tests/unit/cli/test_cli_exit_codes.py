@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from cli.exit_codes import ExitCode
 
+PARSE_ERROR_CODE = 2
+VALIDATION_ERROR_CODE = 3
+PIPELINE_ERROR_MIN = 10
+PIPELINE_ERROR_MAX = 19
+BACKEND_ERROR_MIN = 20
+BACKEND_ERROR_MAX = 29
+
 
 class TestExitCodeValues:
     """Test exit code enum values."""
@@ -18,23 +25,23 @@ class TestExitCodeValues:
 
     def test_parse_error_is_two(self) -> None:
         """PARSE_ERROR should be 2."""
-        assert ExitCode.PARSE_ERROR == 2
+        assert ExitCode.PARSE_ERROR == PARSE_ERROR_CODE
 
     def test_validation_error_is_three(self) -> None:
         """VALIDATION_ERROR should be 3."""
-        assert ExitCode.VALIDATION_ERROR == 3
+        assert ExitCode.VALIDATION_ERROR == VALIDATION_ERROR_CODE
 
     def test_pipeline_errors_in_range(self) -> None:
         """Pipeline errors should be in 10-19 range."""
-        assert 10 <= ExitCode.EXTRACTION_ERROR <= 19
-        assert 10 <= ExitCode.NORMALIZATION_ERROR <= 19
-        assert 10 <= ExitCode.SCHEDULING_ERROR <= 19
-        assert 10 <= ExitCode.EXECUTION_ERROR <= 19
+        assert PIPELINE_ERROR_MIN <= ExitCode.EXTRACTION_ERROR <= PIPELINE_ERROR_MAX
+        assert PIPELINE_ERROR_MIN <= ExitCode.NORMALIZATION_ERROR <= PIPELINE_ERROR_MAX
+        assert PIPELINE_ERROR_MIN <= ExitCode.SCHEDULING_ERROR <= PIPELINE_ERROR_MAX
+        assert PIPELINE_ERROR_MIN <= ExitCode.EXECUTION_ERROR <= PIPELINE_ERROR_MAX
 
     def test_backend_errors_in_range(self) -> None:
         """Backend errors should be in 20-29 range."""
-        assert 20 <= ExitCode.BACKEND_ERROR <= 29
-        assert 20 <= ExitCode.DATAFUSION_ERROR <= 29
+        assert BACKEND_ERROR_MIN <= ExitCode.BACKEND_ERROR <= BACKEND_ERROR_MAX
+        assert BACKEND_ERROR_MIN <= ExitCode.DATAFUSION_ERROR <= BACKEND_ERROR_MAX
 
 
 class TestExitCodeFromException:

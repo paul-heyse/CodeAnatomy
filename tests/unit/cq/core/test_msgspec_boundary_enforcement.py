@@ -1,9 +1,12 @@
+"""Tests for test_msgspec_boundary_enforcement."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 
 def test_hot_paths_do_not_import_core_to_builtins() -> None:
+    """Reject core-to-builtins imports and ad-hoc msgspec conversions in hot paths."""
     repo_root = Path(__file__).resolve().parents[4]
     hot_paths = [
         repo_root / "tools" / "cq" / "search" / "pipeline" / "smart_search.py",

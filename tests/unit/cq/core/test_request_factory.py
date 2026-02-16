@@ -12,6 +12,9 @@ from tools.cq.core.request_factory import (
 )
 from tools.cq.core.toolchain import Toolchain
 
+IMPACT_MAX_DEPTH = 10
+DEFAULT_MAX_FILES = 1000
+
 
 @pytest.fixture
 def mock_toolchain() -> Toolchain:
@@ -140,7 +143,7 @@ def test_impact_request(request_context: RequestContextV1) -> None:
         request_context,
         function_name="test_function",
         param_name="test_param",
-        max_depth=10,
+        max_depth=IMPACT_MAX_DEPTH,
     )
     assert isinstance(request, ImpactRequest)
     assert request.tc == request_context.tc
@@ -148,7 +151,7 @@ def test_impact_request(request_context: RequestContextV1) -> None:
     assert request.argv == request_context.argv
     assert request.function_name == "test_function"
     assert request.param_name == "test_param"
-    assert request.max_depth == 10
+    assert request.max_depth == IMPACT_MAX_DEPTH
 
 
 def test_sig_impact_request(request_context: RequestContextV1) -> None:
@@ -230,13 +233,13 @@ def test_side_effects_request(request_context: RequestContextV1) -> None:
 
     request = RequestFactory.side_effects(
         request_context,
-        max_files=1000,
+        max_files=DEFAULT_MAX_FILES,
     )
     assert isinstance(request, SideEffectsRequest)
     assert request.tc == request_context.tc
     assert request.root == request_context.root
     assert request.argv == request_context.argv
-    assert request.max_files == 1000
+    assert request.max_files == DEFAULT_MAX_FILES
 
 
 def test_scopes_request(request_context: RequestContextV1) -> None:
@@ -252,14 +255,14 @@ def test_scopes_request(request_context: RequestContextV1) -> None:
     request = RequestFactory.scopes(
         request_context,
         target="test_target",
-        max_files=1000,
+        max_files=DEFAULT_MAX_FILES,
     )
     assert isinstance(request, ScopeRequest)
     assert request.tc == request_context.tc
     assert request.root == request_context.root
     assert request.argv == request_context.argv
     assert request.target == "test_target"
-    assert request.max_files == 1000
+    assert request.max_files == DEFAULT_MAX_FILES
 
 
 def test_bytecode_surface_request(request_context: RequestContextV1) -> None:
@@ -276,7 +279,7 @@ def test_bytecode_surface_request(request_context: RequestContextV1) -> None:
         request_context,
         target="test_target",
         show="globals,attrs",
-        max_files=1000,
+        max_files=DEFAULT_MAX_FILES,
     )
     assert isinstance(request, BytecodeSurfaceRequest)
     assert request.tc == request_context.tc
@@ -284,4 +287,4 @@ def test_bytecode_surface_request(request_context: RequestContextV1) -> None:
     assert request.argv == request_context.argv
     assert request.target == "test_target"
     assert request.show == "globals,attrs"
-    assert request.max_files == 1000
+    assert request.max_files == DEFAULT_MAX_FILES

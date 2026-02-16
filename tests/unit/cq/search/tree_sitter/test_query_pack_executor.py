@@ -21,10 +21,15 @@ class _Node:
 
 
 def test_execute_pack_rows_builds_rows_and_match_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test execute pack rows builds rows and match settings."""
     calls: dict[str, object] = {}
     node = _Node()
 
     def _captures(*_args: object, **_kwargs: object) -> tuple[dict[str, list[object]], object]:
+        settings = _kwargs.get("settings")
+        calls["has_change_context"] = (
+            settings.has_change_context if isinstance(settings, QueryExecutionSettingsV1) else None
+        )
         return {"capture": [node]}, QueryExecutionTelemetryV1()
 
     def _matches(
@@ -41,17 +46,24 @@ def test_execute_pack_rows_builds_rows_and_match_settings(monkeypatch: pytest.Mo
         lambda **_kwargs: ((), ()),
     )
 
-    settings = QueryExecutionSettingsV1(match_limit=10, require_containment=False)
+    settings = QueryExecutionSettingsV1(
+        match_limit=10,
+        require_containment=False,
+        has_change_context=True,
+    )
     windows = (QueryWindowV1(start_byte=0, end_byte=1),)
     _captures_out, _rows, _hits, _capture_t, _match_t = query_pack_executor.execute_pack_rows(
         query=cast("Any", object()),
         query_name="00_defs.scm",
         root=cast("Any", object()),
         source_bytes=b"a",
-        windows=windows,
-        settings=settings,
-        callbacks=None,
+        context=query_pack_executor.QueryPackExecutionContextV1(
+            windows=windows,
+            settings=settings,
+            callbacks=None,
+        ),
     )
+    assert calls.get("has_change_context") is True
     match_settings = calls.get("settings")
     assert isinstance(match_settings, QueryExecutionSettingsV1)
     assert match_settings.require_containment is True

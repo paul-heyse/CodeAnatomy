@@ -1,9 +1,12 @@
+"""Tests for test_cache_key_tags."""
+
 from __future__ import annotations
 
 from tools.cq.core.cache import build_namespace_cache_tag, build_scope_hash
 
 
 def test_build_namespace_cache_tag_uses_canonical_atom_order() -> None:
+    """Preserve canonical namespace-tag atom order for cache key introspection."""
     scope_hash = build_scope_hash({"paths": ("src",), "globs": ("*.py",)})
     assert scope_hash is not None
 
@@ -32,7 +35,9 @@ def test_build_namespace_cache_tag_uses_canonical_atom_order() -> None:
     assert "run-123" not in atoms[5]
 
 
+
 def test_build_namespace_cache_tag_is_stable_for_equivalent_scope_payloads() -> None:
+    """Normalize scope inputs before hashing so equivalent payloads map to equal tags."""
     scope_hash_a = build_scope_hash(
         {
             "paths": {"src", "tests"},

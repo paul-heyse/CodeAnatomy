@@ -73,7 +73,10 @@ def require_mapping(value: object) -> dict[str, object]:
     Raises:
         TypeError: If the payload is not mapping-shaped after conversion.
     """
-    return require_contract_mapping(value)
+    try:
+        return require_contract_mapping(value)
+    except TypeError as exc:
+        raise TypeError(str(exc)) from exc
 
 
 class SummaryBuildRequest(CqStruct, frozen=True):

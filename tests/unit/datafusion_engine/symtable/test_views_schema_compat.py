@@ -77,6 +77,7 @@ def _legacy_bindings_payload() -> dict[str, list[object]]:
 def test_symtable_sites_accept_canonical_binding_columns(
     bindings_payload: dict[str, list[object]],
 ) -> None:
+    """Test symtable sites accept canonical binding columns."""
     ctx = SessionContext()
     ctx.from_pydict(bindings_payload, name="symtable_bindings")
     _register_defs_and_refs(ctx)
@@ -93,6 +94,7 @@ def test_symtable_sites_accept_canonical_binding_columns(
 
 
 def test_symtable_sites_reject_legacy_binding_columns() -> None:
+    """Test symtable sites reject legacy binding columns."""
     ctx = SessionContext()
     ctx.from_pydict(_legacy_bindings_payload(), name="symtable_bindings")
     _register_defs_and_refs(ctx)
@@ -104,6 +106,7 @@ def test_symtable_sites_reject_legacy_binding_columns() -> None:
 
 
 def test_symtable_binding_resolutions_require_canonical_binding_columns() -> None:
+    """Test symtable binding resolutions require canonical binding columns."""
     ctx = SessionContext()
     ctx.from_pydict(
         {

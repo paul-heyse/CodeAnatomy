@@ -7,6 +7,8 @@ from collections.abc import Mapping
 
 from tools.cq.core.id import canonicalize_payload, stable_digest, stable_digest24
 
+DIGEST24_LENGTH = 24
+
 
 class TestCanonicalizePayload:
     def test_none(self) -> None:
@@ -32,4 +34,4 @@ class TestStableDigest:
 
     def test_digest24_length(self) -> None:
         d = stable_digest24({"x": 1})
-        assert len(d) == 24
+        assert len(d) == DIGEST24_LENGTH

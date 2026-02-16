@@ -9,6 +9,14 @@ from semantics.quality import QualityRelationshipSpec
 from semantics.quality_templates import EntitySymbolConfig, entity_symbol_relationship
 from tests.test_helpers.immutability import assert_immutable_assignment
 
+DEFAULT_EXACT_SPAN_WEIGHT = 20.0
+CUSTOM_EXACT_SPAN_WEIGHT = 15.0
+DEFAULT_BASE_SCORE = 2000.0
+DEFAULT_BASE_CONFIDENCE = 0.95
+FEATURE_COUNT = 2
+EXACT_END_WEIGHT = 10.0
+TWO_ENTRIES = 2
+
 
 class _EntitySymbolConfigOverrides(TypedDict, total=False):
     """Typed overrides for test config helper."""
@@ -66,7 +74,7 @@ class TestEntitySymbolConfig:
         cfg = EntitySymbolConfig(
             name="test", left_view="left", entity_id_col="l__id", origin="test"
         )
-        assert cfg.exact_span_weight == 20.0
+        assert cfg.exact_span_weight == DEFAULT_EXACT_SPAN_WEIGHT
 
     def test_custom_span_strategy(self) -> None:
         """Config accepts contains span_strategy."""
@@ -97,9 +105,9 @@ class TestEntitySymbolConfig:
             left_view="left",
             entity_id_col="l__id",
             origin="test",
-            exact_span_weight=15.0,
+            exact_span_weight=CUSTOM_EXACT_SPAN_WEIGHT,
         )
-        assert cfg.exact_span_weight == 15.0
+        assert cfg.exact_span_weight == CUSTOM_EXACT_SPAN_WEIGHT
 
 
 class TestEntitySymbolRelationship:
@@ -120,7 +128,7 @@ class TestEntitySymbolRelationship:
             origin=overrides.get("origin", "test_origin"),
             span_strategy=overrides.get("span_strategy", "overlap"),
             scip_role_filter=overrides.get("scip_role_filter"),
-            exact_span_weight=overrides.get("exact_span_weight", 20.0),
+            exact_span_weight=overrides.get("exact_span_weight", DEFAULT_EXACT_SPAN_WEIGHT),
         )
 
     def test_produces_quality_spec(self) -> None:
@@ -172,17 +180,17 @@ class TestEntitySymbolRelationship:
     def test_base_score(self) -> None:
         """Template uses standard base_score of 2000."""
         spec = entity_symbol_relationship(self._default_cfg())
-        assert spec.signals.base_score == 2000.0
+        assert spec.signals.base_score == DEFAULT_BASE_SCORE
 
     def test_base_confidence(self) -> None:
         """Template uses standard base_confidence of 0.95."""
         spec = entity_symbol_relationship(self._default_cfg())
-        assert spec.signals.base_confidence == 0.95
+        assert spec.signals.base_confidence == DEFAULT_BASE_CONFIDENCE
 
     def test_feature_count(self) -> None:
         """Template produces two features: exact_span and exact_end."""
         spec = entity_symbol_relationship(self._default_cfg())
-        assert len(spec.signals.features) == 2
+        assert len(spec.signals.features) == FEATURE_COUNT
         names = [f.name for f in spec.signals.features]
         assert "exact_span" in names
         assert "exact_end" in names
@@ -191,19 +199,21 @@ class TestEntitySymbolRelationship:
         """The exact_end feature always has weight 10.0."""
         spec = entity_symbol_relationship(self._default_cfg())
         end_feature = next(f for f in spec.signals.features if f.name == "exact_end")
-        assert end_feature.weight == 10.0
+        assert end_feature.weight == EXACT_END_WEIGHT
 
     def test_default_exact_span_weight(self) -> None:
         """Default exact_span_weight is 20.0."""
         spec = entity_symbol_relationship(self._default_cfg())
         span_feature = next(f for f in spec.signals.features if f.name == "exact_span")
-        assert span_feature.weight == 20.0
+        assert span_feature.weight == DEFAULT_EXACT_SPAN_WEIGHT
 
     def test_custom_exact_span_weight(self) -> None:
         """Custom exact_span_weight is applied to feature."""
-        spec = entity_symbol_relationship(self._default_cfg(exact_span_weight=15.0))
+        spec = entity_symbol_relationship(
+            self._default_cfg(exact_span_weight=CUSTOM_EXACT_SPAN_WEIGHT)
+        )
         span_feature = next(f for f in spec.signals.features if f.name == "exact_span")
-        assert span_feature.weight == 15.0
+        assert span_feature.weight == CUSTOM_EXACT_SPAN_WEIGHT
 
     def test_overlap_strategy_hard_predicate_count(self) -> None:
         """Overlap strategy with no role filter produces one hard predicate."""
@@ -240,7 +250,7 @@ class TestEntitySymbolRelationshipRanking:
             origin=overrides.get("origin", "test_origin"),
             span_strategy=overrides.get("span_strategy", "overlap"),
             scip_role_filter=overrides.get("scip_role_filter"),
-            exact_span_weight=overrides.get("exact_span_weight", 20.0),
+            exact_span_weight=overrides.get("exact_span_weight", DEFAULT_EXACT_SPAN_WEIGHT),
         )
 
     def test_output_projection_aliases(self) -> None:
@@ -270,7 +280,7 @@ class TestEntitySymbolRelationshipRanking:
         """Ranking has two order-by expressions (score desc, span asc)."""
         spec = entity_symbol_relationship(self._default_cfg())
         assert spec.rank is not None
-        assert len(spec.rank.order_by) == 2
+        assert len(spec.rank.order_by) == TWO_ENTRIES
 
     def test_ranking_order_by_directions(self) -> None:
         """First order is desc (score), second is asc (span start)."""
@@ -309,7 +319,7 @@ class TestEntitySymbolRelationshipWithQualitySpecs:
         assert REL_NAME_SYMBOL.left_on == ()
         assert REL_NAME_SYMBOL.right_on == ()
         # Has role filter -> 2 hard predicates
-        assert len(REL_NAME_SYMBOL.signals.hard) == 2
+        assert len(REL_NAME_SYMBOL.signals.hard) == TWO_ENTRIES
 
     def test_rel_def_symbol_uses_contains(self) -> None:
         """REL_DEF_SYMBOL uses contains strategy and custom weight."""
@@ -319,9 +329,9 @@ class TestEntitySymbolRelationshipWithQualitySpecs:
         assert REL_DEF_SYMBOL.left_view == "cst_defs_norm"
         # Custom span weight 15.0
         span_feature = next(f for f in REL_DEF_SYMBOL.signals.features if f.name == "exact_span")
-        assert span_feature.weight == 15.0
+        assert span_feature.weight == CUSTOM_EXACT_SPAN_WEIGHT
         # Has role filter -> 2 hard predicates
-        assert len(REL_DEF_SYMBOL.signals.hard) == 2
+        assert len(REL_DEF_SYMBOL.signals.hard) == TWO_ENTRIES
 
     def test_rel_import_symbol_structure(self) -> None:
         """REL_IMPORT_SYMBOL has default overlap and role filter."""
@@ -329,7 +339,7 @@ class TestEntitySymbolRelationshipWithQualitySpecs:
 
         assert REL_IMPORT_SYMBOL.name == "rel_import_symbol"
         assert REL_IMPORT_SYMBOL.left_view == "cst_imports_norm"
-        assert len(REL_IMPORT_SYMBOL.signals.hard) == 2
+        assert len(REL_IMPORT_SYMBOL.signals.hard) == TWO_ENTRIES
 
     def test_rel_callsite_symbol_no_role_filter(self) -> None:
         """REL_CALLSITE_SYMBOL has no role filter (only span predicate)."""

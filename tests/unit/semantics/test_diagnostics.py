@@ -6,13 +6,15 @@ from datafusion import SessionContext
 
 from semantics.diagnostics import dataframe_row_count, semantic_quality_issue_batches
 
+SAMPLE_ROW_COUNT = 3
+
 
 def test_dataframe_row_count() -> None:
     """Row counts should reflect DataFrame cardinality."""
     ctx = SessionContext()
     ctx.from_pydict({"value": [1, 2, 3]}, name="sample")
     df = ctx.table("sample")
-    assert dataframe_row_count(df) == 3
+    assert dataframe_row_count(df) == SAMPLE_ROW_COUNT
 
 
 def test_semantic_quality_issue_batches_file_quality() -> None:

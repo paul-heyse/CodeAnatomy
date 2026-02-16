@@ -13,6 +13,9 @@ from semantics.resolver_identity import (
     resolver_identity_tracking,
 )
 
+TWO_DISTINCT_RESOLVERS = 2
+FOUR_DISTINCT_RESOLVERS = 4
+
 # ---------------------------------------------------------------------------
 # ResolverIdentityTracker unit tests
 # ---------------------------------------------------------------------------
@@ -21,7 +24,8 @@ from semantics.resolver_identity import (
 class TestResolverIdentityTracker:
     """Unit tests for the ResolverIdentityTracker dataclass."""
 
-    def test_no_registrations(self) -> None:
+    @staticmethod
+    def test_no_registrations() -> None:
         """Verify empty tracker reports zero distinct resolvers."""
         tracker = ResolverIdentityTracker()
         assert tracker.distinct_resolvers() == 0
@@ -29,7 +33,8 @@ class TestResolverIdentityTracker:
         # assert_identity should not raise when empty.
         tracker.assert_identity()
 
-    def test_single_resolver_same_instance(self) -> None:
+    @staticmethod
+    def test_single_resolver_same_instance() -> None:
         """Verify same resolver instance across multiple subsystems passes."""
         resolver = object()
         tracker = ResolverIdentityTracker(label="test-pipeline")
@@ -41,7 +46,8 @@ class TestResolverIdentityTracker:
         assert tracker.verify_identity() == []
         tracker.assert_identity()
 
-    def test_multiple_distinct_resolvers_detected(self) -> None:
+    @staticmethod
+    def test_multiple_distinct_resolvers_detected() -> None:
         """Verify distinct resolver instances are detected as violations."""
         resolver_a = object()
         resolver_b = object()
@@ -49,14 +55,15 @@ class TestResolverIdentityTracker:
         tracker.record_resolver(resolver_a, label="view_registration")
         tracker.record_resolver(resolver_b, label="scan_override")
 
-        assert tracker.distinct_resolvers() == 2
+        assert tracker.distinct_resolvers() == TWO_DISTINCT_RESOLVERS
         violations = tracker.verify_identity()
         assert len(violations) >= 1
         assert "Resolver identity violation" in violations[0]
         assert "test-pipeline" in violations[0]
         assert "2 distinct" in violations[0]
 
-    def test_assert_identity_raises_on_violation(self) -> None:
+    @staticmethod
+    def test_assert_identity_raises_on_violation() -> None:
         """Verify assert_identity raises RuntimeError on drift."""
         resolver_a = object()
         resolver_b = object()
@@ -67,7 +74,8 @@ class TestResolverIdentityTracker:
         with pytest.raises(RuntimeError, match="Resolver identity violation"):
             tracker.assert_identity()
 
-    def test_violation_message_includes_subsystem_labels(self) -> None:
+    @staticmethod
+    def test_violation_message_includes_subsystem_labels() -> None:
         """Verify violation messages include subsystem label detail."""
         resolver_a = object()
         resolver_b = object()
@@ -80,12 +88,14 @@ class TestResolverIdentityTracker:
         assert "alpha" in full_msg
         assert "beta" in full_msg
 
-    def test_default_label(self) -> None:
+    @staticmethod
+    def test_default_label() -> None:
         """Verify the default label for the tracker is 'pipeline'."""
         tracker = ResolverIdentityTracker()
         assert tracker.label == "pipeline"
 
-    def test_default_subsystem_label(self) -> None:
+    @staticmethod
+    def test_default_subsystem_label() -> None:
         """Verify the default subsystem label is 'unknown'."""
         resolver = object()
         tracker = ResolverIdentityTracker()
@@ -113,7 +123,8 @@ def _run_tracking_with_drift(resolver_a: object, resolver_b: object) -> None:
 class TestResolverIdentityTracking:
     """Tests for the resolver_identity_tracking context manager."""
 
-    def test_context_manager_activates_tracker(self) -> None:
+    @staticmethod
+    def test_context_manager_activates_tracker() -> None:
         """Verify the context manager sets and clears the active tracker."""
         assert get_active_resolver_tracker() is None
 
@@ -123,7 +134,8 @@ class TestResolverIdentityTracking:
 
         assert get_active_resolver_tracker() is None
 
-    def test_strict_mode_passes_on_identity(self) -> None:
+    @staticmethod
+    def test_strict_mode_passes_on_identity() -> None:
         """Verify strict mode exits cleanly when identity is maintained."""
         resolver = object()
         with resolver_identity_tracking(strict=True) as tracker:
@@ -131,14 +143,16 @@ class TestResolverIdentityTracking:
             tracker.record_resolver(resolver, label="b")
         # No exception means success.
 
-    def test_strict_mode_raises_on_violation(self) -> None:
+    @staticmethod
+    def test_strict_mode_raises_on_violation() -> None:
         """Verify strict mode raises on context exit when drift detected."""
         resolver_a = object()
         resolver_b = object()
         with pytest.raises(RuntimeError, match="Resolver identity violation"):
             _run_tracking_with_drift(resolver_a, resolver_b)
 
-    def test_non_strict_mode_does_not_raise(self) -> None:
+    @staticmethod
+    def test_non_strict_mode_does_not_raise() -> None:
         """Verify non-strict mode does not raise even with violations."""
         resolver_a = object()
         resolver_b = object()
@@ -146,9 +160,10 @@ class TestResolverIdentityTracking:
             tracker.record_resolver(resolver_a, label="a")
             tracker.record_resolver(resolver_b, label="b")
         # Non-strict should not raise, even though there are violations.
-        assert tracker.distinct_resolvers() == 2
+        assert tracker.distinct_resolvers() == TWO_DISTINCT_RESOLVERS
 
-    def test_nested_context_restores_previous(self) -> None:
+    @staticmethod
+    def test_nested_context_restores_previous() -> None:
         """Verify nested tracking contexts restore the outer tracker."""
         with resolver_identity_tracking(label="outer") as outer:
             assert get_active_resolver_tracker() is outer
@@ -169,13 +184,15 @@ class TestResolverIdentityTracking:
 class TestRecordResolverIfTracking:
     """Tests for the record_resolver_if_tracking convenience function."""
 
-    def test_no_op_when_no_tracker(self) -> None:
+    @staticmethod
+    def test_no_op_when_no_tracker() -> None:
         """Verify no error when calling without an active tracker."""
         assert get_active_resolver_tracker() is None
         # Should be a silent no-op.
         record_resolver_if_tracking(object(), label="orphan")
 
-    def test_records_when_tracker_active(self) -> None:
+    @staticmethod
+    def test_records_when_tracker_active() -> None:
         """Verify the resolver is recorded when a tracker is active."""
         resolver = object()
         with resolver_identity_tracking() as tracker:
@@ -191,7 +208,8 @@ class TestRecordResolverIfTracking:
 class TestThreadSafety:
     """Tests for concurrent resolver recording."""
 
-    def test_concurrent_same_resolver(self) -> None:
+    @staticmethod
+    def test_concurrent_same_resolver() -> None:
         """Verify multiple threads recording the same resolver instance."""
         resolver = object()
         tracker = ResolverIdentityTracker(label="threaded")
@@ -216,7 +234,8 @@ class TestThreadSafety:
         assert tracker.distinct_resolvers() == 1
         tracker.assert_identity()
 
-    def test_concurrent_distinct_resolvers(self) -> None:
+    @staticmethod
+    def test_concurrent_distinct_resolvers() -> None:
         """Verify distinct resolvers from different threads are detected."""
         tracker = ResolverIdentityTracker(label="threaded-drift")
         barrier = threading.Barrier(4)
@@ -239,7 +258,7 @@ class TestThreadSafety:
             t.join(timeout=10)
 
         assert not errors, f"Thread errors: {errors}"
-        assert tracker.distinct_resolvers() == 4
+        assert tracker.distinct_resolvers() == FOUR_DISTINCT_RESOLVERS
         violations = tracker.verify_identity()
         assert len(violations) >= 1
         assert "4 distinct" in violations[0]

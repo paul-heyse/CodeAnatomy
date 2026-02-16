@@ -6,6 +6,7 @@ from tools.cq.search.tree_sitter.core.language_registry import load_language_reg
 
 
 def test_load_language_registry_python_returns_node_and_field_sets() -> None:
+    """Test load language registry python returns node and field sets."""
     registry = load_language_registry("python")
     assert registry is not None
     assert registry.language == "python"
@@ -14,6 +15,7 @@ def test_load_language_registry_python_returns_node_and_field_sets() -> None:
 
 
 def test_load_language_registry_rust_returns_node_and_field_sets() -> None:
+    """Test load language registry rust returns node and field sets."""
     registry = load_language_registry("rust")
     assert registry is not None
     assert registry.language == "rust"

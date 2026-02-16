@@ -62,6 +62,7 @@ def _result_with_diagnostics() -> CqResult:
 
 
 def test_compact_summary_offloads_diagnostic_payloads() -> None:
+    """Test compact summary offloads diagnostic payloads."""
     result = _result_with_diagnostics()
     compact, offloaded = compact_summary_for_rendering(result.summary)
     offloaded_keys = {key for key, _ in offloaded}
@@ -73,6 +74,7 @@ def test_compact_summary_offloads_diagnostic_payloads() -> None:
 
 
 def test_render_markdown_places_insight_card_first() -> None:
+    """Test render markdown places insight card first."""
     output = render_markdown(_result_with_diagnostics())
     insight_idx = output.find("## Insight Card")
     overview_idx = output.find("## Code Overview")
@@ -82,11 +84,13 @@ def test_render_markdown_places_insight_card_first() -> None:
 
 
 def test_render_markdown_hides_raw_diagnostic_payloads() -> None:
+    """Test render markdown hides raw diagnostic payloads."""
     output = render_markdown(_result_with_diagnostics())
     assert "Diagnostic Details" not in output
     assert '"attempted": 2' not in output
 
 
 def test_render_markdown_shows_artifact_refs_from_insight() -> None:
+    """Test render markdown shows artifact refs from insight."""
     output = render_markdown(_result_with_diagnostics())
     assert ".cq/artifacts/search_diagnostics.json" in output

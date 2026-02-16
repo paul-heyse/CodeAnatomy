@@ -6,6 +6,7 @@ from tools.cq.search.tree_sitter.contracts.query_models import load_pack_rules
 
 
 def test_load_pack_rules_reads_required_metadata_contracts() -> None:
+    """Test load pack rules reads required metadata contracts."""
     rust_rules = load_pack_rules("rust")
     python_rules = load_pack_rules("python")
 

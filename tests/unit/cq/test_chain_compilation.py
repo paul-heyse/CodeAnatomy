@@ -6,6 +6,8 @@ import pytest
 from tools.cq.run.chain import compile_chain_segments
 from tools.cq.run.spec import CallsStep, QStep, RunPlan
 
+CHAIN_STEP_COUNT = 2
+
 
 def test_chain_compiles_steps() -> None:
     """Ensure chain segments compile into a RunPlan."""
@@ -16,7 +18,7 @@ def test_chain_compiles_steps() -> None:
         ],
     )
     assert isinstance(plan, RunPlan)
-    assert len(plan.steps) == 2
+    assert len(plan.steps) == CHAIN_STEP_COUNT
     assert isinstance(plan.steps[0], QStep)
     assert isinstance(plan.steps[1], CallsStep)
 

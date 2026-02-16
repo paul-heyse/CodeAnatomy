@@ -12,6 +12,7 @@ from tools.cq.search.tree_sitter.contracts.query_models import QueryPackRulesV1,
 def test_load_pack_rules_decodes_yaml_with_msgspec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Test load pack rules decodes yaml with msgspec."""
     contracts_path = tmp_path / "contracts.yaml"
     contracts_path.write_text(
         "\n".join(
@@ -47,6 +48,7 @@ def test_load_pack_rules_falls_back_to_defaults_on_invalid_yaml(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test load pack rules falls back to defaults on invalid yaml."""
     contracts_path = tmp_path / "contracts.yaml"
     contracts_path.write_text("rules: [", encoding="utf-8")
     monkeypatch.setattr(

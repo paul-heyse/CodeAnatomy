@@ -6,6 +6,7 @@ from tools.cq.search.rust.evidence import build_rust_module_graph
 
 
 def test_build_rust_module_graph_uses_structured_rows() -> None:
+    """Test build rust module graph uses structured rows."""
     payload = {
         "rust_module_rows": [
             {"module_id": "module:corelib", "module_name": "corelib"},

@@ -13,12 +13,15 @@ from tests.e2e.cq._support.goldens import assert_json_snapshot_data, load_golden
 from tests.e2e.cq._support.projections import result_snapshot_projection
 from tests.e2e.cq._support.specs import assert_result_matches_spec
 
+EXPECTED_RUN_STEPS = 2
+
 
 @pytest.mark.e2e
 def test_run_inline_q_and_search_steps_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test run inline q and search steps golden."""
     result = run_cq_result(
         [
             "run",
@@ -42,7 +45,7 @@ def test_run_inline_q_and_search_steps_golden(
     assert_result_matches_spec(result, spec)
     steps = result.summary.get("steps")
     assert isinstance(steps, list)
-    assert len(steps) == 2
+    assert len(steps) == EXPECTED_RUN_STEPS
 
     assert_json_snapshot_data(
         "run_q_search_python.json",
@@ -56,6 +59,7 @@ def test_run_inline_neighborhood_step_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test run inline neighborhood step golden."""
     result = run_cq_result(
         [
             "run",
@@ -88,6 +92,7 @@ def test_run_inline_neighborhood_step_golden(
 def test_run_top_level_semantic_telemetry_matches_step_summaries(
     run_cq_result: Callable[..., CqResult],
 ) -> None:
+    """Test run top level semantic telemetry matches step summaries."""
     result = run_cq_result(
         [
             "run",

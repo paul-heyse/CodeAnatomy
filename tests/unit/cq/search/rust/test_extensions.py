@@ -5,6 +5,8 @@ from __future__ import annotations
 from tools.cq.search.rust.contracts import RustMacroExpansionRequestV1
 from tools.cq.search.rust.extensions import build_module_graph, expand_macro, expand_macros
 
+BATCH_EXPANSION_RESULT_COUNT = 2
+
 
 class _FakeClient:
     """Fake LSP client for macro expansion tests."""
@@ -60,7 +62,7 @@ class TestExpandMacros:
             RustMacroExpansionRequestV1(file_path="src/lib.rs", line=2, col=0, macro_call_id="id2"),
         )
         results = expand_macros(client=_FakeClient(), requests=requests)
-        assert len(results) == 2
+        assert len(results) == BATCH_EXPANSION_RESULT_COUNT
         assert all(r.applied for r in results)
 
 

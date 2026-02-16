@@ -11,6 +11,9 @@ from tools.cq.search._shared.core import (
     search_sync_with_timeout,
 )
 
+SUM_RESULT = 5
+PRODUCT_WITH_OFFSET = 22
+
 
 class TestSyncTimeout:
     """Test synchronous timeout wrapper."""
@@ -41,7 +44,7 @@ class TestSyncTimeout:
             return a + b
 
         result = search_sync_with_timeout(add, timeout=1.0, args=(2, 3))
-        assert result == 5
+        assert result == SUM_RESULT
 
     def test_with_kwargs(self) -> None:
         """Test timeout wrapper passes kwargs correctly."""
@@ -68,7 +71,7 @@ class TestSyncTimeout:
             args=(3, 4),
             kwargs={"offset": 10},
         )
-        assert result == 22
+        assert result == PRODUCT_WITH_OFFSET
 
     def test_preserves_exceptions(self) -> None:
         """Test timeout wrapper preserves function exceptions."""

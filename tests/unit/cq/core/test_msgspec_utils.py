@@ -10,6 +10,8 @@ from tools.cq.core.msgspec_utils import (
     union_schema_summary,
 )
 
+UNION_VARIANT_COUNT = 2
+
 
 class SampleStruct(msgspec.Struct, frozen=True):
     """Test fixture struct with multiple fields."""
@@ -49,7 +51,7 @@ class TestUnionSchemaSummary:
     def test_summary_variant_count(self) -> None:
         """Verify variant count matches number of types."""
         summary = union_schema_summary((SampleStruct, OtherStruct))
-        assert summary["variant_count"] == 2
+        assert summary["variant_count"] == UNION_VARIANT_COUNT
 
     def test_summary_has_variants_key(self) -> None:
         """Verify summary includes variants list."""

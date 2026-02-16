@@ -16,6 +16,8 @@ from semantics.quality import (
 )
 from semantics.schema import SemanticSchemaError
 
+EXPECTED_INNER_JOIN_MATCH_COUNT = 2
+
 
 class TestResolveJoinKeysStatic:
     """Tests for _resolve_join_keys static method via TableInfo objects."""
@@ -300,7 +302,7 @@ class TestJoinKeyInferenceEndToEnd:
         )
         result = df.collect()[0]
         # Inner join on file_id: f1->sym_1, f2->sym_2 (f3 has no left match)
-        assert len(result["entity_id"].to_pylist()) == 2
+        assert len(result["entity_id"].to_pylist()) == EXPECTED_INNER_JOIN_MATCH_COUNT
 
 
 class TestIRInferredKeysParityWithCompiler:

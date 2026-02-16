@@ -14,16 +14,19 @@ from tools.cq.query.planner import AstGrepRule
 
 
 def test_extract_metavar_names_variants() -> None:
+    """Test extract metavar names variants."""
     names = extract_metavar_names("foo($A, $$OP, $$$ARGS, $_IGNORED)")
     assert set(names) == {"A", "OP", "ARGS"}
 
 
 def test_extract_variadic_metavar_names() -> None:
+    """Test extract variadic metavar names."""
     names = extract_variadic_metavar_names("foo($A, $$$ARGS, $$$MORE)")
     assert names == ("ARGS", "MORE")
 
 
 def test_extract_rule_metavars_includes_composite_and_nth() -> None:
+    """Test extract rule metavars includes composite and nth."""
     rule = AstGrepRule(
         pattern="foo($A, $$$ARGS)",
         inside="class $C",
@@ -36,6 +39,7 @@ def test_extract_rule_metavars_includes_composite_and_nth() -> None:
 
 
 def test_partition_metavar_filters_pushdown_and_residual() -> None:
+    """Test partition metavar filters pushdown and residual."""
     filters = (
         MetaVarFilter(name="A", pattern="^foo$", negate=False),
         MetaVarFilter(name="A", pattern="^bar$", negate=False),

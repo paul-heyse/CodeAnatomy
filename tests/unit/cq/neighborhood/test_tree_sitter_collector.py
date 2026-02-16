@@ -21,6 +21,7 @@ def test_collector_uses_infrastructure_parse_streaming_source() -> None:
     reason="tree_sitter_python not available",
 )
 def test_collect_tree_sitter_neighborhood_python(tmp_path: Path) -> None:
+    """Test collect tree sitter neighborhood python."""
     target_file = tmp_path / "sample.py"
     target_file.write_text(
         """
@@ -56,6 +57,7 @@ def target(value):
 
 
 def test_collect_tree_sitter_neighborhood_missing_file(tmp_path: Path) -> None:
+    """Test collect tree sitter neighborhood missing file."""
     result = collect_tree_sitter_neighborhood(
         TreeSitterNeighborhoodCollectRequest(
             root=str(tmp_path),

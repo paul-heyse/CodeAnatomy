@@ -10,6 +10,7 @@ from tools.cq.search.pipeline.smart_search import EnrichedMatch
 
 
 def test_resolve_objects_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test resolve objects delegates."""
     monkeypatch.setattr(
         resolve_module,
         "build_object_resolved_view",

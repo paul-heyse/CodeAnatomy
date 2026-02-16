@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import msgspec
@@ -20,6 +21,15 @@ if TYPE_CHECKING:
 
     from tools.cq.search.tree_sitter.contracts.core_models import ObjectEvidenceRowV1
     from tools.cq.search.tree_sitter.core.runtime import QueryExecutionCallbacksV1
+
+
+@dataclass(frozen=True, slots=True)
+class QueryPackExecutionContextV1:
+    """Shared runtime options for executing a query pack."""
+
+    windows: tuple[QueryWindowV1, ...]
+    settings: QueryExecutionSettingsV1
+    callbacks: QueryExecutionCallbacksV1 | None = None
 
 
 def run_bounded_query_captures(
@@ -78,9 +88,7 @@ def execute_pack_rows(
     query_name: str,
     root: Node,
     source_bytes: bytes,
-    windows: tuple[QueryWindowV1, ...],
-    settings: QueryExecutionSettingsV1,
-    callbacks: QueryExecutionCallbacksV1 | None = None,
+    context: QueryPackExecutionContextV1,
 ) -> tuple[
     dict[str, list[Node]],
     tuple[ObjectEvidenceRowV1, ...],
@@ -88,16 +96,18 @@ def execute_pack_rows(
     QueryExecutionTelemetryV1,
     QueryExecutionTelemetryV1,
 ]:
-    """Execute captures + matches and project row/hit payloads for one query pack."""
+    """Execute captures + matches and project row/hit payloads for one query pack.
+
+    Returns:
+        tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], tuple[TreeSitterQueryHitV1, ...], QueryExecutionTelemetryV1, QueryExecutionTelemetryV1]: Function return value.
+    """
     captures, matches, rows, hits, capture_telemetry, match_telemetry = (
         execute_pack_rows_with_matches(
             query=query,
             query_name=query_name,
             root=root,
             source_bytes=source_bytes,
-            windows=windows,
-            settings=settings,
-            callbacks=callbacks,
+            context=context,
         )
     )
     _ = matches
@@ -110,9 +120,7 @@ def execute_pack_rows_with_matches(
     query_name: str,
     root: Node,
     source_bytes: bytes,
-    windows: tuple[QueryWindowV1, ...],
-    settings: QueryExecutionSettingsV1,
-    callbacks: QueryExecutionCallbacksV1 | None = None,
+    context: QueryPackExecutionContextV1,
 ) -> tuple[
     dict[str, list[Node]],
     list[tuple[int, dict[str, list[Node]]]],
@@ -121,20 +129,24 @@ def execute_pack_rows_with_matches(
     QueryExecutionTelemetryV1,
     QueryExecutionTelemetryV1,
 ]:
-    """Execute captures + matches and include raw match tuples."""
+    """Execute captures + matches and include raw match tuples.
+
+    Returns:
+        tuple[dict[str, list[Node]], list[tuple[int, dict[str, list[Node]]]], tuple[ObjectEvidenceRowV1, ...], tuple[TreeSitterQueryHitV1, ...], QueryExecutionTelemetryV1, QueryExecutionTelemetryV1]: Function return value.
+    """
     captures, capture_telemetry = run_bounded_query_captures(
         query,
         root,
-        windows=windows,
-        settings=settings,
-        callbacks=callbacks,
+        windows=context.windows,
+        settings=context.settings,
+        callbacks=context.callbacks,
     )
     matches, match_telemetry = run_bounded_query_matches(
         query,
         root,
-        windows=windows,
-        settings=_match_settings(settings),
-        callbacks=callbacks,
+        windows=context.windows,
+        settings=_match_settings(context.settings),
+        callbacks=context.callbacks,
     )
     rows, hits = build_match_rows_with_query_hits(
         query=query,
@@ -145,4 +157,4 @@ def execute_pack_rows_with_matches(
     return captures, matches, rows, hits, capture_telemetry, match_telemetry
 
 
-__all__ = ["execute_pack_rows", "execute_pack_rows_with_matches"]
+__all__ = ["QueryPackExecutionContextV1", "execute_pack_rows", "execute_pack_rows_with_matches"]

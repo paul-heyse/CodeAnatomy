@@ -40,6 +40,7 @@ def _session_ctx_for_metrics() -> SessionContext:
 def test_collect_runtime_execution_metrics_prefers_internal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test collect runtime execution metrics prefers internal."""
     internal = _MetricsModule(
         "datafusion._internal",
         payload={"summary": {"memory_reserved_bytes": 42}, "rows": []},
@@ -66,6 +67,7 @@ def test_collect_runtime_execution_metrics_prefers_internal(
 def test_collect_runtime_execution_metrics_falls_back_to_datafusion_ext(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test collect runtime execution metrics falls back to datafusion ext."""
     ext = _MetricsModule(
         "datafusion_ext",
         payload={"summary": {"metadata_cache_entries": 11}, "rows": []},
@@ -91,6 +93,7 @@ def test_collect_runtime_execution_metrics_falls_back_to_datafusion_ext(
 def test_collect_runtime_execution_metrics_returns_error_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test collect runtime execution metrics returns error payload."""
     internal = _MetricsModule("datafusion._internal", payload=None)
     ext = _MetricsModule("datafusion_ext", payload=None)
 

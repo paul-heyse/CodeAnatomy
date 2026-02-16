@@ -113,6 +113,43 @@ def _successful_spec(
     }
 
 
+def _build_materialization_spec_json(
+    tmp_path: Path,
+    *,
+    view_prefix: str,
+    output_prefix: str,
+) -> tuple[Any, str]:
+    engine = pytest.importorskip("codeanatomy_engine")
+    pyarrow = pytest.importorskip("pyarrow")
+    write_deltalake = getattr(pytest.importorskip("deltalake"), "write_deltalake", None)
+    if write_deltalake is None:
+        pytest.skip("deltalake.write_deltalake is unavailable in this environment")
+    input_location = tmp_path / "input_delta"
+    output_location = tmp_path / "output_delta"
+    write_deltalake(
+        str(input_location),
+        pyarrow.table({"id": pyarrow.array([1, 2, 3], type=pyarrow.int64())}),
+        mode="overwrite",
+    )
+    token = uuid4().hex[:10]
+    spec_json = json.dumps(
+        _successful_spec(
+            str(input_location),
+            str(output_location),
+            view_name=f"{view_prefix}_{token}",
+            output_table=f"{output_prefix}_{token}",
+        )
+    )
+    return engine, spec_json
+
+
+def _run_materialization(engine: Any, spec_json: str) -> dict[str, Any]:
+    factory = engine.SessionFactory.from_class("small")
+    compiled = engine.SemanticPlanCompiler().compile(spec_json)
+    materializer = engine.CpgMaterializer()
+    return materializer.execute(factory, compiled).to_dict()
+
+
 @pytest.mark.integration
 def test_compile_metadata_json_returns_expected_contract_payload(tmp_path: Path) -> None:
     """Compile metadata JSON includes deterministic scheduling contract fields."""
@@ -219,40 +256,13 @@ def test_run_result_task_schedule_returns_schedule_payload(tmp_path: Path) -> No
 @pytest.mark.integration
 def test_rust_engine_identity_surfaces_stable_across_runs(tmp_path: Path) -> None:
     """Repeated Python materialization preserves envelope/planning/provider identity surfaces."""
-    engine = pytest.importorskip("codeanatomy_engine")
-    pyarrow = pytest.importorskip("pyarrow")
-    write_deltalake = getattr(pytest.importorskip("deltalake"), "write_deltalake", None)
-    if write_deltalake is None:
-        pytest.skip("deltalake.write_deltalake is unavailable in this environment")
-
-    input_location = tmp_path / "input_delta"
-    output_location = tmp_path / "output_delta"
-    write_deltalake(
-        str(input_location),
-        pyarrow.table({"id": pyarrow.array([1, 2, 3], type=pyarrow.int64())}),
-        mode="overwrite",
+    engine, spec_json = _build_materialization_spec_json(
+        tmp_path,
+        view_prefix="v1",
+        output_prefix="out_delta",
     )
-
-    token = uuid4().hex[:10]
-    view_name = f"v1_{token}"
-    output_table = f"out_delta_{token}"
-    spec_json = json.dumps(
-        _successful_spec(
-            str(input_location),
-            str(output_location),
-            view_name=view_name,
-            output_table=output_table,
-        )
-    )
-
-    def _run_once() -> dict[str, Any]:
-        factory = engine.SessionFactory.from_class("small")
-        compiled = engine.SemanticPlanCompiler().compile(spec_json)
-        materializer = engine.CpgMaterializer()
-        return materializer.execute(factory, compiled).to_dict()
-
-    first = _run_once()
-    second = _run_once()
+    first = _run_materialization(engine, spec_json)
+    second = _run_materialization(engine, spec_json)
     runs = [first, second]
     assert runs[0]["envelope_hash"] == runs[1]["envelope_hash"]
 

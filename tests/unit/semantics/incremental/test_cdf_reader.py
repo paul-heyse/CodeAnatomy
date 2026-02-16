@@ -13,6 +13,9 @@ from semantics.incremental.cdf_cursors import CdfCursorStore
 from semantics.incremental.cdf_reader import CdfReadOptions, read_cdf_changes
 from storage.deltalake import DeltaCdfOptions
 
+LATEST_DELTA_VERSION = 5
+EXPECTED_STARTING_VERSION = 3
+
 
 def test_read_cdf_updates_cursor(tmp_path: Path) -> None:
     """read_cdf_changes updates cursor after a successful read."""
@@ -38,7 +41,7 @@ def test_read_cdf_updates_cursor(tmp_path: Path) -> None:
         log_storage_options: object | None = None,
     ) -> int:
         _ = storage_options, log_storage_options
-        return 5
+        return LATEST_DELTA_VERSION
 
     def fake_read_delta_cdf(
         _path: str,
@@ -73,7 +76,7 @@ def test_read_cdf_updates_cursor(tmp_path: Path) -> None:
     assert result is not None
     cursor = store.load_cursor(dataset_name)
     assert cursor is not None
-    assert cursor.last_version == 5
+    assert cursor.last_version == LATEST_DELTA_VERSION
     assert cursor.last_timestamp is not None
 
 
@@ -102,7 +105,7 @@ def test_read_cdf_uses_cursor_start_version(tmp_path: Path) -> None:
         log_storage_options: object | None = None,
     ) -> int:
         _ = storage_options, log_storage_options
-        return 5
+        return LATEST_DELTA_VERSION
 
     def fake_read_delta_cdf(
         _path: str,
@@ -135,7 +138,7 @@ def test_read_cdf_uses_cursor_start_version(tmp_path: Path) -> None:
     assert result is not None
     cdf_options = captured.get("cdf_options")
     assert cdf_options is not None
-    assert cdf_options.starting_version == 3
+    assert cdf_options.starting_version == EXPECTED_STARTING_VERSION
     cursor = store.load_cursor(dataset_name)
     assert cursor is not None
-    assert cursor.last_version == 5
+    assert cursor.last_version == LATEST_DELTA_VERSION

@@ -125,7 +125,7 @@ from tools.cq.search.python.extractors import (
 )
 from tools.cq.search.python.extractors import enrich_python_context_by_byte_range
 from tools.cq.search.rg.collector import RgCollector
-from tools.cq.search.rg.runner import build_rg_command, run_rg_count, run_rg_json
+from tools.cq.search.rg.runner import RgCountRequest, build_rg_command, run_rg_count, run_rg_json
 from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
 from tools.cq.search.semantic.diagnostics import (
     build_cross_language_diagnostics,
@@ -521,50 +521,56 @@ def _build_candidate_searcher(config: SearchConfig) -> tuple[list[str], str]:
         pattern = config.query
 
     command = build_rg_command(
-        pattern=pattern,
-        mode=config.mode,
-        lang_types=tuple(ripgrep_types_for_scope(config.lang_scope)),
-        include_globs=config.include_globs or [],
-        exclude_globs=config.exclude_globs or [],
-        limits=config.limits,
+        RgRunRequest(
+            root=config.root,
+            pattern=pattern,
+            mode=config.mode,
+            lang_types=tuple(ripgrep_types_for_scope(config.lang_scope)),
+            include_globs=config.include_globs or [],
+            exclude_globs=config.exclude_globs or [],
+            limits=config.limits,
+        )
     )
     return command, pattern
 
 
 def _identifier_pattern(query: str) -> str:
-    """Escape identifier text; ripgrep word boundaries are applied via ``-w``."""
+    """Escape identifier text; ripgrep word boundaries are applied via ``-w``.
+
+    Returns:
+        str: Function return value.
+    """
     return re.escape(query)
 
 
-def _adaptive_limits_from_count(  # noqa: PLR0913
-    *,
-    root: Path,
-    pattern: str,
-    mode: QueryMode,
-    lang: QueryLanguage,
-    include_globs: list[str] | None,
-    exclude_globs: list[str] | None,
-    limits: SearchLimits,
-) -> SearchLimits:
-    """Choose candidate limits from a quick rg count preflight."""
+def _adaptive_limits_from_count(request: RgCountRequest, *, lang: QueryLanguage) -> SearchLimits:
+    """Choose candidate limits from a quick rg count preflight.
+
+    Returns:
+        SearchLimits: Function return value.
+    """
     counts = run_rg_count(
-        root=root,
-        pattern=pattern,
-        mode=mode,
-        lang_types=(ripgrep_type_for_language(lang),),
-        include_globs=include_globs or [],
-        exclude_globs=exclude_globs or [],
-        limits=limits,
-    )
-    if not counts:
-        return limits
-    estimated_total = sum(max(0, value) for value in counts.values())
-    if estimated_total > limits.max_total_matches * 10:
-        return msgspec.structs.replace(
-            limits,
-            max_matches_per_file=min(limits.max_matches_per_file, 100),
+        RgCountRequest(
+            root=request.root,
+            pattern=request.pattern,
+            mode=request.mode,
+            lang_types=(ripgrep_type_for_language(lang),),
+            include_globs=request.include_globs,
+            exclude_globs=request.exclude_globs,
+            paths=request.paths,
+            limits=request.limits,
         )
-    return limits
+    )
+    active_limits = request.limits or INTERACTIVE
+    if not counts:
+        return active_limits
+    estimated_total = sum(max(0, value) for value in counts.values())
+    if estimated_total > active_limits.max_total_matches * 10:
+        return msgspec.structs.replace(
+            active_limits,
+            max_matches_per_file=min(active_limits.max_matches_per_file, 100),
+        )
+    return active_limits
 
 
 def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchStats:
@@ -1805,13 +1811,16 @@ def _run_candidate_phase(
     exclude_globs = list(ctx.exclude_globs or [])
     exclude_globs.extend(language_extension_exclude_globs(lang))
     effective_limits = _adaptive_limits_from_count(
-        root=ctx.root,
-        pattern=pattern,
-        mode=mode,
+        RgCountRequest(
+            root=ctx.root,
+            pattern=pattern,
+            mode=mode,
+            lang_types=(ripgrep_type_for_language(lang),),
+            include_globs=tuple(include_globs or ()),
+            exclude_globs=tuple(exclude_globs),
+            limits=ctx.limits,
+        ),
         lang=lang,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        limits=ctx.limits,
     )
     raw_matches, stats = collect_candidates(
         CandidateCollectionRequest(
@@ -3860,7 +3869,11 @@ def smart_search(
 
 
 def assemble_result(assembly: SearchResultAssembly) -> CqResult:
-    """Assemble search output from precomputed partition results."""
+    """Assemble search output from precomputed partition results.
+
+    Returns:
+        CqResult: Function return value.
+    """
     return SearchPipeline(assembly.context).assemble(
         cast("list[_LanguageSearchResult]", assembly.partition_results),
         _assemble_smart_search_result,
@@ -3868,7 +3881,11 @@ def assemble_result(assembly: SearchResultAssembly) -> CqResult:
 
 
 def run_smart_search_pipeline(context: SmartSearchContext) -> CqResult:
-    """Run partition and assembly phases for an existing search context."""
+    """Run partition and assembly phases for an existing search context.
+
+    Returns:
+        CqResult: Function return value.
+    """
     partition_results = SearchPipeline(context).run_partitions(_run_language_partitions)
     return SearchPipeline(context).assemble(partition_results, _assemble_smart_search_result)
 

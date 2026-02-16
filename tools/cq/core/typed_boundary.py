@@ -11,10 +11,6 @@ class BoundaryDecodeError(RuntimeError):
     """Raised when payload conversion fails at CQ boundaries."""
 
 
-def _raise_boundary_error(exc: Exception) -> BoundaryDecodeError:
-    return BoundaryDecodeError(str(exc))
-
-
 def convert_strict[T](
     payload: object,
     *,
@@ -40,7 +36,7 @@ def convert_strict[T](
             ),
         )
     except (msgspec.ValidationError, msgspec.DecodeError, TypeError, ValueError) as exc:
-        raise _raise_boundary_error(exc) from exc
+        raise BoundaryDecodeError(str(exc)) from exc
 
 
 def convert_lax[T](
@@ -68,7 +64,7 @@ def convert_lax[T](
             ),
         )
     except (msgspec.ValidationError, msgspec.DecodeError, TypeError, ValueError) as exc:
-        raise _raise_boundary_error(exc) from exc
+        raise BoundaryDecodeError(str(exc)) from exc
 
 
 def decode_json_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T:
@@ -84,7 +80,7 @@ def decode_json_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T
         raw = payload.encode("utf-8") if isinstance(payload, str) else payload
         return cast("T", msgspec.json.decode(raw, type=type_, strict=True))
     except (msgspec.ValidationError, msgspec.DecodeError, TypeError, ValueError) as exc:
-        raise _raise_boundary_error(exc) from exc
+        raise BoundaryDecodeError(str(exc)) from exc
 
 
 def decode_toml_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T:
@@ -100,7 +96,7 @@ def decode_toml_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T
         raw = payload.encode("utf-8") if isinstance(payload, str) else payload
         return cast("T", msgspec.toml.decode(raw, type=type_, strict=True))
     except (msgspec.ValidationError, msgspec.DecodeError, TypeError, ValueError) as exc:
-        raise _raise_boundary_error(exc) from exc
+        raise BoundaryDecodeError(str(exc)) from exc
 
 
 def decode_yaml_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T:
@@ -116,7 +112,7 @@ def decode_yaml_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T
         raw = payload.encode("utf-8") if isinstance(payload, str) else payload
         return cast("T", msgspec.yaml.decode(raw, type=type_, strict=True))
     except (msgspec.ValidationError, msgspec.DecodeError, TypeError, ValueError) as exc:
-        raise _raise_boundary_error(exc) from exc
+        raise BoundaryDecodeError(str(exc)) from exc
 
 
 __all__ = [

@@ -18,6 +18,7 @@ def test_q_python_resolve_entities_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test q python resolve entities golden."""
     result = run_cq_result(
         [
             "q",
@@ -50,6 +51,7 @@ def test_q_rust_compile_target_golden(
     run_cq_result: Callable[..., CqResult],
     update_golden: bool,
 ) -> None:
+    """Test q rust compile target golden."""
     result = run_cq_result(
         [
             "q",
@@ -83,6 +85,7 @@ def test_q_rust_compile_target_golden(
 def test_q_pattern_query_excludes_front_door_insight(
     run_cq_result: Callable[..., CqResult],
 ) -> None:
+    """Test q pattern query excludes front door insight."""
     result = run_cq_result(
         [
             "q",
@@ -100,6 +103,7 @@ def test_q_pattern_query_excludes_front_door_insight(
 def test_q_top_level_any_composite_executes(
     run_cq_result: Callable[..., CqResult],
 ) -> None:
+    """Test q top level any composite executes."""
     result = run_cq_result(
         [
             "q",

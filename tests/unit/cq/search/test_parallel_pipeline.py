@@ -1,3 +1,5 @@
+"""Tests for test_parallel_pipeline."""
+
 from __future__ import annotations
 
 import time
@@ -10,6 +12,7 @@ from tools.cq.core.runtime.worker_scheduler import close_worker_scheduler
 def test_execute_by_language_scope_parallel_preserves_language_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Keep the deterministic language iteration order even when executed in parallel."""
     monkeypatch.setenv("CQ_RUNTIME_QUERY_PARTITION_WORKERS", "2")
     close_worker_scheduler()
 

@@ -13,6 +13,8 @@ from extract.schema_derivation import (
     extraction_schema_to_arrow,
     validate_extraction_schema,
 )
+
+SCHEMA_VERSION_TWO = 2
 from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import FieldBundle
@@ -164,7 +166,7 @@ class TestExtractionSchemaBuilder:
             .build()
         )
         assert schema.name == "test_dataset"
-        assert schema.version == 2
+        assert schema.version == SCHEMA_VERSION_TWO
         assert len(schema.fields) > 0
 
 
@@ -231,7 +233,7 @@ class TestExtractionSchemaTemplates:
     def test_build_template_with_version(self) -> None:
         """Test building template with specific version."""
         schema = build_schema_from_template("ast", "py_ast_v2", version=2)
-        assert schema.version == 2
+        assert schema.version == SCHEMA_VERSION_TWO
 
     def test_build_unknown_template_raises(self) -> None:
         """Test that unknown template raises KeyError."""
@@ -260,7 +262,7 @@ class TestDerivationOptions:
             include_evidence_metadata=True,
             span_style="line_col",
         )
-        assert options.version == 2
+        assert options.version == SCHEMA_VERSION_TWO
         assert options.include_file_identity is False
         assert options.include_evidence_metadata is True
         assert options.span_style == "line_col"

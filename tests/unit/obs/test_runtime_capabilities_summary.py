@@ -9,6 +9,13 @@ from obs.runtime_capabilities_summary import (
     summarize_runtime_execution_metrics,
 )
 
+PRIMARY_EVENT_TIME_MS = 42
+MEMORY_RESERVED_BYTES = 2048
+METADATA_CACHE_ENTRIES = 12
+METADATA_CACHE_HITS = 21
+LIST_FILES_CACHE_ENTRIES = 5
+STATISTICS_CACHE_ENTRIES = 9
+
 
 def test_collect_runtime_capability_events_prefers_primary_runtime_event() -> None:
     """Use runtime capability events when present, ignoring fallback sources."""
@@ -29,7 +36,7 @@ def test_collect_runtime_capability_events_prefers_primary_runtime_event() -> No
     ]
     events = collect_runtime_capability_events(logs)
     assert len(events) == 1
-    assert events[0].event_time_unix_ms == 42
+    assert events[0].event_time_unix_ms == PRIMARY_EVENT_TIME_MS
     assert events[0].delta_compatible is True
 
 
@@ -72,11 +79,11 @@ def test_summarize_runtime_execution_metrics_normalizes_values() -> None:
         }
     )
     assert summary.rows == 1
-    assert summary.memory_reserved_bytes == 2048
-    assert summary.metadata_cache_entries == 12
-    assert summary.metadata_cache_hits == 21
-    assert summary.list_files_cache_entries == 5
-    assert summary.statistics_cache_entries == 9
+    assert summary.memory_reserved_bytes == MEMORY_RESERVED_BYTES
+    assert summary.metadata_cache_entries == METADATA_CACHE_ENTRIES
+    assert summary.metadata_cache_hits == METADATA_CACHE_HITS
+    assert summary.list_files_cache_entries == LIST_FILES_CACHE_ENTRIES
+    assert summary.statistics_cache_entries == STATISTICS_CACHE_ENTRIES
 
 
 def test_latest_runtime_capability_event_returns_none_on_empty() -> None:

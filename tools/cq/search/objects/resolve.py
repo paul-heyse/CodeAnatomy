@@ -680,7 +680,11 @@ def build_occurrence_file_counts(occurrences: list[SearchOccurrenceV1]) -> list[
 
 
 def resolve_objects(matches: Sequence[object], *, query: str) -> ObjectResolutionRuntime:
-    """Compatibility wrapper for object resolution entrypoint."""
+    """Compatibility wrapper for object resolution entrypoint.
+
+    Returns:
+        ObjectResolutionRuntime: Function return value.
+    """
     return build_object_resolved_view(cast("list[EnrichedMatch]", list(matches)), query=query)
 
 

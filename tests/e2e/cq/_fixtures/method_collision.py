@@ -29,7 +29,8 @@ class Alpha:
 class Beta:
     """Class that defines the collide method."""
 
-    def collide(self) -> int:
+    @staticmethod
+    def collide() -> int:
         """Return a constant value.
 
         Returns:

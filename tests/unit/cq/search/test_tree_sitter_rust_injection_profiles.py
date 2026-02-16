@@ -8,6 +8,7 @@ from tools.cq.search.tree_sitter.rust_lane.injection_config import (
 
 
 def test_resolve_sql_profile() -> None:
+    """Test resolve sql profile."""
     profile = resolve_rust_injection_profile("sql")
     assert profile.profile_name == "sql"
     assert profile.language == "sql"
@@ -15,6 +16,7 @@ def test_resolve_sql_profile() -> None:
 
 
 def test_resolve_default_profile() -> None:
+    """Test resolve default profile."""
     profile = resolve_rust_injection_profile("unknown_macro")
     assert profile.profile_name == "rust_default"
     assert profile.language == "rust"

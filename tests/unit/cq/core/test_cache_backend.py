@@ -1,3 +1,5 @@
+"""Tests for test_cache_backend."""
+
 from __future__ import annotations
 
 import os
@@ -15,8 +17,14 @@ from tools.cq.core.cache import (
     get_cq_cache_backend,
 )
 
+INCREMENTED_COUNTER_VALUE = 3
+DECREMENTED_COUNTER_VALUE = 2
+EXPECTED_BULK_WRITES = 2
+FANOUT_INIT_ATTEMPTS = 2
+
 
 def test_build_cache_key_is_deterministic() -> None:
+    """Check cache keys remain stable when unordered payload inputs are reused."""
     key_a = build_cache_key(
         "semantic_front_door",
         version="v2",
@@ -47,7 +55,9 @@ def test_build_cache_key_is_deterministic() -> None:
     assert key_a.startswith("cq:semantic_front_door:v2:")
 
 
+
 def test_canonicalize_cache_payload_sorts_unordered_values() -> None:
+    """Normalize cache payload ordering before hashing or serialization."""
     payload = canonicalize_cache_payload(
         {
             "b": {"z": {"x", "y"}},
@@ -58,27 +68,35 @@ def test_canonicalize_cache_payload_sorts_unordered_values() -> None:
     assert payload["b"] == {"z": ["x", "y"]}
 
 
+
 def test_build_cache_tag() -> None:
+    """Generate a canonical workspace-level cache tag."""
     tag = build_cache_tag(workspace="/repo", language="rust")
     assert tag.startswith("ws:")
     assert "|lang:rust" in tag
 
 
+
 def test_build_run_cache_tag() -> None:
+    """Include run context in cache tags when requested."""
     tag = build_run_cache_tag(workspace="/repo", language="python", run_id="abc123")
     assert tag.startswith("ws:")
     assert "|lang:python|" in tag
     assert "run:" in tag
 
 
+
 def test_build_scope_hash_is_stable() -> None:
+    """Verify scope hash is stable independent of key ordering."""
     hash_a = build_scope_hash({"paths": ["a", "b"], "globs": ("*.py",)})
     hash_b = build_scope_hash({"globs": ("*.py",), "paths": ["a", "b"]})
     assert isinstance(hash_a, str)
     assert hash_a == hash_b
 
 
+
 def test_cache_backend_roundtrip(tmp_path: Path) -> None:
+    """Validate set/get/evict flow for the active backend."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
     os.environ["CQ_CACHE_ENABLED"] = "1"
@@ -95,7 +113,9 @@ def test_cache_backend_roundtrip(tmp_path: Path) -> None:
     os.environ.pop("CQ_CACHE_ENABLED", None)
 
 
+
 def test_cache_backend_advanced_operations(tmp_path: Path) -> None:
+    """Exercise add/increment/decrement/set-many and transaction helpers."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache_adv")
     os.environ["CQ_CACHE_ENABLED"] = "1"
@@ -103,8 +123,8 @@ def test_cache_backend_advanced_operations(tmp_path: Path) -> None:
     backend = get_cq_cache_backend(root=tmp_path)
     assert backend.add("counter", 1, expire=30, tag="x") is True
     assert backend.add("counter", 2, expire=30, tag="x") is False
-    assert backend.incr("counter", 2, default=0) == 3
-    assert backend.decr("counter", 1, default=0) == 2
+    assert backend.incr("counter", 2, default=0) == INCREMENTED_COUNTER_VALUE
+    assert backend.decr("counter", 1, default=0) == DECREMENTED_COUNTER_VALUE
     written = backend.set_many(
         {
             "bulk:k1": {"value": 1},
@@ -113,7 +133,7 @@ def test_cache_backend_advanced_operations(tmp_path: Path) -> None:
         expire=30,
         tag="bulk",
     )
-    assert written == 2
+    assert written == EXPECTED_BULK_WRITES
     assert backend.get("bulk:k1") == {"value": 1}
     assert backend.get("bulk:k2") == {"value": 2}
 
@@ -136,7 +156,9 @@ def test_cache_backend_advanced_operations(tmp_path: Path) -> None:
     os.environ.pop("CQ_CACHE_ENABLED", None)
 
 
+
 def test_cache_backend_noop_when_disabled(tmp_path: Path) -> None:
+    """Expect no writes or reads when CQ cache is disabled by env."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_ENABLED"] = "0"
 
@@ -148,7 +170,9 @@ def test_cache_backend_noop_when_disabled(tmp_path: Path) -> None:
     os.environ.pop("CQ_CACHE_ENABLED", None)
 
 
+
 def test_cache_backend_is_workspace_keyed(tmp_path: Path) -> None:
+    """Ensure cache backends are separate for different workspaces."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
@@ -175,6 +199,7 @@ def test_cache_backend_fails_open_on_corrupt_diskcache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Verify corrupt diskcache initialization falls back to a safe backend."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
@@ -192,7 +217,7 @@ def test_cache_backend_fails_open_on_corrupt_diskcache(
     backend = get_cq_cache_backend(root=tmp_path)
     assert backend.set("k", {"v": 1}) is False
     assert backend.get("k") is None
-    assert attempts["count"] == 2
+    assert attempts["count"] == FANOUT_INIT_ATTEMPTS
 
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_ENABLED", None)

@@ -19,6 +19,10 @@ from tools.cq.search.pipeline.classifier import (
     get_symtable_table,
 )
 
+HIGH_CONFIDENCE_HEURISTIC = 0.9
+MEDIUM_CONFIDENCE_HEURISTIC = 0.8
+CALLSITE_CONFIDENCE_HEURISTIC = 0.6
+
 
 class TestQueryModeDetection:
     """Tests for query mode detection."""
@@ -82,47 +86,47 @@ class TestHeuristicClassification:
         """Test comment detection."""
         result = classify_heuristic("x = 1  # build_graph here", 14, "build_graph")
         assert result.category == "comment_match"
-        assert result.confidence >= 0.9
+        assert result.confidence >= HIGH_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is True
 
     def test_def_pattern(self) -> None:
         """Test function definition detection."""
         result = classify_heuristic("def build_graph(data):", 4, "build_graph")
         assert result.category == "definition"
-        assert result.confidence >= 0.8
+        assert result.confidence >= MEDIUM_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is False
 
     def test_async_def_pattern(self) -> None:
         """Test async function definition detection."""
         result = classify_heuristic("async def build_graph(data):", 10, "build_graph")
         assert result.category == "definition"
-        assert result.confidence >= 0.8
+        assert result.confidence >= MEDIUM_CONFIDENCE_HEURISTIC
 
     def test_class_pattern(self) -> None:
         """Test class definition detection."""
         result = classify_heuristic("class GraphBuilder:", 6, "GraphBuilder")
         assert result.category == "definition"
-        assert result.confidence >= 0.8
+        assert result.confidence >= MEDIUM_CONFIDENCE_HEURISTIC
 
     def test_import_pattern(self) -> None:
         """Test import detection."""
         result = classify_heuristic("import build_graph", 7, "build_graph")
         assert result.category == "import"
-        assert result.confidence >= 0.9
+        assert result.confidence >= HIGH_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is True
 
     def test_from_import_pattern(self) -> None:
         """Test from import detection."""
         result = classify_heuristic("from module import build_graph", 19, "build_graph")
         assert result.category == "from_import"
-        assert result.confidence >= 0.9
+        assert result.confidence >= HIGH_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is True
 
     def test_call_pattern(self) -> None:
         """Test call pattern detection."""
         result = classify_heuristic("result = build_graph(data)", 9, "build_graph")
         assert result.category == "callsite"
-        assert result.confidence >= 0.6
+        assert result.confidence >= CALLSITE_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is False  # Needs AST confirmation
 
     def test_docstring_hint(self) -> None:

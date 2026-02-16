@@ -103,6 +103,7 @@ SEMANTIC_TABLE_SPECS = generate_table_specs(ENTITY_DECLARATIONS)
 
 
 def test_drift_audit_is_deterministic(tmp_path: Path) -> None:
+    """Test drift audit is deterministic."""
     module, _ = _load_drift_module()
     _create_baseline_repo(tmp_path)
 
@@ -114,6 +115,7 @@ def test_drift_audit_is_deterministic(tmp_path: Path) -> None:
 
 
 def test_drift_audit_strict_mode_fails_on_injected_violation(tmp_path: Path) -> None:
+    """Test drift audit strict mode fails on injected violation."""
     _, script_path = _load_drift_module()
     _create_baseline_repo(tmp_path)
     _write(
@@ -137,6 +139,7 @@ def emit(profile: object) -> None:
 
 
 def test_drift_audit_ignores_comment_and_docstring_false_positives(tmp_path: Path) -> None:
+    """Test drift audit ignores comment and docstring false positives."""
     module, script_path = _load_drift_module()
     _create_baseline_repo(tmp_path)
     _write(

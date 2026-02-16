@@ -19,6 +19,7 @@ class _FakeClient:
 
 
 def test_expand_macro_returns_applied_result_from_client() -> None:
+    """Test expand macro returns applied result from client."""
     request = RustMacroExpansionRequestV1(
         file_path="src/lib.rs",
         line=9,
@@ -34,6 +35,7 @@ def test_expand_macro_returns_applied_result_from_client() -> None:
 
 
 def test_expand_macro_fails_open_without_client_request() -> None:
+    """Test expand macro fails open without client request."""
     request = RustMacroExpansionRequestV1(
         file_path="src/lib.rs",
         line=1,

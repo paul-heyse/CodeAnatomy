@@ -14,6 +14,10 @@ from relspec.execution_package import (
 )
 from tests.test_helpers.immutability import assert_immutable_assignment
 
+FIXED_CREATED_AT_UNIX_MS = 1_700_000_000_000
+EXPECTED_PLAN_BUNDLE_COUNT = 3
+SCHEMA_FINGERPRINT_LENGTH = 32
+
 
 class TestExecutionPackageArtifactConstruction:
     """Test that ExecutionPackageArtifact can be constructed with all fields."""
@@ -27,7 +31,7 @@ class TestExecutionPackageArtifactConstruction:
             capability_snapshot_hash="ch_001",
             plan_bundle_fingerprints={"view_a": "fp_a", "view_b": "fp_b"},
             session_config_hash="sh_001",
-            created_at_unix_ms=1700000000000,
+            created_at_unix_ms=FIXED_CREATED_AT_UNIX_MS,
         )
         assert pkg.package_fingerprint == "abc123"
         assert pkg.manifest_hash == "mh_001"
@@ -35,7 +39,7 @@ class TestExecutionPackageArtifactConstruction:
         assert pkg.capability_snapshot_hash == "ch_001"
         assert pkg.plan_bundle_fingerprints == {"view_a": "fp_a", "view_b": "fp_b"}
         assert pkg.session_config_hash == "sh_001"
-        assert pkg.created_at_unix_ms == 1700000000000
+        assert pkg.created_at_unix_ms == FIXED_CREATED_AT_UNIX_MS
 
     def test_frozen_immutability(self) -> None:
         """Verify the artifact is frozen and immutable."""
@@ -166,7 +170,7 @@ class TestBuildExecutionPackagePlanBundleFingerprints:
         """All plan bundle entries are preserved in the output."""
         bundles = {"view_1": "fp_1", "view_2": "fp_2", "view_3": "fp_3"}
         pkg = build_execution_package(plan_bundle_fingerprints=bundles)
-        assert len(pkg.plan_bundle_fingerprints) == 3
+        assert len(pkg.plan_bundle_fingerprints) == EXPECTED_PLAN_BUNDLE_COUNT
         for key, value in bundles.items():
             assert pkg.plan_bundle_fingerprints[key] == value
 
@@ -217,7 +221,7 @@ class TestExecutionPackageMsgspecRoundTrip:
             capability_snapshot_hash="ch",
             plan_bundle_fingerprints={"v1": "f1", "v2": "f2"},
             session_config_hash="sh",
-            created_at_unix_ms=1700000000000,
+            created_at_unix_ms=FIXED_CREATED_AT_UNIX_MS,
         )
         encoded = msgspec.json.encode(original)
         decoded = msgspec.json.decode(encoded, type=ExecutionPackageArtifact)
@@ -238,7 +242,7 @@ class TestExecutionPackageMsgspecRoundTrip:
             capability_snapshot_hash="ch_mp",
             plan_bundle_fingerprints={"view_x": "fp_x"},
             session_config_hash="sh_mp",
-            created_at_unix_ms=1700000000000,
+            created_at_unix_ms=FIXED_CREATED_AT_UNIX_MS,
         )
         encoded = msgspec.msgpack.encode(original)
         decoded = msgspec.msgpack.decode(encoded, type=ExecutionPackageArtifact)
@@ -280,7 +284,7 @@ class TestExecutionPackageSpecRegistration:
         """EXECUTION_PACKAGE_SPEC has a 32-char schema fingerprint."""
         from serde_artifact_specs import EXECUTION_PACKAGE_SPEC
 
-        assert len(EXECUTION_PACKAGE_SPEC.schema_fingerprint) == 32
+        assert len(EXECUTION_PACKAGE_SPEC.schema_fingerprint) == SCHEMA_FINGERPRINT_LENGTH
 
     def test_spec_in_global_registry(self) -> None:
         """Verify the spec appears in the global artifact spec registry."""

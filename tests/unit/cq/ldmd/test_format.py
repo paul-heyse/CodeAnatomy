@@ -12,6 +12,12 @@ from tools.cq.ldmd.format import (
     search_sections,
 )
 
+SECTION_COUNT_TWO = 2
+CAFE_UTF8_BYTES = 5
+SNOWMAN_UTF8_BYTES = 5
+EMOJI_UTF8_BYTES = 6
+SLICE_LIMIT_BYTES = 50
+
 
 def test_valid_ldmd_parses_correctly() -> None:
     """Test that a valid LDMD document parses correctly."""
@@ -26,7 +32,7 @@ More content here.
 <!--LDMD:END id="section2"-->
 """
     index = build_index(content)
-    assert len(index.sections) == 2
+    assert len(index.sections) == SECTION_COUNT_TWO
     assert index.sections[0].id == "section1"
     assert index.sections[1].id == "section2"
     assert index.total_bytes == len(content)
@@ -69,7 +75,7 @@ def test_safe_utf8_truncate_preserves_2byte_chars() -> None:
     """Test that _safe_utf8_truncate preserves 2-byte UTF-8 characters."""
     # U+00E9 (é) is 2 bytes in UTF-8: 0xC3 0xA9
     data = "café".encode()  # b'caf\xc3\xa9'
-    assert len(data) == 5
+    assert len(data) == CAFE_UTF8_BYTES
 
     # Truncating at 4 would split the é character
     result = _safe_utf8_truncate(data, 4)
@@ -82,7 +88,7 @@ def test_safe_utf8_truncate_preserves_3byte_chars() -> None:
     """Test that _safe_utf8_truncate preserves 3-byte UTF-8 characters."""
     # U+2603 (☃) is 3 bytes in UTF-8: 0xE2 0x98 0x83
     data = "hi☃".encode()  # b'hi\xe2\x98\x83'
-    assert len(data) == 5
+    assert len(data) == SNOWMAN_UTF8_BYTES
 
     # Truncating at 4 would split the snowman
     result = _safe_utf8_truncate(data, 4)
@@ -94,7 +100,7 @@ def test_safe_utf8_truncate_preserves_4byte_chars() -> None:
     """Test that _safe_utf8_truncate preserves 4-byte UTF-8 characters."""
     # U+1F600 (😀) is 4 bytes in UTF-8: 0xF0 0x9F 0x98 0x80
     data = "hi😀".encode()  # b'hi\xf0\x9f\x98\x80'
-    assert len(data) == 6
+    assert len(data) == EMOJI_UTF8_BYTES
 
     # Truncating at 4 would split the emoji
     result = _safe_utf8_truncate(data, 4)
@@ -160,12 +166,13 @@ This is a long section with lots of content that should be truncated.
     index = build_index(content)
 
     slice_data = get_slice(content, index, section_id="section1", limit_bytes=50)
-    assert len(slice_data) <= 50
+    assert len(slice_data) <= SLICE_LIMIT_BYTES
     # Should be valid UTF-8
     slice_data.decode("utf-8")
 
 
 def test_get_slice_preview_mode_uses_depth_filter() -> None:
+    """Test get slice preview mode uses depth filter."""
     content = b"""<!--LDMD:BEGIN id=\"root\"-->
 Root line
 <!--LDMD:BEGIN id=\"child\" parent=\"root\"-->
@@ -184,6 +191,7 @@ Grandchild line
 
 
 def test_get_slice_tldr_mode_prefers_tldr_child() -> None:
+    """Test get slice tldr mode prefers tldr child."""
     content = b"""<!--LDMD:BEGIN id=\"section\"-->
 <!--LDMD:BEGIN id=\"section_tldr\" parent=\"section\"-->
 TLDR text
@@ -263,7 +271,7 @@ More outer content
 <!--LDMD:END id="outer"-->
 """
     index = build_index(content)
-    assert len(index.sections) == 2
+    assert len(index.sections) == SECTION_COUNT_TWO
 
     # Find the sections
     outer = next(s for s in index.sections if s.id == "outer")

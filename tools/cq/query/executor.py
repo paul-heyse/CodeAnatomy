@@ -105,7 +105,7 @@ from tools.cq.query.metavar import (
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import filter_records_by_kind, list_scan_files, sg_scan
 from tools.cq.search.pipeline.profiles import SearchLimits
-from tools.cq.search.rg.adapter import find_files_with_pattern
+from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 from tools.cq.search.rg.prefilter import extract_literal_fragments, rg_prefilter_files
 from tools.cq.search.semantic.diagnostics import (
     build_language_capabilities,
@@ -2077,6 +2077,36 @@ def _apply_call_evidence(
             details["bytecode_has_target"] = call_target in bytecode_calls
 
 
+def _import_match_key(import_record: SgRecord) -> tuple[str, int, int, int, int, str]:
+    """Build a stable dedupe key for import-query findings.
+
+    Returns:
+        tuple[str, int, int, int, int, str]: Function return value.
+    """
+    return (
+        import_record.file,
+        import_record.start_line,
+        import_record.start_col,
+        import_record.end_line,
+        import_record.end_col,
+        _extract_import_name(import_record) or import_record.text.strip(),
+    )
+
+
+def _dedupe_import_matches(import_records: list[SgRecord]) -> list[SgRecord]:
+    """Drop duplicate import records emitted by overlapping ast-grep import rules.
+
+    Returns:
+        list[SgRecord]: Function return value.
+    """
+    deduped: dict[tuple[str, int, int, int, int, str], SgRecord] = {}
+    for import_record in import_records:
+        key = _import_match_key(import_record)
+        if key not in deduped:
+            deduped[key] = import_record
+    return list(deduped.values())
+
+
 def _process_import_query(
     import_records: list[SgRecord],
     query: Query,
@@ -2086,7 +2116,7 @@ def _process_import_query(
     symtable: SymtableEnricher | None = None,
 ) -> None:
     """Process an import entity query."""
-    matching_imports = _filter_to_matching(import_records, query)
+    matching_imports = _dedupe_import_matches(_filter_to_matching(import_records, query))
 
     for import_record in matching_imports:
         finding = _import_to_finding(import_record)
@@ -2541,9 +2571,11 @@ def rg_files_with_matches(
     return find_files_with_pattern(
         search_root,
         pattern,
-        include_globs=list(scope.globs) if scope.globs else None,
-        exclude_globs=list(scope.exclude) if scope.exclude else None,
-        limits=effective_limits,
+        options=FilePatternSearchOptions(
+            include_globs=tuple(scope.globs) if scope.globs else (),
+            exclude_globs=tuple(scope.exclude) if scope.exclude else (),
+            limits=effective_limits,
+        ),
     )
 
 

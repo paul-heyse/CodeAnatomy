@@ -51,17 +51,20 @@ def _add_five(x: int) -> int:
 
 
 def test_run_file_lanes_parallel_preserves_order() -> None:
+    """Test run file lanes parallel preserves order."""
     jobs = [1, 2, 3, 4, 5]
     results = run_file_lanes_parallel(jobs, worker=_double, max_workers=2)
     assert results == [2, 4, 6, 8, 10]
 
 
 def test_run_file_lanes_parallel_handles_empty_jobs() -> None:
+    """Test run file lanes parallel handles empty jobs."""
     results = run_file_lanes_parallel([], worker=_identity, max_workers=2)
     assert results == []
 
 
 def test_run_file_lanes_parallel_falls_back_to_sequential_when_max_workers_is_1() -> None:
+    """Test run file lanes parallel falls back to sequential when max workers is 1."""
     jobs = [10, 20, 30]
     results = run_file_lanes_parallel(jobs, worker=_add_five, max_workers=1)
     assert results == [15, 25, 35]
@@ -87,6 +90,7 @@ class _Parser:
 
 
 def test_build_stream_reader_chunks_data() -> None:
+    """Test build stream reader chunks data."""
     reader = build_stream_reader(b"abcdef", chunk_size=2)
     assert reader(0, (0, 0)) == b"ab"
     assert reader(2, (0, 2)) == b"cd"
@@ -94,12 +98,14 @@ def test_build_stream_reader_chunks_data() -> None:
 
 
 def test_build_stream_reader_handles_boundary_conditions() -> None:
+    """Test build stream reader handles boundary conditions."""
     reader = build_stream_reader(b"test", chunk_size=10)
     assert reader(0, (0, 0)) == b"test"
     assert reader(-1, (0, 0)) == b""
 
 
 def test_parse_streaming_source_prefers_stream_callback() -> None:
+    """Test parse streaming source prefers stream callback."""
     parser = _Parser()
     tree = parse_streaming_source(parser, b"hello world")
     assert tree == "tree_from_stream"
@@ -123,6 +129,7 @@ class _MockParser:
 
 
 def test_apply_parser_controls_respects_flags(tmp_path: Path) -> None:
+    """Test apply parser controls respects flags."""
     parser = _MockParser()
     settings = ParserControlSettingsV1(
         reset_before_parse=True,
@@ -136,6 +143,7 @@ def test_apply_parser_controls_respects_flags(tmp_path: Path) -> None:
 
 
 def test_apply_parser_controls_skips_when_flags_false() -> None:
+    """Test apply parser controls skips when flags false."""
     parser = _MockParser()
     settings = ParserControlSettingsV1(
         reset_before_parse=False,
@@ -149,6 +157,7 @@ def test_apply_parser_controls_skips_when_flags_false() -> None:
 
 
 def test_parser_controls_from_env_defaults_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test parser controls from env defaults to false."""
     monkeypatch.delenv("CQ_TREE_SITTER_PARSER_RESET", raising=False)
     monkeypatch.delenv("CQ_TREE_SITTER_PARSER_LOGGER", raising=False)
     monkeypatch.delenv("CQ_TREE_SITTER_DOT_GRAPH_DIR", raising=False)
@@ -162,6 +171,7 @@ def test_parser_controls_from_env_defaults_to_false(monkeypatch: pytest.MonkeyPa
 def test_parser_controls_from_env_respects_flags(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Test parser controls from env respects flags."""
     monkeypatch.setenv("CQ_TREE_SITTER_PARSER_RESET", "1")
     monkeypatch.setenv("CQ_TREE_SITTER_PARSER_LOGGER", "1")
     monkeypatch.setenv("CQ_TREE_SITTER_DOT_GRAPH_DIR", str(tmp_path))

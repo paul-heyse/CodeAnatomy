@@ -1,3 +1,5 @@
+"""Tests for test_register_temp_table_streaming."""
+
 from __future__ import annotations
 
 import pyarrow as pa
@@ -7,6 +9,7 @@ from datafusion_engine.session.helpers import deregister_table, register_temp_ta
 
 
 def test_register_temp_table_streaming_reader() -> None:
+    """Register and deregister a streaming temporary table in one pass."""
     ctx = SessionContext()
     schema = pa.schema([("value", pa.int64())])
     batch = pa.record_batch([pa.array([1, 2, 3])], schema=schema)

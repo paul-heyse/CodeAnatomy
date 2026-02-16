@@ -88,11 +88,9 @@ def _plan_from_node(
     *,
     node: NodeLike,
     language: str,
-    profile_name: str | None,
     combined: bool,
-    include_children: bool,
-    use_self_language: bool,
-    use_parent_language: bool,
+    profile_name: str | None,
+    settings: InjectionSettingsV1,
 ) -> InjectionPlanV1 | None:
     start_byte = int(getattr(node, "start_byte", 0))
     end_byte = int(getattr(node, "end_byte", start_byte))
@@ -110,9 +108,9 @@ def _plan_from_node(
         end_col=int(end_point[1]),
         profile_name=profile_name,
         combined=combined,
-        include_children=include_children,
-        use_self_language=use_self_language,
-        use_parent_language=use_parent_language,
+        include_children=settings.include_children,
+        use_self_language=settings.use_self_language,
+        use_parent_language=settings.use_parent_language,
     )
 
 
@@ -164,11 +162,9 @@ def build_injection_plan_from_matches(
             plan = _plan_from_node(
                 node=node,
                 language=language,
-                profile_name=profile.profile_name,
                 combined=settings.combined or profile.combined,
-                include_children=settings.include_children,
-                use_self_language=settings.use_self_language,
-                use_parent_language=settings.use_parent_language,
+                profile_name=profile.profile_name,
+                settings=settings,
             )
             if plan is None:
                 continue

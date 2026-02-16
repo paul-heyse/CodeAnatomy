@@ -8,6 +8,7 @@ from tools.cq.search.rust import enrichment as enrichment_module
 
 
 def test_extract_rust_context_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test extract rust context delegates."""
     monkeypatch.setattr(
         enrichment_module,
         "enrich_rust_context_by_byte_range",

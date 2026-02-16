@@ -15,6 +15,7 @@ class _FakeNode:
 
 
 def test_export_query_hits_emits_typed_rows() -> None:
+    """Test export query hits emits typed rows."""
     matches = [
         (
             1,

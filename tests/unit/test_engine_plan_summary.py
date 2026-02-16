@@ -14,6 +14,14 @@ from planning_engine.spec_contracts import (
     ViewDefinition,
 )
 
+PLAN_VIEW_COUNT = 3
+RULE_INTENT_COUNT = 2
+TABLES_MATERIALIZED = 2
+TOTAL_ROWS_WRITTEN = 12
+OUTPUT_BATCHES = 2
+ELAPSED_COMPUTE_NANOS = 123_000_000
+WARNING_COUNT = 2
+
 
 def _spec_fixture() -> SemanticExecutionSpec:
     return SemanticExecutionSpec(
@@ -103,29 +111,32 @@ def _run_result_fixture() -> dict[str, object]:
 
 
 def test_plan_summary_from_spec() -> None:
+    """Test plan summary from spec."""
     summary = record_engine_plan_summary(_spec_fixture())
 
-    assert summary.view_count == 3
+    assert summary.view_count == PLAN_VIEW_COUNT
     assert summary.join_edge_count == 1
-    assert summary.rule_intent_count == 2
+    assert summary.rule_intent_count == RULE_INTENT_COUNT
     assert summary.input_relation_count == 1
     assert summary.output_target_count == 1
     assert summary.rulepack_profile == "Default"
 
 
 def test_execution_summary_from_run_result() -> None:
+    """Test execution summary from run result."""
     summary = record_engine_execution_summary(_run_result_fixture())
 
-    assert summary.tables_materialized == 2
-    assert summary.total_rows_written == 12
-    assert summary.output_rows == 12
-    assert summary.output_batches == 2
-    assert summary.elapsed_compute_nanos == 123_000_000
-    assert summary.warning_count == 2
+    assert summary.tables_materialized == TABLES_MATERIALIZED
+    assert summary.total_rows_written == TOTAL_ROWS_WRITTEN
+    assert summary.output_rows == TOTAL_ROWS_WRITTEN
+    assert summary.output_batches == OUTPUT_BATCHES
+    assert summary.elapsed_compute_nanos == ELAPSED_COMPUTE_NANOS
+    assert summary.warning_count == WARNING_COUNT
     assert summary.warning_codes == ("W001", "W002")
 
 
 def test_summary_field_types() -> None:
+    """Test summary field types."""
     plan_summary = record_engine_plan_summary(_spec_fixture())
     execution_summary = record_engine_execution_summary(_run_result_fixture())
 

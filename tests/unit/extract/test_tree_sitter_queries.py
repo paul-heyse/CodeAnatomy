@@ -15,6 +15,7 @@ from extract.extractors.tree_sitter.queries import compile_query_pack
 
 
 def test_tree_sitter_async_def_query() -> None:
+    """Test tree sitter async def query."""
     code = "async def foo():\n    return 1\n"
     file_ctx = FileContext(
         file_id="file-1",

@@ -1,3 +1,5 @@
+"""Tests for test_run_lifecycle."""
+
 from __future__ import annotations
 
 from collections.abc import Generator
@@ -24,7 +26,9 @@ def _close_cache_backends() -> Generator[None]:
     close_cq_cache_backend()
 
 
+
 def test_resolve_write_cache_tag_uses_run_tag_for_ephemeral_namespace() -> None:
+    """Use run-id tag when namespace is marked ephemeral."""
     policy = CqCachePolicyV1(namespace_ephemeral={"search_candidates": True})
     tag = resolve_write_cache_tag(
         CacheWriteTagRequestV1(
@@ -45,7 +49,9 @@ def test_resolve_write_cache_tag_uses_run_tag_for_ephemeral_namespace() -> None:
     assert "snap:snap123" not in tag
 
 
+
 def test_resolve_write_cache_tag_uses_namespace_tag_for_persistent_namespace() -> None:
+    """Use namespace tag when namespace is configured as persistent."""
     policy = CqCachePolicyV1(namespace_ephemeral={"search_candidates": False})
     tag = resolve_write_cache_tag(
         CacheWriteTagRequestV1(
@@ -72,6 +78,7 @@ def test_maybe_evict_run_cache_tag_removes_only_ephemeral_entries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Verify run-tag eviction does not remove persistent namespace cache entries."""
     monkeypatch.setenv("CQ_CACHE_ENABLED", "1")
     monkeypatch.setenv("CQ_CACHE_DIR", str(tmp_path / "cq_cache"))
     monkeypatch.setenv("CQ_CACHE_EVICT_RUN_TAG_ON_EXIT", "1")

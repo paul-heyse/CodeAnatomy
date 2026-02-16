@@ -45,7 +45,12 @@ from tools.cq.macros.calls_target import (
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file, list_scan_files, sg_scan
 from tools.cq.search.pipeline.profiles import INTERACTIVE
-from tools.cq.search.rg.adapter import find_call_candidates, find_def_lines, find_files_with_pattern
+from tools.cq.search.rg.adapter import (
+    FilePatternSearchOptions,
+    find_call_candidates,
+    find_def_lines,
+    find_files_with_pattern,
+)
 
 if TYPE_CHECKING:
     from tools.cq.core.front_door_insight import (
@@ -383,7 +388,11 @@ def _find_function_signature(
 
     # Find files containing the function definition
     pattern = rf"\bdef {base_name}\s*\("
-    def_files = find_files_with_pattern(root, pattern, limits=INTERACTIVE)
+    def_files = find_files_with_pattern(
+        root,
+        pattern,
+        options=FilePatternSearchOptions(limits=INTERACTIVE),
+    )
 
     if not def_files:
         return ""
@@ -1432,8 +1441,10 @@ def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
     candidate_files = find_files_with_pattern(
         root_path,
         pattern,
-        limits=INTERACTIVE,
-        lang_scope=target_language,
+        options=FilePatternSearchOptions(
+            limits=INTERACTIVE,
+            lang_scope=target_language,
+        ),
     )
 
     all_scan_files = list_scan_files([root_path], root=root_path, lang=target_language)

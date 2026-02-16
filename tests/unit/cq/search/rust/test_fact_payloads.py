@@ -6,6 +6,7 @@ from tools.cq.search.rust.evidence import RustFactPayloadV1, coerce_fact_payload
 
 
 def test_coerce_fact_payload() -> None:
+    """Test coerce fact payload."""
     payload = coerce_fact_payload(
         {
             "scope_chain": ("mod:foo",),

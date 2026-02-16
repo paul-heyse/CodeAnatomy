@@ -20,7 +20,11 @@ if TYPE_CHECKING:
 
 
 def _build_node_id(*, file_path: str, node: object | None) -> str:
-    """Build a stable structural node identifier from file and byte span."""
+    """Build a stable structural node identifier from file and byte span.
+
+    Returns:
+        str: Function return value.
+    """
     if node is None:
         return f"{file_path}:::null"
     node_type = str(getattr(node, "type", "unknown"))
@@ -36,7 +40,11 @@ def _build_node_id(*, file_path: str, node: object | None) -> str:
 def export_diagnostic_rows(
     rows: Iterable[object],
 ) -> tuple[TreeSitterDiagnosticV1, ...]:
-    """Normalize diagnostic iterable into a typed tuple payload."""
+    """Normalize diagnostic iterable into a typed tuple payload.
+
+    Returns:
+        tuple[TreeSitterDiagnosticV1, ...]: Function return value.
+    """
     return tuple(row for row in rows if isinstance(row, TreeSitterDiagnosticV1))
 
 
@@ -47,7 +55,11 @@ def collect_diagnostic_rows(
     windows: tuple[QueryWindowV1, ...],
     match_limit: int,
 ) -> tuple[TreeSitterDiagnosticV1, ...]:
-    """Collect diagnostics and return typed tuple rows."""
+    """Collect diagnostics and return typed tuple rows.
+
+    Returns:
+        tuple[TreeSitterDiagnosticV1, ...]: Function return value.
+    """
     from tools.cq.search.tree_sitter.diagnostics import collect_tree_sitter_diagnostics
 
     rows = collect_tree_sitter_diagnostics(
@@ -134,7 +146,11 @@ def export_query_hits(
     file_path: str,
     matches: Sequence[tuple[int, Mapping[str, Sequence[NodeLike]]]],
 ) -> tuple[TreeSitterQueryHitV1, ...]:
-    """Export typed query hit rows from ``matches()`` output."""
+    """Export typed query hit rows from ``matches()`` output.
+
+    Returns:
+        tuple[TreeSitterQueryHitV1, ...]: Function return value.
+    """
     rows: list[TreeSitterQueryHitV1] = []
     for pattern_index, capture_map in matches:
         if not isinstance(pattern_index, int):

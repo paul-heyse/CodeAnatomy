@@ -10,12 +10,14 @@ from tools.cq.search.rg import prefilter
 
 
 def test_extract_literal_fragments_drops_metavars() -> None:
+    """Test extract literal fragments drops metavars."""
     fragments = prefilter.extract_literal_fragments("def $F($$$ARGS): return $X")
     assert any("def" in fragment for fragment in fragments)
     assert all("$" not in fragment for fragment in fragments)
 
 
 def test_collect_prefilter_fragments_from_rules() -> None:
+    """Test collect prefilter fragments from rules."""
     rules = (
         RuleSpec(
             rule_id="r1",
@@ -39,6 +41,7 @@ def test_rg_prefilter_files_fail_open_on_runner_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Test rg prefilter files fail open on runner error."""
     file_path = tmp_path / "a.py"
     file_path.write_text("print('x')\n", encoding="utf-8")
 

@@ -6,6 +6,7 @@ from extraction.contracts import resolve_semantic_input_locations, with_compat_a
 
 
 def test_with_compat_aliases_includes_legacy_keys() -> None:
+    """Test with compat aliases includes legacy keys."""
     locations = {
         "repo_files_v1": "/tmp/repo_files_v1",
         "libcst_files": "/tmp/libcst_files",
@@ -28,6 +29,7 @@ def test_with_compat_aliases_includes_legacy_keys() -> None:
 
 
 def test_resolve_semantic_input_locations_prefers_canonical_candidates() -> None:
+    """Test resolve semantic input locations prefers canonical candidates."""
     locations = {
         "repo_files_v1": "/tmp/repo_files_v1",
         "file_line_index_v1": "/tmp/file_line_index_v1",

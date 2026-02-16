@@ -34,6 +34,11 @@ require_datafusion_udfs()
 require_deltalake()
 require_delta_extension()
 
+START_VERSION_AFTER_TWO_READS = 2
+INITIAL_CURSOR_VERSION = 5
+RECOVERY_CURSOR_VERSION = 10
+UPDATED_CURSOR_VERSION = 15
+
 
 def _write_delta_table_with_cdf(delta_path: Path, table: pa.Table) -> int:
     """Write a Delta table with CDF enabled.
@@ -243,7 +248,9 @@ def test_cursor_state_progression_through_cdf_reads(tmp_path: Path) -> None:
 
     # Third read: No new data, should return None or empty result
     start_version_3 = store.get_start_version(dataset_name)
-    assert start_version_3 == 2, "Start version should be last_version + 1"
+    assert (
+        start_version_3 == START_VERSION_AFTER_TWO_READS
+    ), "Start version should be last_version + 1"
 
     # Read with no new changes
     options3 = CdfReadOptions(
@@ -280,13 +287,13 @@ def test_cursor_recovery_after_corruption(tmp_path: Path) -> None:
     dataset_name = "corrupted_dataset"
 
     # Setup: Write a valid cursor first
-    cursor_before = CdfCursor.create(dataset_name, 5)
+    cursor_before = CdfCursor.create(dataset_name, INITIAL_CURSOR_VERSION)
     store.save_cursor(cursor_before)
 
     # Verify cursor was saved correctly
     loaded_before = store.load_cursor(dataset_name)
     assert loaded_before is not None
-    assert loaded_before.last_version == 5
+    assert loaded_before.last_version == INITIAL_CURSOR_VERSION
 
     # Corrupt the cursor file by writing invalid JSON
     # Use direct path construction to simulate corruption
@@ -302,21 +309,23 @@ def test_cursor_recovery_after_corruption(tmp_path: Path) -> None:
     assert store.has_cursor(dataset_name), "Cursor file should still exist"
 
     # Recovery path: Re-establish cursor with new valid data
-    recovery_cursor = CdfCursor.create(dataset_name, 10)
+    recovery_cursor = CdfCursor.create(dataset_name, RECOVERY_CURSOR_VERSION)
     store.save_cursor(recovery_cursor)
 
     # Verify recovery succeeded
     loaded_after = store.load_cursor(dataset_name)
     assert loaded_after is not None, "Recovered cursor should load"
-    assert loaded_after.last_version == 10, "Recovered cursor should have new version"
+    assert (
+        loaded_after.last_version == RECOVERY_CURSOR_VERSION
+    ), "Recovered cursor should have new version"
 
     # Verify normal operations continue
-    updated = store.update_version(dataset_name, 15)
-    assert updated.last_version == 15
+    updated = store.update_version(dataset_name, UPDATED_CURSOR_VERSION)
+    assert updated.last_version == UPDATED_CURSOR_VERSION
 
     final = store.load_cursor(dataset_name)
     assert final is not None
-    assert final.last_version == 15
+    assert final.last_version == UPDATED_CURSOR_VERSION
 
 
 @pytest.mark.integration

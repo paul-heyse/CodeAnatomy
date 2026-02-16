@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 
+EXPLICIT_EXIT_CODE = 42
+
 
 class TestFilterConfig:
     """Tests for FilterConfig."""
@@ -83,8 +85,8 @@ class TestCliResult:
     def test_explicit_exit_code(self, tmp_path: Path) -> None:
         """Test CLI result with explicit exit code."""
         ctx = CliContext.build(argv=["test"], root=tmp_path)
-        result = CliResult(result="some output", context=ctx, exit_code=42)
-        assert result.get_exit_code() == 42
+        result = CliResult(result="some output", context=ctx, exit_code=EXPLICIT_EXIT_CODE)
+        assert result.get_exit_code() == EXPLICIT_EXIT_CODE
 
     def test_cq_result(self, tmp_path: Path) -> None:
         """Test CLI result with CqResult."""

@@ -7,6 +7,7 @@ from tools.cq.search.python import resolution_index as resolution_index_module
 
 
 def test_build_resolution_index_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test build resolution index delegates."""
     monkeypatch.setattr(
         resolution_index_module,
         "enrich_python_resolution_by_byte_range",

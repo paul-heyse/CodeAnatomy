@@ -14,6 +14,7 @@ def _toolchain_dict() -> dict[str, str | None]:
 
 
 def test_mk_runmeta_generates_run_id(tmp_path: Path) -> None:
+    """Test mk runmeta generates run id."""
     run = mk_runmeta("q", [], str(tmp_path), ms(), _toolchain_dict())
     assert run.run_id
     assert isinstance(run.run_id, str)
@@ -22,6 +23,7 @@ def test_mk_runmeta_generates_run_id(tmp_path: Path) -> None:
 
 
 def test_runmeta_serializes_run_id(tmp_path: Path) -> None:
+    """Test runmeta serializes run id."""
     run = RunMeta(
         macro="q",
         argv=[],
@@ -37,6 +39,7 @@ def test_runmeta_serializes_run_id(tmp_path: Path) -> None:
 
 
 def test_artifact_filename_includes_run_id(tmp_path: Path) -> None:
+    """Test artifact filename includes run id."""
     run = RunMeta(
         macro="q",
         argv=[],

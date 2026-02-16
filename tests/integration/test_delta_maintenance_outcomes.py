@@ -14,6 +14,7 @@ from schema_spec.contracts import DeltaMaintenancePolicy
 
 @pytest.mark.integration
 def test_metrics_unavailable_keeps_base_policy_plan() -> None:
+    """Test metrics unavailable keeps base policy plan."""
     decision = resolve_maintenance_from_execution(
         DeltaMaintenancePlanInput(
             dataset_location=None,
@@ -41,6 +42,7 @@ def test_metrics_unavailable_keeps_base_policy_plan() -> None:
 
 @pytest.mark.integration
 def test_metrics_threshold_path_disables_untriggered_operations() -> None:
+    """Test metrics threshold path disables untriggered operations."""
     decision = resolve_maintenance_from_execution(
         DeltaMaintenancePlanInput(
             dataset_location=None,

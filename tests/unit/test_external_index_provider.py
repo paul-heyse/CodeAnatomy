@@ -75,6 +75,7 @@ def _request() -> ExternalIndexRequest:
 
 
 def test_selects_first_provider_that_returns_candidates() -> None:
+    """Test selects first provider that returns candidates."""
     selection, provider = select_candidates_with_external_indexes(
         cast("SessionContext", object()),
         request=_request(),
@@ -86,6 +87,7 @@ def test_selects_first_provider_that_returns_candidates() -> None:
 
 
 def test_provider_errors_are_fail_open() -> None:
+    """Test provider errors are fail open."""
     selection, provider = select_candidates_with_external_indexes(
         cast("SessionContext", object()),
         request=_request(),

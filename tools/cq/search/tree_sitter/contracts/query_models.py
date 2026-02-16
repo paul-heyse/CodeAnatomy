@@ -85,6 +85,9 @@ class QueryPackPlanV1(CqStruct, frozen=True):
     query_hash: str
     plans: tuple[QueryPatternPlanV1, ...]
     score: float = 0.0
+    grammar_name: str | None = None
+    semantic_version: tuple[int, int, int] | None = None
+    abi_version: int | None = None
 
 
 class GrammarDriftReportV1(CqStruct, frozen=True):
@@ -123,7 +126,11 @@ class QueryPackContractsFileV1(CqStruct, frozen=True):
 
 
 def load_pack_rules(language: str) -> QueryPackRulesV1:
-    """Load query-pack rules from ``contracts.yaml``, falling back to defaults."""
+    """Load query-pack rules from ``contracts.yaml``, falling back to defaults.
+
+    Returns:
+        QueryPackRulesV1: Function return value.
+    """
     path = query_contracts_path(language)
     if not path.exists():
         return QueryPackRulesV1()
@@ -148,7 +155,11 @@ def lint_query_pack_source(
     schema_index: GrammarSchemaIndex,
     compile_query: Callable[[str], Query],
 ) -> tuple[QueryPackLintIssueV1, ...]:
-    """Lint one query source using schema checks and query introspection."""
+    """Lint one query source using schema checks and query introspection.
+
+    Returns:
+        tuple[QueryPackLintIssueV1, ...]: Function return value.
+    """
     issues: list[QueryPackLintIssueV1] = []
 
     try:

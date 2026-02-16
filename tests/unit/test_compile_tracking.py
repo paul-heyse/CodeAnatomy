@@ -18,6 +18,8 @@ from semantics.compile_invariants import (
     record_compile_if_tracking,
 )
 
+COMPILE_COUNT_AFTER_TWO_RECORDS = 2
+
 
 class TestCompileTrackerUnit:
     """Unit tests for CompileTracker state management."""
@@ -33,7 +35,7 @@ class TestCompileTrackerUnit:
         tracker.record_compile()
         assert tracker.compile_count == 1
         tracker.record_compile()
-        assert tracker.compile_count == 2
+        assert tracker.compile_count == COMPILE_COUNT_AFTER_TWO_RECORDS
 
     def test_exceeding_max_compiles_raises(self) -> None:
         """Raise RuntimeError when exceeding the max compile threshold."""

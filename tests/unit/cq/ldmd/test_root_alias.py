@@ -16,6 +16,7 @@ beta
 
 
 def test_get_slice_root_alias_uses_first_section() -> None:
+    """Test get slice root alias uses first section."""
     content = _sample_content()
     index = build_index(content)
     slice_data = get_slice(content, index, section_id="root")
@@ -24,6 +25,7 @@ def test_get_slice_root_alias_uses_first_section() -> None:
 
 
 def test_get_neighbors_root_alias_uses_first_section() -> None:
+    """Test get neighbors root alias uses first section."""
     content = _sample_content()
     index = build_index(content)
     nav = get_neighbors(index, section_id="root")

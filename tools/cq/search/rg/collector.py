@@ -65,30 +65,43 @@ class RgCollector:
     max_files_hit: bool = False
     max_matches_hit: bool = False
 
-    def handle_event(self, event: RgAnyEvent) -> None:  # noqa: C901
+    def handle_event(self, event: RgAnyEvent) -> None:
         """Dispatch a decoded ripgrep event."""
-        if event.type == "begin":
-            data = as_begin_data(event)
-            if data is not None:
-                self._handle_begin(data)
+        handler = self._event_dispatch().get(event.type)
+        if handler is None:
             return
-        if event.type == "end":
-            data = as_end_data(event)
-            if data is not None:
-                self._handle_end(data)
-            return
-        if event.type == "context":
-            data = as_context_data(event)
-            if data is not None:
-                self._handle_context(data)
-            return
-        if event.type == "summary":
-            data = as_summary_data(event)
-            if data is not None:
-                self.handle_summary(data)
-            return
-        if event.type != "match":
-            return
+        handler(event)
+
+    def _event_dispatch(self) -> dict[str, Callable[[RgAnyEvent], None]]:
+        return {
+            "begin": self._handle_begin_event,
+            "end": self._handle_end_event,
+            "context": self._handle_context_event,
+            "summary": self._handle_summary_event,
+            "match": self._handle_match_event,
+        }
+
+    def _handle_begin_event(self, event: RgAnyEvent) -> None:
+        data = as_begin_data(event)
+        if data is not None:
+            self._handle_begin(data)
+
+    def _handle_end_event(self, event: RgAnyEvent) -> None:
+        data = as_end_data(event)
+        if data is not None:
+            self._handle_end(data)
+
+    def _handle_context_event(self, event: RgAnyEvent) -> None:
+        data = as_context_data(event)
+        if data is not None:
+            self._handle_context(data)
+
+    def _handle_summary_event(self, event: RgAnyEvent) -> None:
+        data = as_summary_data(event)
+        if data is not None:
+            self.handle_summary(data)
+
+    def _handle_match_event(self, event: RgAnyEvent) -> None:
         data = as_match_data(event)
         if data is not None:
             self.handle_match(data)
@@ -274,7 +287,11 @@ def collect_events(
     limits: SearchLimits,
     match_factory: Callable[..., RawMatch],
 ) -> RgCollector:
-    """Collect a sequence of ripgrep events into a finalized collector."""
+    """Collect a sequence of ripgrep events into a finalized collector.
+
+    Returns:
+        RgCollector: Function return value.
+    """
     collector = RgCollector(limits=limits, match_factory=match_factory)
     for event in events:
         collector.handle_event(event)

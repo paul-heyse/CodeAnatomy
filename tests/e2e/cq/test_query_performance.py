@@ -12,6 +12,11 @@ from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 
+COLD_QUERY_MAX_SECONDS = 15.0
+WARM_QUERY_MAX_SECONDS = 12.0
+INDEX_BUILD_MAX_SECONDS = 60.0
+SCALING_QUERY_MAX_SECONDS = 12.0
+
 
 def _execute_query(*, plan: Any, query: Any, toolchain: Toolchain, root: Path) -> Any:
     return execute_plan(
@@ -69,7 +74,7 @@ def test_query_latency_cold(toolchain: Toolchain, repo_root: Path) -> None:
     elapsed = time.perf_counter() - start
 
     assert result is not None
-    assert elapsed < 15.0, f"Cold query took {elapsed:.2f}s, expected <15s"
+    assert elapsed < COLD_QUERY_MAX_SECONDS, f"Cold query took {elapsed:.2f}s, expected <15s"
 
 
 @pytest.mark.benchmark
@@ -98,7 +103,7 @@ def test_query_latency_warm(
     elapsed = time.perf_counter() - start
 
     assert result is not None
-    assert elapsed < 12.0, f"Warm query took {elapsed:.2f}s, expected <12s"
+    assert elapsed < WARM_QUERY_MAX_SECONDS, f"Warm query took {elapsed:.2f}s, expected <12s"
 
 
 @pytest.mark.benchmark
@@ -122,7 +127,9 @@ def test_index_build_time(toolchain: Toolchain, repo_root: Path) -> None:
 
     # Index build should be reasonable - adjust threshold based on repo size
     # For CodeAnatomy (~100k LOC), expect <60s on typical hardware
-    assert elapsed < 60.0, f"Index build took {elapsed:.2f}s, expected <60s"
+    assert elapsed < INDEX_BUILD_MAX_SECONDS, (
+        f"Index build took {elapsed:.2f}s, expected <60s"
+    )
 
 
 @pytest.mark.benchmark
@@ -156,4 +163,6 @@ def test_query_scaling_simple(toolchain: Toolchain, repo_root: Path) -> None:
 
     # All simple queries should complete quickly while tolerating CI variance.
     for i, elapsed in enumerate(timings):
-        assert elapsed < 12.0, f"Query {i} took {elapsed:.2f}s, expected <12s"
+        assert elapsed < SCALING_QUERY_MAX_SECONDS, (
+            f"Query {i} took {elapsed:.2f}s, expected <12s"
+        )

@@ -22,7 +22,8 @@ from extract.row_builder import (
 class TestExtractionRowBuilder:
     """Test suite for ExtractionRowBuilder."""
 
-    def test_init_direct(self) -> None:
+    @staticmethod
+    def test_init_direct() -> None:
         """Verify direct initialization with explicit fields."""
         builder = ExtractionRowBuilder(
             file_id="test-file-123",
@@ -35,7 +36,8 @@ class TestExtractionRowBuilder:
         assert builder.file_sha256 == "abc123def456"
         assert builder.repo_id == "my-repo"
 
-    def test_add_identity(self) -> None:
+    @staticmethod
+    def test_add_identity() -> None:
         """Verify add_identity returns correct columns."""
         builder = ExtractionRowBuilder(
             file_id="id1",
@@ -49,7 +51,8 @@ class TestExtractionRowBuilder:
             "file_sha256": "hash1",
         }
 
-    def test_add_repo_identity(self) -> None:
+    @staticmethod
+    def test_add_repo_identity() -> None:
         """Verify add_repo_identity includes repo column."""
         builder = ExtractionRowBuilder(
             file_id="id2",
@@ -65,13 +68,15 @@ class TestExtractionRowBuilder:
             "file_sha256": "hash2",
         }
 
-    def test_add_span(self) -> None:
+    @staticmethod
+    def test_add_span() -> None:
         """Verify add_span returns correct byte offsets."""
         builder = ExtractionRowBuilder(file_id="x", path="y")
         span = builder.add_span(100, 250)
         assert span == {"bstart": 100, "bend": 250}
 
-    def test_add_span_spec(self) -> None:
+    @staticmethod
+    def test_add_span_spec() -> None:
         """Verify add_span_spec returns structured span dict."""
         builder = ExtractionRowBuilder(file_id="x", path="y")
         spec = SpanTemplateSpec(
@@ -88,14 +93,16 @@ class TestExtractionRowBuilder:
         assert result["end"] == {"line0": 15, "col": 20}
         assert result["byte_span"] == {"byte_start": 100, "byte_len": 50}
 
-    def test_add_attrs(self) -> None:
+    @staticmethod
+    def test_add_attrs() -> None:
         """Verify add_attrs returns map entries."""
         builder = ExtractionRowBuilder(file_id="x", path="y")
         attrs = builder.add_attrs({"key1": "value1", "key2": 42})
         assert ("key1", "value1") in attrs
         assert ("key2", "42") in attrs
 
-    def test_build_row(self) -> None:
+    @staticmethod
+    def test_build_row() -> None:
         """Verify build_row merges identity with custom fields."""
         builder = ExtractionRowBuilder(
             file_id="f1",
@@ -110,7 +117,8 @@ class TestExtractionRowBuilder:
         assert row["name"] == "my_func"
         assert "repo" not in row
 
-    def test_build_row_with_repo(self) -> None:
+    @staticmethod
+    def test_build_row_with_repo() -> None:
         """Verify build_row includes repo when requested."""
         builder = ExtractionRowBuilder(
             file_id="f2",
@@ -122,7 +130,8 @@ class TestExtractionRowBuilder:
         assert row["file_id"] == "f2"
         assert row["kind"] == "ClassDef"
 
-    def test_build_row_with_span(self) -> None:
+    @staticmethod
+    def test_build_row_with_span() -> None:
         """Verify build_row_with_span includes byte offsets."""
         builder = ExtractionRowBuilder(
             file_id="f3",
@@ -139,12 +148,14 @@ class TestExtractionRowBuilder:
 class TestModuleFunctions:
     """Test suite for module-level functions."""
 
-    def test_make_span_dict(self) -> None:
+    @staticmethod
+    def test_make_span_dict() -> None:
         """Verify make_span_dict returns correct structure."""
         result = make_span_dict(10, 20)
         assert result == {"bstart": 10, "bend": 20}
 
-    def test_make_span_spec_dict(self) -> None:
+    @staticmethod
+    def test_make_span_spec_dict() -> None:
         """Verify make_span_spec_dict with full specification."""
         spec = SpanTemplateSpec(
             start_line0=0,
@@ -159,14 +170,16 @@ class TestModuleFunctions:
         assert result["col_unit"] == "byte"
         assert result["end_exclusive"] is True
 
-    def test_make_span_spec_dict_empty(self) -> None:
+    @staticmethod
+    def test_make_span_spec_dict_empty() -> None:
         """Verify make_span_spec_dict returns dict with defaults."""
         spec = SpanTemplateSpec()
         result = make_span_spec_dict(spec)
         # With default end_exclusive=True, it should still produce a dict
         assert result is not None
 
-    def test_make_attrs_list(self) -> None:
+    @staticmethod
+    def test_make_attrs_list() -> None:
         """Verify make_attrs_list filters None values."""
         result = make_attrs_list({"a": "1", "b": None, "c": "3"})
         keys = [k for k, _ in result]
@@ -174,7 +187,8 @@ class TestModuleFunctions:
         assert "c" in keys
         assert "b" not in keys
 
-    def test_make_attrs_list_empty(self) -> None:
+    @staticmethod
+    def test_make_attrs_list_empty() -> None:
         """Verify make_attrs_list with no input."""
         result = make_attrs_list(None)
         assert result == []
@@ -192,6 +206,7 @@ class TestExtractionBatchBuilder:
         pa.Schema
             A schema with file_id, path, kind, and name columns.
         """
+        _ = self
         return pa.schema(
             [
                 ("file_id", pa.utf8()),
@@ -201,19 +216,22 @@ class TestExtractionBatchBuilder:
             ]
         )
 
-    def test_init_with_pyarrow_schema(self, simple_schema: pa.Schema) -> None:
+    @staticmethod
+    def test_init_with_pyarrow_schema(simple_schema: pa.Schema) -> None:
         """Verify initialization with pyarrow Schema."""
         builder = ExtractionBatchBuilder(simple_schema)
         assert builder.schema == simple_schema
         assert builder.num_rows == 0
 
-    def test_add_row(self, simple_schema: pa.Schema) -> None:
+    @staticmethod
+    def test_add_row(simple_schema: pa.Schema) -> None:
         """Verify add_row increments row count."""
         builder = ExtractionBatchBuilder(simple_schema)
         builder.add_row({"file_id": "f1", "path": "p1", "kind": "k1", "name": "n1"})
         assert builder.num_rows == 1
 
-    def test_add_rows(self, simple_schema: pa.Schema) -> None:
+    @staticmethod
+    def test_add_rows(simple_schema: pa.Schema) -> None:
         """Verify add_rows adds multiple rows."""
         builder = ExtractionBatchBuilder(simple_schema)
         builder.add_rows(
@@ -225,7 +243,8 @@ class TestExtractionBatchBuilder:
         expected_rows = 2
         assert builder.num_rows == expected_rows
 
-    def test_extend(self, simple_schema: pa.Schema) -> None:
+    @staticmethod
+    def test_extend(simple_schema: pa.Schema) -> None:
         """Verify extend is an alias for add_rows."""
         builder = ExtractionBatchBuilder(simple_schema)
         builder.extend(
@@ -235,14 +254,16 @@ class TestExtractionBatchBuilder:
         )
         assert builder.num_rows == 1
 
-    def test_clear(self, simple_schema: pa.Schema) -> None:
+    @staticmethod
+    def test_clear(simple_schema: pa.Schema) -> None:
         """Verify clear removes all rows."""
         builder = ExtractionBatchBuilder(simple_schema)
         builder.add_row({"file_id": "f1", "path": "p1", "kind": "k1", "name": "n1"})
         builder.clear()
         assert builder.num_rows == 0
 
-    def test_build(self, simple_schema: pa.Schema) -> None:
+    @staticmethod
+    def test_build(simple_schema: pa.Schema) -> None:
         """Verify build returns correct RecordBatch."""
         builder = ExtractionBatchBuilder(simple_schema)
         builder.add_row({"file_id": "f1", "path": "p1", "kind": "k1", "name": "n1"})
@@ -251,7 +272,8 @@ class TestExtractionBatchBuilder:
         assert batch.num_rows == 1
         assert batch.schema == simple_schema
 
-    def test_build_table(self, simple_schema: pa.Schema) -> None:
+    @staticmethod
+    def test_build_table(simple_schema: pa.Schema) -> None:
         """Verify build_table returns correct Table."""
         builder = ExtractionBatchBuilder(simple_schema)
         builder.add_row({"file_id": "f1", "path": "p1", "kind": "k1", "name": "n1"})
@@ -259,7 +281,8 @@ class TestExtractionBatchBuilder:
         assert isinstance(table, pa.Table)
         assert table.num_rows == 1
 
-    def test_build_and_clear(self, simple_schema: pa.Schema) -> None:
+    @staticmethod
+    def test_build_and_clear(simple_schema: pa.Schema) -> None:
         """Verify build_and_clear returns batch and clears rows."""
         builder = ExtractionBatchBuilder(simple_schema)
         builder.add_row({"file_id": "f1", "path": "p1", "kind": "k1", "name": "n1"})
@@ -267,7 +290,8 @@ class TestExtractionBatchBuilder:
         assert batch.num_rows == 1
         assert builder.num_rows == 0
 
-    def test_init_invalid_schema_type(self) -> None:
+    @staticmethod
+    def test_init_invalid_schema_type() -> None:
         """Verify TypeError for invalid schema."""
         with pytest.raises(TypeError, match=r"must be pa\.Schema"):
             ExtractionBatchBuilder(cast("pa.Schema", "not a schema"))
@@ -276,7 +300,8 @@ class TestExtractionBatchBuilder:
 class TestSchemaTemplateOptions:
     """Test suite for SchemaTemplateOptions."""
 
-    def test_default_options(self) -> None:
+    @staticmethod
+    def test_default_options() -> None:
         """Verify default options include standard identity fields."""
         opts = SchemaTemplateOptions()
         fields = extraction_schema_template(opts)
@@ -287,7 +312,8 @@ class TestSchemaTemplateOptions:
         assert "repo" not in names
         assert "bstart" not in names
 
-    def test_with_spans(self) -> None:
+    @staticmethod
+    def test_with_spans() -> None:
         """Verify span fields when requested."""
         opts = SchemaTemplateOptions(include_bstart=True, include_bend=True)
         fields = extraction_schema_template(opts)
@@ -295,14 +321,16 @@ class TestSchemaTemplateOptions:
         assert "bstart" in names
         assert "bend" in names
 
-    def test_with_repo(self) -> None:
+    @staticmethod
+    def test_with_repo() -> None:
         """Verify repo field when requested."""
         opts = SchemaTemplateOptions(include_repo=True)
         fields = extraction_schema_template(opts)
         names = [name for name, _ in fields]
         assert "repo" in names
 
-    def test_minimal_schema(self) -> None:
+    @staticmethod
+    def test_minimal_schema() -> None:
         """Verify minimal schema with everything disabled."""
         opts = SchemaTemplateOptions(
             include_file_id=False,
@@ -312,7 +340,8 @@ class TestSchemaTemplateOptions:
         fields = extraction_schema_template(opts)
         assert fields == []
 
-    def test_schema_field_types(self) -> None:
+    @staticmethod
+    def test_schema_field_types() -> None:
         """Verify correct Arrow types for fields."""
         opts = SchemaTemplateOptions(include_bstart=True, include_bend=True)
         fields = extraction_schema_template(opts)

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
 from tools.cq.search.rg.adapter import (
+    FilePatternSearchOptions,
     find_call_candidates,
     find_callers,
     find_files_with_pattern,
@@ -28,8 +29,10 @@ class TestSearchAdapterIntegration:
         files = find_files_with_pattern(
             repo_root,
             pattern=r"def test_",
-            include_globs=["**/tests/**/*.py"],
-            limits=SearchLimits(max_files=100),
+            options=FilePatternSearchOptions(
+                include_globs=("**/tests/**/*.py",),
+                limits=SearchLimits(max_files=100),
+            ),
         )
 
         assert len(files) > 0
@@ -138,10 +141,14 @@ class TestMacroIntegration:
 class TestSearchLimitsProfiles:
     """Test that search limit profiles work correctly."""
 
+    INTERACTIVE_TIMEOUT_SECONDS = 10.0
+    INTERACTIVE_MAX_FILES = 1000
+    MAX_TOTAL_MATCHES = 3
+
     def test_interactive_profile_is_fast(self) -> None:
         """Test INTERACTIVE profile has reasonable limits for quick queries."""
-        assert INTERACTIVE.timeout_seconds <= 10.0
-        assert INTERACTIVE.max_files <= 1000
+        assert INTERACTIVE.timeout_seconds <= self.INTERACTIVE_TIMEOUT_SECONDS
+        assert INTERACTIVE.max_files <= self.INTERACTIVE_MAX_FILES
 
     def test_custom_limits_work(self) -> None:
         """Test custom SearchLimits work with adapter."""
@@ -162,4 +169,4 @@ class TestSearchLimitsProfiles:
         )
 
         # Should respect the limits
-        assert len(results) <= 3
+        assert len(results) <= self.MAX_TOTAL_MATCHES

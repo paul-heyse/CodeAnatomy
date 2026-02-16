@@ -15,6 +15,9 @@ from tools.cq.cli_app.app import (
     app,
 )
 
+VERBOSE_LEVEL_TWO = 2
+DEFAULT_CONFIG_PROVIDER_COUNT = 2
+
 
 class TestMetaAppParsing:
     """Tests for meta-app token parsing."""
@@ -29,7 +32,7 @@ class TestMetaAppParsing:
     def test_meta_parses_verbose(self) -> None:
         """Test that repeated verbosity flags are counted by meta app."""
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "-vv"])
-        assert bound.kwargs["global_opts"].verbose == 2
+        assert bound.kwargs["global_opts"].verbose == VERBOSE_LEVEL_TWO
 
     def test_meta_parses_verbose_long_flag(self) -> None:
         """Test that --verbose increments verbosity without a value."""
@@ -176,7 +179,7 @@ class TestConfigChain:
         )
         assert launch.output_format is not None
         assert app.config is not None
-        assert len(app.config) == 2
+        assert len(app.config) == DEFAULT_CONFIG_PROVIDER_COUNT
 
     def test_build_launch_context_no_config_keeps_env(self) -> None:
         """Test launch context config chain with --no-config."""

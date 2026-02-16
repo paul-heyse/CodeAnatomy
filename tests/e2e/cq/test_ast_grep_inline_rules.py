@@ -8,6 +8,8 @@ import pytest
 from tools.cq.query.executor import _execute_ast_grep_rules
 from tools.cq.query.planner import AstGrepRule
 
+MIN_RULE_RECORDS = 2
+
 
 @pytest.mark.e2e
 @pytest.mark.requires_ast_grep
@@ -38,4 +40,4 @@ def foo(x: int) -> int:
     rule_ids = {finding.details.get("rule_id") for finding in findings}
     assert "pattern_0" in rule_ids
     assert "pattern_1" in rule_ids
-    assert len(records) >= 2
+    assert len(records) >= MIN_RULE_RECORDS

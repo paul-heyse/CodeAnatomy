@@ -12,20 +12,26 @@ from tools.cq.macros.shared import (
     scope_filter_applied,
 )
 
+MAX_FILES_LIMIT = 3
+
 
 def test_scope_filter_applied_detects_include() -> None:
+    """Test scope filter applied detects include."""
     assert scope_filter_applied(include=["*.py"], exclude=None) is True
 
 
 def test_scope_filter_applied_detects_exclude() -> None:
+    """Test scope filter applied detects exclude."""
     assert scope_filter_applied(include=None, exclude=["tests/*"]) is True
 
 
 def test_scope_filter_applied_returns_false_when_none() -> None:
+    """Test scope filter applied returns false when none."""
     assert scope_filter_applied(include=None, exclude=None) is False
 
 
 def test_macro_score_payload_populates_buckets() -> None:
+    """Test macro score payload populates buckets."""
     payload = macro_score_payload(files=3, findings=5)
     assert payload.impact >= 0.0
     assert payload.confidence >= 0.0
@@ -34,6 +40,7 @@ def test_macro_score_payload_populates_buckets() -> None:
 
 
 def test_macro_scoring_details_supports_breakage_signals() -> None:
+    """Test macro scoring details supports breakage signals."""
     details = macro_scoring_details(
         sites=10,
         files=4,
@@ -48,6 +55,7 @@ def test_macro_scoring_details_supports_breakage_signals() -> None:
 
 
 def test_resolve_target_files_finds_explicit_path(tmp_path: Path) -> None:
+    """Test resolve target files finds explicit path."""
     test_file = tmp_path / "test.py"
     test_file.write_text("def foo(): pass")
 
@@ -61,11 +69,12 @@ def test_resolve_target_files_finds_explicit_path(tmp_path: Path) -> None:
 
 
 def test_iter_files_respects_max_files(tmp_path: Path) -> None:
+    """Test iter files respects max files."""
     for i in range(5):
         (tmp_path / f"file{i}.py").write_text(f"# File {i}")
 
     result = iter_files(
         root=tmp_path,
-        max_files=3,
+        max_files=MAX_FILES_LIMIT,
     )
-    assert len(result) <= 3
+    assert len(result) <= MAX_FILES_LIMIT

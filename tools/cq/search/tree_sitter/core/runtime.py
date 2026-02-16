@@ -44,6 +44,29 @@ class QueryExecutionCallbacksV1:
     ) = None
 
 
+@dataclass(frozen=True, slots=True)
+class _BoundedQueryStateV1:
+    effective_settings: QueryExecutionSettingsV1
+    cursor: object
+    windows: list[tuple[QueryWindowV1 | None, QueryPointWindowV1 | None]]
+    base_window_count: int
+    progress: Callable[[object], bool] | None
+    predicate_callback: Callable[[str, object, int, Mapping[str, Sequence[object]]], bool] | None
+    started: float
+    deadline: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundedQueryRequestV1:
+    query: Query
+    root: Node
+    runtime_label: str
+    windows: Iterable[QueryWindowV1] | None = None
+    point_windows: Iterable[QueryPointWindowV1] | None = None
+    settings: QueryExecutionSettingsV1 | None = None
+    callbacks: QueryExecutionCallbacksV1 | None = None
+
+
 def _default_window(root: Node) -> QueryWindowV1:
     return QueryWindowV1(
         start_byte=int(getattr(root, "start_byte", 0)),
@@ -297,6 +320,22 @@ def _cursor_captures(
     return cursor.captures(root)
 
 
+def _include_capture_node(
+    node: Node,
+    *,
+    has_change_context: bool,
+) -> bool:
+    if not has_change_context:
+        return True
+    has_changes = getattr(node, "has_changes", None)
+    if has_changes is None:
+        return True
+    try:
+        return bool(has_changes)
+    except (RuntimeError, TypeError, ValueError, AttributeError):
+        return True
+
+
 def _cursor_matches(
     *,
     cursor: Any,
@@ -321,6 +360,67 @@ def _cursor_matches(
     return cursor.matches(root)
 
 
+def _merge_capture_map(
+    *,
+    merged: dict[str, list[Node]],
+    captures: object,
+    has_change_context: bool,
+) -> None:
+    if not isinstance(captures, dict):
+        return
+    for capture_name, nodes in captures.items():
+        if not isinstance(capture_name, str) or not isinstance(nodes, list):
+            continue
+        filtered = [
+            node
+            for node in nodes
+            if hasattr(node, "start_byte")
+            and _include_capture_node(node, has_change_context=has_change_context)
+        ]
+        if filtered:
+            merged.setdefault(capture_name, []).extend(filtered)
+
+
+def _prepare_bounded_query_state(
+    *,
+    request: _BoundedQueryRequestV1,
+) -> _BoundedQueryStateV1:
+    effective_settings, tune_plan = _autotuned_settings(
+        request.settings or QueryExecutionSettingsV1(),
+        runtime_label=request.runtime_label,
+    )
+    callback_bundle = request.callbacks or QueryExecutionCallbacksV1()
+    started = monotonic()
+    deadline = (
+        started + (float(effective_settings.budget_ms) / 1000.0)
+        if effective_settings.budget_ms is not None and effective_settings.budget_ms > 0
+        else None
+    )
+    plan = _window_plan(
+        root=request.root,
+        windows=request.windows,
+        point_windows=request.point_windows,
+        split_target=tune_plan.window_split_target,
+    )
+    return _BoundedQueryStateV1(
+        effective_settings=effective_settings,
+        cursor=_build_cursor(request.query, effective_settings),
+        windows=plan,
+        base_window_count=_base_window_count(
+            root=request.root,
+            windows=request.windows,
+            point_windows=request.point_windows,
+        ),
+        progress=_combined_progress_callback(
+            budget_ms=effective_settings.budget_ms,
+            progress_callback=callback_bundle.progress_callback,
+        ),
+        predicate_callback=callback_bundle.predicate_callback,
+        started=started,
+        deadline=deadline,
+    )
+
+
 def run_bounded_query_captures(
     query: Query,
     root: Node,
@@ -336,46 +436,33 @@ def run_bounded_query_captures(
         tuple[dict[str, list[Node]], QueryExecutionTelemetryV1]: Capture map and
             execution telemetry.
     """
-    input_settings = settings or QueryExecutionSettingsV1()
-    effective_settings, tune_plan = _autotuned_settings(
-        input_settings,
-        runtime_label="query_captures",
-    )
-    callback_bundle = callbacks or QueryExecutionCallbacksV1()
-    cursor = _build_cursor(query, effective_settings)
-    plan = _window_plan(
-        root=root,
-        windows=windows,
-        point_windows=point_windows,
-        split_target=tune_plan.window_split_target,
-    )
-    base_window_count = _base_window_count(root=root, windows=windows, point_windows=point_windows)
-    progress = _combined_progress_callback(
-        budget_ms=effective_settings.budget_ms,
-        progress_callback=callback_bundle.progress_callback,
-    )
-    started = monotonic()
-    deadline = (
-        started + (float(effective_settings.budget_ms) / 1000.0)
-        if effective_settings.budget_ms is not None and effective_settings.budget_ms > 0
-        else None
+    state = _prepare_bounded_query_state(
+        request=_BoundedQueryRequestV1(
+            query=query,
+            root=root,
+            windows=windows,
+            point_windows=point_windows,
+            settings=settings,
+            callbacks=callbacks,
+            runtime_label="query_captures",
+        )
     )
 
     merged: dict[str, list[Node]] = {}
     windows_executed = 0
     degrade_reason: str | None = None
     budget_cancelled = False
-    for window, point_window in plan:
-        if deadline is not None and monotonic() >= deadline:
+    for window, point_window in state.windows:
+        if state.deadline is not None and monotonic() >= state.deadline:
             budget_cancelled = True
             break
         window_applied = _apply_window(
-            cursor=cursor,
+            cursor=state.cursor,
             window=window,
             point_window=point_window,
-            window_mode=effective_settings.window_mode,
+            window_mode=state.effective_settings.window_mode,
         )
-        if not window_applied and effective_settings.window_mode == "containment_required":
+        if not window_applied and state.effective_settings.window_mode == "containment_required":
             degrade_reason = derive_degrade_reason(
                 exceeded_match_limit=False,
                 cancelled=False,
@@ -383,30 +470,28 @@ def run_bounded_query_captures(
                 window_applied=False,
             )
             break
-        if not _progress_allows(progress):
+        if not _progress_allows(state.progress):
             break
         captures = _cursor_captures(
-            cursor=cursor,
+            cursor=state.cursor,
             root=root,
-            predicate_callback=callback_bundle.predicate_callback,
-            progress=progress,
+            predicate_callback=state.predicate_callback,
+            progress=state.progress,
         )
         windows_executed += 1
-        if isinstance(captures, dict):
-            for capture_name, nodes in captures.items():
-                if not isinstance(capture_name, str) or not isinstance(nodes, list):
-                    continue
-                merged.setdefault(capture_name, []).extend(
-                    node for node in nodes if hasattr(node, "start_byte")
-                )
-        if bool(getattr(cursor, "did_exceed_match_limit", False)):
+        _merge_capture_map(
+            merged=merged,
+            captures=captures,
+            has_change_context=state.effective_settings.has_change_context,
+        )
+        if bool(getattr(state.cursor, "did_exceed_match_limit", False)):
             break
 
-    exceeded = bool(getattr(cursor, "did_exceed_match_limit", False))
+    exceeded = bool(getattr(state.cursor, "did_exceed_match_limit", False))
     cancelled = _cancelled(
-        progress=progress,
+        progress=state.progress,
         windows_executed=windows_executed,
-        windows_total=len(plan),
+        windows_total=len(state.windows),
         exceeded_match_limit=exceeded,
     )
     cancelled = cancelled or budget_cancelled
@@ -416,15 +501,15 @@ def run_bounded_query_captures(
             cancelled=cancelled,
         )
     telemetry = QueryExecutionTelemetryV1(
-        windows_total=len(plan),
+        windows_total=len(state.windows),
         windows_executed=windows_executed,
         capture_count=sum(len(nodes) for nodes in merged.values()),
         exceeded_match_limit=exceeded,
         cancelled=cancelled,
-        window_split_count=max(0, len(plan) - base_window_count),
+        window_split_count=max(0, len(state.windows) - state.base_window_count),
         degrade_reason=degrade_reason,
     )
-    record_runtime_sample("query_captures", (monotonic() - started) * 1000.0)
+    record_runtime_sample("query_captures", (monotonic() - state.started) * 1000.0)
     return merged, telemetry
 
 
@@ -443,29 +528,16 @@ def run_bounded_query_matches(
         tuple[list[tuple[int, dict[str, list[Node]]]], QueryExecutionTelemetryV1]:
             Match rows and execution telemetry.
     """
-    input_settings = settings or QueryExecutionSettingsV1()
-    effective_settings, tune_plan = _autotuned_settings(
-        input_settings,
-        runtime_label="query_matches",
-    )
-    callback_bundle = callbacks or QueryExecutionCallbacksV1()
-    cursor = _build_cursor(query, effective_settings)
-    plan = _window_plan(
-        root=root,
-        windows=windows,
-        point_windows=point_windows,
-        split_target=tune_plan.window_split_target,
-    )
-    base_window_count = _base_window_count(root=root, windows=windows, point_windows=point_windows)
-    progress = _combined_progress_callback(
-        budget_ms=effective_settings.budget_ms,
-        progress_callback=callback_bundle.progress_callback,
-    )
-    started = monotonic()
-    deadline = (
-        started + (float(effective_settings.budget_ms) / 1000.0)
-        if effective_settings.budget_ms is not None and effective_settings.budget_ms > 0
-        else None
+    state = _prepare_bounded_query_state(
+        request=_BoundedQueryRequestV1(
+            query=query,
+            root=root,
+            windows=windows,
+            point_windows=point_windows,
+            settings=settings,
+            callbacks=callbacks,
+            runtime_label="query_matches",
+        )
     )
 
     merged: list[tuple[int, dict[str, list[Node]]]] = []
@@ -473,17 +545,17 @@ def run_bounded_query_matches(
     windows_executed = 0
     degrade_reason: str | None = None
     budget_cancelled = False
-    for window, point_window in plan:
-        if deadline is not None and monotonic() >= deadline:
+    for window, point_window in state.windows:
+        if state.deadline is not None and monotonic() >= state.deadline:
             budget_cancelled = True
             break
         window_applied = _apply_window(
-            cursor=cursor,
+            cursor=state.cursor,
             window=window,
             point_window=point_window,
-            window_mode=effective_settings.window_mode,
+            window_mode=state.effective_settings.window_mode,
         )
-        if not window_applied and effective_settings.window_mode == "containment_required":
+        if not window_applied and state.effective_settings.window_mode == "containment_required":
             degrade_reason = derive_degrade_reason(
                 exceeded_match_limit=False,
                 cancelled=False,
@@ -491,30 +563,30 @@ def run_bounded_query_matches(
                 window_applied=False,
             )
             break
-        if not _progress_allows(progress):
+        if not _progress_allows(state.progress):
             break
         matches = _cursor_matches(
-            cursor=cursor,
+            cursor=state.cursor,
             root=root,
-            predicate_callback=callback_bundle.predicate_callback,
-            progress=progress,
+            predicate_callback=state.predicate_callback,
+            progress=state.progress,
         )
         windows_executed += 1
         _merge_window_matches(
             matches=matches,
-            require_containment=effective_settings.require_containment,
+            require_containment=state.effective_settings.require_containment,
             window=window,
             seen_match_fingerprints=seen_match_fingerprints,
             merged=merged,
         )
-        if bool(getattr(cursor, "did_exceed_match_limit", False)):
+        if bool(getattr(state.cursor, "did_exceed_match_limit", False)):
             break
 
-    exceeded = bool(getattr(cursor, "did_exceed_match_limit", False))
+    exceeded = bool(getattr(state.cursor, "did_exceed_match_limit", False))
     cancelled = _cancelled(
-        progress=progress,
+        progress=state.progress,
         windows_executed=windows_executed,
-        windows_total=len(plan),
+        windows_total=len(state.windows),
         exceeded_match_limit=exceeded,
     )
     cancelled = cancelled or budget_cancelled
@@ -524,15 +596,15 @@ def run_bounded_query_matches(
             cancelled=cancelled,
         )
     telemetry = QueryExecutionTelemetryV1(
-        windows_total=len(plan),
+        windows_total=len(state.windows),
         windows_executed=windows_executed,
         match_count=len(merged),
         exceeded_match_limit=exceeded,
         cancelled=cancelled,
-        window_split_count=max(0, len(plan) - base_window_count),
+        window_split_count=max(0, len(state.windows) - state.base_window_count),
         degrade_reason=degrade_reason,
     )
-    record_runtime_sample("query_matches", (monotonic() - started) * 1000.0)
+    record_runtime_sample("query_matches", (monotonic() - state.started) * 1000.0)
     return merged, telemetry
 
 

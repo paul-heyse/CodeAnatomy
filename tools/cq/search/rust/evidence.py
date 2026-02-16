@@ -44,7 +44,11 @@ class RustFactPayloadV1(CqOutputStruct, frozen=True):
 
 
 def coerce_fact_payload(payload: dict[str, object]) -> RustFactPayloadV1:
-    """Coerce a generic payload into typed Rust fact payload."""
+    """Coerce a generic payload into typed Rust fact payload.
+
+    Returns:
+        RustFactPayloadV1: Function return value.
+    """
     return convert_lax(payload, type_=RustFactPayloadV1)
 
 
@@ -75,7 +79,11 @@ def _expansion_result_rows(payload: Mapping[str, object]) -> tuple[RustMacroExpa
 
 
 def macro_rows(calls: list[str]) -> tuple[RustMacroEvidenceV1, ...]:
-    """Project macro call names into canonical evidence rows."""
+    """Project macro call names into canonical evidence rows.
+
+    Returns:
+        tuple[RustMacroEvidenceV1, ...]: Function return value.
+    """
     seen: set[str] = set()
     rows: list[RustMacroEvidenceV1] = []
     for name in calls:
@@ -97,7 +105,11 @@ def macro_rows(calls: list[str]) -> tuple[RustMacroEvidenceV1, ...]:
 
 
 def build_macro_evidence(payload: dict[str, object]) -> tuple[RustMacroEvidenceV1, ...]:
-    """Build macro-expansion evidence rows from Rust enrichment payload fields."""
+    """Build macro-expansion evidence rows from Rust enrichment payload fields.
+
+    Returns:
+        tuple[RustMacroEvidenceV1, ...]: Function return value.
+    """
     results = _expansion_result_rows(payload)
     if results:
         rows: list[RustMacroEvidenceV1] = []
@@ -130,12 +142,20 @@ def build_macro_evidence(payload: dict[str, object]) -> tuple[RustMacroEvidenceV
 def build_macro_expansion_evidence(
     payload: dict[str, object],
 ) -> tuple[RustMacroEvidenceV1, ...]:
-    """Build explicit macro-expansion evidence rows from enrichment payload fields."""
+    """Build explicit macro-expansion evidence rows from enrichment payload fields.
+
+    Returns:
+        tuple[RustMacroEvidenceV1, ...]: Function return value.
+    """
     return build_macro_evidence(payload)
 
 
 def attach_macro_expansion_evidence(payload: dict[str, object]) -> dict[str, object]:
-    """Attach serialized macro expansion evidence to a payload in-place."""
+    """Attach serialized macro expansion evidence to a payload in-place.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     evidence = build_macro_expansion_evidence(payload)
     payload["macro_expansions"] = [msgspec.to_builtins(row) for row in evidence]
     return payload
@@ -179,7 +199,11 @@ def _fallback_module_rows(
 
 
 def build_rust_module_graph(payload: Mapping[str, object]) -> RustModuleGraphV1:
-    """Build module graph rows from rust tree-sitter fact payloads."""
+    """Build module graph rows from rust tree-sitter fact payloads.
+
+    Returns:
+        RustModuleGraphV1: Function return value.
+    """
     module_rows_raw = payload.get("rust_module_rows")
     import_rows_raw = payload.get("rust_import_rows")
 
@@ -202,14 +226,22 @@ def build_rust_module_graph(payload: Mapping[str, object]) -> RustModuleGraphV1:
 
 
 def attach_rust_module_graph(payload: dict[str, object]) -> dict[str, object]:
-    """Attach serialized module graph rows to enrichment payload."""
+    """Attach serialized module graph rows to enrichment payload.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     graph = build_rust_module_graph(payload)
     payload["rust_module_graph"] = msgspec.to_builtins(graph)
     return payload
 
 
 def attach_rust_evidence(payload: dict[str, object]) -> dict[str, object]:
-    """Attach macro and module-graph evidence payloads in-place."""
+    """Attach macro and module-graph evidence payloads in-place.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     return attach_rust_module_graph(attach_macro_expansion_evidence(payload))
 
 

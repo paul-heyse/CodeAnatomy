@@ -734,7 +734,11 @@ def enrich_context_by_byte_range(
     byte_start: int,
     byte_end: int,
 ) -> dict[str, object]:
-    """Run Rust byte-range enrichment through the consolidated lane."""
+    """Run Rust byte-range enrichment through the consolidated lane.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     payload = enrich_rust_context_by_byte_range(
         source,
         byte_start=byte_start,
@@ -744,7 +748,11 @@ def enrich_context_by_byte_range(
 
 
 def extract_rust_context(request: RustEnrichmentRequest) -> dict[str, object]:
-    """Extract Rust enrichment payload for a byte-range request."""
+    """Extract Rust enrichment payload for a byte-range request.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     payload = enrich_rust_context_by_byte_range(
         request.source,
         byte_start=request.byte_start,

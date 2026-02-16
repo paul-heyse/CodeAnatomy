@@ -16,6 +16,8 @@ from tools.cq.macros.calls import (
     cmd_calls,
 )
 
+MAX_TARGET_CALLEE_FINDINGS = 10
+
 
 def _write_file(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -23,6 +25,7 @@ def _write_file(path: Path, content: str) -> None:
 
 
 def test_cmd_calls_uses_ast_grep_when_available(tmp_path: Path) -> None:
+    """Test cmd calls uses ast grep when available."""
     tc = Toolchain.detect()
     if not tc.has_sgpy:
         pytest.skip("ast-grep-py not available")
@@ -199,7 +202,7 @@ def test_cmd_calls_includes_target_callees_and_insight_counters(tmp_path: Path) 
     result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
     target_callees = [section for section in result.sections if section.title == "Target Callees"]
     assert target_callees, "Target Callees section missing"
-    assert len(target_callees[0].findings) <= 10
+    assert len(target_callees[0].findings) <= MAX_TARGET_CALLEE_FINDINGS
 
     insight = cast("Mapping[str, object]", result.summary.get("front_door_insight", {}))
     assert insight
@@ -284,6 +287,7 @@ def test_extract_context_snippet_prioritizes_anchor_block() -> None:
 
 
 def test_calls_payload_reason_normalizes_python_semantic_timeout() -> None:
+    """Test calls payload reason normalizes python semantic timeout."""
     payload: dict[str, object] = {
         "coverage": {"status": "not_resolved", "reason": "timeout"},
     }
@@ -291,6 +295,7 @@ def test_calls_payload_reason_normalizes_python_semantic_timeout() -> None:
 
 
 def test_calls_payload_reason_uses_fallback_for_rust() -> None:
+    """Test calls payload reason uses fallback for rust."""
     payload: dict[str, object] = {}
     assert (
         _calls_payload_reason("rust", payload, fallback_reason="request_failed") == "request_failed"

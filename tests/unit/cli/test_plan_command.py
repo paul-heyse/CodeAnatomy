@@ -131,6 +131,7 @@ def test_plan_command_uses_engine_profile_and_emits_runtime_metadata(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Test plan command uses engine profile and emits runtime metadata."""
     fake_session_factory = _configure_plan_test_doubles(monkeypatch)
 
     exit_code = plan_command(
@@ -152,6 +153,7 @@ def test_plan_command_fails_when_session_initialization_fails(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Test plan command fails when session initialization fails."""
     _configure_plan_test_doubles(monkeypatch, fail_session=True)
 
     exit_code = plan_command(

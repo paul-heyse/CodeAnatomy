@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from tools.cq.search._shared.core import PythonNodeEnrichmentSettingsV1, convert_from_attributes
 
+QUERY_BUDGET_MS = 10
+
 
 @dataclass(frozen=True)
 class _RuntimeAttrs:
@@ -19,14 +21,15 @@ class _RuntimeAttrs:
 
 
 def test_convert_from_attributes_to_msgspec_struct() -> None:
+    """Test convert from attributes to msgspec struct."""
     runtime = _RuntimeAttrs(
         source_bytes=b"x",
         line=1,
         col=0,
         cache_key="abc",
-        query_budget_ms=10,
+        query_budget_ms=QUERY_BUDGET_MS,
     )
     converted = convert_from_attributes(runtime, type_=PythonNodeEnrichmentSettingsV1)
     assert isinstance(converted, PythonNodeEnrichmentSettingsV1)
     assert converted.cache_key == "abc"
-    assert converted.query_budget_ms == 10
+    assert converted.query_budget_ms == QUERY_BUDGET_MS

@@ -1,29 +1,30 @@
 # 02 — Search Pipeline
 
-**Version:** 0.4.0
+**Version:** 0.5.0
 **Last Updated:** 2026-02-15
-**Status:** Phase 2 Complete
+**Status:** Production
 
 ## Scope
 
 This document covers the CQ search pipeline (`tools/cq/search/`), which transforms text matches from ripgrep into semantically-enriched, object-resolved findings. The search subsystem is the foundation of CQ's `cq search` command and provides candidate collection for entity queries.
 
 **What's covered:**
-- Pipeline orchestration and flow
+- Three-phase pipeline architecture (collection → classification → enrichment)
 - Candidate collection via ripgrep
 - Three-tier classification system
 - Five-stage Python enrichment
-- Rust enrichment
+- Two-stage Rust enrichment
 - Object resolution and aggregation
 - Cross-source agreement validation
-- Result assembly
+- Parallel classification execution
+- Multi-language support (Python, Rust)
+- Result assembly and section construction
 
 **Cross-references:**
 - Tree-sitter details → **doc 07** (07_tree_sitter_engine.md)
 - LSP integration → **doc 06** (06_cross_cutting_contracts.md)
 - FrontDoor Insight contracts → **doc 06**
 - Caching infrastructure → **doc 10** (10_runtime_services.md)
-- Advanced evidence planes → **doc 06**
 
 ---
 
@@ -35,19 +36,19 @@ The search subsystem is organized into subdirectories by functional concern.
 
 ```
 tools/cq/search/
-├── pipeline/        # Core search orchestration (~5,923 LOC)
-├── python/          # Python-specific enrichment (~3,678 LOC)
-├── rg/              # Ripgrep integration (~1,053 LOC)
-├── objects/         # Object resolution system (~1,109 LOC)
-├── semantic/        # Semantic integration (~1,399 LOC)
-├── rust/            # Rust enrichment (~900 LOC)
-├── enrichment/      # Shared enrichment utilities (~200 LOC)
-├── _shared/         # Common contracts and utilities (~300 LOC)
+├── pipeline/        # Core search orchestration (6,105 LOC)
+├── python/          # Python-specific enrichment (3,677 LOC)
+├── rg/              # Ripgrep integration (1,578 LOC)
+├── objects/         # Object resolution system (1,109 LOC)
+├── semantic/        # Semantic integration (1,399 LOC)
+├── rust/            # Rust enrichment (1,261 LOC)
+├── enrichment/      # Shared enrichment utilities (442 LOC)
+├── _shared/         # Common contracts and utilities (958 LOC)
 ├── generated/       # Generated node type schemas (~1,500 LOC)
-└── queries/         # Language-specific query definitions
+└── tree_sitter/     # Tree-sitter integration (documented in doc 07)
 ```
 
-**Total:** ~15,500 LOC (excluding tree-sitter subdirectory, which is documented in doc 07)
+**Total:** ~16,576 LOC (excluding tree-sitter subdirectory, which is documented in doc 07)
 
 ### Key Modules by Directory
 
@@ -55,14 +56,15 @@ tools/cq/search/
 
 | Module | LOC | Purpose |
 |--------|-----|---------|
-| `smart_search.py` | 3,769 | Main entry point, partition execution, result assembly |
+| `smart_search.py` | 3,897 | Main entry point, partition execution, result assembly |
 | `classifier.py` | 659 | Three-tier classification (heuristic → AST → record) |
 | `partition_pipeline.py` | 550 | Per-language partition execution |
-| `classifier_runtime.py` | 431 | Classification runtime (caches, node lookup, records) |
+| `classifier_runtime.py` | 450 | Classification runtime (caches, node lookup, records) |
 | `context_window.py` | 118 | Context snippet extraction with window computation |
 | `candidate_normalizer.py` | 101 | Definition candidate selection |
-| `models.py` | 75 | SearchConfig, SearchRequest, SmartSearchContext |
-| `profiles.py` | 65 | SearchLimits presets with constraint annotations (DEFAULT, INTERACTIVE, AUDIT) |
+| `contracts.py` | 99 | SearchConfig, SearchRequest, SmartSearchContext |
+| `orchestration.py` | 110 | Multi-language orchestration helpers |
+| `profiles.py` | 80 | SearchLimits presets with constraint annotations |
 | `__init__.py` | 41 | Package facade with lazy module loading |
 
 **Lazy Loading:** The `__init__.py` uses `__getattr__` to defer imports until first access, reducing startup overhead and preventing import cycles. Exports include `SearchContext`, `SearchPipeline`, `SearchResultAssembly`, `assemble_result`, and `run_smart_search_pipeline`.
@@ -71,22 +73,23 @@ tools/cq/search/
 
 | Module | LOC | Purpose |
 |--------|-----|---------|
-| `extractors.py` | 2,236 | Five-stage Python enrichment pipeline |
+| `extractors.py` | 2,242 | Five-stage Python enrichment pipeline |
 | `resolution_support.py` | 625 | Python resolution helpers |
 | `analysis_session.py` | 320 | Per-file analysis session cache |
 | `resolution_index.py` | 255 | Resolution index construction |
-| `semantic_signal.py` | 59 | Semantic signal evaluation |
-| `agreement.py` | 55 | Cross-source agreement validation |
+| `evidence.py` | 114 | Python evidence extraction |
+| `pipeline_support.py` | 92 | Pipeline utility functions |
 
 #### `rg/` — Ripgrep Integration
 
 | Module | LOC | Purpose |
 |--------|-----|---------|
-| `adapter.py` | 243 | Ripgrep command construction |
-| `runner.py` | 235 | Ripgrep process execution |
-| `codec.py` | 219 | Ripgrep JSON event parsing |
-| `collector.py` | 210 | RgCollector for streaming event collection |
-| `contracts.py` | 63 | Request/response contracts |
+| `runner.py` | 353 | Ripgrep process execution |
+| `adapter.py` | 337 | Ripgrep command construction |
+| `codec.py` | 324 | Ripgrep JSON event parsing |
+| `collector.py` | 285 | RgCollector for streaming event collection |
+| `prefilter.py` | 124 | Prefilter optimizations |
+| `contracts.py` | 72 | Request/response contracts |
 
 #### `objects/` — Object Resolution
 
@@ -107,14 +110,30 @@ tools/cq/search/
 
 | Module | LOC | Purpose |
 |--------|-----|---------|
-| `enrichment.py` | 725 | Two-stage Rust enrichment (tree-sitter → syntax) |
-| `evidence.py` | 145 | Rust evidence extraction |
+| `enrichment.py` | 766 | Two-stage Rust enrichment (tree-sitter → syntax) |
+| `evidence.py` | 231 | Rust evidence extraction |
+| `extensions.py` | 169 | Rust-specific extensions |
+| `contracts.py` | 65 | Rust enrichment contracts |
+
+#### `enrichment/` — Shared Enrichment
+
+| Module | LOC | Purpose |
+|--------|-----|---------|
+| `core.py` | 366 | Shared enrichment utilities and normalization |
+| `contracts.py` | 43 | Enrichment contract definitions |
+
+#### `_shared/` — Common Utilities
+
+| Module | LOC | Purpose |
+|--------|-----|---------|
+| `search_contracts.py` | 541 | Search-specific contracts and coercion |
+| `core.py` | 390 | Core shared utilities and requests |
 
 ---
 
 ## Entry Point: smart_search()
 
-**Location:** `pipeline/smart_search.py`
+**Location:** `pipeline/smart_search.py:3897`
 
 **Signature:**
 ```python
@@ -158,14 +177,14 @@ flowchart TD
     C --> C2[Rust Partition]
 
     C1 --> P1[Collect Candidates]
-    C1 --> P2[Classify Matches]
-    C1 --> P3[Enrich Python]
-    C1 --> P4[Resolve Objects]
+    P1 --> P2[Classify Matches]
+    P2 --> P3[Enrich Python]
+    P3 --> P4[Resolve Objects]
 
     C2 --> R1[Collect Candidates]
-    C2 --> R2[Classify Matches]
-    C2 --> R3[Enrich Rust]
-    C2 --> R4[Resolve Objects]
+    R1 --> R2[Classify Matches]
+    R2 --> R3[Enrich Rust]
+    R3 --> R4[Resolve Objects]
 ```
 
 ### Pipeline Stages
@@ -201,7 +220,11 @@ flowchart TD
 
 ---
 
-## Candidate Collection
+## Three-Phase Architecture
+
+The search pipeline operates in three distinct phases:
+
+### Phase 1: Candidate Collection
 
 **Purpose:** Execute native ripgrep search and collect raw matches.
 
@@ -227,8 +250,7 @@ def collect_candidates(
     """
 ```
 
-### Implementation Flow
-
+**Implementation Flow:**
 ```python
 # 1. Build and execute ripgrep command
 proc = run_rg_json(
@@ -236,7 +258,7 @@ proc = run_rg_json(
         root=request.root,
         pattern=request.pattern,
         mode=request.mode,
-        lang_types=(ripgrep_type_for_language(request.lang),),
+        lang_types=ripgrep_types_for_scope(request.lang),
         include_globs=request.include_globs or [],
         exclude_globs=request.exclude_globs or [],
         limits=request.limits,
@@ -265,9 +287,38 @@ stats = msgspec.structs.replace(
 )
 ```
 
+### Phase 2: Classification
+
+**Purpose:** Categorize matches using three-tier progressive refinement.
+
+**Tiers:**
+1. Heuristic (O(1) line patterns)
+2. AST node (O(log n) cached ast-grep)
+3. Record-based (O(log n) ast-grep records)
+
+**See "Three-Tier Classification" section below for details.**
+
+### Phase 3: Enrichment
+
+**Purpose:** Extract semantic details using language-specific pipelines.
+
+**Python:** Five-stage enrichment (ast-grep → Python AST → import → resolution → tree-sitter)
+
+**Rust:** Two-stage enrichment (tree-sitter → syntax)
+
+**See "Python Enrichment" and "Rust Enrichment" sections below for details.**
+
+---
+
+## Ripgrep Integration
+
+**Location:** `rg/` directory
+
+**Purpose:** Execute native ripgrep search and parse streaming JSON output.
+
 ### RgCollector Event Handling
 
-**Location:** `rg/collector.py`
+**Location:** `rg/collector.py:285`
 
 The `RgCollector` parses ripgrep's streaming JSON output:
 
@@ -282,6 +333,30 @@ The `RgCollector` parses ripgrep's streaming JSON output:
 - Respects `SearchLimits` caps (max_files, max_matches_per_file, max_total_matches)
 - Tracks scanned/matched file counts
 - Timeout detection via process exit code
+
+### Command Construction
+
+**Location:** `rg/adapter.py:337`
+
+**Function:** `build_rg_command()`
+
+**Generated command structure:**
+```bash
+rg --json \
+   --max-count <max_matches_per_file> \
+   --max-filesize <max_file_size_bytes> \
+   --type <lang_type> \
+   --glob <include_glob>... \
+   --glob '!<exclude_glob>'... \
+   [--fixed-strings | --auto-hybrid-regex] \
+   <pattern> \
+   <root>
+```
+
+**Mode mapping:**
+- `IDENTIFIER` → `--auto-hybrid-regex` with word boundary pattern
+- `REGEX` → regex mode (default)
+- `LITERAL` → `--fixed-strings`
 
 ### Search Statistics
 
@@ -302,7 +377,7 @@ class SearchStats:
 
 ## Three-Tier Classification
 
-**Location:** `pipeline/classifier.py`
+**Location:** `pipeline/classifier.py:659`
 
 The classification pipeline progressively refines match categorization through three tiers of increasing cost and accuracy.
 
@@ -313,6 +388,30 @@ The classification pipeline progressively refines match categorization through t
 | 1. Heuristic | O(1) | Line pattern matching | 0.60-0.95 | True for comments/imports |
 | 2. AST Node | O(log n) | ast-grep node lookup | 0.60-0.95 | — |
 | 3. Record-Based | O(log n) | ast-grep record filtering | 0.85-0.95 | — |
+
+### Match Categories
+
+**Literal type:** `MatchCategory`
+
+```python
+MatchCategory = Literal[
+    # Definitions (write sites)
+    "definition",         # function/class/method/constant/variable def
+    # Usage sites
+    "callsite",          # function/method calls
+    "import",            # import statement
+    "from_import",       # from X import Y
+    "reference",         # name/attribute access (not a call)
+    "assignment",        # write site (x = ...)
+    "annotation",        # type hints
+    # Non-code matches
+    "docstring_match",   # in docstring
+    "comment_match",     # in comment
+    "string_match",      # in string literal
+    # Fallback
+    "text_match",        # unclassified code match
+]
+```
 
 ### Tier 1: Heuristic Classification
 
@@ -336,6 +435,15 @@ The classification pipeline progressively refines match categorization through t
 
 **Skip-deeper flag:** Set to `True` for comments and imports where AST cannot provide additional information.
 
+**Result struct:** `HeuristicResult`
+
+```python
+class HeuristicResult(msgspec.Struct, frozen=True):
+    category: MatchCategory | None
+    confidence: float
+    skip_deeper: bool
+```
+
 ### Tier 2: AST Node Classification
 
 **Function:** `classify_from_node()`
@@ -349,13 +457,14 @@ The classification pipeline progressively refines match categorization through t
 4. Apply 0.9x confidence degradation per parent level
 5. Extract containing scope (enclosing function/class)
 
-**Node kind mapping:** `NODE_KIND_MAP` maps tree-sitter node kinds to categories:
+**Node kind mapping:** Maps tree-sitter node kinds to categories:
 
 ```python
 NODE_KIND_MAP: dict[str, tuple[MatchCategory, float]] = {
     # High-confidence definitions
     "function_definition": ("definition", 0.95),
     "class_definition": ("definition", 0.95),
+    "async_function_definition": ("definition", 0.95),
 
     # High-confidence callsites
     "call": ("callsite", 0.95),
@@ -421,7 +530,7 @@ class EnrichedMatch:
 
 ## Five-Stage Python Enrichment
 
-**Location:** `python/extractors.py`
+**Location:** `python/extractors.py:2,242`
 
 The Python enrichment pipeline runs sequentially per-match, accumulating state across five stages. Each stage has independent error handling (fail-open).
 
@@ -542,14 +651,14 @@ class _PythonEnrichmentState:
 3. Status marking (set `enrichment_status` to "degraded" if issues found)
 4. Stage metadata (add `stage_status` and `stage_timings_ms`)
 5. Truncation tracking (add `truncated_fields` if truncated)
-6. Payload budget enforcement (enforce 4096-byte limit)
+6. Payload budget enforcement (enforce 4096-byte limit via `_MAX_PAYLOAD_BYTES`)
 7. Size hint (add `payload_size_hint` for monitoring)
 
 ---
 
 ## Python Analysis Session
 
-**Location:** `python/analysis_session.py`
+**Location:** `python/analysis_session.py:320`
 
 **Purpose:** Per-file Python analysis session cache to avoid duplicate parse work when multiple matches occur in the same file.
 
@@ -582,7 +691,7 @@ class PythonAnalysisSession:
 ### Session Lifecycle
 
 1. **Keyed by:** `(file_path, content_hash)` — content-addressable
-2. **Cache size:** Max 64 entries, LRU eviction
+2. **Cache size:** Max 64 entries (`_MAX_TREE_CACHE_ENTRIES`), LRU eviction
 3. **Lazy initialization:** Artifacts populated on first access
 4. **Shared across stages:** All enrichment stages reuse same session
 
@@ -610,9 +719,9 @@ class AstSpanEntry:
 
 ---
 
-## Rust Enrichment
+## Two-Stage Rust Enrichment
 
-**Location:** `rust/enrichment.py`
+**Location:** `rust/enrichment.py:766`
 
 **Purpose:** Two-stage Rust enrichment pipeline using tree-sitter and syntax analysis.
 
@@ -631,8 +740,10 @@ def enrich_rust_context_by_byte_range(
 ) -> dict[str, object]:
     """Enrich Rust code context by byte range.
 
-    Returns:
-        dict[str, object]: Enrichment payload with Rust-specific fields.
+    Returns
+    -------
+    dict[str, object]
+        Enrichment payload with Rust-specific fields.
     """
 ```
 
@@ -649,6 +760,8 @@ def enrich_rust_context_by_byte_range(
 - `return_type` — Return type annotation
 - `is_async` — Async function flag
 - `is_unsafe` — Unsafe block flag
+- `const_generics` — Const generic parameters
+- `where_clause` — Where clause details
 
 ### Stage 2: Syntax Analysis
 
@@ -657,14 +770,15 @@ def enrich_rust_context_by_byte_range(
 **Extracted fields:**
 - `macro_calls` — Macro invocation count
 - `lifetime_params` — Lifetime parameter count
-- `where_clause` — Where clause presence
 - `match_arms` — Match arm count (for match expressions)
+- `error_handling` — Result/Option usage patterns
+- `unsafe_blocks` — Unsafe block count
 
 ---
 
 ## Object Resolution System
 
-**Location:** `objects/resolve.py`, `objects/render.py`
+**Location:** `objects/resolve.py:693`, `objects/render.py:392`
 
 **Purpose:** Aggregate enriched matches by resolved object identity, enabling object-centric reporting and deduplication.
 
@@ -750,11 +864,11 @@ class SearchOccurrenceV1:
 
 ## Cross-Source Agreement
 
-**Location:** `python/agreement.py`
+**Location:** `python/extractors.py` (inline in finalization)
 
 **Purpose:** Validate consistency across ast-grep, python_resolution, and tree-sitter extractions.
 
-**Function:** `build_agreement_summary()`
+**Function:** `_build_agreement_summary()` (inline)
 
 **Algorithm:**
 ```python
@@ -811,7 +925,7 @@ def build_agreement_summary(
 
 ## Semantic Front-Door Integration
 
-**Location:** `semantic/front_door.py`
+**Location:** `semantic/front_door.py:521`
 
 **Purpose:** Phased execution pipeline for language-aware static semantic enrichment with caching and single-flight coordination.
 
@@ -866,7 +980,7 @@ The search pipeline builds `FrontDoorInsightV1` cards that include:
 
 ## Search Profiles and Limits
 
-**Location:** `pipeline/profiles.py`
+**Location:** `pipeline/profiles.py:80`
 
 **Purpose:** Predefined search limit profiles for different use cases.
 
@@ -995,7 +1109,7 @@ def _assemble_smart_search_result(
 
 ### Section Types
 
-**Top-level sections:**
+**Top-level sections (in rendering order):**
 1. **Insight Card** — FrontDoorInsightV1 (rendered first)
 2. **Code Overview** — Query-focused summary
 3. **Target Candidates** — Top definition matches
@@ -1038,33 +1152,115 @@ def _assemble_smart_search_result(
 
 **Fail-open semantics:** Catches all exceptions and falls back to sequential classification to prevent pipeline failures.
 
+**Worker isolation:** Each worker process has independent caches and imports, avoiding shared state corruption.
+
 ---
 
-## Consolidation Notes
+## Multi-Language Support
 
-The search subsystem is planned for file consolidation to reduce module count and improve cohesion.
+**Location:** `pipeline/partition_pipeline.py:550`, `pipeline/orchestration.py:110`
 
-### Planned Consolidation
+### Language Scope
 
-**Target structure:**
-```
-tools/cq/search/
-├── core.py          # Main entry point + orchestration
-├── candidates.py    # Ripgrep integration + collection
-├── classify.py      # Three-tier classification
-├── enrich.py        # Five-stage enrichment
-├── resolve.py       # Object resolution
-├── contracts.py     # Shared contracts
-└── utils.py         # Shared utilities
-```
+**Default:** `"auto"` — searches both Python and Rust
 
-**Benefits:**
-- Reduced import complexity
-- Clearer module boundaries
-- Easier navigation
-- Consolidated caching logic
+**Explicit scopes:**
+- `"python"` — Python only (`.py`, `.pyi`)
+- `"rust"` — Rust only (`.rs`)
 
-**Timeline:** TBD — consolidation is not currently scheduled.
+**Extension-authoritative filtering:** After ripgrep collection, matches are filtered by file extension to ensure language scope correctness.
+
+### Language Partitioning
+
+**Function:** `execute_by_language_scope()` in `core/multilang_orchestrator.py`
+
+**Strategy:**
+1. Expand language scope to list of languages (`auto` → `["python", "rust"]`)
+2. Execute partition function per language
+3. Collect partition results
+4. Merge results via `merge_partitioned_items()`
+
+**Partition independence:** Each language partition runs with independent:
+- Ripgrep type filters
+- Include/exclude globs (constrained by language)
+- Enrichment pipelines
+- Classification logic
+
+---
+
+## Payload Budget Enforcement
+
+**Location:** `enrichment/core.py:366`
+
+**Purpose:** Limit enrichment payload size to prevent excessive memory consumption and output bloat.
+
+### Budget Limits
+
+**Constant:** `_MAX_PAYLOAD_BYTES = 4096`
+
+**Enforcement:**
+- Applied in `_finalize_python_enrichment_payload()`
+- Truncates fields exceeding budget
+- Tracks truncated fields in `truncated_fields` list
+- Adds `payload_size_hint` for monitoring
+
+### Truncation Strategy
+
+**Function:** `enforce_payload_budget()`
+
+**Algorithm:**
+1. Compute current payload size via `payload_size_hint()`
+2. If under budget, return unchanged
+3. If over budget, truncate large fields (signatures, decorators, etc.)
+4. Re-compute size after each truncation
+5. Record truncated field names
+
+**Field-specific limits:**
+- `signature`: 200 chars
+- `decorators`: 8 items, 60 chars each
+- `base_classes`: 6 items, 60 chars each
+- `call_target`: 120 chars
+- `scope_chain`: 8 items
+- `import_names`: 12 items
+
+---
+
+## Caching Infrastructure
+
+**Location:** `pipeline/classifier_runtime.py:450`
+
+### Cache Types
+
+**SgRoot cache:**
+- Key: `(file_path, content_hash)`
+- Max entries: 64 (LRU)
+- Stores: ast-grep parse tree
+
+**Source cache:**
+- Key: `file_path`
+- Max entries: 128 (LRU)
+- Stores: File source text
+
+**Symtable cache:**
+- Key: `(file_path, content_hash)`
+- Max entries: 64 (LRU)
+- Stores: Python symtable.SymbolTable
+
+**Record context cache:**
+- Key: `(file_path, content_hash)`
+- Max entries: 64 (LRU)
+- Stores: Pre-scanned ast-grep records (def, call, import, assign)
+
+### Cache Management
+
+**Function:** `clear_caches()` in `pipeline/classifier.py`
+
+Clears all classification and enrichment caches. Called:
+- Between run invocations (via `clear_caches()` export)
+- On cache size limit violations
+- On explicit user request
+
+**Cache warming:** No explicit warming; caches populate on-demand during first access.
 
 ---
 
@@ -1078,9 +1274,11 @@ The search subsystem provides the foundation for CQ's semantic code search capab
 - **Layered enrichment:** Each stage adds detail without blocking subsequent stages
 - **Cross-source validation:** Agreement tracking reveals extraction conflicts
 - **Object-centric:** Deduplication and aggregation by resolved identity
+- **Parallel execution:** Multi-file classification via ProcessPool (spawn context)
+- **Multi-language:** Supports Python and Rust with language-specific pipelines
 
 **Integration points:**
 - **Query subsystem** (doc 03) — Provides entity queries that use search as candidate source
 - **Tree-sitter engine** (doc 07) — Stage 5 enrichment and structural analysis
 - **LSP integration** (doc 06) — Semantic overlays and diagnostics
-- **Caching layer** (doc 10) — Persistent cache coordination and single-flight
+- **Caching layer** (doc 10) — Persistent cache for semantic outcomes

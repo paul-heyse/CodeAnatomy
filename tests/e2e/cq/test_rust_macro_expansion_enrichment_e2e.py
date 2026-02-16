@@ -9,6 +9,7 @@ from tools.cq.search.tree_sitter.rust_lane.runtime import is_tree_sitter_rust_av
 
 @pytest.mark.skipif(not is_tree_sitter_rust_available(), reason="tree-sitter-rust unavailable")
 def test_rust_macro_expansion_bridge_attaches_evidence() -> None:
+    """Test rust macro expansion bridge attaches evidence."""
     source = 'fn main() { regex!("a+"); }\n'
     byte_start = source.index("regex")
     byte_end = byte_start + len("regex")

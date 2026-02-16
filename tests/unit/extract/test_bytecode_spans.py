@@ -7,11 +7,13 @@ from collections.abc import Iterable
 from extract.coordination.context import FileContext
 from extract.extractors.bytecode_extract import BytecodeExtractOptions, _bytecode_file_row
 
+NEWLINE_BYTE = 0x0A
+
 
 def _line_start_bytes(data: bytes) -> list[int]:
     starts = [0]
     for idx, value in enumerate(data):
-        if value == 0x0A:
+        if value == NEWLINE_BYTE:
             starts.append(idx + 1)
     return starts
 
@@ -47,6 +49,7 @@ def _iter_instructions(row: dict[str, object]) -> list[dict[str, object]]:
 
 
 def test_bytecode_instruction_byte_span() -> None:
+    """Test bytecode instruction byte span."""
     code = "def foo():\n    x = 1\n    return x\n"
     data = code.encode("utf-8")
     file_ctx = FileContext(

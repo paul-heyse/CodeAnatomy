@@ -1,3 +1,5 @@
+"""Tests for test_tree_sitter_parse_session."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -39,7 +41,9 @@ class _FakeParser:
         return _FakeTree(source_bytes)
 
 
+
 def test_parse_session_reuses_and_reparses_incrementally() -> None:
+    """Reuse parser trees while still reparsing on source changes."""
     session = ParseSession(cast("Callable[[], Parser]", _fake_parser_factory))
 
     tree1, changed1, reused1 = session.parse(file_key="a.py", source_bytes=b"x = 1\n")

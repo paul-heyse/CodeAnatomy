@@ -22,6 +22,9 @@ PY_DEF_CLASS = _PY_RULES["py_def_class"]
 PY_DEF_FUNCTION = _PY_RULES["py_def_function"]
 PY_IMPORT = _PY_RULES["py_import"]
 
+FUNCTION_LINE_NUMBER = 3
+TWO_RECORDS = 2
+
 
 class TestRuleSpec:
     """Tests for RuleSpec dataclass."""
@@ -126,7 +129,7 @@ class TestScanFiles:
         records = scan_files([test_file], (PY_DEF_FUNCTION,), tmp_path)
         assert len(records) == 1
         # Function is on line 3 (1-indexed)
-        assert records[0].start_line == 3
+        assert records[0].start_line == FUNCTION_LINE_NUMBER
 
     def test_scan_unicode_file(self, tmp_path: Path) -> None:
         """Scanning should handle unicode content."""
@@ -150,7 +153,7 @@ class TestScanFiles:
         file2.write_text("def bar(): pass\n", encoding="utf-8")
 
         records = scan_files([file1, file2], (PY_DEF_FUNCTION,), tmp_path)
-        assert len(records) == 2
+        assert len(records) == TWO_RECORDS
 
 
 class TestScanWithPattern:
@@ -188,7 +191,7 @@ class TestScanWithPattern:
         assert "$$$ARGS" in metavars
         capture = metavars["$$$ARGS"]
         assert capture["kind"] == "multi"
-        assert len(capture["nodes"]) == 2
+        assert len(capture["nodes"]) == TWO_RECORDS
 
 
 class TestFilterRecordsByType:
@@ -201,7 +204,7 @@ class TestFilterRecordsByType:
             SgRecord("call", "name_call", "test.py", 3, 0, 3, 5, "foo()", "py_call_name"),
         ]
         filtered = filter_records_by_type(records, None)
-        assert len(filtered) == 2
+        assert len(filtered) == TWO_RECORDS
 
     def test_filter_by_type(self) -> None:
         """Should filter to specified types."""
@@ -226,6 +229,6 @@ class TestGroupRecordsByFile:
             SgRecord("def", "function", "a.py", 5, 0, 6, 0, "def h(): pass", "py_def_function"),
         ]
         grouped = group_records_by_file(records)
-        assert len(grouped) == 2
-        assert len(grouped["a.py"]) == 2
+        assert len(grouped) == TWO_RECORDS
+        assert len(grouped["a.py"]) == TWO_RECORDS
         assert len(grouped["b.py"]) == 1

@@ -22,6 +22,8 @@ require_datafusion_udfs()
 require_deltalake()
 require_delta_extension()
 
+MIN_CONCURRENT_APPEND_ROWS = 2
+
 
 def _conflict_family(exc: BaseException) -> str:
     message = str(exc).lower()
@@ -99,4 +101,4 @@ def test_concurrent_delta_writes_have_classified_outcomes(tmp_path: Path) -> Non
             outcomes.append("ok")
     assert set(outcomes).issubset({"ok", "conflict"})
     table = DeltaTable(destination)
-    assert table.to_pyarrow_table().num_rows >= 2
+    assert table.to_pyarrow_table().num_rows >= MIN_CONCURRENT_APPEND_ROWS

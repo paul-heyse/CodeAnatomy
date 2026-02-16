@@ -33,6 +33,16 @@ from tools.cq.search.pipeline.smart_search import (
 from tools.cq.search.semantic.models import LanguageSemanticEnrichmentOutcome
 from tools.cq.search.tree_sitter.rust_lane.runtime import is_tree_sitter_rust_available
 
+DEFAULT_LINE_NUMBER = 10
+DEFAULT_COLUMN_OFFSET = 9
+BASIC_SCANNED_FILES = 100
+BASIC_MATCHED_FILES = 10
+DEFAULT_CONFIDENCE = 0.95
+EXPECTED_OCCURRENCES = 3
+WORKER_INPUT_FILE_COUNT = 8
+EXPECTED_WORKER_COUNT = 4
+MAX_CONTEXT_END_LINE = 40
+
 
 def _span(
     file: str,
@@ -146,8 +156,8 @@ class TestRawMatch:
             match_byte_end=20,
         )
         assert raw.file == "src/module.py"
-        assert raw.line == 10
-        assert raw.col == 9
+        assert raw.line == DEFAULT_LINE_NUMBER
+        assert raw.col == DEFAULT_COLUMN_OFFSET
         assert raw.match_text == "build_graph"
 
     def test_raw_match_no_context_fields(self) -> None:
@@ -172,11 +182,11 @@ class TestSearchStats:
         """Test basic SearchStats."""
         stats = SearchStats(
             scanned_files=100,
-            matched_files=10,
+            matched_files=BASIC_MATCHED_FILES,
             total_matches=50,
         )
-        assert stats.scanned_files == 100
-        assert stats.matched_files == 10
+        assert stats.scanned_files == BASIC_SCANNED_FILES
+        assert stats.matched_files == BASIC_MATCHED_FILES
         assert stats.truncated is False
         assert stats.timed_out is False
         assert stats.max_files_hit is False
@@ -186,7 +196,7 @@ class TestSearchStats:
         """Test truncated SearchStats."""
         stats = SearchStats(
             scanned_files=100,
-            matched_files=10,
+            matched_files=BASIC_MATCHED_FILES,
             total_matches=500,
             truncated=True,
             max_matches_hit=True,
@@ -209,7 +219,7 @@ class TestEnrichedMatch:
             evidence_kind="resolved_ast",
         )
         assert match.category == "callsite"
-        assert match.confidence == 0.95
+        assert match.confidence == DEFAULT_CONFIDENCE
         assert match.evidence_kind == "resolved_ast"
 
 
@@ -217,7 +227,7 @@ class TestRelevanceScoring:
     """Tests for relevance scoring."""
 
     def test_definition_scores_highest(self) -> None:
-        """Test that definitions score highest."""
+        """Definitions should outrank callsites in relevance scoring."""
         definition = EnrichedMatch(
             span=_span("src/module.py", 1, 0),
             text="def build_graph():",
@@ -350,7 +360,7 @@ class TestBuildFinding:
         assert finding.category == "callsite"
         assert finding.anchor is not None
         assert finding.anchor.file == "src/module.py"
-        assert finding.anchor.line == 10
+        assert finding.anchor.line == DEFAULT_LINE_NUMBER
 
     def test_build_finding_with_scope(self, sample_repo: Path) -> None:
         """Test Finding with containing scope."""
@@ -451,9 +461,9 @@ class TestBuildSummary:
         )
         assert summary["query"] == "build_graph"
         assert summary["mode"] == "identifier"
-        assert summary["scanned_files"] == 100
+        assert summary["scanned_files"] == BASIC_SCANNED_FILES
         assert summary["scanned_files_is_estimate"] is True
-        assert summary["matched_files"] == 10
+        assert summary["matched_files"] == BASIC_MATCHED_FILES
         assert summary["returned_matches"] == 1
 
     def test_summary_with_truncation(self) -> None:
@@ -593,10 +603,10 @@ class TestBuildSections:
                 assert isinstance(first_resolved_occurrence, dict)
                 assert "line_id" in first_resolved_occurrence
                 assert isinstance(first_resolved_occurrence.get("block_ref"), str)
-        assert resolved_occurrence_total == 3
+        assert resolved_occurrence_total == EXPECTED_OCCURRENCES
 
         occurrences_section = next(s for s in sections if s.title == "Occurrences")
-        assert len(occurrences_section.findings) == 3
+        assert len(occurrences_section.findings) == EXPECTED_OCCURRENCES
         assert all("block" in finding.message for finding in occurrences_section.findings)
         assert all("line_id=" in finding.message for finding in occurrences_section.findings)
         assert all("object_id=" in finding.message for finding in occurrences_section.findings)
@@ -677,7 +687,7 @@ class TestSmartSearch:
         tmp_path: Path,
     ) -> None:
         """Classification path should use at most four worker processes."""
-        for idx in range(8):
+        for idx in range(WORKER_INPUT_FILE_COUNT):
             (tmp_path / f"mod_{idx}.py").write_text(
                 "def build_graph():\n    return 1\n",
                 encoding="utf-8",
@@ -685,7 +695,7 @@ class TestSmartSearch:
         clear_caches()
         result = smart_search(tmp_path, "build_graph", lang_scope="python")
         assert result.evidence
-        assert _resolve_search_worker_count(8) == 4
+        assert _resolve_search_worker_count(WORKER_INPUT_FILE_COUNT) == EXPECTED_WORKER_COUNT
 
     def test_smart_search_with_include_globs(self, sample_repo: Path) -> None:
         """Test smart search with include globs."""
@@ -975,7 +985,7 @@ class TestSmartSearchFiltersAndEnrichment:
         start_line = cast("int", context_window["start_line"])
         end_line = cast("int", context_window["end_line"])
         assert start_line == 1
-        assert end_line < 40
+        assert end_line < MAX_CONTEXT_END_LINE
 
     def test_rust_scope_in_python_tree_has_no_scope_drop_anomaly(self, tmp_path: Path) -> None:
         """Rust searches constrained to Python-only trees should not inflate dropped_by_scope."""

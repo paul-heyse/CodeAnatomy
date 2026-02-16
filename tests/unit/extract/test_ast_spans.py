@@ -34,6 +34,7 @@ def _find_node(
 
 
 def test_ast_byte_span_for_function_def() -> None:
+    """Test ast byte span for function def."""
     code = "def foo(x):\n    return x\n"
     file_ctx = FileContext(
         file_id="file-1",

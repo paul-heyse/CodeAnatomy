@@ -48,6 +48,7 @@ def _runtime_or_skip() -> IncrementalRuntime:
 
 
 def test_incremental_runtime_build_requires_dataset_resolver() -> None:
+    """Test incremental runtime build requires dataset resolver."""
     signature = inspect.signature(IncrementalRuntimeBuildRequest)
     dataset_resolver = signature.parameters["dataset_resolver"]
     assert dataset_resolver.default is inspect.Parameter.empty

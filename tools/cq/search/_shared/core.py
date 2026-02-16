@@ -49,7 +49,11 @@ _JSON_DECODER = msgspec.json.Decoder(type=dict[str, object])
 
 
 def line_col_to_byte_offset(source_bytes: bytes, line: int, col: int) -> int | None:
-    """Convert 1-indexed line and 0-indexed char column to byte offset."""
+    """Convert 1-indexed line and 0-indexed char column to byte offset.
+
+    Returns:
+        int | None: Function return value.
+    """
     if line < 1 or col < 0:
         return None
     lines = source_bytes.splitlines(keepends=True)
@@ -64,12 +68,20 @@ def line_col_to_byte_offset(source_bytes: bytes, line: int, col: int) -> int | N
 
 
 def encode_mapping(payload: dict[str, object]) -> bytes:
-    """Encode mapping payload with deterministic JSON ordering."""
+    """Encode mapping payload with deterministic JSON ordering.
+
+    Returns:
+        bytes: Function return value.
+    """
     return _JSON_ENCODER.encode(payload)
 
 
 def decode_mapping(payload: bytes) -> dict[str, object]:
-    """Decode mapping payload using reusable typed decoder."""
+    """Decode mapping payload using reusable typed decoder.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     return _JSON_DECODER.decode(payload)
 
 
@@ -86,7 +98,11 @@ def truncate(text: str, max_len: int) -> str:
 
 
 def node_text(node: Node, source_bytes: bytes, *, strip: bool = True) -> str:
-    """Extract UTF-8 text for a tree-sitter node range."""
+    """Extract UTF-8 text for a tree-sitter node range.
+
+    Returns:
+        str: Function return value.
+    """
     start = int(getattr(node, "start_byte", 0))
     end = int(getattr(node, "end_byte", start))
     if end <= start:
@@ -96,7 +112,11 @@ def node_text(node: Node, source_bytes: bytes, *, strip: bool = True) -> str:
 
 
 def sg_node_text(node: SgNode | None) -> str | None:
-    """Extract normalized text from an ast-grep node."""
+    """Extract normalized text from an ast-grep node.
+
+    Returns:
+        str | None: Function return value.
+    """
     if node is None:
         return None
     text = node.text().strip()
@@ -104,7 +124,11 @@ def sg_node_text(node: SgNode | None) -> str | None:
 
 
 def convert_from_attributes(obj: object, *, type_: object) -> object:
-    """Convert runtime objects to target type using attribute access."""
+    """Convert runtime objects to target type using attribute access.
+
+    Returns:
+        object: Function return value.
+    """
     return convert_lax(obj, type_=type_, from_attributes=True)
 
 
@@ -119,6 +143,9 @@ def to_mapping_payload(value: object) -> dict[str, object]:
 
     Raises:
         TypeError: If the converted payload is not a mapping.
+
+    Returns:
+        dict[str, object]: Function return value.
     """
     payload = contract_to_builtins(value)
     if isinstance(payload, dict):
@@ -325,6 +352,9 @@ def search_sync_with_timeout[T](
     Raises:
         ValueError: If ``timeout`` is negative.
         TimeoutError: If execution exceeds the timeout.
+
+    Returns:
+        T: Function return value.
     """
     if timeout < 0:
         msg = "Timeout must be positive"
@@ -348,6 +378,9 @@ async def search_async_with_timeout[T](coro: Awaitable[T], timeout_seconds: floa
     Raises:
         ValueError: If ``timeout_seconds`` is negative.
         TimeoutError: If execution exceeds the timeout.
+
+    Returns:
+        T: Function return value.
     """
     if timeout_seconds < 0:
         msg = "Timeout must be positive"

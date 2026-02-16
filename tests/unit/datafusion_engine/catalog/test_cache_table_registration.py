@@ -19,6 +19,7 @@ else:
 def test_register_cache_tables_uses_direct_extension_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test register cache tables uses direct extension path."""
     captured: dict[str, object] = {"ctx": None, "payload": None}
 
     class _Module:
@@ -54,6 +55,7 @@ def test_register_cache_tables_uses_direct_extension_path(
 def test_register_cache_tables_raises_abi_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Raise an ABI mismatch when extension registers with incompatible SessionContext."""
     class _Module:
         def register_cache_tables(self, _ctx: object, _payload: dict[str, str]) -> None:
             msg = "argument 'ctx': cannot be converted"

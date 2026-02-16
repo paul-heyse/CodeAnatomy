@@ -17,6 +17,8 @@ from extract.extractors.ast_extract import AstExtractOptions, extract_ast_tables
 from extract.extractors.cst_extract import CstExtractOptions, extract_cst_tables
 from extract.extractors.symtable_extract import SymtableExtractOptions, extract_symtables_table
 
+SHA256_HEX_LENGTH = 64
+
 
 class _RecordBatchReaderLike(Protocol):
     def read_all(self) -> pa.Table: ...
@@ -290,7 +292,7 @@ def test_file_sha256_computation() -> None:
     assert hash1 == hash2
 
     # Verify expected hash format (64 hex characters)
-    assert len(hash1) == 64
+    assert len(hash1) == SHA256_HEX_LENGTH
     assert all(c in "0123456789abcdef" for c in hash1)
 
 

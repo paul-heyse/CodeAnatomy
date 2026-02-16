@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from tools.cq.search.tree_sitter.tags import RustTagEventV1, build_tag_events
 
+EXPECTED_TAG_ROWS = 2
+
 
 @dataclass(frozen=True)
 class _FakeNode:
@@ -29,7 +31,7 @@ def test_build_tag_events_emits_definition_and_reference_rows() -> None:
         (1, {"role.reference": [_FakeNode(12, 16)], "name": [_FakeNode(12, 16)]}),
     ]
     rows = build_tag_events(matches=matches, source_bytes=source_bytes)
-    assert len(rows) == 2
+    assert len(rows) == EXPECTED_TAG_ROWS
     assert rows[0].role == "definition"
     assert rows[0].name == "demo"
     assert rows[1].role == "reference"
@@ -41,3 +43,30 @@ def test_build_tag_events_skips_matches_without_role() -> None:
     matches = [(0, {"name": [_FakeNode(3, 7)]})]
     rows = build_tag_events(matches=matches, source_bytes=source_bytes)
     assert len(rows) == 0
+
+
+def test_build_tag_events_supports_distribution_taxonomy_and_name_fallback() -> None:
+    """Test build tag events supports distribution taxonomy and name fallback."""
+    source_bytes = b"fn demo() { demo(); }"
+    matches = [
+        (
+            0,
+            {
+                "definition.function": [_FakeNode(3, 7)],
+                "definition.function.name": [_FakeNode(3, 7)],
+            },
+        ),
+        (
+            1,
+            {
+                "reference.call": [_FakeNode(12, 16)],
+                "reference.call.name": [_FakeNode(12, 16)],
+            },
+        ),
+    ]
+    rows = build_tag_events(matches=matches, source_bytes=source_bytes)
+    assert len(rows) == EXPECTED_TAG_ROWS
+    assert rows[0].role == "definition"
+    assert rows[0].name == "demo"
+    assert rows[1].role == "reference"
+    assert rows[1].name == "demo"

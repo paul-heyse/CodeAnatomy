@@ -7,8 +7,16 @@ from tools.cq.search.pipeline.smart_search import RawMatch
 from tools.cq.search.rg.codec import RgEvent
 from tools.cq.search.rg.collector import RgCollector
 
+MATCH_LINE_NUMBER = 5
+MATCH_BYTE_END = 3
+UNICODE_MATCH_BYTE_START = 5
+UNICODE_MATCH_BYTE_END = 11
+UNICODE_MATCH_CHAR_START = 5
+UNICODE_MATCH_CHAR_END = 10
+
 
 def test_rgcollector_collects_matches_and_summary() -> None:
+    """Test rgcollector collects matches and summary."""
     limits = SearchLimits(max_files=10, max_total_matches=10, max_matches_per_file=5)
     collector = RgCollector(limits=limits, match_factory=RawMatch)
 
@@ -33,14 +41,15 @@ def test_rgcollector_collects_matches_and_summary() -> None:
     assert len(collector.matches) == 1
     match = collector.matches[0]
     assert match.span.file == "src/foo.py"
-    assert match.span.start_line == 5
+    assert match.span.start_line == MATCH_LINE_NUMBER
     assert match.match_byte_start == 0
-    assert match.match_byte_end == 3
+    assert match.match_byte_end == MATCH_BYTE_END
     assert collector.summary_stats is not None
     assert collector.summary_stats.get("matches") == 1
 
 
 def test_rgcollector_finalize_when_missing_summary() -> None:
+    """Test rgcollector finalize when missing summary."""
     limits = SearchLimits(max_files=10, max_total_matches=10, max_matches_per_file=5)
     collector = RgCollector(limits=limits, match_factory=RawMatch)
 
@@ -62,6 +71,7 @@ def test_rgcollector_finalize_when_missing_summary() -> None:
 
 
 def test_rgcollector_converts_submatch_byte_offsets_to_char_columns() -> None:
+    """Test rgcollector converts submatch byte offsets to char columns."""
     limits = SearchLimits(max_files=10, max_total_matches=10, max_matches_per_file=5)
     collector = RgCollector(limits=limits, match_factory=RawMatch)
     collector.handle_event(
@@ -79,7 +89,7 @@ def test_rgcollector_converts_submatch_byte_offsets_to_char_columns() -> None:
     collector.finalize()
     assert len(collector.matches) == 1
     match = collector.matches[0]
-    assert match.match_byte_start == 5
-    assert match.match_byte_end == 11
-    assert match.match_start == 5
-    assert match.match_end == 10
+    assert match.match_byte_start == UNICODE_MATCH_BYTE_START
+    assert match.match_byte_end == UNICODE_MATCH_BYTE_END
+    assert match.match_start == UNICODE_MATCH_CHAR_START
+    assert match.match_end == UNICODE_MATCH_CHAR_END

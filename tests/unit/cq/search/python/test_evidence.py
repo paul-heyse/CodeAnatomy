@@ -9,6 +9,8 @@ from tools.cq.search.python.evidence import (
     evaluate_python_semantic_signal_from_mapping,
 )
 
+MAX_NOISE_REASONS_FOR_PARTIAL_SIGNAL = 3
+
 
 class TestEvaluatePythonSemanticSignal:
     """Tests for evaluate_python_semantic_signal_from_mapping."""
@@ -47,7 +49,7 @@ class TestEvaluatePythonSemanticSignal:
         }
         has_signal, reasons = evaluate_python_semantic_signal_from_mapping(payload)
         assert has_signal is True
-        assert len(reasons) < 3
+        assert len(reasons) < MAX_NOISE_REASONS_FOR_PARTIAL_SIGNAL
 
 
 class TestBuildAgreementSummary:

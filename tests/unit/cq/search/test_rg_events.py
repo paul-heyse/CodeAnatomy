@@ -17,8 +17,11 @@ from tools.cq.search.rg.codec import (
     summary_stats,
 )
 
+MATCH_LINE_NUMBER = 5
+
 
 def test_decode_rg_event_match_line() -> None:
+    """Test decode rg event match line."""
     payload = msgspec.json.encode(
         {
             "type": "match",
@@ -36,13 +39,14 @@ def test_decode_rg_event_match_line() -> None:
     match_data = as_match_data(event)
     assert isinstance(match_data, RgMatchData)
     assert match_path(match_data) == "src/foo.py"
-    assert match_line_number(match_data) == 5
+    assert match_line_number(match_data) == MATCH_LINE_NUMBER
     assert match_line_text(match_data) == "build_graph()"
     assert match_data.submatches
     assert match_data.submatches[0].start == 0
 
 
 def test_decode_rg_event_summary_line() -> None:
+    """Test decode rg event summary line."""
     payload = msgspec.json.encode(
         {
             "type": "summary",
@@ -58,4 +62,5 @@ def test_decode_rg_event_summary_line() -> None:
 
 
 def test_decode_rg_event_invalid_line_returns_none() -> None:
+    """Test decode rg event invalid line returns none."""
     assert decode_rg_event(b"{invalid json") is None

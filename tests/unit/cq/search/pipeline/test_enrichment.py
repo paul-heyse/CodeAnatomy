@@ -11,6 +11,7 @@ from tools.cq.search.pipeline.smart_search import RawMatch
 
 
 def test_run_enrichment_prefetch_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test run enrichment prefetch delegates."""
     sentinel: dict[str, object] = {"payloads": {}}
     context = cast("SearchConfig", object())
 

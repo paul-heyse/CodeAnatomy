@@ -11,6 +11,8 @@ from semantics.ir_pipeline import infer_semantics
 from semantics.view_kinds import ViewKindStr
 from tests.test_helpers.immutability import assert_immutable_assignment
 
+MIN_CONFIDENCE_FOR_HIGH_SCORE = 0.8
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -638,7 +640,7 @@ class TestInferenceConfidenceField:
         )
         assert props.inference_confidence is not None
         assert props.inference_confidence.decision_type == "join_strategy"
-        assert props.inference_confidence.confidence_score >= 0.8
+        assert props.inference_confidence.confidence_score >= MIN_CONFIDENCE_FOR_HIGH_SCORE
 
     def test_frozen_inference_confidence(self) -> None:
         """InferenceConfidence field is immutable on InferredViewProperties."""
@@ -676,7 +678,9 @@ class TestInferSemanticsAttachesConfidence:
         assert hub_props.inference_confidence is not None
         assert hub_props.inference_confidence.decision_type == "cache_policy"
         assert hub_props.inference_confidence.decision_value == "eager"
-        assert hub_props.inference_confidence.confidence_score >= 0.8
+        assert (
+            hub_props.inference_confidence.confidence_score >= MIN_CONFIDENCE_FOR_HIGH_SCORE
+        )
 
     def test_terminal_view_has_cache_confidence(self) -> None:
         """Terminal views should have cache_policy confidence attached."""

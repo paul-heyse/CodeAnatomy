@@ -18,6 +18,14 @@ from semantics.incremental.cdf_joins import (
     merge_incremental_results,
 )
 
+STRATEGY_COUNT = 4
+APPEND_ROW_COUNT = 4
+UPSERT_ROW_COUNT = 3
+UPSERT_UPDATED_VALUE = 20
+DELETE_INSERT_ROW_COUNT = 2
+MERGED_ROW_COUNT = 3
+UPDATED_VALUE_DEFAULT = 10
+
 
 class TestCDFMergeStrategy:
     """Tests for CDFMergeStrategy enum."""
@@ -41,7 +49,7 @@ class TestCDFMergeStrategy:
     def test_all_strategies_enumerated(self) -> None:
         """All expected strategies are enumerated."""
         strategies = list(CDFMergeStrategy)
-        assert len(strategies) == 4
+        assert len(strategies) == STRATEGY_COUNT
         names = {s.name for s in strategies}
         assert names == {"APPEND", "UPSERT", "REPLACE", "DELETE_INSERT"}
 
@@ -197,7 +205,7 @@ class TestApplyCdfMerge:
 
         rows = self._collect_all_rows(result)
         all_ids = rows.get("id", [])
-        assert len(all_ids) == 4
+        assert len(all_ids) == APPEND_ROW_COUNT
 
     def test_upsert_strategy(self) -> None:
         """UPSERT strategy updates existing and inserts new."""
@@ -214,11 +222,11 @@ class TestApplyCdfMerge:
 
         rows = self._collect_all_rows(result)
         # Should have a (original), b (updated to 20), c (new)
-        assert len(rows["id"]) == 3
+        assert len(rows["id"]) == UPSERT_ROW_COUNT
 
         # b should have value 20 (from new_data)
         b_idx = rows["id"].index("b")
-        assert rows["value"][b_idx] == 20
+        assert rows["value"][b_idx] == UPSERT_UPDATED_VALUE
 
     def test_delete_insert_strategy(self) -> None:
         """DELETE_INSERT strategy works like upsert."""
@@ -235,7 +243,7 @@ class TestApplyCdfMerge:
 
         rows = self._collect_all_rows(result)
         # Should have a (original) and b (replaced with 20)
-        assert len(rows["id"]) == 2
+        assert len(rows["id"]) == DELETE_INSERT_ROW_COUNT
 
     def test_replace_strategy_requires_partition_column(self) -> None:
         """REPLACE strategy requires partition_column."""
@@ -276,7 +284,7 @@ class TestApplyCdfMerge:
         rows = self._collect_all_rows(result)
         # f1 partition replaced (a, b removed, x added)
         # f2 partition unchanged (c remains)
-        assert len(rows["id"]) == 2
+        assert len(rows["id"]) == DELETE_INSERT_ROW_COUNT
         assert "c" in rows["id"]
         assert "x" in rows["id"]
         assert "a" not in rows["id"]
@@ -347,7 +355,7 @@ class TestMergeIncrementalResults:
 
         rows = self._collect_all_rows(result)
         # Should have a, b (updated), c
-        assert len(rows["id"]) == 3
+        assert len(rows["id"]) == MERGED_ROW_COUNT
 
     def test_default_strategy_is_upsert(self) -> None:
         """Default merge strategy is UPSERT."""
@@ -373,7 +381,7 @@ class TestMergeIncrementalResults:
         collected = result.collect()
         rows = collected[0].to_pydict()
         # a should be updated to 10
-        assert rows["value"][0] == 10
+        assert rows["value"][0] == UPDATED_VALUE_DEFAULT
 
 
 class TestDefaultCdfColumn:

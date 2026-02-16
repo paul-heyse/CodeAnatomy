@@ -7,6 +7,7 @@ from extract.extractors.symtable_extract import SymtableExtractOptions, _symtabl
 
 
 def test_symtable_span_hint_byte_start() -> None:
+    """Test symtable span hint byte start."""
     code = "def foo():\n    x = 1\n"
     file_ctx = FileContext(
         file_id="file-1",

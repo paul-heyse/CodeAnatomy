@@ -7,6 +7,7 @@ from tools.cq.run.runner import _populate_run_summary_metadata
 
 
 def test_populate_run_summary_aggregates_step_semantic_telemetry() -> None:
+    """Test populate run summary aggregates step semantic telemetry."""
     run = RunMeta(
         macro="run",
         argv=["cq", "run"],

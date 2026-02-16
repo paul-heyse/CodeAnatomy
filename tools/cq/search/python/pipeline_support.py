@@ -19,7 +19,11 @@ if TYPE_CHECKING:
 
 
 def extract_signature_stage(node: SgNode) -> dict[str, object]:
-    """Extract a bounded signature preview from an ast-grep node."""
+    """Extract a bounded signature preview from an ast-grep node.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     signature = node.text().split("{", maxsplit=1)[0].strip()
     if not signature:
         return {}
@@ -30,7 +34,11 @@ def extract_signature_stage(node: SgNode) -> dict[str, object]:
 
 
 def find_import_aliases(node: SgNode) -> list[SgNode]:
-    """Find ``import X as Y`` alias bindings with identifier constraints."""
+    """Find ``import X as Y`` alias bindings with identifier constraints.
+
+    Returns:
+        list[SgNode]: Function return value.
+    """
     return node.find_all(
         {
             "rule": {"pattern": "import $X as $Y"},
@@ -53,7 +61,11 @@ class PythonResolutionPayloadV1(CqOutputStruct, frozen=True):
 
 
 def coerce_resolution_payload(payload: dict[str, object]) -> PythonResolutionPayloadV1:
-    """Coerce raw resolution mapping into typed contract payload."""
+    """Coerce raw resolution mapping into typed contract payload.
+
+    Returns:
+        PythonResolutionPayloadV1: Function return value.
+    """
     return msgspec.convert(payload, type=PythonResolutionPayloadV1, strict=False)
 
 
@@ -63,7 +75,11 @@ def coerce_resolution_payload(payload: dict[str, object]) -> PythonResolutionPay
 def run_python_enrichment_pipeline(
     request: PythonByteRangeEnrichmentRequest,
 ) -> dict[str, object]:
-    """Run enrichment + native-resolution merge for one byte-range request."""
+    """Run enrichment + native-resolution merge for one byte-range request.
+
+    Returns:
+        dict[str, object]: Function return value.
+    """
     from tools.cq.search.python.evidence import evaluate_python_semantic_signal_from_mapping
 
     payload = extract_python_byte_range(request)

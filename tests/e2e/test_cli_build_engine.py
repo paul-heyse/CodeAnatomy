@@ -48,6 +48,7 @@ def test_build_command_smoke_with_stubbed_orchestrator(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test build command smoke with stubbed orchestrator."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     (repo_root / "pkg.py").write_text("def f() -> int:\n    return 1\n", encoding="utf-8")

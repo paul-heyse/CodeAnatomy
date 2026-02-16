@@ -1,3 +1,5 @@
+"""Tests for test_performance_smoke."""
+
 from __future__ import annotations
 
 import os
@@ -30,6 +32,7 @@ def _golden_workspace() -> Path:
 
 @pytest.mark.benchmark
 def test_search_cache_smoke() -> None:
+    """Benchmark expected repeated smart_search invocations stay performant."""
     if not _benchmark_enabled():
         pytest.skip("Set CQ_ENABLE_BENCHMARK_SMOKE=1 to run benchmark smoke tests.")
     root = _golden_workspace()
@@ -59,6 +62,7 @@ def test_search_cache_smoke() -> None:
 
 @pytest.mark.benchmark
 def test_calls_cache_smoke() -> None:
+    """Benchmark repeated calls command executes with bounded regression."""
     if not _benchmark_enabled():
         pytest.skip("Set CQ_ENABLE_BENCHMARK_SMOKE=1 to run benchmark smoke tests.")
     root = _golden_workspace()
@@ -76,6 +80,7 @@ def test_calls_cache_smoke() -> None:
 
 @pytest.mark.benchmark
 def test_query_entity_auto_scope_smoke() -> None:
+    """Benchmark execute_plan path under auto scope remains stable on warm path."""
     if not _benchmark_enabled():
         pytest.skip("Set CQ_ENABLE_BENCHMARK_SMOKE=1 to run benchmark smoke tests.")
     root = _golden_workspace()

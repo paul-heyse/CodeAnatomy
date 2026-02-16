@@ -1,3 +1,5 @@
+"""Tests for test_cache_maintenance."""
+
 from __future__ import annotations
 
 import os
@@ -7,6 +9,7 @@ from tools.cq.core.cache import close_cq_cache_backend, get_cq_cache_backend, ma
 
 
 def test_cache_maintenance_tick_reports_counters(tmp_path: Path) -> None:
+    """Exercise maintenance counters and ensure telemetry fields are populated."""
     close_cq_cache_backend()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")

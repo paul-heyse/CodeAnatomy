@@ -13,6 +13,7 @@ from tools.cq.search.python import extractors as extractors_module
 
 
 def test_extract_python_node_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test extract python node delegates."""
     monkeypatch.setattr(
         extractors_module,
         "enrich_python_context",
@@ -23,6 +24,7 @@ def test_extract_python_node_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_extract_python_byte_range_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test extract python byte range delegates."""
     monkeypatch.setattr(
         extractors_module,
         "enrich_python_context_by_byte_range",

@@ -25,6 +25,10 @@ require_datafusion_udfs()
 require_deltalake()
 require_delta_extension()
 
+MIN_COMMIT_HISTORY_ENTRIES = 2
+PIPELINE_COMMIT_VERSION = 11
+SCHEMA_EVOLUTION_COMMIT_VERSION = 2
+
 
 @pytest.mark.integration
 def test_idempotent_write_deduplication(tmp_path: Path) -> None:
@@ -60,7 +64,7 @@ def test_idempotent_write_deduplication(tmp_path: Path) -> None:
 
     history = DeltaTable(str(table_path)).history()
     assert v2 >= v1
-    assert len(history) >= 2
+    assert len(history) >= MIN_COMMIT_HISTORY_ENTRIES
 
 
 @pytest.mark.integration
@@ -202,7 +206,7 @@ def test_write_pipeline_propagates_idempotent(tmp_path: Path) -> None:
     )
 
     assert write_result.commit_app_id == "pipeline_test"
-    assert write_result.commit_version == 11
+    assert write_result.commit_version == PIPELINE_COMMIT_VERSION
 
     latest = DeltaTable(str(table_path)).history()[0]
     assert latest.get("commit_app_id") == "pipeline_test"
@@ -256,7 +260,7 @@ def test_schema_evolution_with_idempotent_write(tmp_path: Path) -> None:
         )
     )
     assert write_v2.commit_app_id == "schema_evo"
-    assert write_v2.commit_version == 2
+    assert write_v2.commit_version == SCHEMA_EVOLUTION_COMMIT_VERSION
 
     table = DeltaTable(str(table_path)).to_pyarrow_table()
     assert {"id", "value", "extra"} <= set(table.schema.names)

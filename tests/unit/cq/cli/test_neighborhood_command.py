@@ -7,6 +7,10 @@ from tools.cq.neighborhood.bundle_builder import plan_feasible_slices
 from tools.cq.neighborhood.section_layout import materialize_section_layout
 from tools.cq.run.spec import _STEP_TAGS, RUN_STEP_TYPES, NeighborhoodStep
 
+EXPECTED_DEGRADES = 2
+DEFAULT_TOP_K = 10
+CUSTOM_TOP_K = 5
+
 
 def test_neighborhood_step_msgspec_roundtrip() -> None:
     """Test NeighborhoodStep msgspec serialization roundtrip."""
@@ -38,7 +42,7 @@ def test_plan_feasible_slices_returns_degrades() -> None:
 
     # Should return empty feasible and degradation events
     assert len(feasible) == 0
-    assert len(degrades) == 2
+    assert len(degrades) == EXPECTED_DEGRADES
     assert all(d.severity == "info" for d in degrades)
     assert all(d.category == "unavailable" for d in degrades)
 
@@ -115,7 +119,7 @@ def test_neighborhood_step_defaults() -> None:
     step = NeighborhoodStep(target="test.py:10")
 
     assert step.lang == "python"
-    assert step.top_k == 10
+    assert step.top_k == DEFAULT_TOP_K
     assert step.no_semantic_enrichment is False
 
 
@@ -130,5 +134,5 @@ def test_neighborhood_step_with_custom_values() -> None:
 
     assert step.target == "main.rs:50:10"
     assert step.lang == "rust"
-    assert step.top_k == 5
+    assert step.top_k == CUSTOM_TOP_K
     assert step.no_semantic_enrichment is True

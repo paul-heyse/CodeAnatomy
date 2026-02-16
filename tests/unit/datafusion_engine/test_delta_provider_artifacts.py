@@ -14,6 +14,10 @@ from datafusion_engine.delta.provider_artifacts import (
     provider_build_request_from_service_context,
 )
 
+RESOLVED_DELTA_VERSION = 11
+FINGERPRINT_LENGTH = 16
+PRUNED_FILE_COUNT = 2
+
 
 @dataclass(frozen=True)
 class _CompatibilityStub:
@@ -109,10 +113,10 @@ def test_build_delta_provider_build_result_emits_snapshot_identity_and_fingerpri
     snapshot_key = payload.get("snapshot_key")
     assert isinstance(snapshot_key, dict)
     assert snapshot_key["canonical_uri"] == "s3://example-bucket/path/table"
-    assert snapshot_key["resolved_version"] == 11
+    assert snapshot_key["resolved_version"] == RESOLVED_DELTA_VERSION
     fingerprint = payload.get("storage_profile_fingerprint")
     assert isinstance(fingerprint, str)
-    assert len(fingerprint) == 16
+    assert len(fingerprint) == FINGERPRINT_LENGTH
     assert payload["probe_result"] == "ok"
     assert payload["entrypoint"] == "delta_provider_from_session"
     assert payload["strict_native_provider_enabled"] is True
@@ -150,7 +154,7 @@ def test_provider_build_request_adapter_from_registration_context() -> None:
     )
     assert isinstance(request, DeltaProviderBuildRequest)
     assert request.delta_pruning_applied is True
-    assert request.delta_pruned_files == 2
+    assert request.delta_pruned_files == PRUNED_FILE_COUNT
     assert request.delta_scan_ignored is False
     assert request.provider_mode == "delta_table_provider"
 
@@ -236,5 +240,5 @@ def test_provider_build_result_includes_internal_bootstrap_snapshot_identity() -
     assert canonical_uri.startswith("file://")
     storage_fingerprint = payload.get("storage_profile_fingerprint")
     assert isinstance(storage_fingerprint, str)
-    assert len(storage_fingerprint) == 16
+    assert len(storage_fingerprint) == FINGERPRINT_LENGTH
     assert "event_time_unix_ms" not in payload

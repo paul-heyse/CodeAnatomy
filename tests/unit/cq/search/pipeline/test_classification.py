@@ -11,6 +11,7 @@ from tools.cq.search.pipeline.smart_search import RawMatch
 
 
 def test_run_classification_phase_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test run classification phase delegates."""
     sentinel = ["enriched"]
     context = cast("SearchConfig", object())
 

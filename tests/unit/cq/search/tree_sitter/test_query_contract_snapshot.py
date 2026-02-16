@@ -18,6 +18,7 @@ class _Source:
 
 
 def test_build_contract_snapshot_normalizes_schema_and_pack_rows() -> None:
+    """Test build contract snapshot normalizes schema and pack rows."""
     schema_index = SimpleNamespace(
         all_node_kinds={"function_definition", "class_definition"},
         field_names={"name", "body"},
@@ -38,6 +39,7 @@ def test_build_contract_snapshot_normalizes_schema_and_pack_rows() -> None:
 
 
 def test_diff_snapshots_reports_schema_removals() -> None:
+    """Test diff snapshots reports schema removals."""
     before = build_contract_snapshot(
         language="rust",
         schema_index=SimpleNamespace(

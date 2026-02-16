@@ -7,6 +7,7 @@ from app.api import build_pipeline
 
 
 def run() -> None:
+    """Run."""
     registry, router, service = build_pipeline()
     _ = registry, router, service
 

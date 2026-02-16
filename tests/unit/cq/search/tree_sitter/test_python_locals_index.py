@@ -9,6 +9,9 @@ from tools.cq.search.tree_sitter.python_lane.locals_index import (
     scope_chain_for_anchor,
 )
 
+INNER_SCOPE_START_BYTE = 17
+INNER_SCOPE_END_BYTE = 46
+
 
 @dataclass(frozen=True)
 class _FakeNode:
@@ -25,6 +28,7 @@ class _FakeNode:
 
 
 def test_build_locals_index_selects_nearest_scope() -> None:
+    """Test build locals index selects nearest scope."""
     source = b"def outer():\n    def inner():\n        x = 1\n"
     x_start = source.index(b"x =")
     definition = _FakeNode(type="identifier", start_byte=x_start, end_byte=x_start + 1, text=b"x")
@@ -49,11 +53,12 @@ def test_build_locals_index_selects_nearest_scope() -> None:
 
     assert len(rows) == 1
     assert rows[0].name == "x"
-    assert rows[0].scope_start == 17
-    assert rows[0].scope_end == 46
+    assert rows[0].scope_start == INNER_SCOPE_START_BYTE
+    assert rows[0].scope_end == INNER_SCOPE_END_BYTE
 
 
 def test_scope_chain_for_anchor_falls_back_to_module() -> None:
+    """Test scope chain for anchor falls back to module."""
     source = b"value = 1\n"
     anchor = _FakeNode(type="identifier", start_byte=0, end_byte=5, text=b"value")
 

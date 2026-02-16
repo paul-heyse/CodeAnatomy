@@ -17,6 +17,7 @@ class _FakeQuery:
 
 
 def test_settings_for_pattern_extracts_injection_flags() -> None:
+    """Test settings for pattern extracts injection flags."""
     query = _FakeQuery(
         {
             0: {
@@ -39,6 +40,7 @@ def test_settings_for_pattern_extracts_injection_flags() -> None:
 
 
 def test_settings_for_pattern_handles_missing_pattern_settings() -> None:
+    """Test settings for pattern handles missing pattern settings."""
     query = _FakeQuery({})
     settings = settings_for_pattern(query, 1)
     assert settings == InjectionSettingsV1()

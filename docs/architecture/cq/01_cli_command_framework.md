@@ -1,9 +1,9 @@
 # 01 — CLI & Command Framework
 
-**Version:** 0.5.0
+**Version:** 0.5.1
 **Scope:** `tools/cq/cli_app/` — Command-line interface, routing, configuration, output rendering
 **Phase:** Phase 2 documentation (Command Interface Layer)
-**Last Updated:** 2026-02-15 — Typed boundary integration, CLI-specific run-step contracts
+**Last Updated:** 2026-02-15 — Cyclopts-based CLI with unified request/result pipeline
 
 ---
 
@@ -32,94 +32,35 @@ The CLI & Command Framework provides the external interface to CQ's analysis cap
 ## Module Map
 
 ```
-tools/cq/cli_app/                    (3,844 LOC total)
-├── __init__.py                      (49 LOC) - Package re-exports
+tools/cq/cli_app/                    (3,722 LOC total)
+├── __init__.py                      (49 LOC) - Package re-exports, main() entry
 ├── app.py                           (290 LOC) - Root App, launcher, command registration
-├── config.py                        (35 LOC) - Config provider chain (TOML, env)
 ├── context.py                       (189 LOC) - CliContext, CliResult, CliTextResult
-├── contracts.py                     (164 LOC) - CLI-specific run-step contracts, boundary conversion
-├── decorators.py                    (42 LOC) - Context injection decorators
-├── dispatch.py                      (42 LOC) - Dispatch pipeline (async support)
-├── groups.py                        (44 LOC) - Cyclopts command groups
-├── options.py                       (128 LOC) - Typed option structs
-├── params.py                        (281 LOC) - Parameter groups
+├── infrastructure.py                (154 LOC) - Config chain, decorators, dispatch, groups
+├── params.py                        (314 LOC) - Parameter groups for cyclopts
 ├── result.py                        (381 LOC) - Result rendering dispatch, artifact persistence
-├── result_action.py                 (81 LOC) - Cyclopts result action handlers
-├── telemetry.py                     (156 LOC) - Telemetry capture and error classification
 ├── types.py                         (288 LOC) - Output format enums, custom converters
+├── telemetry.py                     (156 LOC) - Telemetry capture and error classification
+├── options.py                       (127 LOC) - Typed option structs
+├── protocol_output.py               (111 LOC) - Text/JSON helpers for protocol commands
 ├── validators.py                    (97 LOC) - Input validators
+├── result_action.py                 (81 LOC) - Cyclopts result action handlers
 ├── completion.py                    (69 LOC) - Shell completion scripts
-└── commands/                        (1,510 LOC)
+├── contracts.py                     (5 LOC) - Placeholder for future CLI-specific contracts
+└── commands/                        (1,357 LOC)
     ├── __init__.py                  (7 LOC)
-    ├── admin.py                     (107 LOC) - Deprecated admin commands
-    ├── analysis.py                  (325 LOC) - Analysis macros
-    ├── artifact.py                  (160 LOC) - Artifact protocol commands
-    ├── chain.py                     (47 LOC) - Command chaining frontend
-    ├── ldmd.py                      (311 LOC) - LDMD protocol
+    ├── analysis.py                  (304 LOC) - 8 analysis commands
+    ├── ldmd.py                      (274 LOC) - LDMD protocol sub-app
     ├── neighborhood.py              (145 LOC) - Neighborhood assembly command
-    ├── query.py                     (118 LOC) - Query command entry
-    ├── repl.py                      (78 LOC) - Interactive REPL mode
-    ├── report.py                    (79 LOC) - Unified report command
-    ├── run.py                       (53 LOC) - Multi-step execution
-    └── search.py                    (80 LOC) - Smart search command
+    ├── artifact.py                  (140 LOC) - Artifact protocol sub-app
+    ├── query.py                     (121 LOC) - Query command entry
+    ├── search.py                    (85 LOC) - Smart search command
+    ├── admin.py                     (80 LOC) - Deprecated admin commands
+    ├── report.py                    (78 LOC) - Unified report command
+    ├── repl.py                      (77 LOC) - Interactive REPL mode
+    ├── run.py                       (53 LOC) - Multi-step execution launcher
+    └── chain.py                     (47 LOC) - Command chaining frontend
 ```
-
----
-
-## Run-Step Contracts and Typed Boundary
-
-### CLI-Specific Run-Step Types
-
-**Location:** `cli_app/contracts.py:12-138`
-
-The CLI layer defines its own run-step contract types that mirror the canonical `RunStep` union from `tools/cq/run/spec.py`. These CLI-specific types enable cyclopts to parse JSON payloads from `--step` and `--steps` parameters.
-
-**CLI Step Types:**
-
-- `QStepCli` - Query command step
-- `SearchStepCli` - Search command step
-- `CallsStepCli` - Calls analysis step
-- `ImpactStepCli` - Impact analysis step
-- `ImportsStepCli` - Import analysis step
-- `ExceptionsStepCli` - Exception analysis step
-- `SigImpactStepCli` - Signature impact analysis step
-- `SideEffectsStepCli` - Side effects analysis step
-- `ScopesStepCli` - Scope analysis step
-- `BytecodeSurfaceStepCli` - Bytecode surface analysis step
-- `NeighborhoodStepCli` - Neighborhood assembly step
-
-All CLI step types are Python dataclasses (not msgspec structs) to maintain compatibility with cyclopts' parameter binding system.
-
-### Typed Boundary Conversion
-
-**Location:** `cli_app/contracts.py:141-147`
-
-```python
-def to_run_step(payload: dict[str, object]) -> RunStep:
-    """Convert a CLI mapping payload into canonical run-step union."""
-    try:
-        return convert_strict(payload, type_=RunStep)
-    except BoundaryDecodeError as exc:
-        msg = f"Invalid run step payload: {exc}"
-        raise ValueError(msg) from exc
-```
-
-**Boundary Protocol:**
-
-The `to_run_step()` converter uses the typed boundary protocol (`tools/cq/core/typed_boundary.py`) to transform CLI-layer payloads into canonical run-step contracts. This provides:
-
-1. **Type validation** - Ensures step payloads match expected schemas
-2. **Error reporting** - `BoundaryDecodeError` provides detailed validation failures
-3. **Canonical conversion** - CLI types converted to execution layer types
-
-**Integration Points:**
-
-- **options.py** - `RunOptions.step` and `RunOptions.steps` are now typed as `list[RunStep]` (previously `list[dict[str, object]]`)
-- **params.py** - `RunParams.step` and `RunParams.steps` use `list[RunStepCli]` for parameter binding, then converted via `options_from_params()`
-
-**Why Separate CLI Types:**
-
-The CLI layer uses dataclasses for cyclopts compatibility, while the execution layer uses msgspec structs for performance. The typed boundary protocol bridges these representations, ensuring validation occurs at the CLI ingress point before execution begins.
 
 ---
 
@@ -127,7 +68,7 @@ The CLI layer uses dataclasses for cyclopts compatibility, while the execution l
 
 ### Root App Configuration
 
-**Location:** `cli_app/app.py:156-173`
+**Location:** `cli_app/app.py:156-172`
 
 ```python
 app = App(
@@ -152,6 +93,7 @@ app = App(
 - `result_action`: Custom result action pipeline for CliResult handling
 - `config`: Layered config providers (env + TOML)
 - `exit_on_error=False`: Commands return exit codes instead of calling `sys.exit()`
+- `version="0.4.0"`: CQ version string
 
 ### Launcher Pattern
 
@@ -181,13 +123,31 @@ def launcher(
 4. Invoke command via telemetry wrapper
 5. Return exit code to shell
 
+**LaunchContext Structure:**
+
+**Location:** `cli_app/app.py:123-143`
+
+```python
+@dataclass(frozen=True, slots=True)
+class LaunchContext:
+    """Resolved launch-time parameters."""
+    argv: list[str]
+    root: Path | None
+    verbose: int
+    output_format: OutputFormat | None
+    artifact_dir: Path | None
+    save_artifact: bool
+    config_file: str | None
+    use_config: bool
+```
+
 ---
 
 ## Config Resolution Chain
 
 ### Three-Layer Precedence
 
-**Location:** `cli_app/config.py:9-30`
+**Location:** `cli_app/infrastructure.py:20-56`
 
 Configuration resolved via layered providers with strict precedence ordering:
 
@@ -217,11 +177,60 @@ artifact_dir = ".cq/artifacts"
 save_artifact = true
 ```
 
+**Config Chain Builder:**
+
+**Location:** `cli_app/infrastructure.py:20-56`
+
+```python
+def build_config_chain(
+    config_file: str | None = None,
+    *,
+    use_config: bool = True,
+) -> list[Any]:
+    """Build Cyclopts config providers with `CLI > env > config > defaults` precedence."""
+    from cyclopts.config import Env, Toml
+
+    providers: list[Any] = []
+
+    # Always include environment provider (CQ_* prefix)
+    providers.append(Env(prefix="CQ_"))
+
+    # Conditionally add config file provider
+    if use_config:
+        toml_path = config_file or "pyproject.toml"
+        providers.append(Toml(toml_path, root_keys=("tool", "cq")))
+
+    return providers
+```
+
 ### Global Options
 
-**Location:** `cli_app/app.py:72-123`
+**Location:** `cli_app/app.py:46-118`
 
-Core global option fields (see source for full parameter annotations):
+**ConfigOptionArgs:**
+
+```python
+@dataclass(frozen=True, slots=True)
+class ConfigOptionArgs:
+    """Parsed CLI config options."""
+    config: str | None = None      # --config path/to/config.toml
+    use_config: bool = True        # --no-config to disable
+```
+
+**GlobalOptionArgs:**
+
+```python
+@dataclass(frozen=True, slots=True)
+class GlobalOptionArgs:
+    """Parsed CLI global options."""
+    root: Path | None = None
+    verbose: int = 0
+    output_format: OutputFormat | None = None
+    artifact_dir: Path | None = None
+    save_artifact: bool = True
+```
+
+Core global option fields with cyclopts parameter annotations:
 
 - `root`: Repository root path (default: auto-detect via git)
 - `verbose`: Verbosity level (count flag: `-vv` → 2)
@@ -235,7 +244,7 @@ Core global option fields (see source for full parameter annotations):
 
 ### Command Binding and Dispatch
 
-**Location:** `cli_app/dispatch.py:12-35`
+**Location:** `cli_app/infrastructure.py:110-133`
 
 ```python
 def dispatch_bound_command(command: Callable[..., Any], bound: BoundArguments) -> Any:
@@ -314,6 +323,25 @@ Each invocation receives a unique run ID via `resolve_run_identity_contract()` w
 - `run_uuid_version`: UUID version (7)
 - `run_created_ms`: Timestamp in milliseconds
 
+**Invocation Wrapper:**
+
+**Location:** `cli_app/telemetry.py:90-153`
+
+```python
+def invoke_with_telemetry(
+    app: App,
+    tokens: list[str] | None,
+    *,
+    ctx: CliContext,
+) -> tuple[int, CqInvokeEvent]:
+    """Invoke a command with parse/exec timing and error classification."""
+    # Parse phase: app.parse_args(tokens)
+    # Context injection: bound.arguments["ctx"] = ctx
+    # Execute phase: dispatch_bound_command(command, bound)
+    # Error handling: classify by stage, build telemetry event
+    # Return: (exit_code, event)
+```
+
 ---
 
 ## Context Pipeline
@@ -357,15 +385,43 @@ Toolchain probing fails gracefully; missing tools result in `available=False` fl
 
 ### Context Injection
 
-**Location:** `cli_app/decorators.py:12-39`
+**Location:** `cli_app/infrastructure.py:59-86`
 
-Commands receive `CliContext` via injection. The telemetry wrapper checks for `"ctx"` in `ignored` parameters and injects context into `bound.arguments["ctx"]`.
+Commands receive `CliContext` via injection. The telemetry wrapper checks for `"ctx"` in function signature and injects context into `bound.arguments["ctx"]`.
+
+**Context Injection Decorator:**
+
+```python
+def require_ctx(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator asserting ctx kwarg is a CliContext instance."""
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        ctx = kwargs.get("ctx")
+        if ctx is not None and not isinstance(ctx, CliContext):
+            msg = f"Expected CliContext for 'ctx', got {type(ctx).__name__}"
+            raise TypeError(msg)
+        return func(*args, **kwargs)
+    return wrapper
+```
+
+**Helper Function:**
+
+```python
+def require_context(ctx: CliContext | None) -> CliContext:
+    """Extract non-optional context or raise."""
+    if ctx is None:
+        msg = "CliContext is required but was None"
+        raise RuntimeError(msg)
+    return ctx
+```
 
 **Usage in Commands:**
 
 ```python
 @app.command
+@require_ctx
 def search(query: str, *, ctx: CliContext) -> CliResult:
+    ctx = require_context(ctx)
     root = ctx.root
     toolchain = ctx.toolchain
     ...
@@ -386,6 +442,12 @@ class CliResult(CqStruct, frozen=True):
     context: CliContext
     exit_code: int | None = None
     filters: FilterConfig | None = None
+
+    @property
+    def is_cq_result(self) -> bool:
+        """Check if result is a CqResult."""
+        from tools.cq.core.structs import CqResult
+        return isinstance(self.result, CqResult)
 ```
 
 **CliResult Contract:**
@@ -414,19 +476,37 @@ Protocol commands (LDMD, artifact) that return raw text or JSON use `CliTextResu
 
 ### Parameter Groups for Cyclopts
 
-**Location:** `cli_app/params.py:48-280`
+**Location:** `cli_app/params.py:48-314`
 
 Parameter groups are dataclass-based reusable parameter bundles that can be flattened into command signatures via cyclopts `Parameter(name="*")`. Each command has a corresponding `*Params` dataclass that defines its parameter set.
 
 **Parameter Group Examples:**
 
 - `FilterParams` - Common filters (include, exclude, impact, confidence, severity, limit)
-- `QueryParams` - Query command parameters (extends `FilterParams`)
-- `SearchParams` - Search command parameters (extends `FilterParams`)
-- `RunParams` - Run command parameters with step/steps fields
-- `ImpactParams` - Impact analysis parameters
-- `ImportsParams` - Import analysis parameters
-- And others...
+- `QueryParams(FilterParams)` - Query command parameters (extends `FilterParams`)
+- `SearchParams(FilterParams)` - Search command parameters (extends `FilterParams`)
+- `RunParams(FilterParams)` - Run command parameters with step/steps fields
+- `ImpactParams(FilterParams)` - Impact analysis parameters
+- `ImportsParams(FilterParams)` - Import analysis parameters
+- `SigImpactParams(FilterParams)` - Signature impact parameters
+- `SideEffectsParams(FilterParams)` - Side effects parameters
+- `ScopesParams` - Scope analysis parameters
+- `BytecodeSurfaceParams` - Bytecode analysis parameters
+- `ReportParams(FilterParams)` - Report command parameters
+
+**FilterParams Base:**
+
+```python
+@dataclass
+class FilterParams:
+    """Common filter parameters."""
+    include: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)
+    impact: list[ImpactBucket] = field(default_factory=list)
+    confidence: list[ConfidenceBucket] = field(default_factory=list)
+    severity: list[SeverityLevel] = field(default_factory=list)
+    limit: int = 0  # 0 = unlimited
+```
 
 **RunParams Step Fields:**
 
@@ -434,33 +514,71 @@ Parameter groups are dataclass-based reusable parameter bundles that can be flat
 
 ```python
 step: Annotated[
-    list[RunStepCli],
+    list[dict[str, object]],
     Parameter(
         name="--step",
         group=run_input,
         n_tokens=1,
         accepts_keys=False,
         help='Repeatable JSON step object (e.g., \'{"type":"q","query":"..."}\')',
+        converter=_run_step_converter,
     ),
 ] = field(default_factory=list)
 
 steps: Annotated[
-    list[RunStepCli],
+    list[dict[str, object]],
     Parameter(
         name="--steps",
         group=run_input,
         n_tokens=1,
         accepts_keys=False,
         help='JSON array of steps (e.g., \'[{"type":"q",...},{"type":"calls",...}]\')',
+        converter=_run_steps_converter,
     ),
 ] = field(default_factory=list)
 ```
 
 **Key Observations:**
 
-- `RunParams.step` and `RunParams.steps` are typed as `list[RunStepCli]` (CLI-layer dataclasses)
-- Cyclopts automatically deserializes JSON payloads into these dataclass instances
-- The typed boundary protocol later converts CLI types to canonical execution types
+- `RunParams.step` and `RunParams.steps` are typed as `list[dict[str, object]]`
+- Custom converters parse JSON payloads from CLI arguments
+- The `run` command converts these dicts into typed `RunStep` instances via msgspec
+
+**Cyclopts Groups:**
+
+```python
+search_mode = Group("Search Mode", mutually_exclusive=True, sort_key=1)
+filter_group = Group("Filters", sort_key=2)
+run_input = Group("Run Input (mutually exclusive)", mutually_exclusive=True, sort_key=1, validator=validators.LimitedChoice(min_selection=1, max_selection=3))
+```
+
+**Validators:**
+
+```python
+_LIMIT_VALIDATOR = validators.Number(gte=1, lte=1_000_000)
+_DEPTH_VALIDATOR = validators.Number(gte=1, lte=10_000)
+_MAX_FILES_VALIDATOR = validators.Number(gte=1, lte=1_000_000)
+```
+
+**Custom Converters:**
+
+```python
+def comma_separated_list(type_: type) -> Callable[[str], list[Any]]:
+    """Parse comma-separated values into typed list."""
+    ...
+
+def comma_separated_enum(enum_type: type[Enum]) -> Callable[[str], list[Enum]]:
+    """Parse comma-separated enum values."""
+    ...
+
+def _run_step_converter(value: str) -> dict[str, object]:
+    """Parse JSON step object."""
+    ...
+
+def _run_steps_converter(value: str) -> list[dict[str, object]]:
+    """Parse JSON array of steps."""
+    ...
+```
 
 ### Options Conversion from Params
 
@@ -470,7 +588,7 @@ steps: Annotated[
 def options_from_params[T](params: Any, *, type_: type[T]) -> T:
     """Convert a CLI params dataclass into a CQ options struct.
 
-    Returns:
+    Returns
     -------
     T
         Parsed options struct of the requested type.
@@ -492,11 +610,12 @@ The `options_from_params()` helper uses the typed boundary protocol (`convert_st
 ```
 User Input (JSON)
   → Cyclopts Parameter Binding
-  → RunStepCli (dataclass instance)
+  → XxxParams (dataclass instance)
   → options_from_params()
   → convert_strict(..., from_attributes=True)
-  → RunStep (msgspec struct)
-  → Execution Layer
+  → XxxOptions (msgspec struct)
+  → Request Factory
+  → Service Layer
 ```
 
 **Why Two Type Layers:**
@@ -521,9 +640,26 @@ def cq_result_action(result: Any) -> int:
     if isinstance(result, int):
         return result
     return 0
+
+def _return_int_as_exit_code_else_zero(result: Any) -> int:
+    """Cyclopts second-stage result action (normalize bool/int/None → exit code)."""
+    if isinstance(result, bool):
+        return 0 if result else 1
+    if isinstance(result, int):
+        return result
+    return 0
+
+CQ_DEFAULT_RESULT_ACTION = (cq_result_action, _return_int_as_exit_code_else_zero)
 ```
 
-**Handle Result Pipeline:**
+**Two-Stage Pipeline:**
+
+1. **Stage 1** (`cq_result_action`): Dispatch on `CliResult`, call `handle_result()`
+2. **Stage 2** (`_return_int_as_exit_code_else_zero`): Normalize bool/int/None to exit code
+
+This pattern allows commands to return `CliResult`, `int`, or `bool`, and all are normalized to shell exit codes.
+
+### Handle Result Pipeline
 
 **Location:** `cli_app/result.py:143-197`
 
@@ -534,6 +670,29 @@ def cq_result_action(result: Any) -> int:
 3. **Artifact persistence**: Save results + diagnostics + overflow artifacts
 4. **Rendering**: Dispatch to format-specific renderer
 5. **Output emission**: Write to console (verbatim for JSON/LDMD, Rich-wrapped for MD)
+
+```python
+def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) -> int:
+    """Main CLI result handler."""
+    # Non-CqResult path
+    if not cli_result.is_cq_result:
+        return _handle_non_cq_result(cli_result)
+
+    # Apply filters
+    result = apply_result_filters(cli_result.result, filters)
+
+    # Persist artifacts
+    _handle_artifact_persistence(result, cli_result.context)
+
+    # Render output
+    output_format = cli_result.context.output_format or OutputFormat.md
+    output = render_result(result, output_format)
+
+    # Emit output
+    _emit_output(output, output_format)
+
+    return cli_result.exit_code or 0
+```
 
 ---
 
@@ -559,6 +718,32 @@ def cq_result_action(result: Any) -> int:
 **Lazy Import for LDMD:**
 
 LDMD uses a lazy import to prevent circular dependencies and allow the LDMD subsystem to evolve independently.
+
+```python
+def render_result(result: CqResult, output_format: OutputFormat) -> str:
+    """Dispatch rendering based on output format."""
+    if output_format == OutputFormat.json:
+        return dumps_json(result)
+    elif output_format == OutputFormat.md:
+        return render_markdown(result)
+    elif output_format == OutputFormat.summary:
+        return render_summary(result)
+    elif output_format == OutputFormat.mermaid:
+        return render_mermaid_flowchart(result)
+    elif output_format == OutputFormat.mermaid_class:
+        return render_mermaid_class_diagram(result)
+    elif output_format == OutputFormat.dot:
+        return render_dot(result)
+    elif output_format == OutputFormat.ldmd:
+        from tools.cq.ldmd.export import render_ldmd_from_cq_result
+        return render_ldmd_from_cq_result(result)
+    elif output_format == OutputFormat.both:
+        md = render_markdown(result)
+        json_output = dumps_json(result)
+        return f"{md}\n\n---\n\n```json\n{json_output}\n```"
+    else:
+        return render_markdown(result)  # default fallback
+```
 
 ### Markdown Renderer
 
@@ -746,7 +931,7 @@ For the FrontDoor Insight contract and assembly logic, see:
 | Command | Module | Description |
 |---------|--------|-------------|
 | `ldmd` | `commands.ldmd:ldmd_app` | LDMD progressive disclosure protocol |
-| `artifact` | `commands.artifact:artifact_app` | Artifact protocol (list, get, purge) |
+| `artifact` | `commands.artifact:artifact_app` | Artifact protocol (list, get) |
 
 **LDMD Sub-Commands:**
 
@@ -759,7 +944,16 @@ For the FrontDoor Insight contract and assembly logic, see:
 
 - `artifact list`: List saved artifacts
 - `artifact get <id>`: Load artifact by ID
-- `artifact purge --before <timestamp>`: Delete old artifacts
+
+### Admin Commands (Deprecated)
+
+**Location:** `cli_app/commands/admin.py:80`
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `index` | Deprecated | Cache index management (stub) |
+| `cache` | Deprecated | Cache admin commands (stub) |
+| `schema` | Deprecated | Schema export commands (stub) |
 
 ### Registration Pattern
 
@@ -768,6 +962,7 @@ Commands registered via `app.command()` with module path strings (lazy import):
 ```python
 app.command("tools.cq.cli_app.commands.search:search", group=analysis_group)
 app.command("tools.cq.cli_app.commands.query:q", name="q", group=analysis_group)
+app.command("tools.cq.cli_app.commands.neighborhood:neighborhood", name=["neighborhood", "nb"], group=analysis_group)
 ```
 
 **Benefits:**
@@ -794,6 +989,34 @@ app.command("tools.cq.cli_app.commands.query:q", name="q", group=analysis_group)
 - **Error handling**: Non-zero exit codes reported but don't terminate REPL
 - **Telemetry**: All commands wrapped with telemetry collection
 
+```python
+def repl(*, ctx: CliContext) -> int:
+    """Launch interactive REPL mode."""
+    ctx = require_context(ctx)
+    print("CQ Interactive REPL. Type 'help' or 'exit'.")
+
+    while True:
+        try:
+            line = input("cq> ").strip()
+            if not line:
+                continue
+            if line in ("exit", "quit"):
+                break
+            if line == "help":
+                print(app.help)
+                continue
+
+            tokens = shlex.split(line)
+            exit_code, _event = invoke_with_telemetry(app, tokens, ctx=ctx)
+
+            if exit_code != 0:
+                print(f"Command exited with code {exit_code}")
+        except (KeyboardInterrupt, EOFError):
+            break
+
+    return 0
+```
+
 ---
 
 ## Error Handling and Exit Codes
@@ -818,6 +1041,30 @@ app.command("tools.cq.cli_app.commands.query:q", name="q", group=analysis_group)
 - **validation**: Validator rejections (e.g., `--limit -5`)
 - **execution**: Runtime exceptions during command execution
 
+**Error Classification Logic:**
+
+```python
+def _classify_error_stage(exc: Exception) -> tuple[str | None, str | None]:
+    """Classify error by stage and class."""
+    from cyclopts import (
+        BindingError,
+        CoercionError,
+        CommandNotFoundError,
+        ValidationError,
+    )
+
+    if isinstance(exc, CommandNotFoundError):
+        return "command_resolve", exc.__class__.__name__
+    elif isinstance(exc, BindingError):
+        return "binding", exc.__class__.__name__
+    elif isinstance(exc, CoercionError):
+        return "coercion", exc.__class__.__name__
+    elif isinstance(exc, ValidationError):
+        return "validation", exc.__class__.__name__
+    else:
+        return "execution", f"runtime.{exc.__class__.__name__}"
+```
+
 ---
 
 ## Validators
@@ -832,6 +1079,42 @@ app.command("tools.cq.cli_app.commands.query:q", name="q", group=analysis_group)
 - `validators.Number`: Numeric range checks
 - `validators.LimitedChoice`: Min/max choice count
 - `validators.mutually_exclusive`: Mutually exclusive options
+
+**Custom Validators:**
+
+```python
+def validate_path_exists(path: Path, name: str = "path") -> Path:
+    """Validate that a path exists."""
+    if not path.exists():
+        msg = f"{name} does not exist: {path}"
+        raise ValueError(msg)
+    return path
+
+def validate_positive_int(value: int, name: str = "value") -> int:
+    """Validate that an integer is positive."""
+    if value <= 0:
+        msg = f"{name} must be positive, got {value}"
+        raise ValueError(msg)
+    return value
+
+def validate_target_spec(value: str) -> tuple[str, str]:
+    """Parse and validate target spec (kind:value format)."""
+    if ":" not in value:
+        return "symbol", value
+    kind, target = value.split(":", 1)
+    valid_kinds = {"function", "class", "method", "module", "path"}
+    if kind not in valid_kinds:
+        msg = f"Invalid target kind: {kind}. Valid: {valid_kinds}"
+        raise ValueError(msg)
+    return kind, target
+
+def validate_launcher_invariants(**kwargs: object) -> None:
+    """Cross-option invariant checking for launcher."""
+    config_opts = kwargs.get("config_opts")
+    if config_opts and not config_opts.use_config and config_opts.config:
+        msg = "Cannot specify --config with --no-config"
+        raise ValueError(msg)
+```
 
 ---
 
@@ -860,6 +1143,10 @@ cq --install-completion
 - Option name completion
 - Enum value completion (output formats, severity levels, etc.)
 - File path completion for file arguments
+
+**Implementation:**
+
+Cyclopts provides built-in completion script generation via `app.completion()`. The CLI wraps this with a custom `--install-completion` flag.
 
 ---
 
@@ -909,6 +1196,84 @@ class Artifact(CqStruct, frozen=True):
     path: str
     format: str  # "json", "msgpack", "ldmd"
     kind: str    # "result", "diagnostics", "neighborhood_overflow", "search_bundle"
+```
+
+**Artifact Persistence Handler:**
+
+**Location:** `cli_app/result.py:247-309`
+
+```python
+def _handle_artifact_persistence(result: CqResult, ctx: CliContext) -> None:
+    """Save artifacts and attach metadata to front-door insight."""
+    if not ctx.save_artifact:
+        return
+
+    artifact_dir = ctx.artifact_dir or Path(".cq/artifacts")
+
+    # Search macro: save via cache-backed artifact store
+    if result.macro == "search":
+        _save_search_artifact_bundle(result, artifact_dir)
+    else:
+        # Other macros: save JSON result + diagnostics
+        _save_result_artifact(result, artifact_dir)
+        _save_diagnostics_artifact(result, artifact_dir)
+        _save_neighborhood_overflow_artifact(result, artifact_dir)
+```
+
+---
+
+## Protocol Output Helpers
+
+### Text/JSON Dual-Mode Output
+
+**Location:** `cli_app/protocol_output.py:111`
+
+Protocol commands (LDMD, artifact, admin) use helpers for consistent text/JSON output:
+
+```python
+def wants_json(ctx: CliContext) -> bool:
+    """Check if JSON output is requested."""
+    return ctx.output_format == OutputFormat.json
+
+def text_result(ctx: CliContext, text: str, media_type: str = "text/plain", exit_code: int = 0) -> CliResult:
+    """Build CliTextResult wrapped in CliResult."""
+    return CliResult(
+        result=CliTextResult(text=text, media_type=media_type),
+        context=ctx,
+        exit_code=exit_code,
+    )
+
+def json_result(ctx: CliContext, payload: Any, exit_code: int = 0) -> CliResult:
+    """Serialize payload as JSON and wrap in CliResult."""
+    from tools.cq.core.structs import dumps_json
+    text = dumps_json(payload)
+    return text_result(ctx, text, media_type="application/json", exit_code=exit_code)
+
+def emit_payload(ctx: CliContext, payload: Any, text_fallback: str | None = None, exit_code: int = 0) -> CliResult:
+    """Dual-mode: JSON if wants_json(ctx), else text fallback."""
+    if wants_json(ctx):
+        return json_result(ctx, payload, exit_code=exit_code)
+    return text_result(ctx, text_fallback or "", exit_code=exit_code)
+```
+
+**Usage Example (LDMD):**
+
+```python
+@ldmd_app.command
+def index(path: str, *, ctx: CliContext) -> CliResult:
+    """Build LDMD index from document."""
+    ctx = require_context(ctx)
+
+    # Build index
+    index_payload = build_ldmd_index(path)
+
+    # Emit JSON or text
+    if wants_json(ctx):
+        return json_result(ctx, index_payload)
+
+    # Text fallback: pretty-print section list
+    text = format_index_as_text(index_payload)
+    return text_result(ctx, text)
 ```
 
 ---
@@ -997,19 +1362,44 @@ Consider a renderer plugin system with explicit contracts, or an intermediate re
 
 ## File Locations
 
-- **Root App**: `tools/cq/cli_app/app.py` (290 LOC)
-- **Config Chain**: `tools/cq/cli_app/config.py` (35 LOC)
-- **Context Types**: `tools/cq/cli_app/context.py` (189 LOC)
-- **Dispatch Pipeline**: `tools/cq/cli_app/dispatch.py` (42 LOC)
-- **Telemetry**: `tools/cq/cli_app/telemetry.py` (156 LOC)
-- **Result Rendering**: `tools/cq/cli_app/result.py` (381 LOC)
-- **Result Actions**: `tools/cq/cli_app/result_action.py` (81 LOC)
-- **Output Formats**: `tools/cq/cli_app/types.py` (288 LOC)
-- **Validators**: `tools/cq/cli_app/validators.py` (97 LOC)
-- **Markdown Renderer**: `tools/cq/core/report.py` (1,774 LOC)
-- **Findings Table**: `tools/cq/core/findings_table.py` (494 LOC)
-- **Commands Directory**: `tools/cq/cli_app/commands/` (1,510 LOC)
+**Entry Points:**
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli.py` (12 LOC) - Thin wrapper
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/__init__.py` (49 LOC) - main() and main_async()
+
+**Core CLI Infrastructure:**
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/app.py` (290 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/context.py` (189 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/infrastructure.py` (154 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/params.py` (314 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/result.py` (381 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/types.py` (288 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/telemetry.py` (156 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/options.py` (127 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/protocol_output.py` (111 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/validators.py` (97 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/result_action.py` (81 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/completion.py` (69 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/contracts.py` (5 LOC)
+
+**Command Modules:**
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/analysis.py` (304 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/ldmd.py` (274 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/neighborhood.py` (145 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/artifact.py` (140 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/query.py` (121 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/search.py` (85 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/admin.py` (80 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/report.py` (78 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/repl.py` (77 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/run.py` (53 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/cli_app/commands/chain.py` (47 LOC)
+
+**Request/Result Infrastructure:**
+- `/Users/paulheyse/CodeAnatomy/tools/cq/core/request_factory.py` (396 LOC)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/core/result_factory.py` (referenced)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/core/report.py` (1597-1677, markdown rendering)
+- `/Users/paulheyse/CodeAnatomy/tools/cq/core/findings_table.py` (filter/rehydrate logic)
 
 ---
 
-**End of Document**
+**Total CLI Layer:** 3,722 LOC across 24 files in `tools/cq/cli_app/`

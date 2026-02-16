@@ -6,6 +6,8 @@ from pathlib import Path
 
 from tools.cq.macros._rust_fallback import rust_fallback_search
 
+MIN_RUST_MATCHES = 2
+
 
 class TestRustFallbackSearch:
     """Tests for the shared Rust fallback helper."""
@@ -118,8 +120,8 @@ class TestRustFallbackSearch:
             macro_name="calls",
         )
         # Should find at least the definition and the call
-        assert len(findings) >= 2
+        assert len(findings) >= MIN_RUST_MATCHES
         assert stats["matched_files"] == 1
         matches = stats["matches"]
         assert isinstance(matches, int)
-        assert matches >= 2
+        assert matches >= MIN_RUST_MATCHES

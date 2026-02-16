@@ -17,6 +17,7 @@ class _Node:
 
 
 def test_find_import_aliases_uses_config_rules() -> None:
+    """Test find import aliases uses config rules."""
     node = _Node()
     rows = find_import_aliases(cast("Any", node))
     assert rows == ["match"]

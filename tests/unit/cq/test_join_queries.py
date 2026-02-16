@@ -11,6 +11,8 @@ from __future__ import annotations
 from tools.cq.query.ir import JoinConstraint, JoinTarget, Query
 from tools.cq.query.parser import parse_query
 
+EXPECTED_JOIN_COUNT = 2
+
 
 class TestJoinTarget:
     """Tests for JoinTarget dataclass."""
@@ -95,7 +97,7 @@ class TestJoinQueryParsing:
     def test_multiple_joins(self) -> None:
         """Parse query with multiple join constraints."""
         query = parse_query("entity=function used_by=function:main raises=class:Error")
-        assert len(query.joins) == 2
+        assert len(query.joins) == EXPECTED_JOIN_COUNT
 
         types = {j.join_type for j in query.joins}
         assert types == {"used_by", "raises"}

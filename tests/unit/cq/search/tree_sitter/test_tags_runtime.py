@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from tools.cq.search.tree_sitter.tags import build_tag_events
 
+EXPECTED_TAG_ROWS = 2
+
 
 @dataclass(frozen=True)
 class _FakeNode:
@@ -14,6 +16,7 @@ class _FakeNode:
 
 
 def test_build_tag_events_emits_definition_and_reference_rows() -> None:
+    """Test build tag events emits definition and reference rows."""
     source_bytes = b"fn demo() { call(); }"
     matches = [
         (
@@ -32,7 +35,7 @@ def test_build_tag_events_emits_definition_and_reference_rows() -> None:
         ),
     ]
     rows = build_tag_events(matches=matches, source_bytes=source_bytes)
-    assert len(rows) == 2
+    assert len(rows) == EXPECTED_TAG_ROWS
     assert rows[0].role == "definition"
     assert rows[0].name == "demo"
     assert rows[1].role == "reference"

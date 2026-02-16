@@ -6,6 +6,7 @@ from tools.cq.search.rust.extensions import build_module_graph
 
 
 def test_build_module_graph_normalizes_nodes_and_edges() -> None:
+    """Test build module graph normalizes nodes and edges."""
     graph = build_module_graph(
         module_rows=[
             {"module_name": "core", "module_id": "module:core", "file_path": "src/lib.rs"},

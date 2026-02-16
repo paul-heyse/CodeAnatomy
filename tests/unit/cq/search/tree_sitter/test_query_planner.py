@@ -6,6 +6,7 @@ from tools.cq.search.tree_sitter.query import planner as planner_module
 
 
 def test_query_planner_exports_functions() -> None:
+    """Test query planner exports functions."""
     assert callable(planner_module.build_pack_plan)
     assert callable(planner_module.build_pattern_plan)
     assert callable(planner_module.sort_pack_plans)

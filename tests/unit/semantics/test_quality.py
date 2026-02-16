@@ -21,6 +21,20 @@ from semantics.quality import (
     SignalsSpec,
 )
 
+DEFAULT_BASE_SCORE = 1000.0
+DEFAULT_BASE_CONFIDENCE = 0.5
+DEFAULT_QUALITY_WEIGHT = 0.0001
+CUSTOM_BASE_SCORE = 500.0
+CUSTOM_BASE_CONFIDENCE = 0.95
+CUSTOM_QUALITY_WEIGHT = 0.001
+HARD_PREDICATE_COUNT = 2
+FEATURE_WEIGHT = 5.0
+CUSTOM_FEATURE_WEIGHT = 10.0
+ORDER_BY_COUNT = 2
+SELECT_EXPR_COUNT = 3
+HIGH_CONFIDENCE = 0.98
+TOP_K_ALL = 3
+
 
 class TestSignalsSpec:
     """Tests for SignalsSpec dataclass."""
@@ -28,23 +42,23 @@ class TestSignalsSpec:
     def test_default_values(self) -> None:
         """SignalsSpec has sensible defaults."""
         spec = SignalsSpec()
-        assert spec.base_score == 1000.0
-        assert spec.base_confidence == 0.5
+        assert spec.base_score == DEFAULT_BASE_SCORE
+        assert spec.base_confidence == DEFAULT_BASE_CONFIDENCE
         assert spec.hard == ()
         assert spec.features == ()
         assert spec.quality_score_column == "file_quality_score"
-        assert spec.quality_weight == 0.0001
+        assert spec.quality_weight == DEFAULT_QUALITY_WEIGHT
 
     def test_custom_values(self) -> None:
         """SignalsSpec accepts custom values."""
         spec = SignalsSpec(
-            base_score=500.0,
-            base_confidence=0.95,
-            quality_weight=0.001,
+            base_score=CUSTOM_BASE_SCORE,
+            base_confidence=CUSTOM_BASE_CONFIDENCE,
+            quality_weight=CUSTOM_QUALITY_WEIGHT,
         )
-        assert spec.base_score == 500.0
-        assert spec.base_confidence == 0.95
-        assert spec.quality_weight == 0.001
+        assert spec.base_score == CUSTOM_BASE_SCORE
+        assert spec.base_confidence == CUSTOM_BASE_CONFIDENCE
+        assert spec.quality_weight == CUSTOM_QUALITY_WEIGHT
 
     def test_frozen_immutable(self) -> None:
         """SignalsSpec is immutable (frozen)."""
@@ -61,7 +75,7 @@ class TestSignalsSpec:
                 HardPredicate(eq("owner_def_id", "def_id")),
             ],
         )
-        assert len(spec.hard) == 2
+        assert len(spec.hard) == HARD_PREDICATE_COUNT
 
     def test_with_features(self) -> None:
         """SignalsSpec can contain features."""
@@ -69,12 +83,12 @@ class TestSignalsSpec:
 
         spec = SignalsSpec(
             features=[
-                Feature("kind_match", case_eq("owner_kind", "def_kind"), weight=5.0),
+                Feature("kind_match", case_eq("owner_kind", "def_kind"), weight=FEATURE_WEIGHT),
             ],
         )
         assert len(spec.features) == 1
         assert spec.features[0].name == "kind_match"
-        assert spec.features[0].weight == 5.0
+        assert spec.features[0].weight == FEATURE_WEIGHT
 
 
 class TestFeature:
@@ -92,8 +106,8 @@ class TestFeature:
         """Feature accepts custom weight."""
         from semantics.exprs import case_eq
 
-        feature = Feature("test", case_eq("a", "b"), weight=10.0)
-        assert feature.weight == 10.0
+        feature = Feature("test", case_eq("a", "b"), weight=CUSTOM_FEATURE_WEIGHT)
+        assert feature.weight == CUSTOM_FEATURE_WEIGHT
 
     def test_quality_kind(self) -> None:
         """Feature can be quality kind."""
@@ -193,9 +207,9 @@ class TestRankSpec:
             keep="all",
             top_k=3,
         )
-        assert len(rank.order_by) == 2
+        assert len(rank.order_by) == ORDER_BY_COUNT
         assert rank.keep == "all"
-        assert rank.top_k == 3
+        assert rank.top_k == TOP_K_ALL
 
     def test_frozen(self) -> None:
         """RankSpec is immutable."""
@@ -237,13 +251,13 @@ class TestQualityRelationshipSpec:
             rule_name="docstring_owner",
             signals=SignalsSpec(
                 base_score=1000,
-                base_confidence=0.98,
+                base_confidence=HIGH_CONFIDENCE,
                 hard=[
                     HardPredicate(is_not_null("l__owner_def_id")),
                     HardPredicate(eq("l__owner_def_id", "r__entity_id")),
                 ],
                 features=[
-                    Feature("kind_match", case_eq("l__owner_kind", "r__kind"), weight=5.0),
+                    Feature("kind_match", case_eq("l__owner_kind", "r__kind"), weight=FEATURE_WEIGHT),
                 ],
             ),
             rank=RankSpec(
@@ -259,10 +273,10 @@ class TestQualityRelationshipSpec:
             ],
         )
         assert spec.provider == "libcst"
-        assert len(spec.signals.hard) == 2
+        assert len(spec.signals.hard) == HARD_PREDICATE_COUNT
         assert len(spec.signals.features) == 1
         assert spec.rank is not None
-        assert len(spec.select_exprs) == 3
+        assert len(spec.select_exprs) == SELECT_EXPR_COUNT
 
     def test_frozen(self) -> None:
         """QualityRelationshipSpec is immutable."""
@@ -334,7 +348,7 @@ class TestQualitySpecsRegistry:
         from semantics.quality_specs import REL_CST_DOCSTRING_OWNER_BY_ID
 
         assert REL_CST_DOCSTRING_OWNER_BY_ID.name == "rel_cst_docstring_owner_by_id"
-        assert REL_CST_DOCSTRING_OWNER_BY_ID.signals.base_confidence == 0.98
-        assert len(REL_CST_DOCSTRING_OWNER_BY_ID.signals.hard) == 2
+        assert REL_CST_DOCSTRING_OWNER_BY_ID.signals.base_confidence == HIGH_CONFIDENCE
+        assert len(REL_CST_DOCSTRING_OWNER_BY_ID.signals.hard) == HARD_PREDICATE_COUNT
         assert REL_CST_DOCSTRING_OWNER_BY_ID.rank is not None
         assert REL_CST_DOCSTRING_OWNER_BY_ID.rank.top_k == 1

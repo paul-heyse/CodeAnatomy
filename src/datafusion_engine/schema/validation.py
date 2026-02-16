@@ -124,7 +124,9 @@ def _datafusion_type_name(dtype: pa.DataType) -> str:
     str
         DataFusion SQL type name for the dtype.
     """
-    from datafusion_engine.session.runtime import _datafusion_type_name as runtime_type_name
+    from datafusion_engine.session.runtime_dataset_io import (
+        _datafusion_type_name as runtime_type_name,
+    )
 
     return runtime_type_name(dtype)
 

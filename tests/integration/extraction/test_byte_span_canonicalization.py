@@ -13,9 +13,9 @@ from typing import Protocol, cast
 import pyarrow as pa
 import pytest
 
-from extract.extractors.ast_extract import AstExtractOptions, extract_ast_tables
-from extract.extractors.cst_extract import CstExtractOptions, extract_cst_tables
-from extract.extractors.tree_sitter.extract import TreeSitterExtractOptions, extract_ts_tables
+from extract.extractors.ast import AstExtractOptions, extract_ast_tables
+from extract.extractors.cst import CstExtractOptions, extract_cst_tables
+from extract.extractors.tree_sitter import TreeSitterExtractOptions, extract_ts_tables
 from tests.test_helpers.datafusion_runtime import df_ctx
 
 
@@ -219,7 +219,7 @@ def test_span_normalization_with_missing_udf() -> None:
     Verifies that attempting span normalization without the col_to_byte UDF
     raises ValueError with a clear UDF-missing message.
     """
-    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
 
     ctx = df_ctx()
 

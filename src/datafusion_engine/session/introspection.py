@@ -21,7 +21,7 @@ from cache.diskcache_factory import (
     run_profile_maintenance,
 )
 from datafusion_engine.lineage.diagnostics import record_events
-from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

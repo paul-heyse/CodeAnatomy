@@ -26,6 +26,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_bound_call
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
 from tools.cq.index.def_index import DefIndex, FnDecl
@@ -692,10 +693,12 @@ def _build_not_found_result(request: ImpactRequest, *, started_ms: float) -> CqR
         started_ms=started_ms,
     )
     result = builder.result
-    result.summary = {
-        "status": "not_found",
-        "function": request.function_name,
-    }
+    result.summary = summary_from_mapping(
+        {
+            "status": "not_found",
+            "function": request.function_name,
+        }
+    )
     result.key_findings.append(
         Finding(
             category="error",
@@ -799,11 +802,13 @@ def _build_impact_result(
     all_sites = _analyze_functions(ctx)
     caller_sites = _find_callers_via_search(request.function_name, request.root)
 
-    result.summary = _build_impact_summary(
-        request,
-        functions=ctx.functions,
-        all_sites=all_sites,
-        caller_sites=caller_sites,
+    result.summary = summary_from_mapping(
+        _build_impact_summary(
+            request,
+            functions=ctx.functions,
+            all_sites=all_sites,
+            caller_sites=caller_sites,
+        )
     )
 
     scoring_details, depth_counts, files_affected = _build_impact_scoring(all_sites)

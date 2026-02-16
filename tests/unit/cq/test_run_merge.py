@@ -9,6 +9,7 @@ from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.front_door_builders import FrontDoorInsightV1, InsightSliceV1, InsightTargetV1
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.schema import CqResult, Finding, RunMeta, Section
+from tools.cq.core.summary_contract import SemanticTelemetryV1, summary_from_mapping
 from tools.cq.orchestration.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
@@ -53,10 +54,14 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
         toolchain={},
     )
     py_result = CqResult(
-        run=run, summary={"matches": 1}, key_findings=[Finding(category="d", message="py")]
+        run=run,
+        summary=summary_from_mapping({"matches": 1}),
+        key_findings=[Finding(category="d", message="py")],
     )
     rs_result = CqResult(
-        run=run, summary={"matches": 2}, key_findings=[Finding(category="d", message="rs")]
+        run=run,
+        summary=summary_from_mapping({"matches": 2}),
+        key_findings=[Finding(category="d", message="rs")],
     )
     merged = merge_language_cq_results(
         MergeResultsRequest(
@@ -68,8 +73,10 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
     assert merged.summary["lang_scope"] == "auto"
     assert merged.summary["language_order"] == ["python", "rust"]
     assert isinstance(merged.summary["languages"], dict)
-    assert "python" in merged.summary["languages"]
-    assert "rust" in merged.summary["languages"]
+    languages = merged.summary["languages"]
+    assert isinstance(languages, dict)
+    assert "python" in languages
+    assert "rust" in languages
     assert isinstance(merged.summary["cross_language_diagnostics"], list)
     assert isinstance(merged.summary["language_capabilities"], dict)
     assert "python_semantic_overview" in merged.summary
@@ -91,12 +98,12 @@ def test_merge_language_cq_results_preserves_summary_common() -> None:
     )
     py_result = CqResult(
         run=run,
-        summary={"matches": 1},
+        summary=summary_from_mapping({"matches": 1}),
         key_findings=[Finding(category="d", message="py")],
     )
     rs_result = CqResult(
         run=run,
-        summary={"matches": 2},
+        summary=summary_from_mapping({"matches": 2}),
         key_findings=[Finding(category="d", message="rs")],
     )
     merged = merge_language_cq_results(
@@ -144,12 +151,14 @@ def test_merge_language_results_preserves_front_door_insight() -> None:
     )
     py_result = CqResult(
         run=run,
-        summary={"matches": 1, "front_door_insight": msgspec.to_builtins(py_insight)},
+        summary=summary_from_mapping(
+            {"matches": 1, "front_door_insight": msgspec.to_builtins(py_insight)}
+        ),
         key_findings=[Finding(category="definition", message="py")],
     )
     rs_result = CqResult(
         run=run,
-        summary={"matches": 0},
+        summary=summary_from_mapping({"matches": 0}),
         key_findings=[],
     )
     merged = merge_language_cq_results(
@@ -194,9 +203,11 @@ def test_merge_language_results_marks_partial_when_language_missing_insight() ->
             results={
                 "python": CqResult(
                     run=run,
-                    summary={"matches": 1, "front_door_insight": msgspec.to_builtins(insight)},
+                    summary=summary_from_mapping(
+                        {"matches": 1, "front_door_insight": msgspec.to_builtins(insight)}
+                    ),
                 ),
-                "rust": CqResult(run=run, summary={"matches": 0}),
+                "rust": CqResult(run=run, summary=summary_from_mapping({"matches": 0})),
             },
             run=run,
             summary_common={"query": "entity=function name=target", "mode": "entity"},
@@ -229,30 +240,34 @@ def test_merge_language_results_aggregates_semantic_telemetry() -> None:
     )
     py_result = CqResult(
         run=run,
-        summary={
-            "matches": 2,
-            "python_semantic_telemetry": {
-                "attempted": 2,
-                "applied": 1,
-                "failed": 1,
-                "skipped": 0,
-                "timed_out": 0,
-            },
-        },
+        summary=summary_from_mapping(
+            {
+                "matches": 2,
+                "python_semantic_telemetry": {
+                    "attempted": 2,
+                    "applied": 1,
+                    "failed": 1,
+                    "skipped": 0,
+                    "timed_out": 0,
+                },
+            }
+        ),
         key_findings=[Finding(category="definition", message="py")],
     )
     rust_result = CqResult(
         run=run,
-        summary={
-            "matches": 1,
-            "rust_semantic_telemetry": {
-                "attempted": 1,
-                "applied": 1,
-                "failed": 0,
-                "skipped": 0,
-                "timed_out": 0,
-            },
-        },
+        summary=summary_from_mapping(
+            {
+                "matches": 1,
+                "rust_semantic_telemetry": {
+                    "attempted": 1,
+                    "applied": 1,
+                    "failed": 0,
+                    "skipped": 0,
+                    "timed_out": 0,
+                },
+            }
+        ),
         key_findings=[Finding(category="definition", message="rs")],
     )
 
@@ -267,11 +282,11 @@ def test_merge_language_results_aggregates_semantic_telemetry() -> None:
 
     python_semantic = merged.summary.get("python_semantic_telemetry")
     rust = merged.summary.get("rust_semantic_telemetry")
-    assert isinstance(python_semantic, dict)
-    assert isinstance(rust, dict)
-    assert python_semantic.get("attempted") == PYTHON_ATTEMPTED_COUNT
-    assert python_semantic.get("applied") == 1
-    assert python_semantic.get("failed") == 1
-    assert rust.get("attempted") == 1
-    assert rust.get("applied") == 1
-    assert rust.get("failed") == 0
+    assert isinstance(python_semantic, SemanticTelemetryV1)
+    assert isinstance(rust, SemanticTelemetryV1)
+    assert python_semantic.attempted == PYTHON_ATTEMPTED_COUNT
+    assert python_semantic.applied == 1
+    assert python_semantic.failed == 1
+    assert rust.attempted == 1
+    assert rust.applied == 1
+    assert rust.failed == 0

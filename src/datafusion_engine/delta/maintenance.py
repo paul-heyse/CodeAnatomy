@@ -12,7 +12,7 @@ import msgspec
 from datafusion import SessionContext
 
 from datafusion_engine.dataset.registry import DatasetLocation
-from datafusion_engine.delta.control_plane import (
+from datafusion_engine.delta.control_plane_core import (
     DeltaCheckpointRequest,
     DeltaCommitOptions,
     DeltaOptimizeRequest,
@@ -25,20 +25,17 @@ from datafusion_engine.delta.observability import (
     DeltaMaintenanceArtifact,
     record_delta_maintenance,
 )
-from datafusion_engine.delta.service import (
-    DeltaFeatureMutationRequest,
-    delta_service_for_profile,
-)
+from datafusion_engine.delta.service import DeltaFeatureMutationRequest, DeltaService
 from obs.datafusion_engine_runtime_metrics import (
     maintenance_tracer,
     record_delta_maintenance_run,
 )
-from storage.deltalake.delta import DeltaFeatureMutationOptions
+from storage.deltalake.delta_read import DeltaFeatureMutationOptions
 
 if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.contracts import DeltaMaintenancePolicy
+    from schema_spec.dataset_spec import DeltaMaintenancePolicy
 
 _MIN_RETENTION_HOURS = 168
 logger = logging.getLogger(__name__)
@@ -83,7 +80,7 @@ def _resolve_base_maintenance_plan(
     """
     resolved = request.policy
     if resolved is None and request.dataset_location is not None:
-        resolved = request.dataset_location.resolved.delta_maintenance_policy
+        resolved = request.dataset_location.delta_maintenance_policy
     if resolved is None:
         return None
     if not _has_maintenance(resolved):
@@ -421,7 +418,7 @@ def run_delta_maintenance(
     ctx: SessionContext,
     *,
     plan: DeltaMaintenancePlan,
-    runtime_profile: DataFusionRuntimeProfile | None,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> tuple[Mapping[str, object], ...]:
     """Execute the maintenance plan and record observability artifacts.
 
@@ -431,7 +428,7 @@ def run_delta_maintenance(
         Sequence of maintenance reports emitted by the control plane.
     """
     policy = plan.policy
-    service = delta_service_for_profile(runtime_profile)
+    service = DeltaService(profile=runtime_profile)
     reports: list[Mapping[str, object]] = []
     logger.info(
         "Running delta maintenance table_uri=%s dataset=%s",
@@ -445,7 +442,7 @@ def run_delta_maintenance(
             execute=lambda: service.features.enable_deletion_vectors(
                 _feature_mutation_options(
                     plan,
-                    runtime_profile=runtime_profile,
+                    delta_service=service,
                     commit_metadata={"operation": "enable_deletion_vectors"},
                 )
             ),
@@ -469,7 +466,7 @@ def run_delta_maintenance(
             execute=lambda: service.features.enable_v2_checkpoints(
                 _feature_mutation_options(
                     plan,
-                    runtime_profile=runtime_profile,
+                    delta_service=service,
                     commit_metadata={"operation": "enable_v2_checkpoints"},
                 )
             ),
@@ -602,10 +599,9 @@ def _run_maintenance_operation[T](
 def _feature_mutation_options(
     plan: DeltaMaintenancePlan,
     *,
-    runtime_profile: DataFusionRuntimeProfile | None,
+    delta_service: DeltaService,
     commit_metadata: Mapping[str, str] | None,
 ) -> DeltaFeatureMutationOptions:
-    service = delta_service_for_profile(runtime_profile)
     request = DeltaFeatureMutationRequest(
         path=plan.table_uri,
         storage_options=plan.storage_options,
@@ -614,7 +610,7 @@ def _feature_mutation_options(
         commit_metadata=commit_metadata,
         gate=plan.feature_gate,
     )
-    return service.features.feature_mutation_options(request)
+    return delta_service.features.feature_mutation_options(request)
 
 
 def _has_maintenance(policy: DeltaMaintenancePolicy) -> bool:

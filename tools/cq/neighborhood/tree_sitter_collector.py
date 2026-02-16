@@ -20,6 +20,7 @@ from tools.cq.neighborhood.contracts import (
     TreeSitterNeighborhoodCollectResult,
 )
 from tools.cq.neighborhood.tree_sitter_neighborhood_query_engine import collect_callers_callees
+from tools.cq.search.rust.extractors_shared import RUST_SCOPE_KINDS
 from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryWindowV1,
     TreeSitterDiagnosticV1,
@@ -43,16 +44,7 @@ except ImportError:  # pragma: no cover - optional dependency
     _TreeSitterParser = None
 
 _SCOPE_KINDS: frozenset[str] = frozenset(
-    {
-        "function_definition",
-        "class_definition",
-        "function_item",
-        "struct_item",
-        "enum_item",
-        "trait_item",
-        "impl_item",
-        "mod_item",
-    }
+    {"function_definition", "class_definition"} | (RUST_SCOPE_KINDS - {"block"})
 )
 
 _STOP_CONTEXT_KINDS: frozenset[str] = frozenset({"block", "module", "source_file"})

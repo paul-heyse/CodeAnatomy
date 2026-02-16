@@ -67,7 +67,7 @@ def align_to_schema(
         if name in input_cols
         and resolved_table.schema.field(name).type != resolved_schema.field(name).type
     ]
-    from datafusion_engine.session.runtime import align_table_to_schema
+    from datafusion_engine.session.runtime_dataset_io import align_table_to_schema
 
     aligned = align_table_to_schema(
         resolved_table,

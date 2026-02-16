@@ -10,6 +10,7 @@ from tools.cq.core.structs import CqStruct
 from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
 
 if TYPE_CHECKING:
+    from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.toolchain import Toolchain
 
 
@@ -92,6 +93,11 @@ class RunExecutionContext(Protocol):
     @property
     def artifact_dir(self) -> Path | None:
         """Optional artifact directory."""
+        ...
+
+    @property
+    def services(self) -> CqRuntimeServices:
+        """Runtime service bundle resolved at composition root."""
         ...
 
 

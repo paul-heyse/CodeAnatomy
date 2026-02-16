@@ -7,10 +7,10 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration_core import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.expr.spec import ExprSpec
-from schema_spec.contracts import DatasetSpec
+from schema_spec.dataset_spec import DatasetSpec
 from schema_spec.specs import TableSchemaSpec
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
 from tests.test_helpers.diagnostics import diagnostic_profile

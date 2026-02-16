@@ -7,6 +7,8 @@ from pathlib import Path
 
 import msgspec
 
+from utils.coercion import coerce_bool
+
 
 class RepoScanDiffOptions(msgspec.Struct, frozen=True):
     """Diff-selection controls for repository scanning."""
@@ -81,12 +83,12 @@ def normalize_extraction_options(
     include_globs = _coerce_globs(options.get("include_globs"))
     exclude_globs = _coerce_globs(options.get("exclude_globs"))
 
-    tree_sitter_enabled = _coerce_bool(
+    tree_sitter_enabled = coerce_bool(
         options.get("tree_sitter_enabled"),
         default=default_tree_sitter_enabled,
     )
     if "tree_sitter_enabled" not in options:
-        tree_sitter_enabled = _coerce_bool(
+        tree_sitter_enabled = coerce_bool(
             options.get("enable_tree_sitter"),
             default=default_tree_sitter_enabled,
         )
@@ -116,10 +118,10 @@ def normalize_extraction_options(
     return ExtractionRunOptions(
         include_globs=include_globs,
         exclude_globs=exclude_globs,
-        include_untracked=_coerce_bool(options.get("include_untracked"), default=True),
-        include_submodules=_coerce_bool(options.get("include_submodules"), default=False),
-        include_worktrees=_coerce_bool(options.get("include_worktrees"), default=False),
-        follow_symlinks=_coerce_bool(options.get("follow_symlinks"), default=False),
+        include_untracked=coerce_bool(options.get("include_untracked"), default=True),
+        include_submodules=coerce_bool(options.get("include_submodules"), default=False),
+        include_worktrees=coerce_bool(options.get("include_worktrees"), default=False),
+        follow_symlinks=coerce_bool(options.get("follow_symlinks"), default=False),
         tree_sitter_enabled=tree_sitter_enabled,
         max_workers=max_workers,
         diff_base_ref=diff_base_ref,
@@ -135,12 +137,12 @@ def _coerce_incremental_diff(value: object) -> RepoScanDiffOptions:
         return RepoScanDiffOptions(
             diff_base_ref=_coerce_optional_ref(value.get("git_base_ref")),
             diff_head_ref=_coerce_optional_ref(value.get("git_head_ref")),
-            changed_only=_coerce_bool(value.get("git_changed_only"), default=False),
+            changed_only=coerce_bool(value.get("git_changed_only"), default=False),
         )
     return RepoScanDiffOptions(
         diff_base_ref=_coerce_optional_ref(getattr(value, "git_base_ref", None)),
         diff_head_ref=_coerce_optional_ref(getattr(value, "git_head_ref", None)),
-        changed_only=_coerce_bool(getattr(value, "git_changed_only", None), default=False),
+        changed_only=coerce_bool(getattr(value, "git_changed_only", None), default=False),
     )
 
 
@@ -182,12 +184,6 @@ def _coerce_optional_ref(value: object) -> str | None:
         cleaned = value.strip()
         return cleaned or None
     return None
-
-
-def _coerce_bool(value: object, *, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    return default
 
 
 def _coerce_positive_int(value: object, *, default: int) -> int:

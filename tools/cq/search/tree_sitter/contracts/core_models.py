@@ -58,6 +58,16 @@ class QueryWindowV1(CqStruct, frozen=True):
     start_byte: int
     end_byte: int
 
+    def __post_init__(self) -> None:
+        """Validate byte-window ordering constraints.
+
+        Raises:
+            ValueError: If ``start_byte`` is greater than ``end_byte``.
+        """
+        if self.start_byte > self.end_byte:
+            msg = "start_byte must be <= end_byte"
+            raise ValueError(msg)
+
 
 class QueryPointWindowV1(CqStruct, frozen=True):
     """Inclusive-exclusive point window for row/column anchored execution."""

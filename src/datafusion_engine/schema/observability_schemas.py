@@ -43,7 +43,7 @@ from datafusion_engine.schema.extraction_schemas import (
     _schema_with_metadata,
     extract_base_schema_names,
 )
-from datafusion_engine.schema.introspection import SchemaIntrospector, table_names_snapshot
+from datafusion_engine.schema.introspection_core import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql.options import sql_options_for_profile
 from datafusion_engine.udf.expr import udf_expr
 from utils.validation import find_missing
@@ -439,7 +439,7 @@ def schema_contract_for_table(ctx: SessionContext, *, table_name: str) -> Schema
     SchemaContract
         Schema contract derived from the catalog schema.
     """
-    from datafusion_engine.schema.introspection import schema_contract_from_table
+    from datafusion_engine.schema.introspection_core import schema_contract_from_table
 
     return schema_contract_from_table(ctx, table_name=table_name)
 
@@ -672,7 +672,7 @@ def _validate_required_functions(
     resolved = catalog or _function_catalog(ctx)
     available = set(resolved.function_names) if resolved is not None else set()
     try:
-        from datafusion_engine.udf.extension_runtime import (
+        from datafusion_engine.udf.extension_core import (
             rust_udf_snapshot,
             udf_names_from_snapshot,
         )
@@ -1222,7 +1222,7 @@ def validate_required_engine_functions(ctx: SessionContext) -> None:
     Raises:
         ValueError: If the operation cannot be completed.
     """
-    from datafusion_engine.udf.extension_runtime import udf_backend_available
+    from datafusion_engine.udf.extension_core import udf_backend_available
 
     if not udf_backend_available():
         return

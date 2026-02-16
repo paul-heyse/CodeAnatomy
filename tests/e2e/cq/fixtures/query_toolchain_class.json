@@ -86,7 +86,6 @@
     }
   ],
   "summary": {
-    "cross_language_diagnostics": [],
     "front_door_insight": {
       "artifact_refs": {
         "diagnostics": null,
@@ -124,11 +123,14 @@
           "overflow_artifact_ref": null,
           "preview": [
             {
+              "byte_span": null,
               "display_label": "Toolchain",
               "file_path": "tools/cq/core/toolchain.py",
               "kind": "definition",
               "name": "Toolchain",
-              "node_id": "entity:caller:tools/cq/core/toolchain.py:68:Toolchain"
+              "node_id": "entity:caller:tools/cq/core/toolchain.py:68:Toolchain",
+              "qualname": null,
+              "signature": null
             }
           ],
           "source": "heuristic",
@@ -296,98 +298,11 @@
       }
     },
     "mode": "entity",
-    "python_semantic_diagnostics": [],
-    "python_semantic_overview": {},
     "python_semantic_telemetry": {
       "applied": 1,
-      "attempted": 1,
-      "failed": 0,
-      "skipped": 0,
-      "timed_out": 0
+      "attempted": 1
     },
     "query": "entity=class name=Toolchain",
-    "rust_semantic_telemetry": {
-      "applied": 0,
-      "attempted": 0,
-      "failed": 0,
-      "skipped": 0,
-      "timed_out": 0
-    },
-    "semantic_planes": {
-      "counts": {
-        "diagnostics": 0,
-        "injections": 0,
-        "locals": 11,
-        "semantic_tokens": 2
-      },
-      "degradation": [],
-      "language": "python",
-      "preview": {
-        "diagnostics": [],
-        "injections": [],
-        "locals": [
-          {
-            "kind": "qualified_name",
-            "name": "CqStruct"
-          },
-          {
-            "kind": "qualified_name",
-            "name": "Toolchain.CqStruct"
-          },
-          {
-            "kind": "qualified_name",
-            "name": "tools.cq.core.structs.CqStruct"
-          },
-          {
-            "kind": "local_definition",
-            "name": "Toolchain"
-          },
-          {
-            "kind": "local_definition",
-            "name": "detect"
-          },
-          {
-            "kind": "local_definition",
-            "name": "diskcache_available"
-          },
-          {
-            "kind": "local_definition",
-            "name": "diskcache_version"
-          },
-          {
-            "kind": "local_definition",
-            "name": "has_rg"
-          },
-          {
-            "kind": "local_definition",
-            "name": "has_sgpy"
-          },
-          {
-            "kind": "local_definition",
-            "name": "msg"
-          },
-          {
-            "kind": "local_definition",
-            "name": "msgspec_available"
-          }
-        ],
-        "semantic_tokens": [
-          {
-            "kind": "node_kind",
-            "value": "class_definition"
-          },
-          {
-            "kind": "item_role",
-            "value": "class_def"
-          }
-        ]
-      },
-      "sources": [
-        "ast_grep",
-        "python_resolution",
-        "tree_sitter"
-      ],
-      "version": "cq.semantic_planes.v2"
-    }
+    "rust_semantic_telemetry": {}
   }
 }

@@ -8,8 +8,8 @@ from datafusion_engine.bootstrap.zero_row import (
     ZeroRowBootstrapReport,
     ZeroRowBootstrapRequest,
 )
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import (
     DiagnosticsConfig,
     ZeroRowBootstrapConfig,
 )

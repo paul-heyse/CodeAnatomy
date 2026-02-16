@@ -30,7 +30,7 @@ _PARAM_SIGNATURE_SEPARATOR = "\x1f"
 
 @cache
 def _scalar_param_signature_schema() -> pa.Schema:
-    from datafusion_engine.session.runtime import dataset_schema_from_context
+    from datafusion_engine.session.runtime_dataset_io import dataset_schema_from_context
 
     schema = dataset_schema_from_context("scalar_param_signature_v1")
     if isinstance(schema, pa.Schema):

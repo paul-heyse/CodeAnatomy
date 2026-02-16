@@ -10,10 +10,16 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
-from relspec.compiled_policy import CompiledExecutionPolicy
-from relspec.contracts import CompileExecutionPolicyRequestV1
+from relspec.compiled_policy import (
+    CompiledExecutionPolicy,
+    CompiledInferenceConfidence,
+    CompiledMaintenancePolicy,
+    CompiledScanPolicyOverride,
+    JsonValue,
+)
+from relspec.contracts import CompileExecutionPolicyRequestV1, ScanOverrideLike, TaskGraphLike
 from serde_msgspec import to_builtins
 from utils.hashing import hash_json_canonical
 
@@ -24,23 +30,6 @@ if TYPE_CHECKING:
     from relspec.pipeline_policy import DiagnosticsPolicy
     from semantics.ir import SemanticIR
 
-
-class _OutDegreeGraph(Protocol):
-    def out_degree(self, node_idx: object) -> int: ...
-
-
-class _TaskGraphLike(Protocol):
-    task_idx: Mapping[str, object]
-    graph: _OutDegreeGraph
-
-
-class _ScanOverrideLike(Protocol):
-    dataset_name: str
-    policy: object
-    reasons: object
-    inference_confidence: object | None
-
-
 _LOGGER = logging.getLogger(__name__)
 
 # Fan-out threshold above which an intermediate node is promoted to
@@ -48,14 +37,53 @@ _LOGGER = logging.getLogger(__name__)
 _HIGH_FANOUT_THRESHOLD = 2
 
 
+def _to_json_scalar(value: object) -> str | int | float | bool | None:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _to_json_value(value: object) -> JsonValue:
+    """Normalize arbitrary payloads to JSON-compatible typed values.
+
+    Returns:
+    -------
+    JsonValue
+        JSON-compatible value representation.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _to_json_scalar(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return tuple(_to_json_scalar(item) for item in value)
+    return str(value)
+
+
+def _to_json_mapping(value: object) -> dict[str, JsonValue]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): _to_json_value(item) for key, item in value.items()}
+
+
+def _normalize_reason_labels(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return (normalized,) if normalized else ()
+    if isinstance(value, Sequence):
+        labels = tuple(str(item).strip() for item in value if str(item).strip())
+        return tuple(dict.fromkeys(labels))
+    return ()
+
+
 @dataclass(frozen=True)
 class _CompiledPolicyComponents:
     cache_policies: dict[str, str]
-    scan_policy_map: dict[str, object]
-    maintenance_policy_map: dict[str, object]
+    scan_policy_map: dict[str, CompiledScanPolicyOverride]
+    maintenance_policy_map: dict[str, CompiledMaintenancePolicy]
     udf_requirements: dict[str, tuple[str, ...]]
     join_strategies: dict[str, str]
-    inference_confidence: dict[str, object]
+    inference_confidence: dict[str, CompiledInferenceConfidence]
     materialization_strategy: str | None
     diagnostics_flags: dict[str, bool]
     workload_class: str | None
@@ -149,8 +177,8 @@ def _derive_policy_components(
 
 
 def _derive_cache_policies(
-    task_graph: _TaskGraphLike,
-    output_locations: Mapping[str, object],
+    task_graph: TaskGraphLike,
+    output_locations: Mapping[str, DatasetLocation],
     *,
     cache_overrides: Mapping[str, str] | None = None,
     workload_class: str | None = None,
@@ -297,8 +325,8 @@ def _workload_adjusted_cache_policy(
 
 
 def _scan_overrides_to_mapping(
-    overrides: tuple[_ScanOverrideLike, ...],
-) -> dict[str, object]:
+    overrides: tuple[ScanOverrideLike, ...],
+) -> dict[str, CompiledScanPolicyOverride]:
     """Convert scan policy overrides to a serializable mapping.
 
     Parameters
@@ -308,24 +336,30 @@ def _scan_overrides_to_mapping(
 
     Returns:
     -------
-    dict[str, object]
+    dict[str, CompiledScanPolicyOverride]
         Mapping of dataset names to override configuration dicts.
     """
-    result: dict[str, object] = {}
+    result: dict[str, CompiledScanPolicyOverride] = {}
     for override in overrides:
-        entry: dict[str, object] = {
-            "policy": to_builtins(override.policy),
-            "reasons": override.reasons,
-        }
-        if override.inference_confidence is not None:
-            entry["inference_confidence"] = to_builtins(override.inference_confidence)
-        result[override.dataset_name] = entry
+        raw_policy = to_builtins(override.policy, str_keys=True)
+        policy_payload = _to_json_mapping(raw_policy)
+        raw_conf = (
+            to_builtins(override.inference_confidence, str_keys=True)
+            if override.inference_confidence is not None
+            else None
+        )
+        conf_payload = _to_json_mapping(raw_conf) if raw_conf is not None else None
+        result[override.dataset_name] = CompiledScanPolicyOverride(
+            policy=policy_payload,
+            reasons=_normalize_reason_labels(override.reasons),
+            inference_confidence=conf_payload,
+        )
     return result
 
 
 def _derive_udf_requirements(
     *,
-    task_graph: _TaskGraphLike,
+    task_graph: TaskGraphLike,
     view_nodes: Sequence[ViewNode] | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Extract per-task UDF requirements from task graph node payloads.
@@ -383,31 +417,34 @@ def _derive_join_strategies_from_semantic_ir(
 
 def _derive_inference_confidence_from_semantic_ir(
     semantic_ir: SemanticIR | None,
-) -> dict[str, object]:
+) -> dict[str, CompiledInferenceConfidence]:
     """Extract structured inference confidence from semantic IR views.
 
     Returns:
     -------
-    dict[str, object]
+    dict[str, CompiledInferenceConfidence]
         Serialized inference confidence payload by view name.
     """
     if semantic_ir is None:
         return {}
-    confidence_by_view: dict[str, object] = {}
+    confidence_by_view: dict[str, CompiledInferenceConfidence] = {}
     for view in semantic_ir.views:
         inferred = view.inferred_properties
         if inferred is None or inferred.inference_confidence is None:
             continue
-        confidence_by_view[view.name] = to_builtins(
+        payload = to_builtins(
             inferred.inference_confidence,
             str_keys=True,
         )
+        normalized = _to_json_mapping(payload)
+        if normalized:
+            confidence_by_view[view.name] = CompiledInferenceConfidence(payload=normalized)
     return confidence_by_view
 
 
 def _derive_maintenance_policies(
     output_locations: Mapping[str, DatasetLocation],
-) -> dict[str, object]:
+) -> dict[str, CompiledMaintenancePolicy]:
     """Extract per-dataset maintenance policy from resolved output locations.
 
     Parameters
@@ -417,10 +454,10 @@ def _derive_maintenance_policies(
 
     Returns:
     -------
-    dict[str, object]
+    dict[str, CompiledMaintenancePolicy]
         Mapping of dataset names to serialized maintenance policy payloads.
     """
-    policies: dict[str, object] = {}
+    policies: dict[str, CompiledMaintenancePolicy] = {}
     for dataset_name, location in sorted(output_locations.items()):
         resolved = getattr(location, "resolved", None)
         if resolved is None:
@@ -428,7 +465,10 @@ def _derive_maintenance_policies(
         maintenance_policy = getattr(resolved, "delta_maintenance_policy", None)
         if maintenance_policy is None:
             continue
-        policies[dataset_name] = to_builtins(maintenance_policy, str_keys=True)
+        payload = to_builtins(maintenance_policy, str_keys=True)
+        normalized = _to_json_mapping(payload)
+        if normalized:
+            policies[dataset_name] = CompiledMaintenancePolicy(payload=normalized)
     return policies
 
 

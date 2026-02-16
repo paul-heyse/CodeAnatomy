@@ -40,7 +40,6 @@ def q(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.core.bootstrap import resolve_runtime_services
     from tools.cq.core.schema import ms
     from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
     from tools.cq.query.parser import QueryParseError, has_query_tokens, parse_query
@@ -77,8 +76,7 @@ def q(
                 ),
             )
 
-            services = resolve_runtime_services(ctx.root)
-            result = services.search.execute(request)
+            result = ctx.services.search.execute(request)
             return CliResult(result=result, context=ctx, filters=options)
         result = build_error_result(
             macro="q",
@@ -100,6 +98,7 @@ def q(
             plan=plan,
             query=parsed_query,
             root=str(ctx.root),
+            services=ctx.services,
             argv=tuple(ctx.argv),
             query_text=query_string,
         ),

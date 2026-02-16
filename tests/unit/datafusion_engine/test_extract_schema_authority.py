@@ -5,8 +5,9 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.schema import _resolve_nested_row_schema_authority, extract_schema_for
+from datafusion_engine.schema import extract_schema_for
 from datafusion_engine.schema import extraction_schemas as _extraction_mod
+from datafusion_engine.schema.extraction_schemas import _resolve_nested_row_schema_authority
 
 
 def test_extract_schema_for_prefers_derived_when_shape_is_compatible(

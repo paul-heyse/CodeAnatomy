@@ -6,8 +6,8 @@ import importlib.util
 
 import pytest
 
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import (
     DiagnosticsConfig,
     FeatureGatesConfig,
     PolicyBundleConfig,

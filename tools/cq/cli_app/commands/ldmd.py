@@ -12,7 +12,7 @@ from cyclopts import validators
 from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import protocol_group, require_context
 from tools.cq.cli_app.protocol_output import text_result, wants_json
-from tools.cq.cli_app.types import LdmdSliceMode
+from tools.cq.core.types import LdmdSliceMode
 from tools.cq.ldmd.format import (
     LdmdParseError,
     build_index,

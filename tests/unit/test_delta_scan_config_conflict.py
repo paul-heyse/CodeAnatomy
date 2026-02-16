@@ -23,7 +23,7 @@ require_delta_extension()
 
 def test_delta_file_column_conflict_raises(tmp_path: Path) -> None:
     """Raise when Delta file column collides with data columns."""
-    from datafusion_engine.dataset.registration import (
+    from datafusion_engine.dataset.registration_core import (
         register_dataset_df,
     )
     from datafusion_engine.dataset.registry import DatasetLocation

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from tools.cq.core.schema import ScoreDetails
 from tools.cq.core.scoring import (
     ConfidenceSignals,
@@ -23,7 +24,7 @@ def test_build_score_details_with_signals() -> None:
     details = build_score_details(impact=impact, confidence=confidence)
 
     assert details is not None
-    assert details.impact_score == 1.0
+    assert details.impact_score == pytest.approx(1.0)
     assert details.impact_bucket == "high"
     assert details.confidence_score == HIGH_CONFIDENCE_SCORE
     assert details.confidence_bucket == "high"

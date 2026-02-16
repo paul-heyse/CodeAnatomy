@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from extract.coordination.context import FileContext
-from extract.extractors.bytecode_extract import BytecodeExtractOptions, _bytecode_file_row
+from extract.extractors.bytecode import BytecodeExtractOptions, _bytecode_file_row
 
 NEWLINE_BYTE = 0x0A
 

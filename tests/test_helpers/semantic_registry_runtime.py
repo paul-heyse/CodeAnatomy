@@ -13,7 +13,7 @@ from tests.test_helpers.optional_deps import require_datafusion
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.session.runtime_session import SessionRuntime
 
 
 def _register_semantic_registry(ctx: SessionContext) -> None:

@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
-    record_artifact,
-)
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_compile import record_artifact
 from serde_schema_registry import ArtifactSpec
 
 

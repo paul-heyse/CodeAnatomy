@@ -39,8 +39,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_SEMANTICS, stage_span
 from relspec.inference_confidence import InferenceConfidence
 from semantics.config import SemanticConfig
 from semantics.join_helpers import join_by_span_contains, join_by_span_overlap
@@ -199,7 +198,7 @@ class SemanticCompiler:
         self._config = config or SemanticConfig()
 
     def _require_udfs(self, required: tuple[str, ...]) -> None:
-        from datafusion_engine.udf.extension_runtime import (
+        from datafusion_engine.udf.extension_core import (
             rust_udf_snapshot,
             validate_required_udfs,
         )
@@ -243,7 +242,7 @@ class SemanticCompiler:
         config_spec = self._config.spec_for(table_name)
         if config_spec is not None:
             return config_spec
-        from semantics.spec_registry import spec_for_table
+        from semantics.registry import spec_for_table
 
         return spec_for_table(table_name)
 

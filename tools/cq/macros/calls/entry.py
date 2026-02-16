@@ -22,6 +22,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.summary_contract import build_semantic_telemetry, summary_from_mapping
 from tools.cq.macros.calls.analysis import (
     CallSite,
     _analyze_sites,
@@ -53,6 +54,10 @@ from tools.cq.macros.calls_target import (
     attach_target_metadata,
     infer_target_language,
 )
+from tools.cq.macros.constants import (
+    CALLS_TARGET_CALLEE_PREVIEW,
+    FRONT_DOOR_PREVIEW_PER_SLICE,
+)
 from tools.cq.macros.contracts import CallsRequest
 from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
@@ -66,8 +71,6 @@ if TYPE_CHECKING:
     from tools.cq.macros.calls.analysis import CallSite
     from tools.cq.query.language import QueryLanguage
 
-_CALLS_TARGET_CALLEE_PREVIEW = 10
-_FRONT_DOOR_PREVIEW_PER_SLICE = 5
 logger = logging.getLogger(__name__)
 
 
@@ -258,7 +261,7 @@ def _init_calls_result(
         started_ms=started_ms,
     )
     result = builder.result
-    result.summary = _build_calls_summary(ctx.function_name, scan_result)
+    result.summary = summary_from_mapping(_build_calls_summary(ctx.function_name, scan_result))
     return result
 
 
@@ -314,7 +317,7 @@ def _build_calls_front_door_state(
             root=ctx.root,
             function_name=ctx.function_name,
             score=score,
-            preview_limit=_CALLS_TARGET_CALLEE_PREVIEW,
+            preview_limit=CALLS_TARGET_CALLEE_PREVIEW,
             target_language=resolved_target_language,
             run_id=result.run.run_id,
         ),
@@ -327,7 +330,7 @@ def _build_calls_front_door_state(
             target_callees=target_callees,
             analysis=analysis,
             score=score,
-            preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+            preview_per_slice=FRONT_DOOR_PREVIEW_PER_SLICE,
         )
     )
     _attach_calls_neighborhood_section(result, neighborhood_findings)
@@ -384,7 +387,7 @@ def _apply_calls_semantic_with_telemetry(
             target_line=state.target_line,
             target_language=state.target_language,
             symbol_hint=symbol_hint,
-            preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+            preview_per_slice=FRONT_DOOR_PREVIEW_PER_SLICE,
             run_id=result.run.run_id,
         ),
     )
@@ -397,24 +400,18 @@ def _attach_calls_semantic_summary(
     semantic_telemetry: tuple[int, int, int, int],
 ) -> None:
     semantic_attempted, semantic_applied, semantic_failed, semantic_timed_out = semantic_telemetry
-    result.summary["python_semantic_telemetry"] = {
-        "attempted": semantic_attempted if target_language == "python" else 0,
-        "applied": semantic_applied if target_language == "python" else 0,
-        "failed": max(semantic_failed, semantic_attempted - semantic_applied)
-        if target_language == "python"
-        else 0,
-        "skipped": 0,
-        "timed_out": semantic_timed_out if target_language == "python" else 0,
-    }
-    result.summary["rust_semantic_telemetry"] = {
-        "attempted": semantic_attempted if target_language == "rust" else 0,
-        "applied": semantic_applied if target_language == "rust" else 0,
-        "failed": max(semantic_failed, semantic_attempted - semantic_applied)
-        if target_language == "rust"
-        else 0,
-        "skipped": 0,
-        "timed_out": semantic_timed_out if target_language == "rust" else 0,
-    }
+    result.summary.python_semantic_telemetry = build_semantic_telemetry(
+        attempted=semantic_attempted if target_language == "python" else 0,
+        applied=semantic_applied if target_language == "python" else 0,
+        failed=semantic_failed if target_language == "python" else 0,
+        timed_out=semantic_timed_out if target_language == "python" else 0,
+    )
+    result.summary.rust_semantic_telemetry = build_semantic_telemetry(
+        attempted=semantic_attempted if target_language == "rust" else 0,
+        applied=semantic_applied if target_language == "rust" else 0,
+        failed=semantic_failed if target_language == "rust" else 0,
+        timed_out=semantic_timed_out if target_language == "rust" else 0,
+    )
 
 
 def _build_calls_result(
@@ -458,7 +455,7 @@ def _build_calls_result(
         top_level_applied=semantic_telemetry[1],
         reasons=semantic_reasons,
     )
-    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
+    result.summary.front_door_insight = to_public_front_door_insight_dict(insight)
     return result
 
 

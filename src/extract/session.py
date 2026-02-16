@@ -12,7 +12,7 @@ from extraction.engine_session_factory import build_engine_session
 from extraction.runtime_profile import RuntimeProfileSpec
 
 if TYPE_CHECKING:
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.session.runtime_session import SessionRuntime
 
 
 @dataclass(frozen=True)

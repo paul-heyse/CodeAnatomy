@@ -7,6 +7,20 @@ from pathlib import Path
 
 import msgspec
 
+from tools.cq.core.cache.defaults import (
+    DEFAULT_CACHE_CULL_LIMIT,
+    DEFAULT_CACHE_DIR,
+    DEFAULT_CACHE_EVICTION_POLICY,
+    DEFAULT_CACHE_LANE_LOCK_TTL_SECONDS,
+    DEFAULT_CACHE_MAX_TREE_SITTER_LANES,
+    DEFAULT_CACHE_SHARDS,
+    DEFAULT_CACHE_SIZE_LIMIT_BYTES,
+    DEFAULT_CACHE_SQLITE_CACHE_SIZE,
+    DEFAULT_CACHE_SQLITE_MMAP_SIZE,
+    DEFAULT_CACHE_TIMEOUT_SECONDS,
+    DEFAULT_CACHE_TRANSACTION_BATCH_SIZE,
+    DEFAULT_CACHE_TTL_SECONDS,
+)
 from tools.cq.core.contracts_constraints import NonNegativeInt, PositiveFloat, PositiveInt
 from tools.cq.core.runtime.env_namespace import (
     NamespacePatternV1,
@@ -15,33 +29,30 @@ from tools.cq.core.runtime.env_namespace import (
     parse_namespace_bool_overrides,
     parse_namespace_int_overrides,
 )
-from tools.cq.core.runtime.execution_policy import default_runtime_execution_policy
 from tools.cq.core.structs import CqSettingsStruct
-
-_DEFAULT_DIR = ".cq_cache"
 
 
 class CqCachePolicyV1(CqSettingsStruct, frozen=True):
     """Policy controlling disk-backed CQ cache behavior."""
 
     enabled: bool = True
-    directory: str = _DEFAULT_DIR
-    shards: PositiveInt = 8
-    timeout_seconds: PositiveFloat = 0.05
-    ttl_seconds: PositiveInt = 900
+    directory: str = DEFAULT_CACHE_DIR
+    shards: PositiveInt = DEFAULT_CACHE_SHARDS
+    timeout_seconds: PositiveFloat = DEFAULT_CACHE_TIMEOUT_SECONDS
+    ttl_seconds: PositiveInt = DEFAULT_CACHE_TTL_SECONDS
     evict_run_tag_on_exit: bool = False
     namespace_ttl_seconds: dict[str, int] = msgspec.field(default_factory=dict)
     namespace_enabled: dict[str, bool] = msgspec.field(default_factory=dict)
     namespace_ephemeral: dict[str, bool] = msgspec.field(default_factory=dict)
-    size_limit_bytes: PositiveInt = 2_147_483_648
-    cull_limit: NonNegativeInt = 16
-    eviction_policy: str = "least-recently-stored"
+    size_limit_bytes: PositiveInt = DEFAULT_CACHE_SIZE_LIMIT_BYTES
+    cull_limit: NonNegativeInt = DEFAULT_CACHE_CULL_LIMIT
+    eviction_policy: str = DEFAULT_CACHE_EVICTION_POLICY
     statistics_enabled: bool = False
-    max_tree_sitter_lanes: PositiveInt = 4
-    lane_lock_ttl_seconds: PositiveInt = 15
-    sqlite_mmap_size: NonNegativeInt = 0
-    sqlite_cache_size: NonNegativeInt = 0
-    transaction_batch_size: PositiveInt = 128
+    max_tree_sitter_lanes: PositiveInt = DEFAULT_CACHE_MAX_TREE_SITTER_LANES
+    lane_lock_ttl_seconds: PositiveInt = DEFAULT_CACHE_LANE_LOCK_TTL_SECONDS
+    sqlite_mmap_size: NonNegativeInt = DEFAULT_CACHE_SQLITE_MMAP_SIZE
+    sqlite_cache_size: NonNegativeInt = DEFAULT_CACHE_SQLITE_CACHE_SIZE
+    transaction_batch_size: PositiveInt = DEFAULT_CACHE_TRANSACTION_BATCH_SIZE
 
 
 class _ResolvedCacheScalarSettings(CqSettingsStruct, frozen=True):
@@ -128,7 +139,7 @@ def _resolve_cache_scalar_settings(
     runtime: object,
 ) -> _ResolvedCacheScalarSettings:
     directory_value = os.getenv("CQ_CACHE_DIR")
-    directory = directory_value.strip() if directory_value else str(root / _DEFAULT_DIR)
+    directory = directory_value.strip() if directory_value else str(root / DEFAULT_CACHE_DIR)
     statistics_enabled = env_bool(
         os.getenv("CQ_CACHE_STATISTICS_ENABLED"),
         default=bool(getattr(runtime, "statistics_enabled", False)),
@@ -142,59 +153,66 @@ def _resolve_cache_scalar_settings(
         directory=directory,
         ttl_seconds=env_int(
             os.getenv("CQ_CACHE_TTL_SECONDS"),
-            default=int(getattr(runtime, "ttl_seconds", 900)),
+            default=int(getattr(runtime, "ttl_seconds", DEFAULT_CACHE_TTL_SECONDS)),
             minimum=1,
         ),
         shards=env_int(
             os.getenv("CQ_CACHE_SHARDS"),
-            default=int(getattr(runtime, "shards", 8)),
+            default=int(getattr(runtime, "shards", DEFAULT_CACHE_SHARDS)),
             minimum=1,
         ),
         timeout_seconds=max(
             0.001,
             float(
-                os.getenv("CQ_CACHE_TIMEOUT_SECONDS") or getattr(runtime, "timeout_seconds", 0.05)
+                os.getenv("CQ_CACHE_TIMEOUT_SECONDS")
+                or getattr(runtime, "timeout_seconds", DEFAULT_CACHE_TIMEOUT_SECONDS)
             ),
         ),
         size_limit_bytes=env_int(
             os.getenv("CQ_CACHE_SIZE_LIMIT_BYTES"),
-            default=int(getattr(runtime, "size_limit_bytes", 2_147_483_648)),
+            default=int(getattr(runtime, "size_limit_bytes", DEFAULT_CACHE_SIZE_LIMIT_BYTES)),
             minimum=1,
         ),
         cull_limit=env_int(
             os.getenv("CQ_CACHE_CULL_LIMIT"),
-            default=int(getattr(runtime, "cull_limit", 16)),
+            default=int(getattr(runtime, "cull_limit", DEFAULT_CACHE_CULL_LIMIT)),
             minimum=0,
         ),
         eviction_policy=(
             os.getenv("CQ_CACHE_EVICTION_POLICY")
-            or getattr(runtime, "eviction_policy", "least-recently-stored")
+            or getattr(runtime, "eviction_policy", DEFAULT_CACHE_EVICTION_POLICY)
         ).strip()
-        or str(getattr(runtime, "eviction_policy", "least-recently-stored")),
+        or str(getattr(runtime, "eviction_policy", DEFAULT_CACHE_EVICTION_POLICY)),
         statistics_enabled=statistics_enabled,
         max_tree_sitter_lanes=env_int(
             os.getenv("CQ_CACHE_MAX_TREE_SITTER_LANES"),
-            default=int(getattr(runtime, "max_tree_sitter_lanes", 4)),
+            default=int(
+                getattr(runtime, "max_tree_sitter_lanes", DEFAULT_CACHE_MAX_TREE_SITTER_LANES)
+            ),
             minimum=1,
         ),
         lane_lock_ttl_seconds=env_int(
             os.getenv("CQ_CACHE_LANE_LOCK_TTL_SECONDS"),
-            default=int(getattr(runtime, "lane_lock_ttl_seconds", 15)),
+            default=int(
+                getattr(runtime, "lane_lock_ttl_seconds", DEFAULT_CACHE_LANE_LOCK_TTL_SECONDS)
+            ),
             minimum=1,
         ),
         sqlite_mmap_size=env_int(
             os.getenv("CQ_CACHE_SQLITE_MMAP_SIZE"),
-            default=int(getattr(runtime, "sqlite_mmap_size", 0)),
+            default=int(getattr(runtime, "sqlite_mmap_size", DEFAULT_CACHE_SQLITE_MMAP_SIZE)),
             minimum=0,
         ),
         sqlite_cache_size=env_int(
             os.getenv("CQ_CACHE_SQLITE_CACHE_SIZE"),
-            default=int(getattr(runtime, "sqlite_cache_size", 0)),
+            default=int(getattr(runtime, "sqlite_cache_size", DEFAULT_CACHE_SQLITE_CACHE_SIZE)),
             minimum=0,
         ),
         transaction_batch_size=env_int(
             os.getenv("CQ_CACHE_TRANSACTION_BATCH_SIZE"),
-            default=int(getattr(runtime, "transaction_batch_size", 128)),
+            default=int(
+                getattr(runtime, "transaction_batch_size", DEFAULT_CACHE_TRANSACTION_BATCH_SIZE)
+            ),
             minimum=1,
         ),
     )
@@ -206,7 +224,7 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
     Returns:
         Cache policy resolved from runtime defaults and environment.
     """
-    runtime = default_runtime_execution_policy().cache
+    runtime = CqCachePolicyV1()
     enabled = env_bool(os.getenv("CQ_CACHE_ENABLED"), default=runtime.enabled)
     settings = _resolve_cache_scalar_settings(root=root, runtime=runtime)
 

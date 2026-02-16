@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.io.write import (
+from datafusion_engine.io.write_core import (
     WriteFormat,
     WriteMode,
     WritePipeline,

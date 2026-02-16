@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import msgspec
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.front_door_builders import FrontDoorInsightV1, InsightTargetV1
+from tools.cq.core.summary_contract import SemanticTelemetryV1, summary_from_mapping
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import (
     ExecutePlanRequestV1,
@@ -64,6 +66,7 @@ def _execute_query(
             plan=plan,
             query=query,
             root=str(root),
+            services=resolve_runtime_services(root),
             argv=argv,
             query_text=query_text,
         ),
@@ -223,10 +226,8 @@ def test_entity_insight_skips_semantic_for_high_cardinality_query(tmp_path: Path
     assert any("not_attempted_by_budget" in str(note) for note in notes)
 
     python_semantic_telemetry = result.summary.get("python_semantic_telemetry")
-    assert isinstance(python_semantic_telemetry, dict)
-    attempted = python_semantic_telemetry.get("attempted")
-    assert isinstance(attempted, int)
-    assert attempted == 0
+    assert isinstance(python_semantic_telemetry, SemanticTelemetryV1)
+    assert python_semantic_telemetry.attempted == 0
 
 
 def test_mark_entity_insight_semantic_from_merged_telemetry() -> None:
@@ -247,28 +248,30 @@ def test_mark_entity_insight_semantic_from_merged_telemetry() -> None:
     )
     result = CqResult(
         run=run,
-        summary={
-            "lang_scope": "auto",
-            "front_door_insight": msgspec.to_builtins(insight),
-            "python_semantic_telemetry": {
-                "attempted": 2,
-                "applied": 1,
-                "failed": 1,
-                "skipped": 0,
-                "timed_out": 0,
-            },
-            "rust_semantic_telemetry": {
-                "attempted": 0,
-                "applied": 0,
-                "failed": 0,
-                "skipped": 0,
-                "timed_out": 0,
-            },
-            "languages": {
-                "python": {"matches": 1, "total_matches": 1},
-                "rust": {"matches": 0, "total_matches": 0},
-            },
-        },
+        summary=summary_from_mapping(
+            {
+                "lang_scope": "auto",
+                "front_door_insight": msgspec.to_builtins(insight),
+                "python_semantic_telemetry": {
+                    "attempted": 2,
+                    "applied": 1,
+                    "failed": 1,
+                    "skipped": 0,
+                    "timed_out": 0,
+                },
+                "rust_semantic_telemetry": {
+                    "attempted": 0,
+                    "applied": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "timed_out": 0,
+                },
+                "languages": {
+                    "python": {"matches": 1, "total_matches": 1},
+                    "rust": {"matches": 0, "total_matches": 0},
+                },
+            }
+        ),
     )
 
     _mark_entity_insight_partial_from_summary(result)

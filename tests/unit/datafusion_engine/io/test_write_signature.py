@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from inspect import signature
 
-from datafusion_engine.io.write import WritePipeline
+from datafusion_engine.io.write_core import WritePipeline
 
 
 def test_write_pipeline_signature_removes_prefer_streaming() -> None:

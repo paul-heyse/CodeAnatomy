@@ -11,7 +11,7 @@ from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
-    from schema_spec.contracts import DeltaScanOptions, ScanPolicyConfig
+    from schema_spec.dataset_spec import DeltaScanOptions, ScanPolicyConfig
     from serde_artifacts import DeltaScanConfigSnapshot
 
 
@@ -35,10 +35,10 @@ def resolve_delta_scan_options(
     DeltaScanOptions | None
         Delta scan options derived from the dataset location, when present.
     """
-    options = location.resolved.delta_scan
+    options = location.delta_scan
     if scan_policy is None:
         return options
-    from schema_spec.contracts import apply_delta_scan_policy
+    from schema_spec.dataset_spec import apply_delta_scan_policy
 
     return apply_delta_scan_policy(options, policy=scan_policy)
 

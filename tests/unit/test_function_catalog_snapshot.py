@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datafusion_engine.session.runtime import (
-    function_catalog_snapshot_for_profile,
-)
+from datafusion_engine.session.runtime_session import function_catalog_snapshot_for_profile
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion
 

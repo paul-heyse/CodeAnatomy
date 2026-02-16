@@ -10,6 +10,7 @@ from tools.cq.core.front_door_builders import (
 )
 from tools.cq.core.report import ARTIFACT_ONLY_KEYS, compact_summary_for_rendering, render_markdown
 from tools.cq.core.schema import CqResult, Finding, RunMeta, Section
+from tools.cq.core.summary_contract import summary_from_mapping
 
 
 def _run_meta() -> RunMeta:
@@ -50,7 +51,7 @@ def _result_with_diagnostics() -> CqResult:
     }
     return CqResult(
         run=_run_meta(),
-        summary=summary,
+        summary=summary_from_mapping(summary),
         key_findings=[Finding(category="definition", message="function: target")],
         sections=[
             Section(

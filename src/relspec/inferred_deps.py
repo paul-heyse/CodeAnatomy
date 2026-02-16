@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from datafusion_engine.lineage.reporting import ScanLineage
-from schema_spec.contracts import dataset_spec_name
+from schema_spec.dataset_spec import dataset_spec_name
 from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.schema.contracts import SchemaContract
     from datafusion_engine.views.graph import ViewNode
-    from schema_spec.contracts import DatasetSpec
+    from schema_spec.dataset_spec import DatasetSpec
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ def infer_deps_from_plan_bundle(
             )
 
     if resolved_udfs:
-        from datafusion_engine.udf.extension_runtime import validate_required_udfs
+        from datafusion_engine.udf.extension_core import validate_required_udfs
 
         validate_required_udfs(resolved_snapshot, required=resolved_udfs)
 
@@ -253,7 +253,7 @@ def _required_metadata_for_tables(
         spec = _dataset_spec_for_table(table_name, ctx=ctx)
         if spec is None:
             continue
-        from schema_spec.contracts import dataset_spec_schema
+        from schema_spec.dataset_spec import dataset_spec_schema
 
         metadata = dataset_spec_schema(spec).metadata
         if metadata:

@@ -21,7 +21,6 @@ from datafusion_engine.delta.maintenance import (
     resolve_maintenance_from_execution,
     run_delta_maintenance,
 )
-from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.delta.store_policy import resolve_delta_store_policy
 from semantics.incremental.plan_bundle_exec import execute_df_to_table
 from semantics.incremental.runtime import IncrementalRuntime, TempTableRegistry
@@ -161,7 +160,7 @@ def register_delta_df(
         table_spec = resolved_location.table_spec
     overrides = None
     if resolved_scan is not None or table_spec is not None:
-        from schema_spec.contracts import DeltaPolicyBundle
+        from schema_spec.dataset_spec import DeltaPolicyBundle
 
         delta_bundle = DeltaPolicyBundle(scan=resolved_scan) if resolved_scan is not None else None
         overrides = DatasetLocationOverrides(delta=delta_bundle, table_spec=table_spec)
@@ -214,7 +213,7 @@ def run_delta_maintenance_if_configured(
         dataset_location = None
     else:
         dataset_location = context.dataset_resolver.location(dataset_name)
-    delta_version = delta_service_for_profile(runtime_profile).table_version(
+    delta_version = runtime_profile.delta_ops.delta_service().table_version(
         path=table_uri,
         storage_options=storage_options,
         log_storage_options=log_storage_options,
@@ -230,9 +229,7 @@ def run_delta_maintenance_if_configured(
         log_storage_options=log_storage_options,
         delta_version=delta_version,
         delta_timestamp=None,
-        feature_gate=dataset_location.resolved.delta_feature_gate
-        if dataset_location is not None
-        else None,
+        feature_gate=dataset_location.delta_feature_gate if dataset_location is not None else None,
         policy=None,
     )
     decision = resolve_maintenance_from_execution(plan_input, metrics=metrics)

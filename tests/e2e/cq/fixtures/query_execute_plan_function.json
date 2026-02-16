@@ -6,16 +6,16 @@
       "anchor": {
         "col": 0,
         "end_col": 17,
-        "end_line": 764,
+        "end_line": 803,
         "file": "tools/cq/query/executor.py",
-        "line": 712
+        "line": 746
       },
       "category": "definition",
       "details": {
         "data": {
-          "callee_count": 11,
+          "callee_count": 12,
           "caller_count": 0,
-          "calls_within": 11,
+          "calls_within": 12,
           "enclosing_scope": "<module>",
           "kind": "function",
           "language": "python",
@@ -27,7 +27,7 @@
           "confidence_score": 0.95,
           "evidence_kind": "resolved_ast",
           "impact_bucket": "low",
-          "impact_score": 0.077
+          "impact_score": 0.0815
         }
       },
       "message": "function: execute_plan",
@@ -56,14 +56,14 @@
           "anchor": {
             "col": 0,
             "end_col": 17,
-            "end_line": 764,
+            "end_line": 803,
             "file": "tools/cq/query/executor.py",
-            "line": 712
+            "line": 746
           },
           "category": "entity_neighborhood",
           "details": {
             "data": {
-              "callee_count": 11,
+              "callee_count": 12,
               "caller_count": 0,
               "enclosing_scope": "<module>",
               "language": "python",
@@ -75,10 +75,10 @@
               "confidence_score": 0.95,
               "evidence_kind": "resolved_ast",
               "impact_bucket": "low",
-              "impact_score": 0.077
+              "impact_score": 0.0815
             }
           },
-          "message": "execute_plan: callers=0, callees=11, scope=<module>",
+          "message": "execute_plan: callers=0, callees=12, scope=<module>",
           "severity": "info"
         }
       ],
@@ -86,7 +86,6 @@
     }
   ],
   "summary": {
-    "cross_language_diagnostics": [],
     "front_door_insight": {
       "artifact_refs": {
         "diagnostics": null,
@@ -117,15 +116,18 @@
           "overflow_artifact_ref": null,
           "preview": [
             {
+              "byte_span": null,
               "display_label": "execute_plan",
               "file_path": "tools/cq/query/executor.py",
               "kind": "definition",
               "name": "execute_plan",
-              "node_id": "entity:callee:tools/cq/query/executor.py:712:execute_plan"
+              "node_id": "entity:callee:tools/cq/query/executor.py:746:execute_plan",
+              "qualname": null,
+              "signature": null
             }
           ],
           "source": "heuristic",
-          "total": 11
+          "total": 12
         },
         "callers": {
           "availability": "partial",
@@ -152,7 +154,7 @@
       "risk": {
         "counters": {
           "arg_shape_count": 0,
-          "callees": 11,
+          "callees": 12,
           "callers": 0,
           "closure_capture_count": 0,
           "files_with_calls": 0,
@@ -169,7 +171,7 @@
         "location": {
           "col": 0,
           "file": "tools/cq/query/executor.py",
-          "line": 712
+          "line": 746
         },
         "qualname": null,
         "selection_reason": "top_entity_result",
@@ -296,83 +298,11 @@
       }
     },
     "mode": "entity",
-    "python_semantic_diagnostics": [],
-    "python_semantic_overview": {},
     "python_semantic_telemetry": {
       "applied": 1,
-      "attempted": 1,
-      "failed": 0,
-      "skipped": 0,
-      "timed_out": 0
+      "attempted": 1
     },
     "query": "entity=function name=execute_plan",
-    "rust_semantic_telemetry": {
-      "applied": 0,
-      "attempted": 0,
-      "failed": 0,
-      "skipped": 0,
-      "timed_out": 0
-    },
-    "semantic_planes": {
-      "counts": {
-        "diagnostics": 0,
-        "injections": 0,
-        "locals": 7,
-        "semantic_tokens": 2
-      },
-      "degradation": [],
-      "language": "python",
-      "preview": {
-        "diagnostics": [],
-        "injections": [],
-        "locals": [
-          {
-            "kind": "qualified_name",
-            "name": "ExecutePlanRequestV1"
-          },
-          {
-            "kind": "qualified_name",
-            "name": "execute_plan.ExecutePlanRequestV1"
-          },
-          {
-            "kind": "local_definition",
-            "name": "active_run_id"
-          },
-          {
-            "kind": "local_definition",
-            "name": "ctx"
-          },
-          {
-            "kind": "local_definition",
-            "name": "execute_plan"
-          },
-          {
-            "kind": "local_definition",
-            "name": "result"
-          },
-          {
-            "kind": "local_definition",
-            "name": "root"
-          }
-        ],
-        "semantic_tokens": [
-          {
-            "kind": "node_kind",
-            "value": "function_definition"
-          },
-          {
-            "kind": "item_role",
-            "value": "free_function"
-          }
-        ]
-      },
-      "sources": [
-        "ast_grep",
-        "python_ast",
-        "python_resolution",
-        "tree_sitter"
-      ],
-      "version": "cq.semantic_planes.v2"
-    }
+    "rust_semantic_telemetry": {}
   }
 }

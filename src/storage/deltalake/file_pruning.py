@@ -15,8 +15,7 @@ from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.session.helpers import temp_table
 from datafusion_engine.udf.expr import udf_expr
-from obs.otel.scopes import SCOPE_STORAGE
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_STORAGE, stage_span
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr

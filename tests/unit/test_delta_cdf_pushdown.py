@@ -20,7 +20,7 @@ require_delta_extension()
 
 
 def _create_cdf_table(path: Path) -> None:
-    from storage.deltalake.delta import DeltaFeatureMutationOptions, enable_delta_features
+    from storage.deltalake.delta_read import DeltaFeatureMutationOptions, enable_delta_features
 
     table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
     _ = write_delta_table(
@@ -36,7 +36,7 @@ def _create_cdf_table(path: Path) -> None:
 
 def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     """Ensure CDF providers honor projection and filter pushdown."""
-    from datafusion_engine.dataset.registration import (
+    from datafusion_engine.dataset.registration_core import (
         register_dataset_df,
     )
     from datafusion_engine.dataset.registry import DatasetLocation
@@ -80,12 +80,13 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
 
 def test_delta_cdf_facade_registration(tmp_path: Path) -> None:
     """Expose CDF providers via the execution facade."""
-    from datafusion_engine.dataset.registration import (
+    from datafusion_engine.dataset.registration_core import (
         register_dataset_df,
     )
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.session.facade import DataFusionExecutionFacade
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_profile_config import FeatureGatesConfig
     from semantics.compile_context import build_semantic_execution_context
     from storage.deltalake import DeltaCdfOptions
 

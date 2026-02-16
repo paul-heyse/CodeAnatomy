@@ -10,6 +10,12 @@ from tools.cq.core.contracts import MergeResultsRequest, SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, DetailPayload, Finding, Section, mk_result
+from tools.cq.core.summary_contract import (
+    coerce_semantic_telemetry as coerce_summary_semantic_telemetry,
+)
+from tools.cq.core.summary_contract import (
+    summary_from_mapping,
+)
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 from tools.cq.orchestration.multilang_summary import (
     build_multilang_summary,
@@ -73,7 +79,7 @@ def execute_by_language_scope[T](
     return dict(zip(languages, batch.done, strict=False))
 
 
-def merge_partitioned_items(
+def merge_partitioned_items[T](
     *,
     partitions: Mapping[QueryLanguage, list[T]],
     scope: QueryLanguageScope,
@@ -144,10 +150,10 @@ def _clone_finding_with_language(
 
 
 def _result_match_count(result: CqResult) -> int:
-    summary_matches = result.summary.get("matches")
+    summary_matches = result.summary.matches
     if isinstance(summary_matches, int):
         return summary_matches
-    summary_total = result.summary.get("total_matches")
+    summary_total = result.summary.total_matches
     if isinstance(summary_total, int):
         return summary_total
     return len(result.key_findings)
@@ -164,6 +170,15 @@ def _zero_semantic_telemetry() -> dict[str, int]:
 
 
 def _coerce_semantic_telemetry(value: object) -> dict[str, int]:
+    typed = coerce_summary_semantic_telemetry(value)
+    if typed is not None:
+        return {
+            "attempted": typed.attempted,
+            "applied": typed.applied,
+            "failed": typed.failed,
+            "skipped": typed.skipped,
+            "timed_out": typed.timed_out,
+        }
     if not isinstance(value, Mapping):
         return _zero_semantic_telemetry()
     try:
@@ -192,7 +207,7 @@ def _aggregate_semantic_telemetry(
 ) -> dict[str, int]:
     aggregate = _zero_semantic_telemetry()
     for result in results.values():
-        telemetry = _coerce_semantic_telemetry(result.summary.get(key))
+        telemetry = _coerce_semantic_telemetry(getattr(result.summary, key, None))
         aggregate = _sum_semantic_telemetry(aggregate, telemetry)
     return aggregate
 
@@ -208,7 +223,7 @@ def _aggregate_python_semantic_diagnostics(
         result = results.get(lang)
         if result is None:
             continue
-        rows = result.summary.get("python_semantic_diagnostics")
+        rows = result.summary.python_semantic_diagnostics
         if not isinstance(rows, list):
             continue
         for row in rows:
@@ -231,11 +246,11 @@ def _select_semantic_planes_payload(
         result = results.get(lang)
         if result is None:
             continue
-        planes = result.summary.get("semantic_planes")
+        planes = result.summary.semantic_planes
         if isinstance(planes, dict) and planes:
             return dict(planes)
     for result in results.values():
-        planes = result.summary.get("semantic_planes")
+        planes = result.summary.semantic_planes
         if isinstance(planes, dict) and planes:
             return dict(planes)
     return {}
@@ -293,7 +308,7 @@ def _collect_insights_by_language(
         result = results.get(lang)
         if result is None:
             continue
-        insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
+        insight = coerce_front_door_insight(result.summary.front_door_insight)
         if insight is not None:
             by_language[lang] = insight
     return by_language
@@ -436,21 +451,23 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
         results=request.results,
     )
 
-    merged.summary = build_multilang_summary(
-        SummaryBuildRequest(
-            common=summary_common,
-            lang_scope=request.scope,
-            language_order=tuple(order),
-            languages=partitions,
-            cross_language_diagnostics=summary_diagnostics,
-            language_capabilities=request.language_capabilities,
+    merged.summary = summary_from_mapping(
+        build_multilang_summary(
+            SummaryBuildRequest(
+                common=summary_common,
+                lang_scope=request.scope,
+                language_order=tuple(order),
+                languages=partitions,
+                cross_language_diagnostics=summary_diagnostics,
+                language_capabilities=request.language_capabilities,
+            )
         )
     )
     merged_insight = _select_front_door_insight(request.scope, request.results)
     if merged_insight is not None:
         from tools.cq.core.front_door_render import to_public_front_door_insight_dict
 
-        merged.summary["front_door_insight"] = to_public_front_door_insight_dict(merged_insight)
+        merged.summary.front_door_insight = to_public_front_door_insight_dict(merged_insight)
     if diag_findings:
         merged.key_findings.extend(diag_findings)
     return merged

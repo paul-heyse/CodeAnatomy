@@ -3,11 +3,11 @@
 Scope: Verify Delta provider construction contains FFI failures and
 surfaces them as structured RuntimeError, not panics. Delta provider
 construction crosses FFI/runtime boundaries via
-delta_provider_from_session() in datafusion_engine.delta.control_plane.
+delta_provider_from_session() in datafusion_engine.delta.control_plane_core.
 
 Key code boundaries:
-- delta_provider_from_session() in datafusion_engine.delta.control_plane (line 646)
-- DeltaProviderRequest in datafusion_engine.delta.control_plane
+- delta_provider_from_session() in datafusion_engine.delta.control_plane_core (line 646)
+- DeltaProviderRequest in datafusion_engine.delta.control_plane_core
 - DataFusionEngineError in datafusion_engine.errors
 """
 
@@ -45,7 +45,7 @@ class TestDeltaProviderPanicContainment:
         should raise a structured error (RuntimeError or DataFusionEngineError),
         not an uncaught FFI panic.
         """
-        from datafusion_engine.delta.control_plane import (
+        from datafusion_engine.delta.control_plane_core import (
             DeltaProviderRequest,
             delta_provider_from_session,
         )
@@ -77,7 +77,7 @@ class TestDeltaProviderPanicContainment:
         """
         from pathlib import Path
 
-        from datafusion_engine.delta.control_plane import (
+        from datafusion_engine.delta.control_plane_core import (
             DeltaProviderRequest,
             delta_provider_from_session,
         )
@@ -110,7 +110,7 @@ class TestDeltaProviderPanicContainment:
     @staticmethod
     def test_provider_request_is_frozen() -> None:
         """Verify DeltaProviderRequest is immutable."""
-        from datafusion_engine.delta.control_plane import DeltaProviderRequest
+        from datafusion_engine.delta.control_plane_core import DeltaProviderRequest
 
         request = DeltaProviderRequest(
             table_uri="/tmp/test",

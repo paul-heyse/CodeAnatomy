@@ -13,18 +13,18 @@ from deltalake import DeltaTable
 
 from cli.groups import restore_target_group
 from cli.kv_parser import parse_kv_pairs
-from datafusion_engine.delta.control_plane import (
+from datafusion_engine.delta.control_plane_core import (
     DeltaProviderRequest,
     DeltaRestoreRequest,
     delta_provider_from_session,
     delta_restore,
 )
-from datafusion_engine.delta.service import delta_service_for_profile
+from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.errors import DataFusionEngineError
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
 from serde_msgspec import JSON_ENCODER_SORTED, StructBaseCompat, json_default
@@ -256,7 +256,7 @@ def vacuum_command(
         keep_versions=keep_versions_list,
         commit_metadata=commit_payload or None,
     )
-    service = delta_service_for_profile(None)
+    service = DeltaService(profile=DataFusionRuntimeProfile())
     files = service.vacuum(
         path=path,
         options=vacuum_options,
@@ -295,7 +295,7 @@ def checkpoint_command(
         Exit status code.
     """
     storage_options: dict[str, str] = parse_kv_pairs(storage_option) if storage_option else {}
-    service = delta_service_for_profile(None)
+    service = DeltaService(profile=DataFusionRuntimeProfile())
     service.create_checkpoint(
         path=path,
         storage_options=storage_options or None,
@@ -323,7 +323,7 @@ def cleanup_log_command(
         Exit status code.
     """
     storage_options: dict[str, str] = parse_kv_pairs(storage_option) if storage_option else {}
-    service = delta_service_for_profile(None)
+    service = DeltaService(profile=DataFusionRuntimeProfile())
     service.cleanup_log(
         path=path,
         storage_options=storage_options or None,

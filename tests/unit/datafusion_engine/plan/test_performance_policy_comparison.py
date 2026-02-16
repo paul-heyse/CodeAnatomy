@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datafusion_engine.plan.artifact_store import (
+from datafusion_engine.plan.artifact_store_core import (
     _apply_plan_artifact_retention,
     _plan_diff_gate_violations,
 )

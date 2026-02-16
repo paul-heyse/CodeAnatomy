@@ -1,0 +1,16 @@
+# ruff: noqa: D103, INP001, SLF001
+"""Tests for dataset Delta registration split module."""
+
+from __future__ import annotations
+
+import inspect
+
+from datafusion_engine.dataset import registration_delta
+
+
+def test_registration_delta_contains_callable_helpers() -> None:
+    source = inspect.getsource(registration_delta)
+    assert "def _build_delta_provider_registration" in source
+    assert "registration_core as _core" not in source
+    assert "resolve_dataset_provider(" in source
+    assert callable(registration_delta._build_delta_provider_registration)

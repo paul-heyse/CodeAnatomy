@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Container, Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, TypeVar
-
-if TYPE_CHECKING:
-    import pyarrow as pa
-
+from typing import TypeVar
 
 T = TypeVar("T")
 
@@ -98,28 +94,6 @@ def ensure_callable(
     return value
 
 
-def ensure_table(value: object, *, label: str = "input") -> pa.Table:
-    """Convert table-like input into a PyArrow Table.
-
-    Args:
-        value: Value to coerce into a table.
-        label: Label used in validation errors.
-
-    Returns:
-        pa.Table: Result.
-
-    Raises:
-        TypeError: If value cannot be coerced to a table.
-    """
-    from datafusion_engine.arrow.coercion import to_arrow_table
-
-    try:
-        return to_arrow_table(value)
-    except TypeError as exc:
-        msg = f"{label} must be Table/RecordBatch/RecordBatchReader, got {type(value).__name__}"
-        raise TypeError(msg) from exc
-
-
 def ensure_not_empty[T](
     value: Sequence[T],
     *,
@@ -143,7 +117,7 @@ def ensure_not_empty[T](
     return value
 
 
-def ensure_subset(
+def ensure_subset[T](
     items: Iterable[T],
     universe: Container[T],
     *,
@@ -197,7 +171,7 @@ def ensure_unique[T](
     return result
 
 
-def find_missing(required: Iterable[T], available: Container[T]) -> list[T]:
+def find_missing[T](required: Iterable[T], available: Container[T]) -> list[T]:
     """Find items in required that are not in available.
 
     Parameters
@@ -215,7 +189,7 @@ def find_missing(required: Iterable[T], available: Container[T]) -> list[T]:
     return [item for item in required if item not in available]
 
 
-def validate_required_items(
+def validate_required_items[T](
     required: Iterable[T],
     available: Container[T],
     *,
@@ -247,7 +221,6 @@ __all__ = [
     "ensure_not_empty",
     "ensure_sequence",
     "ensure_subset",
-    "ensure_table",
     "ensure_unique",
     "find_missing",
     "validate_required_items",

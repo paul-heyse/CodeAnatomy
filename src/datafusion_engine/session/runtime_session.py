@@ -6,18 +6,20 @@ import logging
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, cast
-from weakref import WeakKeyDictionary
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from datafusion import DataFrame, SessionContext, SQLOptions
 
-from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
+from datafusion_engine.session._session_caches import (
+    RUNTIME_SETTINGS_OVERLAY,
+    SESSION_RUNTIME_CACHE,
+)
 from datafusion_engine.sql.options import planning_sql_options, sql_options_for_profile
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from storage.ipc_utils import payload_hash
 from utils.registry_protocol import Registry
-from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from datafusion_engine.catalog.introspection import IntrospectionCache
@@ -29,8 +31,6 @@ from datafusion_engine.session.runtime_telemetry import (
 )
 
 _logger = logging.getLogger(__name__)
-
-_RUNTIME_SESSION_ID: Final[str] = uuid7_str()
 
 
 @dataclass(frozen=True)
@@ -45,10 +45,6 @@ class SessionRuntime:
     udf_snapshot: Mapping[str, object]
     df_settings: Mapping[str, str]
 
-
-_SESSION_RUNTIME_CACHE: dict[str, SessionRuntime] = {}
-_RUNTIME_SETTINGS_OVERLAY: WeakKeyDictionary[SessionContext, dict[str, str]] = WeakKeyDictionary()
-_SESSION_CONTEXT_CACHE: dict[str, SessionContext] = {}
 
 _SESSION_RUNTIME_HASH_VERSION = 1
 
@@ -102,7 +98,7 @@ def _build_session_runtime_from_context(
     profile: DataFusionRuntimeProfile,
 ) -> SessionRuntime:
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, rust_udf_snapshot_hash
+    from datafusion_engine.udf.extension_core import rust_udf_snapshot, rust_udf_snapshot_hash
     from datafusion_engine.udf.metadata import rewrite_tag_index
 
     try:
@@ -176,7 +172,7 @@ def record_runtime_setting_override(
     """Record runtime settings that DataFusion does not surface via SQL."""
     if not key.startswith("datafusion.runtime."):
         return
-    overrides = _RUNTIME_SETTINGS_OVERLAY.setdefault(ctx, {})
+    overrides = RUNTIME_SETTINGS_OVERLAY.setdefault(ctx, {})
     overrides[key] = value
 
 
@@ -188,7 +184,7 @@ def runtime_setting_overrides(ctx: SessionContext) -> Mapping[str, str]:
     Mapping[str, str]
         Runtime setting overrides keyed by setting name.
     """
-    overrides = _RUNTIME_SETTINGS_OVERLAY.get(ctx)
+    overrides = RUNTIME_SETTINGS_OVERLAY.get(ctx)
     return dict(overrides) if overrides else {}
 
 
@@ -241,13 +237,14 @@ def build_session_runtime(
         Planning-ready runtime with UDF identity and settings snapshots.
     """
     cache_key = profile.context_cache_key()
-    cached = _SESSION_RUNTIME_CACHE.get(cache_key)
+    cached_obj = SESSION_RUNTIME_CACHE.get(cache_key)
+    cached = cached_obj if isinstance(cached_obj, SessionRuntime) else None
     ctx = profile.session_context()
     # Guard against cache-key collisions across profile variants.
     if cached is not None and use_cache and cached.profile == profile and cached.ctx is ctx:
         return cached
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, rust_udf_snapshot_hash
+    from datafusion_engine.udf.extension_core import rust_udf_snapshot, rust_udf_snapshot_hash
     from datafusion_engine.udf.metadata import rewrite_tag_index
 
     snapshot = rust_udf_snapshot(ctx, registries=profile.udf_extension_registries)
@@ -271,7 +268,7 @@ def build_session_runtime(
         df_settings=df_settings,
     )
     if use_cache:
-        _SESSION_RUNTIME_CACHE[cache_key] = runtime
+        SESSION_RUNTIME_CACHE[cache_key] = runtime
     return runtime
 
 
@@ -306,7 +303,7 @@ def refresh_session_runtime(
         msg = "DataFusionRuntimeProfile does not expose a session runtime builder."
         raise TypeError(msg)
     runtime = runtime_builder(resolved_ctx)
-    _SESSION_RUNTIME_CACHE[profile.context_cache_key()] = runtime
+    SESSION_RUNTIME_CACHE[profile.context_cache_key()] = runtime
     return runtime
 
 

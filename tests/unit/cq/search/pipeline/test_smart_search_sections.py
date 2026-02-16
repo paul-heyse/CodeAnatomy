@@ -1,45 +1,46 @@
-"""Tests for smart-search section wrapper module."""
+"""Tests for smart-search section helpers."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import cast
 
-import pytest
-import tools.cq.search.pipeline.smart_search as smart_search_module
-from tools.cq.core.schema import Finding, Section
+from tools.cq.core.locations import SourceSpan
 from tools.cq.search._shared.types import QueryMode
+from tools.cq.search.pipeline.classifier import MatchCategory
 from tools.cq.search.pipeline.smart_search_sections import build_finding, build_sections
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
 
-def test_build_sections_delegates_to_smart_search(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Section wrapper should delegate to smart_search.build_sections."""
-    expected = [Section(title="S")]
-    monkeypatch.setattr(
-        smart_search_module,
-        "build_sections",
-        lambda *_args, **_kwargs: expected,
+def _match(category: str) -> EnrichedMatch:
+    return EnrichedMatch(
+        span=SourceSpan(file="src/mod.py", start_line=1, start_col=0),
+        text="target()",
+        match_text="target",
+        category=cast("MatchCategory", category),
+        confidence=0.9,
+        evidence_kind="resolved_ast",
+        language="python",
     )
 
-    result = build_sections([], tmp_path, "target", QueryMode.IDENTIFIER)
-    assert result == expected
+
+def test_build_finding_shapes_details(tmp_path: Path) -> None:
+    """Build finding helper maps enriched match fields into details."""
+    finding = build_finding(_match("definition"), tmp_path)
+    assert finding.category == "definition"
+    assert finding.anchor is not None
+    assert finding.anchor.file == "src/mod.py"
+    assert finding.details.get("match_text") == "target"
 
 
-def test_build_finding_delegates_to_smart_search(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Finding wrapper should delegate to smart_search.build_finding."""
-    expected = Finding(category="definition", message="target")
-    monkeypatch.setattr(
-        smart_search_module,
-        "build_finding",
-        lambda *_args, **_kwargs: expected,
+def test_build_sections_includes_followups(tmp_path: Path) -> None:
+    """Section builder includes follow-up section for identifier matches."""
+    sections = build_sections(
+        [_match("definition")],
+        tmp_path,
+        "target",
+        QueryMode.IDENTIFIER,
     )
-
-    result = build_finding(cast("EnrichedMatch", object()), Path(tmp_path))
-    assert result == expected
+    titles = [section.title for section in sections]
+    assert "Resolved Objects" in titles
+    assert "Suggested Follow-ups" in titles

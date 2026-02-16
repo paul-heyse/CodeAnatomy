@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms
+from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.core.target_specs import BundleTargetKind, TargetSpecV1
 from tools.cq.macros.bytecode import cmd_bytecode_surface
 from tools.cq.macros.exceptions import cmd_exceptions
@@ -27,6 +27,7 @@ from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 
 if TYPE_CHECKING:
+    from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.toolchain import Toolchain
 
 
@@ -55,6 +56,7 @@ class BundleContext:
     """Context for running report bundles."""
 
     tc: Toolchain
+    services: CqRuntimeServices
     root: Path
     argv: list[str]
     target: TargetSpecV1
@@ -146,6 +148,7 @@ def resolve_target_scope(ctx: BundleContext) -> TargetScope:
             plan=plan,
             query=query,
             root=str(root),
+            services=ctx.services,
             argv=tuple(ctx.argv),
         ),
         tc=ctx.tc,
@@ -219,17 +222,19 @@ def merge_bundle_results(preset: str, ctx: BundleContext, results: list[CqResult
     run = run_ctx.to_runmeta(f"report:{preset}")
     merged = mk_result(run)
 
-    merged.summary = {
-        "bundle": preset,
-        "target": f"{_bundle_target_kind(ctx.target)}:{_bundle_target_value(ctx.target)}",
-        "in_dir": ctx.in_dir,
-    }
+    merged.summary = summary_from_mapping(
+        {
+            "bundle": {"name": preset},
+            "target": f"{_bundle_target_kind(ctx.target)}:{_bundle_target_value(ctx.target)}",
+            "in_dir": ctx.in_dir,
+        }
+    )
 
     for result in results:
         macro = result.run.macro
         merge_step_results(merged, macro, result)
 
-    merged.summary["macro_summaries"] = merged.summary.get("step_summaries", {})
+    merged.summary.macro_summaries = dict(merged.summary.step_summaries)
 
     return merged
 
@@ -254,7 +259,7 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
     target_kind = _bundle_target_kind(target)
     target_value = _bundle_target_value(target)
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
-    services = resolve_runtime_services(ctx.root)
+    services = ctx.services
 
     if target_kind in {"function", "method"}:
         request = RequestFactory.calls(request_ctx, function_name=target_value)
@@ -339,7 +344,7 @@ def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
     target_kind = _bundle_target_kind(target)
     target_value = _bundle_target_value(target)
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
-    services = resolve_runtime_services(ctx.root)
+    services = ctx.services
 
     if target_kind in {"function", "method"}:
         if ctx.param:
@@ -419,5 +424,5 @@ def _skip_result(ctx: BundleContext, macro: str, reason: str) -> CqResult:
     )
     run = run_ctx.to_runmeta(macro)
     result = mk_result(run)
-    result.summary["skipped"] = reason
+    result.summary.skipped = reason
     return result

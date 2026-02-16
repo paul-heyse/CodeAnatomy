@@ -14,6 +14,7 @@ from tools.cq.index.repo import resolve_repo_context
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.schema import CqResult
     from tools.cq.core.toolchain import Toolchain
 
@@ -77,6 +78,7 @@ class CliContext(CqStruct, frozen=True):
     argv: list[str]
     root: Path
     toolchain: Toolchain
+    services: CqRuntimeServices
     verbose: int = 0
     output_format: OutputFormat | None = None
     artifact_dir: Path | None = None
@@ -119,6 +121,10 @@ class CliContext(CqStruct, frozen=True):
         root = root.resolve()
         toolchain = Toolchain.detect()
 
+        from tools.cq.core.bootstrap import resolve_runtime_services
+
+        services = resolve_runtime_services(root)
+
         return cls(
             argv=argv,
             root=root,
@@ -127,6 +133,7 @@ class CliContext(CqStruct, frozen=True):
             output_format=options.output_format,
             artifact_dir=options.artifact_dir,
             save_artifact=options.save_artifact,
+            services=services,
         )
 
 

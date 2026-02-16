@@ -5,7 +5,12 @@ from __future__ import annotations
 import msgspec
 import pytest
 
-from relspec.compiled_policy import CompiledExecutionPolicy
+from relspec.compiled_policy import (
+    CompiledExecutionPolicy,
+    CompiledInferenceConfidence,
+    CompiledMaintenancePolicy,
+    CompiledScanPolicyOverride,
+)
 from serde_msgspec import to_builtins
 
 SHA256_HEX_DIGEST_LENGTH = 64
@@ -44,17 +49,23 @@ class TestCompiledExecutionPolicyConstruction:
         """Construct with all fields populated."""
         policy = CompiledExecutionPolicy(
             cache_policy_by_view={"v1": "delta_output"},
-            scan_policy_overrides={"ds1": {"policy": "full"}},
-            maintenance_policy_by_dataset={"ds1": {"optimize": True}},
+            scan_policy_overrides={
+                "ds1": CompiledScanPolicyOverride(policy={"policy": "full"}, reasons=())
+            },
+            maintenance_policy_by_dataset={
+                "ds1": CompiledMaintenancePolicy(payload={"optimize": True})
+            },
             udf_requirements_by_view={"v1": ("udf_a", "udf_b")},
             join_strategy_by_view={"v1": "foreign_key"},
             inference_confidence_by_view={
-                "v1": {
-                    "confidence_score": 0.85,
-                    "decision_type": "join_strategy",
-                    "decision_value": "foreign_key",
-                    "evidence_sources": ("schema",),
-                }
+                "v1": CompiledInferenceConfidence(
+                    payload={
+                        "confidence_score": 0.85,
+                        "decision_type": "join_strategy",
+                        "decision_value": "foreign_key",
+                        "evidence_sources": ("schema",),
+                    }
+                )
             },
             materialization_strategy="delta",
             diagnostics_flags={"capture_datafusion_metrics": True},

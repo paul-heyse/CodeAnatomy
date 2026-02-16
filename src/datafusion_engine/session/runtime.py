@@ -1,4 +1,7 @@
 """Runtime profile helpers for DataFusion execution."""
+# NOTE(size-exception): This module is temporarily >800 LOC during hard-cutover
+# decomposition. Remaining extraction and contraction work is tracked in
+# docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
 
 from __future__ import annotations
 
@@ -38,61 +41,19 @@ from datafusion_engine.plan.perf_policy import (
     PerformancePolicy,
 )
 from datafusion_engine.registry_facade import RegistrationPhase
-from datafusion_engine.schema.introspection import (
+from datafusion_engine.schema.introspection_core import (
     SchemaIntrospector,
 )
+from datafusion_engine.session._session_caches import SESSION_CONTEXT_CACHE
 from datafusion_engine.session.context_pool import SessionFactory
-from datafusion_engine.session.features import (
-    FeatureStateSnapshot,
-    feature_state_snapshot,
-)
-from datafusion_engine.session.introspection import (
-    register_cdf_inputs_for_profile,
-    schema_introspector_for_profile,
-)
 from datafusion_engine.session.runtime_compile import (
     _supports_explain_analyze_level,
-    compile_resolver_invariant_artifact_payload,
-    compile_resolver_invariants_strict_mode,
-    effective_catalog_autoload,
-    effective_ident_normalization,
-    record_artifact,
-    record_compile_resolver_invariants,
-    supports_explain_analyze_level,
 )
 
-# ---------------------------------------------------------------------------
-# Imports from extracted runtime sub-modules.
-#
-# These modules were extracted from this file to reduce its size. All public
-# and private names are imported here so that existing ``from
-# datafusion_engine.session.runtime import X`` patterns continue to work
-# without modification.
-# ---------------------------------------------------------------------------
-from datafusion_engine.session.runtime_compile_options import (
-    compile_options_for_profile,
-    resolve_compile_hooks,
-    resolve_compile_sql_policy,
-)
+# Runtime helpers are imported from authority submodules; external callers
+# should import those authority modules directly instead of this file.
 from datafusion_engine.session.runtime_config_policies import (
-    CACHE_PROFILES,
-    CST_AUTOLOAD_DF_POLICY,
-    DATAFUSION_MAJOR_VERSION,
-    DATAFUSION_OPTIMIZER_DYNAMIC_FILTER_SKIP_VERSION,
-    DATAFUSION_POLICY_PRESETS,
-    DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
-    DEFAULT_DF_POLICY,
-    DEV_DF_POLICY,
-    GIB,
-    KIB,
-    MIB,
-    PROD_DF_POLICY,
-    SCHEMA_HARDENING_PRESETS,
-    SYMTABLE_DF_POLICY,
     DataFusionConfigPolicy,
-    DataFusionFeatureGates,
-    DataFusionJoinPolicy,
-    DataFusionSettingsContract,
     SchemaHardeningProfile,
     _effective_catalog_autoload_for_profile,
     _resolved_config_policy_for_profile,
@@ -100,81 +61,27 @@ from datafusion_engine.session.runtime_config_policies import (
 )
 from datafusion_engine.session.runtime_dataset_io import (
     _introspection_cache_for_ctx,
-    align_table_to_schema,
-    assert_schema_metadata,
-    cache_prefix_for_delta_snapshot,
-    dataset_schema_from_context,
-    dataset_spec_from_context,
-    datasource_config_from_manifest,
-    datasource_config_from_profile,
-    extract_output_locations_for_profile,
-    normalize_dataset_locations_for_profile,
-    read_delta_as_reader,
-    record_dataset_readiness,
-    semantic_output_locations_for_profile,
 )
 from datafusion_engine.session.runtime_diagnostics_mixin import _RuntimeDiagnosticsMixin
 
 # Delegation imports for extracted runtime modules.
 from datafusion_engine.session.runtime_extensions import (
-    _install_cache_tables as _ext_install_cache_tables,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _install_delta_plan_codecs_extension as _ext_install_delta_plan_codecs,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _install_physical_expr_adapter_factory as _ext_install_physical_expr_adapter,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _install_planner_rules as _ext_install_planner_rules,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _install_tracing as _ext_install_tracing,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _install_udf_platform as _ext_install_udf_platform,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _record_cache_diagnostics as _ext_record_cache_diagnostics,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _record_delta_plan_codecs as _ext_record_delta_plan_codecs,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _record_extension_parity_validation as _ext_record_extension_parity,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _refresh_udf_catalog as _ext_refresh_udf_catalog,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _validate_async_udf_policy as _ext_validate_async_udf_policy,
-)
-from datafusion_engine.session.runtime_extensions import (
-    _validate_rule_function_allowlist as _ext_validate_rule_function_allowlist,
-)
-from datafusion_engine.session.runtime_extensions import (
-    record_delta_session_defaults,
+    _install_cache_tables,
+    _install_delta_plan_codecs_extension,
+    _install_physical_expr_adapter_factory,
+    _install_planner_rules,
+    _install_tracing,
+    _install_udf_platform,
+    _record_cache_diagnostics,
+    _record_delta_plan_codecs,
+    _record_extension_parity_validation,
+    _refresh_udf_catalog,
+    _validate_async_udf_policy,
+    _validate_rule_function_allowlist,
 )
 from datafusion_engine.session.runtime_hooks import (
-    CacheEventHook,
-    ExplainHook,
-    PlanArtifactsHook,
-    SemanticDiffHook,
-    SqlIngestHook,
-    SubstraitFallbackHook,
     _apply_builder,
     _attach_cache_manager,
-    apply_execution_label,
-    apply_execution_policy,
-    diagnostics_arrow_ingest_hook,
-    diagnostics_cache_hook,
-    diagnostics_dml_hook,
-    diagnostics_explain_hook,
-    diagnostics_plan_artifacts_hook,
-    diagnostics_semantic_diff_hook,
-    diagnostics_sql_ingest_hook,
-    diagnostics_substrait_fallback_hook,
-    labeled_explain_hook,
 )
 from datafusion_engine.session.runtime_ops import (
     RuntimeProfileCatalog,
@@ -186,90 +93,45 @@ from datafusion_engine.session.runtime_ops import (
     delta_runtime_env_options,
 )
 from datafusion_engine.session.runtime_profile_config import (
-    CST_DIAGNOSTIC_STATEMENTS,
-    INFO_SCHEMA_STATEMENT_NAMES,
-    INFO_SCHEMA_STATEMENTS,
-    AdapterExecutionPolicy,
     CatalogConfig,
     DataSourceConfig,
     DiagnosticsConfig,
     ExecutionConfig,
-    ExecutionLabel,
-    ExtractOutputConfig,
     FeatureGatesConfig,
-    MemoryPool,
     PolicyBundleConfig,
-    PreparedStatementSpec,
-    SemanticOutputConfig,
     ZeroRowBootstrapConfig,
 )
 from datafusion_engine.session.runtime_schema_registry import (
-    _ast_dataset_location as _schema_ast_dataset_location,
+    _ast_dataset_location,
+    _bytecode_dataset_location,
+    _dataset_template,
+    _install_schema_registry,
+    _prepare_statements,
 )
-from datafusion_engine.session.runtime_schema_registry import (
-    _bytecode_dataset_location as _schema_bytecode_dataset_location,
-)
-from datafusion_engine.session.runtime_schema_registry import (
-    _dataset_template as _schema_dataset_template,
-)
-from datafusion_engine.session.runtime_schema_registry import (
-    _install_schema_registry as _schema_install_schema_registry,
-)
-from datafusion_engine.session.runtime_schema_registry import (
-    _prepare_statements as _schema_prepare_statements,
-)
-from datafusion_engine.session.runtime_schema_registry import record_schema_snapshots_for_profile
 from datafusion_engine.session.runtime_session import (
     DataFusionViewRegistry,
     SessionRuntime,
     _build_session_runtime_from_context,
     build_session_runtime,
-    catalog_snapshot_for_profile,
-    function_catalog_snapshot_for_profile,
-    record_runtime_setting_override,
     record_view_definition,
-    refresh_session_runtime,
-    runtime_setting_overrides,
-    session_runtime_for_context,
-    session_runtime_hash,
-    settings_snapshot_for_profile,
 )
 from datafusion_engine.session.runtime_telemetry import (
-    SETTINGS_HASH_VERSION,
-    TELEMETRY_PAYLOAD_VERSION,
     _build_telemetry_payload_row,
-    performance_policy_applied_knobs,
-    performance_policy_settings,
-)
-from datafusion_engine.session.runtime_telemetry import (
-    _effective_ident_normalization as _telemetry_effective_ident_normalization,
-)
-from datafusion_engine.session.runtime_telemetry import (
-    _identifier_normalization_mode as _telemetry_identifier_normalization_mode,
-)
-from datafusion_engine.session.runtime_udf import (
-    SchemaRegistryValidationResult,
+    _effective_ident_normalization,
 )
 from datafusion_engine.sql.options import (
     sql_options_for_profile,
     statement_sql_options_for_profile,
 )
-from datafusion_engine.udf.extension_runtime import ExtensionRegistries
+from datafusion_engine.udf.extension_core import ExtensionRegistries
 from datafusion_engine.udf.platform import RustUdfPlatformRegistries
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from serde_msgspec import MSGPACK_ENCODER, StructBaseStrict
-
-# Use the telemetry versions for _RuntimeDiagnosticsMixin compatibility.
-_identifier_normalization_mode = _telemetry_identifier_normalization_mode
-_effective_ident_normalization = _telemetry_effective_ident_normalization
 
 _MISSING = object()
 _COMPILE_RESOLVER_STRICT_ENV = "CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT"
 _CI_ENV = "CI"
 _DEFAULT_PERFORMANCE_POLICY = PerformancePolicy()
-_EXTENSION_MODULE_NAMES: tuple[str, ...] = ("datafusion_engine.extensions.datafusion_ext",)
-# DataFusion Python currently raises plain ``Exception`` for many SQL/plan failures.
-_DATAFUSION_SQL_ERROR = Exception
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -298,8 +160,6 @@ else:
 _TELEMETRY_MSGPACK_ENCODER = MSGPACK_ENCODER
 
 logger = logging.getLogger(__name__)
-
-_SESSION_CONTEXT_CACHE: dict[str, SessionContext] = {}
 
 
 def resolved_config_policy(
@@ -469,7 +329,7 @@ class DataFusionRuntimeProfile(
                     diagnostics_sink=diagnostics_sink,
                 ),
             )
-        async_policy = _ext_validate_async_udf_policy(self)
+        async_policy = _validate_async_udf_policy(self)
         if not async_policy["valid"]:
             msg = f"Async UDF policy invalid: {async_policy['errors']}."
             raise ValueError(msg)
@@ -569,17 +429,17 @@ class DataFusionRuntimeProfile(
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
         self._install_view_schema(ctx)
-        _ext_install_udf_platform(self, ctx)
-        _ext_install_planner_rules(self, ctx)
-        _schema_install_schema_registry(self, ctx)
-        _ext_validate_rule_function_allowlist(self, ctx)
-        _schema_prepare_statements(self, ctx)
+        _install_udf_platform(self, ctx)
+        _install_planner_rules(self, ctx)
+        _install_schema_registry(self, ctx)
+        _validate_rule_function_allowlist(self, ctx)
+        _prepare_statements(self, ctx)
         self.delta_ops.ensure_delta_plan_codecs(ctx)
-        _ext_record_extension_parity(self, ctx)
-        _ext_install_physical_expr_adapter(self, ctx)
-        _ext_install_tracing(self, ctx)
-        _ext_install_cache_tables(self, ctx)
-        _ext_record_cache_diagnostics(self, ctx)
+        _record_extension_parity_validation(self, ctx)
+        _install_physical_expr_adapter_factory(self, ctx)
+        _install_tracing(self, ctx)
+        _install_cache_tables(self, ctx)
+        _record_cache_diagnostics(self, ctx)
         self._cache_context(ctx)
         return ctx
 
@@ -615,11 +475,11 @@ class DataFusionRuntimeProfile(
         tuple[bool, bool]
             Tuple of (available, installed) flags.
         """
-        return _ext_install_delta_plan_codecs(ctx)
+        return _install_delta_plan_codecs_extension(ctx)
 
     def record_delta_plan_codecs_event(self, *, available: bool, installed: bool) -> None:
         """Record the Delta plan codecs install status."""
-        _ext_record_delta_plan_codecs(self, available=available, installed=installed)
+        _record_delta_plan_codecs(self, available=available, installed=installed)
 
     def resolve_dataset_template(self, name: str) -> DatasetLocation | None:
         """Return a dataset location template for the name.
@@ -629,7 +489,7 @@ class DataFusionRuntimeProfile(
         DatasetLocation | None
             Template dataset location when configured.
         """
-        return _schema_dataset_template(self, name)
+        return _dataset_template(self, name)
 
     def resolve_ast_dataset_location(self) -> DatasetLocation | None:
         """Return the configured AST dataset location.
@@ -639,7 +499,7 @@ class DataFusionRuntimeProfile(
         DatasetLocation | None
             AST dataset location when configured.
         """
-        return _schema_ast_dataset_location(self)
+        return _ast_dataset_location(self)
 
     def resolve_bytecode_dataset_location(self) -> DatasetLocation | None:
         """Return the configured bytecode dataset location.
@@ -649,7 +509,7 @@ class DataFusionRuntimeProfile(
         DatasetLocation | None
             Bytecode dataset location when configured.
         """
-        return _schema_bytecode_dataset_location(self)
+        return _bytecode_dataset_location(self)
 
     def _delta_runtime_profile_ctx(
         self,
@@ -842,25 +702,25 @@ class DataFusionRuntimeProfile(
         self._install_view_schema(ctx)
 
     def _install_udf_stack_for_context(self, ctx: SessionContext) -> None:
-        _ext_install_udf_platform(self, ctx)
-        _ext_install_planner_rules(self, ctx)
+        _install_udf_platform(self, ctx)
+        _install_planner_rules(self, ctx)
 
     def _install_schema_guards_for_context(self, ctx: SessionContext) -> None:
-        _schema_install_schema_registry(self, ctx)
-        _ext_validate_rule_function_allowlist(self, ctx)
+        _install_schema_registry(self, ctx)
+        _validate_rule_function_allowlist(self, ctx)
 
     def _install_planning_extensions_for_context(self, ctx: SessionContext) -> None:
-        _schema_prepare_statements(self, ctx)
+        _prepare_statements(self, ctx)
         self.delta_ops.ensure_delta_plan_codecs(ctx)
 
     def _install_extension_hooks_for_context(self, ctx: SessionContext) -> None:
-        _ext_record_extension_parity(self, ctx)
-        _ext_install_physical_expr_adapter(self, ctx)
+        _record_extension_parity_validation(self, ctx)
+        _install_physical_expr_adapter_factory(self, ctx)
 
     def _install_observability_for_context(self, ctx: SessionContext) -> None:
-        _ext_install_tracing(self, ctx)
-        _ext_install_cache_tables(self, ctx)
-        _ext_record_cache_diagnostics(self, ctx)
+        _install_tracing(self, ctx)
+        _install_cache_tables(self, ctx)
+        _record_cache_diagnostics(self, ctx)
 
     def _install_input_plugins(self, ctx: SessionContext) -> None:
         """Install input plugins on the session context."""
@@ -918,7 +778,7 @@ class DataFusionRuntimeProfile(
         cache_key = ctx
         catalog = self.udf_catalog_cache.get(cache_key)
         if catalog is None:
-            _ext_refresh_udf_catalog(self, ctx)
+            _refresh_udf_catalog(self, ctx)
             catalog = self.udf_catalog_cache.get(cache_key)
         if catalog is None:
             msg = "UDF catalog is unavailable for the current DataFusion session context."
@@ -935,7 +795,7 @@ class DataFusionRuntimeProfile(
         """
         if not self.features.enable_function_factory:
             return None
-        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
+        from datafusion_engine.udf.extension_core import rust_udf_snapshot
         from datafusion_engine.udf.factory import function_factory_policy_hash
 
         snapshot = rust_udf_snapshot(ctx, registries=self.udf_extension_registries)
@@ -1129,12 +989,12 @@ class DataFusionRuntimeProfile(
     def _cached_context(self) -> SessionContext | None:
         if not self.execution.share_context or self.diagnostics.diagnostics_sink is not None:
             return None
-        return _SESSION_CONTEXT_CACHE.get(self._cache_key())
+        return SESSION_CONTEXT_CACHE.get(self._cache_key())
 
     def _cache_context(self, ctx: SessionContext) -> None:
         if not self.execution.share_context:
             return
-        _SESSION_CONTEXT_CACHE[self._cache_key()] = ctx
+        SESSION_CONTEXT_CACHE[self._cache_key()] = ctx
 
     def _build_session_context(self) -> SessionContext:
         """Create the SessionContext base for this runtime profile.
@@ -1159,122 +1019,7 @@ class DataFusionRuntimeProfile(
         adapter.register_object_store(scheme="file://", store=store, host=None)
 
 
-__all__ = [
-    "CACHE_PROFILES",
-    "CST_AUTOLOAD_DF_POLICY",
-    "CST_DIAGNOSTIC_STATEMENTS",
-    "DATAFUSION_MAJOR_VERSION",
-    "DATAFUSION_OPTIMIZER_DYNAMIC_FILTER_SKIP_VERSION",
-    "DATAFUSION_POLICY_PRESETS",
-    "DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION",
-    "DEFAULT_DF_POLICY",
-    "DEV_DF_POLICY",
-    "GIB",
-    "INFO_SCHEMA_STATEMENTS",
-    "INFO_SCHEMA_STATEMENT_NAMES",
-    "KIB",
-    "MIB",
-    "PROD_DF_POLICY",
-    "SCHEMA_HARDENING_PRESETS",
-    # Telemetry
-    "SETTINGS_HASH_VERSION",
-    "SYMTABLE_DF_POLICY",
-    "TELEMETRY_PAYLOAD_VERSION",
-    "AdapterExecutionPolicy",
-    "CacheEventHook",
-    "CatalogConfig",
-    # Config policies
-    "DataFusionConfigPolicy",
-    "DataFusionFeatureGates",
-    "DataFusionJoinPolicy",
-    # Core types
-    "DataFusionRuntimeProfile",
-    "DataFusionSettingsContract",
-    "DataFusionViewRegistry",
-    "DataSourceConfig",
-    "DiagnosticsConfig",
-    # Config structs
-    "ExecutionConfig",
-    "ExecutionLabel",
-    # Hooks
-    "ExplainHook",
-    "ExtractOutputConfig",
-    "FeatureGatesConfig",
-    # Features
-    "FeatureStateSnapshot",
-    "MemoryPool",
-    "PlanArtifactsHook",
-    "PolicyBundleConfig",
-    "PreparedStatementSpec",
-    "SchemaHardeningProfile",
-    # UDF helpers
-    "SchemaRegistryValidationResult",
-    "SemanticDiffHook",
-    "SemanticOutputConfig",
-    "SessionRuntime",
-    "SqlIngestHook",
-    "SubstraitFallbackHook",
-    "ZeroRowBootstrapConfig",
-    # Dataset IO
-    "align_table_to_schema",
-    "apply_execution_label",
-    "apply_execution_policy",
-    "assert_schema_metadata",
-    # Session runtime
-    "build_session_runtime",
-    "cache_prefix_for_delta_snapshot",
-    "catalog_snapshot_for_profile",
-    "compile_options_for_profile",
-    "compile_resolver_invariant_artifact_payload",
-    "compile_resolver_invariants_strict_mode",
-    "dataset_schema_from_context",
-    "dataset_spec_from_context",
-    "datasource_config_from_manifest",
-    "datasource_config_from_profile",
-    "diagnostics_arrow_ingest_hook",
-    "diagnostics_cache_hook",
-    "diagnostics_dml_hook",
-    "diagnostics_explain_hook",
-    "diagnostics_plan_artifacts_hook",
-    "diagnostics_semantic_diff_hook",
-    "diagnostics_sql_ingest_hook",
-    "diagnostics_substrait_fallback_hook",
-    "effective_catalog_autoload",
-    "effective_ident_normalization",
-    "extract_output_locations_for_profile",
-    "feature_state_snapshot",
-    "function_catalog_snapshot_for_profile",
-    "labeled_explain_hook",
-    "normalize_dataset_locations_for_profile",
-    "performance_policy_applied_knobs",
-    "performance_policy_settings",
-    "read_delta_as_reader",
-    # Compile helpers
-    "record_artifact",
-    "record_compile_resolver_invariants",
-    "record_dataset_readiness",
-    "record_delta_session_defaults",
-    "record_runtime_setting_override",
-    "record_schema_snapshots_for_profile",
-    "record_view_definition",
-    "refresh_session_runtime",
-    # Introspection
-    "register_cdf_inputs_for_profile",
-    "resolve_compile_hooks",
-    "resolve_compile_sql_policy",
-    "resolved_config_policy",
-    "resolved_schema_hardening",
-    "runtime_setting_overrides",
-    "schema_introspector_for_profile",
-    "semantic_output_locations_for_profile",
-    "session_runtime_for_context",
-    "session_runtime_hash",
-    "settings_snapshot_for_profile",
-    # SQL options (re-exports)
-    "sql_options_for_profile",
-    "statement_sql_options_for_profile",
-    "supports_explain_analyze_level",
-]
+__all__ = ["DataFusionRuntimeProfile"]
 
 # ---------------------------------------------------------------------------
 # Deferred import of artifact spec constants.

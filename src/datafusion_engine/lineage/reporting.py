@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping, Sequence
 import msgspec
 
 from datafusion_engine.plan.walk import walk_logical_complete
-from datafusion_engine.udf.extension_runtime import (
+from datafusion_engine.udf.extension_core import (
     udf_names_from_snapshot,
     validate_rust_udf_snapshot,
 )

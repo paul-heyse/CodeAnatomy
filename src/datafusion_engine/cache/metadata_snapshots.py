@@ -12,9 +12,10 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from datafusion_engine.dataset.registry import DatasetLocation
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.facade import DataFusionExecutionFacade
 from datafusion_engine.session.helpers import deregister_table
+from utils.coercion import coerce_int_or_none
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -90,7 +91,7 @@ def snapshot_datafusion_caches(
             CacheSnapshotRegistryEntry,
             record_cache_snapshot_registry,
         )
-        from obs.otel.cache import cache_span
+        from obs.otel import cache_span
 
         try:
             with cache_span(
@@ -199,19 +200,6 @@ def _fallback_cache_snapshot_source(ctx: SessionContext, *, table_name: str) -> 
     return _cache_snapshot_source_table(cache_name, row={})
 
 
-def _coerce_optional_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        with suppress(ValueError):
-            return int(value.strip())
-    return None
-
-
 def _coerce_optional_str(value: object) -> str | None:
     if value is None:
         return None
@@ -219,7 +207,7 @@ def _coerce_optional_str(value: object) -> str | None:
 
 
 def _cache_snapshot_source_table(cache_name: str, *, row: Mapping[str, object]) -> pa.Table:
-    event_time = _coerce_optional_int(row.get("event_time_unix_ms"))
+    event_time = coerce_int_or_none(row.get("event_time_unix_ms"))
     if event_time is None:
         event_time = int(time.time() * 1000)
 
@@ -227,10 +215,10 @@ def _cache_snapshot_source_table(cache_name: str, *, row: Mapping[str, object]) 
         [
             pa.array([str(row.get("cache_name") or cache_name)], type=pa.string()),
             pa.array([event_time], type=pa.int64()),
-            pa.array([_coerce_optional_int(row.get("entry_count"))], type=pa.int64()),
-            pa.array([_coerce_optional_int(row.get("hit_count"))], type=pa.int64()),
-            pa.array([_coerce_optional_int(row.get("miss_count"))], type=pa.int64()),
-            pa.array([_coerce_optional_int(row.get("eviction_count"))], type=pa.int64()),
+            pa.array([coerce_int_or_none(row.get("entry_count"))], type=pa.int64()),
+            pa.array([coerce_int_or_none(row.get("hit_count"))], type=pa.int64()),
+            pa.array([coerce_int_or_none(row.get("miss_count"))], type=pa.int64()),
+            pa.array([coerce_int_or_none(row.get("eviction_count"))], type=pa.int64()),
             pa.array([_coerce_optional_str(row.get("config_ttl"))], type=pa.string()),
             pa.array([_coerce_optional_str(row.get("config_limit"))], type=pa.string()),
         ],

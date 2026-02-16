@@ -97,7 +97,7 @@ def test_missing_udf_signature_metadata() -> None:
     signature_inputs, validate_required_udfs raises ValueError with
     "Missing Rust UDF signature metadata" naming the UDF.
     """
-    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
 
     ctx = df_ctx()
 
@@ -126,7 +126,7 @@ def test_missing_udf_return_metadata() -> None:
     return_types, validate_required_udfs raises ValueError with
     "Missing Rust UDF return metadata" naming the UDF.
     """
-    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
 
     ctx = df_ctx()
 
@@ -181,7 +181,7 @@ def test_semantic_type_validation_accepts_zero_row_metadata_table(
 @pytest.mark.integration
 def test_udf_alias_resolution() -> None:
     """validate_required_udfs should accept aliases mapped to canonical names."""
-    from datafusion_engine.udf.extension_runtime import (
+    from datafusion_engine.udf.extension_core import (
         rust_udf_snapshot,
         snapshot_alias_mapping,
         validate_required_udfs,

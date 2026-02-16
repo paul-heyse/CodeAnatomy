@@ -468,7 +468,7 @@ class CacheStateSnapshot:
 
 def _extract_cache_config(settings: list[dict[str, object]]) -> CacheConfigSnapshot:
     settings_map = {str(row.get("name")): str(row.get("value")) for row in settings}
-    from datafusion_engine.session.runtime import DEFAULT_DF_POLICY
+    from datafusion_engine.session.runtime_config_policies import DEFAULT_DF_POLICY
 
     defaults = DEFAULT_DF_POLICY.settings
     return CacheConfigSnapshot(

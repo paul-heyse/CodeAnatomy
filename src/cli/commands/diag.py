@@ -11,8 +11,11 @@ from typing import TYPE_CHECKING, Annotated
 import pyarrow as pa
 from cyclopts import Parameter
 
-from datafusion_engine.delta.control_plane import DeltaProviderRequest, delta_provider_from_session
-from datafusion_engine.delta.service import delta_service_for_profile
+from datafusion_engine.delta.control_plane_core import (
+    DeltaProviderRequest,
+    delta_provider_from_session,
+)
+from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema import extract_schema_for
@@ -110,7 +113,8 @@ def diag_command(
 
 def _is_delta_table(path: Path) -> bool:
     try:
-        return delta_service_for_profile(None).table_version(path=str(path)) is not None
+        profile = DataFusionRuntimeProfile()
+        return DeltaService(profile=profile).table_version(path=str(path)) is not None
     except (RuntimeError, TypeError, ValueError):
         return False
 

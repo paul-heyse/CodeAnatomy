@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DiagnosticsConfig
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import DiagnosticsConfig
 from obs.diagnostics import DiagnosticsCollector
 
 

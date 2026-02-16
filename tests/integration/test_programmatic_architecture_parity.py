@@ -38,7 +38,7 @@ from semantics.ir import (
     ir_cache_hint_to_execution_policy,
 )
 from semantics.ir_pipeline import _infer_join_keys_from_fields
-from semantics.pipeline import (
+from semantics.pipeline_build import (
     _resolve_cache_policy_hierarchy,
 )
 from semantics.registry import SEMANTIC_TABLE_SPECS

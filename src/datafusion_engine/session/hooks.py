@@ -27,7 +27,7 @@ def chain_optional_hooks[**P](*hooks: Callable[P, None] | None) -> Callable[P, N
     return _chained
 
 
-def record_registration(
+def record_registration[V](
     registry: MutableMapping[str, V],
     key: str,
     value: V,

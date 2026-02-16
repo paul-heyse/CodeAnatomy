@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 from datafusion import SessionContext
 
-from datafusion_engine.udf.extension_runtime import (
+from datafusion_engine.udf.extension_core import (
     extension_capabilities_report,
     validate_extension_capabilities,
 )

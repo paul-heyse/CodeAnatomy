@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
 import pytest
 from tools.cq.core.locations import SourceSpan
+from tools.cq.core.summary_contract import SemanticTelemetryV1
 from tools.cq.search.pipeline.classifier import QueryMode, clear_caches
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.python_semantic import (
@@ -29,8 +29,10 @@ from tools.cq.search.pipeline.smart_search import (
 )
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
+    LanguageSearchResult,
     RawMatch,
     SearchStats,
+    SearchSummaryInputs,
     _PythonSemanticPrefetchResult,
 )
 from tools.cq.search.pipeline.worker_policy import resolve_search_worker_count
@@ -60,6 +62,38 @@ def _span(
         start_col=col,
         end_line=line,
         end_col=end_col,
+    )
+
+
+def _summary_inputs(
+    *,
+    query: str,
+    stats: SearchStats,
+    matches: list[EnrichedMatch],
+) -> SearchSummaryInputs:
+    config = SearchConfig(
+        root=Path(),
+        query=query,
+        mode=QueryMode.IDENTIFIER,
+        lang_scope="auto",
+        mode_requested=QueryMode.IDENTIFIER,
+        mode_chain=(QueryMode.IDENTIFIER,),
+        fallback_applied=False,
+        limits=SMART_SEARCH_LIMITS,
+        include_globs=None,
+        exclude_globs=None,
+        include_strings=False,
+        with_neighborhood=False,
+        argv=[],
+        tc=None,
+        started_ms=0.0,
+    )
+    return SearchSummaryInputs(
+        config=config,
+        stats=stats,
+        matches=matches,
+        languages=("python", "rust"),
+        language_stats={"python": stats, "rust": stats},
     )
 
 
@@ -473,13 +507,7 @@ class TestBuildSummary:
                 evidence_kind="resolved_ast",
             )
         ]
-        summary = build_summary(
-            "build_graph",
-            QueryMode.IDENTIFIER,
-            stats,
-            matches,
-            SMART_SEARCH_LIMITS,
-        )
+        summary = build_summary(_summary_inputs(query="build_graph", stats=stats, matches=matches))
         assert summary["query"] == "build_graph"
         assert summary["mode"] == "identifier"
         assert summary["scanned_files"] == BASIC_SCANNED_FILES
@@ -497,13 +525,7 @@ class TestBuildSummary:
             truncated=True,
             max_matches_hit=True,
         )
-        summary = build_summary(
-            "build_graph",
-            QueryMode.IDENTIFIER,
-            stats,
-            [],
-            SMART_SEARCH_LIMITS,
-        )
+        summary = build_summary(_summary_inputs(query="build_graph", stats=stats, matches=[]))
         assert summary["truncated"] is True
         assert summary["caps_hit"] == "max_total_matches"
 
@@ -515,13 +537,7 @@ class TestBuildSummary:
             matched_files=1,
             total_matches=1,
         )
-        summary = build_summary(
-            "build_graph",
-            QueryMode.IDENTIFIER,
-            stats,
-            [],
-            SMART_SEARCH_LIMITS,
-        )
+        summary = build_summary(_summary_inputs(query="build_graph", stats=stats, matches=[]))
         assert summary["lang_scope"] == "auto"
         assert summary["language_order"] == ["python", "rust"]
         assert isinstance(summary["languages"], dict)
@@ -1280,10 +1296,10 @@ class TestSmartSearchFiltersAndEnrichment:
         assert telemetry_map.get("applied") == 1
 
     @staticmethod
-    def test_run_single_partition_starts_python_semantic_prefetch_before_classification(
+    def test_run_single_partition_delegates_to_enrichment_phase(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """PythonSemantic prefetch should run concurrently with classification."""
+        """Single-partition helper delegates to enrichment phase orchestration."""
         clear_caches()
         ctx = SearchConfig(
             root=tmp_path,
@@ -1300,63 +1316,41 @@ class TestSmartSearchFiltersAndEnrichment:
             match_byte_start=4,
             match_byte_end=10,
         )
-        prefetch_started = threading.Event()
-        release_prefetch = threading.Event()
+        captured: dict[str, object] = {}
 
-        def _fake_candidate_phase(
-            _ctx: SearchConfig,
+        def _fake_enrichment_phase(
+            _plan: object,
             *,
-            lang: str,
+            config: SearchConfig,
             mode: QueryMode,
-        ) -> tuple[list[RawMatch], SearchStats, str]:
-            assert lang == "python"
-            assert mode == QueryMode.IDENTIFIER
-            return (
-                [raw_match],
-                SearchStats(scanned_files=1, matched_files=1, total_matches=1),
-                r"\btarget\b",
+        ) -> LanguageSearchResult:
+            captured["config"] = config
+            captured["mode"] = mode
+            return LanguageSearchResult(
+                lang="python",
+                raw_matches=[raw_match],
+                stats=SearchStats(scanned_files=1, matched_files=1, total_matches=1),
+                pattern=r"\btarget\b",
+                enriched_matches=[],
+                dropped_by_scope=0,
+                python_semantic_prefetch=_PythonSemanticPrefetchResult(
+                    telemetry={
+                        "attempted": 1,
+                        "applied": 0,
+                        "failed": 0,
+                        "skipped": 0,
+                        "timed_out": 0,
+                    }
+                ),
             )
 
-        def _fake_prefetch(
-            _ctx: SearchConfig,
-            *,
-            lang: str,
-            raw_matches: list[RawMatch],
-        ) -> _PythonSemanticPrefetchResult:
-            assert lang == "python"
-            assert raw_matches == [raw_match]
-            prefetch_started.set()
-            release_prefetch.wait(timeout=1.0)
-            return _PythonSemanticPrefetchResult(
-                telemetry={"attempted": 0, "applied": 0, "failed": 0, "skipped": 0, "timed_out": 0}
-            )
-
-        def _fake_classification(
-            _ctx: SearchConfig,
-            *,
-            lang: str,
-            raw_matches: list[RawMatch],
-        ) -> list[EnrichedMatch]:
-            assert lang == "python"
-            assert raw_matches == [raw_match]
-            assert prefetch_started.wait(timeout=1.0), (
-                "prefetch should start before classification returns"
-            )
-            release_prefetch.set()
-            return []
-
         monkeypatch.setattr(
-            "tools.cq.search.pipeline.smart_search._run_candidate_phase", _fake_candidate_phase
-        )
-        monkeypatch.setattr(
-            "tools.cq.search.pipeline.python_semantic.run_prefetch_python_semantic_for_raw_matches",
-            _fake_prefetch,
-        )
-        monkeypatch.setattr(
-            "tools.cq.search.pipeline.smart_search._run_classification_phase", _fake_classification
+            "tools.cq.search.pipeline.smart_search.run_enrichment_phase", _fake_enrichment_phase
         )
 
         result = _run_single_partition(ctx, "python", mode=QueryMode.IDENTIFIER)
+        assert captured["config"] is ctx
+        assert captured["mode"] == QueryMode.IDENTIFIER
         assert result.python_semantic_prefetch is not None
 
     @staticmethod
@@ -1446,10 +1440,9 @@ def test_search_rust_front_door_uses_rust_semantic_adapter(
     insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
     degradation = cast("dict[str, object]", insight.get("degradation", {}))
     assert degradation.get("semantic") in {"ok", "partial"}
-    rust_semantic = cast("dict[str, object]", result.summary.get("rust_semantic_telemetry", {}))
-    attempted = rust_semantic.get("attempted", 0)
-    assert isinstance(attempted, int)
-    assert attempted >= 1
+    rust_semantic = result.summary.get("rust_semantic_telemetry")
+    assert isinstance(rust_semantic, SemanticTelemetryV1)
+    assert rust_semantic.attempted >= 1
 
 
 def test_search_python_capability_probe_unavailable_is_non_fatal(
@@ -1489,13 +1482,10 @@ def test_search_python_capability_probe_unavailable_is_non_fatal(
     insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
     degradation = cast("dict[str, object]", insight.get("degradation", {}))
     assert degradation.get("semantic") in {"ok", "partial"}
-    python_semantic = cast("dict[str, object]", result.summary.get("python_semantic_telemetry", {}))
-    attempted = python_semantic.get("attempted", 0)
-    applied = python_semantic.get("applied", 0)
-    assert isinstance(attempted, int)
-    assert isinstance(applied, int)
-    assert attempted >= 1
-    assert applied >= 1
+    python_semantic = result.summary.get("python_semantic_telemetry")
+    assert isinstance(python_semantic, SemanticTelemetryV1)
+    assert python_semantic.attempted >= 1
+    assert python_semantic.applied >= 1
 
 
 def test_search_python_timeout_reason_not_collapsed_to_session_unavailable(

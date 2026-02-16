@@ -403,7 +403,7 @@ def merge_incremental_results(
     This function delegates to :func:`apply_cdf_merge` when the base table exists.
     For tables not yet in the session, returns the incremental data directly.
     """
-    from datafusion_engine.schema.introspection import table_names_snapshot
+    from datafusion_engine.schema.introspection_core import table_names_snapshot
 
     if base_table not in table_names_snapshot(ctx):
         return incremental_df

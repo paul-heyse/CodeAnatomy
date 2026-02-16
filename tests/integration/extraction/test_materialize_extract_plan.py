@@ -13,7 +13,8 @@ from typing import Any
 import pytest
 
 from core_types import DeterminismTier
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DiagnosticsConfig
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import DiagnosticsConfig
 from extract.coordination.evidence_plan import compile_evidence_plan
 from extract.coordination.materialization import (
     ExtractMaterializeOptions,

@@ -1,4 +1,4 @@
-"""Tests for the builder dispatch factory in semantics.pipeline.
+"""Tests for the builder dispatch factory in semantics.pipeline_build.
 
 Verify that ``_dispatch_from_registry`` creates handlers that resolve
 builders from name-keyed registries, and that the master dispatcher
@@ -13,11 +13,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from semantics.pipeline import (
+from semantics.pipeline_build import (
     _CONSOLIDATED_BUILDER_HANDLERS,
     _dispatch_from_registry,
 )
-from semantics.spec_registry import SemanticSpecIndex
+from semantics.registry import SemanticSpecIndex
 from semantics.view_kinds import ViewKindStr
 
 CONSOLIDATED_HANDLER_COUNT = 6
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
     from datafusion_engine.plan.bundle_artifact import DataFrameBuilder
-    from semantics.pipeline import _SemanticSpecContext
+    from semantics.pipeline_build import _SemanticSpecContext
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +229,7 @@ class TestRegistryFunctions:
     @staticmethod
     def test_span_unnest_registry_keys() -> None:
         """The span-unnest registry returns all 4 expected builder names."""
-        from semantics.pipeline import _span_unnest_registry
+        from semantics.pipeline_build import _span_unnest_registry
 
         ctx = _stub_context()
         registry = _span_unnest_registry(ctx)
@@ -244,7 +244,7 @@ class TestRegistryFunctions:
     @staticmethod
     def test_symtable_registry_keys() -> None:
         """The symtable registry returns all 5 expected builder names."""
-        from semantics.pipeline import _symtable_registry
+        from semantics.pipeline_build import _symtable_registry
 
         ctx = _stub_context()
         registry = _symtable_registry(ctx)
@@ -260,7 +260,7 @@ class TestRegistryFunctions:
     @staticmethod
     def test_diagnostic_registry_keys() -> None:
         """The diagnostic registry returns at least one builder."""
-        from semantics.pipeline import _diagnostic_registry
+        from semantics.pipeline_build import _diagnostic_registry
 
         ctx = _stub_context()
         registry = _diagnostic_registry(ctx)
@@ -271,7 +271,7 @@ class TestRegistryFunctions:
     @staticmethod
     def test_finalize_kind_is_rust_only() -> None:
         """FINALIZE views should be rejected in Python dispatch."""
-        from semantics.pipeline import _builder_for_project_kind
+        from semantics.pipeline_build import _builder_for_project_kind
 
         spec = _make_spec("cpg_nodes", "finalize")
         with pytest.raises(ValueError, match="Rust CpgEmit transforms"):
@@ -280,7 +280,7 @@ class TestRegistryFunctions:
     @staticmethod
     def test_registry_builders_are_callable() -> None:
         """All registry values must be callable DataFrameBuilder instances."""
-        from semantics.pipeline import _span_unnest_registry, _symtable_registry
+        from semantics.pipeline_build import _span_unnest_registry, _symtable_registry
 
         ctx = _stub_context()
         for registry in (_span_unnest_registry(ctx), _symtable_registry(ctx)):

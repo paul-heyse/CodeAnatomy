@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from datafusion_engine.io import write as write_module
-from datafusion_engine.io.write import (
+from datafusion_engine.io import write_core as write_module
+from datafusion_engine.io.write_core import (
     _adaptive_file_size_from_bundle,
     _AdaptiveFileSizeDecision,
     compute_adaptive_file_size,

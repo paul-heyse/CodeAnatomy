@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.search.rust.extractors_shared import RUST_SCOPE_KINDS
 from tools.cq.search.tree_sitter.contracts.core_models import (
     ObjectEvidenceRowV1,
     QueryExecutionSettingsV1,
@@ -93,15 +94,7 @@ try:
 except ImportError:  # pragma: no cover - exercised via availability checks
     _TreeSitterPoint = None
 
-_SCOPE_KINDS: tuple[str, ...] = (
-    "function_item",
-    "struct_item",
-    "enum_item",
-    "trait_item",
-    "impl_item",
-    "mod_item",
-    "macro_invocation",
-)
+_SCOPE_KINDS: tuple[str, ...] = tuple(sorted(RUST_SCOPE_KINDS - {"block"}))
 
 _DEFAULT_SCOPE_DEPTH = 24
 _MAX_SCOPE_NODES = 256
@@ -307,16 +300,7 @@ def _find_ancestor(node: Node, kind: str, *, max_depth: int) -> Node | None:
 # Shared enrichment builder
 # ---------------------------------------------------------------------------
 
-_DEFINITION_SCOPE_KINDS: frozenset[str] = frozenset(
-    {
-        "function_item",
-        "struct_item",
-        "enum_item",
-        "trait_item",
-        "impl_item",
-        "mod_item",
-    }
-)
+_DEFINITION_SCOPE_KINDS: frozenset[str] = frozenset(_SCOPE_KINDS)
 
 _CALL_NODE_KINDS: frozenset[str] = frozenset({"call_expression", "macro_invocation"})
 

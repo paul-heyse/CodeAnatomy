@@ -80,7 +80,7 @@ def execute_run_plan(
         ctx.root,
     )
     merged = mk_result(run_ctx.to_runmeta("run"))
-    merged.summary["plan_version"] = plan.version
+    merged.summary.plan_version = plan.version
 
     steps = normalize_step_ids(plan.steps)
     executed_results: list[tuple[str, CqResult]] = []
@@ -118,7 +118,7 @@ def execute_run_plan(
         executed_results.append((step_id, result))
 
     populate_run_summary_metadata(merged, executed_results, total_steps=len(steps))
-    merged.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    merged.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
     assign_result_finding_ids(merged)
     maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=run_id)
     maybe_evict_run_cache_tag(root=ctx.root, language="rust", run_id=run_id)
@@ -215,7 +215,7 @@ def _run_grouped_q_batches(
 
 
 def _results_have_error(results: list[tuple[str, CqResult]]) -> bool:
-    return any("error" in result.summary for _, result in results)
+    return any(bool(result.summary.error) for _, result in results)
 
 
 def _prepare_q_step(

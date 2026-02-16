@@ -9,6 +9,7 @@ from rich.console import Console
 from tools.cq.cli_app.app import app
 from tools.cq.core.report import render_markdown
 from tools.cq.core.schema import CqResult, RunMeta
+from tools.cq.core.summary_contract import summary_from_mapping
 
 from tests.cli_golden._support.goldens import assert_text_snapshot
 
@@ -88,7 +89,7 @@ def _render_search_summary() -> str:
             "scanned_files_is_estimate": False,
         },
     )
-    result = CqResult(run=run, summary=summary)
+    result = CqResult(run=run, summary=summary_from_mapping(summary))
     return render_markdown(result)
 
 

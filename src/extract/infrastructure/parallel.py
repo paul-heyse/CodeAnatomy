@@ -85,7 +85,7 @@ def _build_propagation_carrier() -> dict[str, str]:
     return carrier
 
 
-def parallel_map(
+def parallel_map[T, U](
     items: Iterable[T],
     fn: Callable[[T], U],
     *,

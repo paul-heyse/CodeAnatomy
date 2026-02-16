@@ -12,7 +12,8 @@ from datafusion_engine.session.facade import DataFusionExecutionFacade
 from extraction.engine_runtime import EngineRuntime
 
 if TYPE_CHECKING:
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_session import SessionRuntime
 from datafusion_engine.dataset.registry import DatasetCatalog
 from obs.diagnostics import DiagnosticsCollector
 

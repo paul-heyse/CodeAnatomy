@@ -18,7 +18,7 @@ require_datafusion()
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.session.runtime_session import SessionRuntime
 
 
 def _runtime_context() -> tuple[SessionContext, SessionRuntime]:

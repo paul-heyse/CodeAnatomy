@@ -60,7 +60,7 @@ class _ViewGraphRegistrationContext:
 
     def install_udf_platform(self) -> None:
         from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
-        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
+        from datafusion_engine.udf.extension_core import rust_udf_snapshot
         from datafusion_engine.udf.platform import install_rust_udf_platform
 
         options = _platform_options(self.runtime_profile)

@@ -37,6 +37,7 @@ from tools.cq.search._shared.core import (
 )
 from tools.cq.search._shared.core import source_hash as _shared_source_hash
 from tools.cq.search._shared.core import truncate as _shared_truncate
+from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search.enrichment.core import (
     append_source as _append_enrichment_source,
 )
@@ -111,19 +112,6 @@ _PYTHON_ENRICHMENT_CROSSCHECK_ENV = "CQ_PY_ENRICHMENT_CROSSCHECK"
 
 _MAX_PARENT_DEPTH = 20
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Error tuple (fail-open boundary)
-# ---------------------------------------------------------------------------
-
-_ENRICHMENT_ERRORS = (
-    RuntimeError,
-    TypeError,
-    ValueError,
-    AttributeError,
-    UnicodeError,
-    SyntaxError,
-)
 
 # ---------------------------------------------------------------------------
 # Enrichable node kinds
@@ -255,7 +243,7 @@ def _try_extract(
     """
     try:
         result = extractor(*args)
-    except _ENRICHMENT_ERRORS as exc:
+    except ENRICHMENT_ERRORS as exc:
         logger.warning("Python extractor degraded (%s): %s", label, type(exc).__name__)
         return {}, f"{label}: {type(exc).__name__}"
     else:
@@ -746,7 +734,7 @@ def _enrich_ast_grep_core(
         # Call extractor with context keyword argument
         try:
             result = extractor(*args, context=context)
-        except _ENRICHMENT_ERRORS as exc:
+        except ENRICHMENT_ERRORS as exc:
             result: dict[str, object] = {}
             reason = f"{label}: {type(exc).__name__}"
             logger.warning("Python extractor degraded (%s): %s", label, type(exc).__name__)
@@ -1173,7 +1161,7 @@ def _run_python_resolution_stage(
             byte_end=byte_end,
             session=session,
         )
-    except _ENRICHMENT_ERRORS as exc:
+    except ENRICHMENT_ERRORS as exc:
         logger.warning("Python resolution enrichment failed: %s", type(exc).__name__)
         state.python_resolution_fields = {}
         resolution_reasons.append(f"python_resolution: {type(exc).__name__}")
@@ -1230,7 +1218,7 @@ def _run_tree_sitter_stage(
                 tree_sitter_reasons.append(f"tree_sitter: {ts_reason}")
         else:
             state.stage_status["tree_sitter"] = "skipped"
-    except _ENRICHMENT_ERRORS as exc:
+    except ENRICHMENT_ERRORS as exc:
         logger.warning("Python tree-sitter enrichment stage failed: %s", type(exc).__name__)
         state.stage_status["tree_sitter"] = "degraded"
         tree_sitter_reasons.append(f"tree_sitter: {type(exc).__name__}")

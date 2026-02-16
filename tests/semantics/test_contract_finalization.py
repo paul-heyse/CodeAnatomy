@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datafusion import SessionContext
 
-from schema_spec.contracts import dataset_spec_contract
+from schema_spec.dataset_spec import dataset_spec_contract
 from semantics.catalog.dataset_specs import dataset_spec
-from semantics.pipeline import _finalize_df_to_contract
+from semantics.pipeline_build import _finalize_df_to_contract
 
 
 def test_finalize_df_to_contract_adds_missing_columns() -> None:

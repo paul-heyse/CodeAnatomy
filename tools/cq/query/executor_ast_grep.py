@@ -17,7 +17,6 @@ from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
 from tools.cq.core.cache.content_hash import file_content_hash
-from tools.cq.core.cache.contracts import PatternFragmentCacheV1
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import decode_fragment_payload
 from tools.cq.core.cache.fragment_contracts import (
@@ -27,12 +26,8 @@ from tools.cq.core.cache.fragment_contracts import (
     FragmentRequestV1,
     FragmentWriteV1,
 )
-from tools.cq.core.cache.fragment_engine import (
-    FragmentPersistRuntimeV1,
-    FragmentProbeRuntimeV1,
-    partition_fragment_entries,
-    persist_fragment_writes,
-)
+from tools.cq.core.cache.fragment_engine import FragmentPersistRuntimeV1, FragmentProbeRuntimeV1
+from tools.cq.core.cache.fragment_orchestrator import run_fragment_scan
 from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import build_cache_key, build_scope_hash
 from tools.cq.core.cache.namespaces import (
@@ -63,6 +58,7 @@ from tools.cq.query.cache_converters import (
     record_sort_key_lightweight as record_sort_key,
 )
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage, is_rust_language
+from tools.cq.query.match_contracts import MatchData, MatchRange, MatchRangePoint
 from tools.cq.query.metavar import (
     apply_metavar_filters,
     extract_rule_metavars,
@@ -70,6 +66,7 @@ from tools.cq.query.metavar import (
     partition_metavar_filters,
 )
 from tools.cq.query.planner import AstGrepRule
+from tools.cq.search.cache.contracts import PatternFragmentCacheV1
 from tools.cq.search.rg.prefilter import extract_literal_fragments, rg_prefilter_files
 
 if TYPE_CHECKING:
@@ -119,7 +116,7 @@ class AstGrepExecutionState:
 
     findings: list[Finding]
     records: list[SgRecord]
-    raw_matches: list[dict[str, object]]
+    raw_matches: list[MatchData]
 
 
 @dataclass(frozen=True)
@@ -162,7 +159,7 @@ def execute_ast_grep_rules(
     query: Query | None = None,
     globs: list[str] | None = None,
     run_id: str | None = None,
-) -> tuple[list[Finding], list[SgRecord], list[dict[str, object]]]:
+) -> tuple[list[Finding], list[SgRecord], list[MatchData]]:
     """Execute ast-grep rules using ast-grep-py and return findings.
 
     Parameters
@@ -182,7 +179,7 @@ def execute_ast_grep_rules(
 
     Returns:
     -------
-    tuple[list[Finding], list[SgRecord], list[dict[str, object]]]
+    tuple[list[Finding], list[SgRecord], list[MatchData]]
         Findings, underlying records, and raw match data.
     """
     if not rules or not paths:
@@ -206,65 +203,45 @@ def execute_ast_grep_rules(
         tag=fragment_ctx.tag,
         run_id=run_id,
     )
-    partition = partition_fragment_entries(
-        request,
-        entries,
-        FragmentProbeRuntimeV1(
+    scan_result = run_fragment_scan(
+        request=request,
+        entries=entries,
+        probe_runtime=FragmentProbeRuntimeV1(
             cache_get=fragment_ctx.cache.get,
             decode=decode_pattern_fragment_payload,
             cache_enabled=fragment_ctx.cache_enabled,
             record_get=record_cache_get,
             record_decode_failure=record_cache_decode_failure,
         ),
-    )
-    findings_by_rel, records_by_rel, raw_by_rel = pattern_data_from_hits(partition.hits)
-    if partition.misses:
-        miss_data = compute_pattern_miss_data(
+        persist_runtime=FragmentPersistRuntimeV1(
+            cache_set=lambda key, value, *, expire=None, tag=None: fragment_ctx.cache.set(
+                key,
+                value,
+                expire=expire,
+                tag=tag,
+            ),
+            cache_set_many=lambda rows, *, expire=None, tag=None: fragment_ctx.cache.set_many(
+                rows,
+                expire=expire,
+                tag=tag,
+            ),
+            encode=contract_to_builtins,
+            cache_enabled=fragment_ctx.cache_enabled,
+            transact=fragment_ctx.cache.transact,
+            record_set=record_cache_set,
+        ),
+        scan_misses=lambda misses: _scan_pattern_fragment_misses(
             rules=rules,
             query=query,
             fragment_ctx=fragment_ctx,
-            misses=partition.misses,
-        )
-        writes: list[FragmentWriteV1] = []
-        for miss in partition.misses:
-            rel_path = miss.entry.file
-            findings = sorted(miss_data[0].get(rel_path, []), key=finding_sort_key)
-            records = sorted(miss_data[1].get(rel_path, []), key=record_sort_key)
-            raw_matches = sorted(miss_data[2].get(rel_path, []), key=raw_match_sort_key)
-            findings_by_rel[rel_path] = findings
-            records_by_rel[rel_path] = records
-            raw_by_rel[rel_path] = raw_matches
-            writes.append(
-                FragmentWriteV1(
-                    entry=miss.entry,
-                    payload=PatternFragmentCacheV1(
-                        findings=cast("list[dict[str, object]]", contract_to_builtins(findings)),
-                        records=[record_to_cache_record(item) for item in records],
-                        raw_matches=raw_matches,
-                    ),
-                )
-            )
-        persist_fragment_writes(
-            request,
-            writes,
-            FragmentPersistRuntimeV1(
-                cache_set=lambda key, value, *, expire=None, tag=None: fragment_ctx.cache.set(
-                    key,
-                    value,
-                    expire=expire,
-                    tag=tag,
-                ),
-                cache_set_many=lambda rows, *, expire=None, tag=None: fragment_ctx.cache.set_many(
-                    rows,
-                    expire=expire,
-                    tag=tag,
-                ),
-                encode=contract_to_builtins,
-                cache_enabled=fragment_ctx.cache_enabled,
-                transact=fragment_ctx.cache.transact,
-                record_set=record_cache_set,
-            ),
-        )
+            misses=misses,
+        ),
+    )
+    findings_by_rel, records_by_rel, raw_by_rel = pattern_data_from_hits(scan_result.hits)
+    if scan_result.miss_payload is not None:
+        findings_by_rel.update(scan_result.miss_payload[0])
+        records_by_rel.update(scan_result.miss_payload[1])
+        raw_by_rel.update(scan_result.miss_payload[2])
     return assemble_pattern_output(
         paths=fragment_ctx.paths,
         root=fragment_ctx.root,
@@ -272,6 +249,51 @@ def execute_ast_grep_rules(
         records_by_rel=records_by_rel,
         raw_by_rel=raw_by_rel,
     )
+
+
+def _scan_pattern_fragment_misses(
+    *,
+    rules: tuple[AstGrepRule, ...],
+    query: Query | None,
+    fragment_ctx: PatternFragmentContext,
+    misses: list[FragmentMissV1],
+) -> tuple[
+    tuple[
+        dict[str, list[Finding]],
+        dict[str, list[SgRecord]],
+        dict[str, list[MatchData]],
+    ],
+    list[FragmentWriteV1],
+]:
+    miss_data = compute_pattern_miss_data(
+        rules=rules,
+        query=query,
+        fragment_ctx=fragment_ctx,
+        misses=tuple(misses),
+    )
+    writes: list[FragmentWriteV1] = []
+    normalized_findings: dict[str, list[Finding]] = {}
+    normalized_records: dict[str, list[SgRecord]] = {}
+    normalized_raw: dict[str, list[MatchData]] = {}
+    for miss in misses:
+        rel_path = miss.entry.file
+        findings = sorted(miss_data[0].get(rel_path, []), key=finding_sort_key)
+        records = sorted(miss_data[1].get(rel_path, []), key=record_sort_key)
+        raw_matches = sorted(miss_data[2].get(rel_path, []), key=raw_match_sort_key)
+        normalized_findings[rel_path] = findings
+        normalized_records[rel_path] = records
+        normalized_raw[rel_path] = raw_matches
+        writes.append(
+            FragmentWriteV1(
+                entry=miss.entry,
+                payload=PatternFragmentCacheV1(
+                    findings=cast("list[dict[str, object]]", contract_to_builtins(findings)),
+                    records=[record_to_cache_record(item) for item in records],
+                    raw_matches=cast("list[dict[str, object]]", contract_to_builtins(raw_matches)),
+                ),
+            )
+        )
+    return (normalized_findings, normalized_records, normalized_raw), writes
 
 
 def build_pattern_fragment_context(
@@ -381,21 +403,22 @@ def decode_pattern_fragment_payload(payload: object) -> object | None:
         return None
     findings = [msgspec.convert(item, type=Finding) for item in decoded.findings]
     records = [cache_record_to_record(item) for item in decoded.records]
-    return (findings, records, list(decoded.raw_matches))
+    raw_matches = [msgspec.convert(item, type=MatchData) for item in decoded.raw_matches]
+    return (findings, records, raw_matches)
 
 
 def pattern_data_from_hits(
     hits: tuple[FragmentHitV1, ...],
-) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
+) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[MatchData]]]:
     """Extract pattern data from cache hits.
 
     Returns:
-        tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
+        tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[MatchData]]]:
             File-bucketed findings, records, and raw-match payloads.
     """
     findings_by_rel: dict[str, list[Finding]] = {}
     records_by_rel: dict[str, list[SgRecord]] = {}
-    raw_by_rel: dict[str, list[dict[str, object]]] = {}
+    raw_by_rel: dict[str, list[MatchData]] = {}
     for hit in hits:
         payload = hit.payload
         if not (
@@ -408,7 +431,7 @@ def pattern_data_from_hits(
             continue
         findings_by_rel[hit.entry.file] = cast("list[Finding]", payload[0])
         records_by_rel[hit.entry.file] = cast("list[SgRecord]", payload[1])
-        raw_by_rel[hit.entry.file] = cast("list[dict[str, object]]", payload[2])
+        raw_by_rel[hit.entry.file] = cast("list[MatchData]", payload[2])
     return findings_by_rel, records_by_rel, raw_by_rel
 
 
@@ -418,11 +441,11 @@ def compute_pattern_miss_data(
     query: Query | None,
     fragment_ctx: PatternFragmentContext,
     misses: tuple[FragmentMissV1, ...],
-) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
+) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[MatchData]]]:
     """Compute pattern data for cache misses.
 
     Returns:
-        tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
+        tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[MatchData]]]:
             File-bucketed findings, records, and raw-match payloads for missed entries.
     """
     miss_paths = [fragment_ctx.root / miss.entry.file for miss in misses]
@@ -442,11 +465,9 @@ def compute_pattern_miss_data(
     for finding in state.findings:
         rel_path = finding.anchor.file if finding.anchor is not None else ""
         miss_findings.setdefault(rel_path, []).append(finding)
-    miss_raw: dict[str, list[dict[str, object]]] = {}
+    miss_raw: dict[str, list[MatchData]] = {}
     for row in state.raw_matches:
-        rel_path = row.get("file")
-        if isinstance(rel_path, str):
-            miss_raw.setdefault(rel_path, []).append(row)
+        miss_raw.setdefault(row.file, []).append(row)
     return miss_findings, miss_records, miss_raw
 
 
@@ -456,17 +477,17 @@ def assemble_pattern_output(
     root: Path,
     findings_by_rel: dict[str, list[Finding]],
     records_by_rel: dict[str, list[SgRecord]],
-    raw_by_rel: dict[str, list[dict[str, object]]],
-) -> tuple[list[Finding], list[SgRecord], list[dict[str, object]]]:
+    raw_by_rel: dict[str, list[MatchData]],
+) -> tuple[list[Finding], list[SgRecord], list[MatchData]]:
     """Assemble pattern output from file-bucketed data.
 
     Returns:
-        tuple[list[Finding], list[SgRecord], list[dict[str, object]]]:
+        tuple[list[Finding], list[SgRecord], list[MatchData]]:
             Deterministically ordered findings, records, and raw matches.
     """
     findings: list[Finding] = []
     records: list[SgRecord] = []
-    raw_matches: list[dict[str, object]] = []
+    raw_matches: list[MatchData] = []
     for file_path in paths:
         rel_path = normalize_repo_relative_path(str(file_path), root=root)
         findings.extend(findings_by_rel.get(rel_path, []))
@@ -721,28 +742,29 @@ def build_match_data(
     rel_path: str,
     metavar_names: tuple[str, ...],
     variadic_names: frozenset[str],
-) -> dict[str, object]:
+) -> MatchData:
     """Build match data dictionary from ast-grep match.
 
     Returns:
-        dict[str, object]: Serializable match payload used by downstream conversion.
+        MatchData: Serializable match payload used by downstream conversion.
     """
     range_obj = match.range()
-    return {
-        "ruleId": rule_id,
-        "file": rel_path,
-        "text": match.text(),
-        "range": {
-            "start": {"line": range_obj.start.line, "column": range_obj.start.column},
-            "end": {"line": range_obj.end.line, "column": range_obj.end.column},
-        },
-        "metaVariables": extract_match_metavars(
+    return MatchData(
+        file=rel_path,
+        pattern=rule_id,
+        text=match.text(),
+        range=MatchRange(
+            start=MatchRangePoint(line=range_obj.start.line, column=range_obj.start.column),
+            end=MatchRangePoint(line=range_obj.end.line, column=range_obj.end.column),
+        ),
+        message="Pattern match",
+        metavars=extract_match_metavars(
             match,
             metavar_names=metavar_names,
             variadic_names=variadic_names,
             include_multi=True,
         ),
-    }
+    )
 
 
 def match_passes_filters(
@@ -917,7 +939,7 @@ def coerce_int(value: object) -> int:
     return 0
 
 
-def match_to_finding(data: dict[str, object]) -> tuple[Finding | None, SgRecord | None]:
+def match_to_finding(data: MatchData) -> tuple[Finding | None, SgRecord | None]:
     """Convert ast-grep match to Finding and SgRecord.
 
     Returns:
@@ -925,34 +947,27 @@ def match_to_finding(data: dict[str, object]) -> tuple[Finding | None, SgRecord 
     tuple[Finding | None, SgRecord | None]
         Finding and record for the match when available.
     """
-    if "range" not in data or "file" not in data:
-        return None, None
-
-    range_data = data["range"]
-    if not isinstance(range_data, dict):
-        return None, None
-    start = cast("dict[str, object]", range_data.get("start", {}))
-    end = cast("dict[str, object]", range_data.get("end", {}))
-    file_value = data.get("file", "")
-    file_name = str(file_value) if file_value is not None else ""
+    file_name = data.file
+    start = data.range.start
+    end = data.range.end
 
     anchor = Anchor(
         file=file_name,
-        line=coerce_int(start.get("line", 0)) + 1,  # Convert to 1-indexed
-        col=coerce_int(start.get("column", 0)),
-        end_line=coerce_int(end.get("line", 0)) + 1,
-        end_col=coerce_int(end.get("column", 0)),
+        line=coerce_int(start.line) + 1,  # Convert to 1-indexed
+        col=coerce_int(start.column),
+        end_line=coerce_int(end.line) + 1,
+        end_col=coerce_int(end.column),
     )
 
     finding = Finding(
         category="pattern_match",
-        message=str(data.get("message", "Pattern match")),
+        message=data.message or "Pattern match",
         anchor=anchor,
         severity="info",
         details=build_detail_payload(
             data={
-                "text": data.get("text", ""),
-                "rule_id": data.get("ruleId", "pattern_query"),
+                "text": data.text,
+                "rule_id": data.pattern,
             }
         ),
     )
@@ -961,12 +976,12 @@ def match_to_finding(data: dict[str, object]) -> tuple[Finding | None, SgRecord 
         record="def",  # Default, may not be accurate for all patterns
         kind="pattern_match",
         file=file_name,
-        start_line=coerce_int(start.get("line", 0)) + 1,
-        start_col=coerce_int(start.get("column", 0)),
-        end_line=coerce_int(end.get("line", 0)) + 1,
-        end_col=coerce_int(end.get("column", 0)),
-        text=str(data.get("text", "")),
-        rule_id=str(data.get("ruleId", "pattern_query")),
+        start_line=coerce_int(start.line) + 1,
+        start_col=coerce_int(start.column),
+        end_line=coerce_int(end.line) + 1,
+        end_col=coerce_int(end.column),
+        text=data.text,
+        rule_id=data.pattern,
     )
 
     return finding, record
@@ -1034,19 +1049,9 @@ def collect_ast_grep_match_spans(
     return matches
 
 
-def raw_match_sort_key(match: dict[str, object]) -> tuple[str, int, int]:
+def raw_match_sort_key(match: MatchData) -> tuple[str, int, int]:
     """Return sort key for raw match data."""
-    file = match.get("file", "")
-    file_str = str(file) if file is not None else ""
-    range_data = match.get("range")
-    if not isinstance(range_data, dict):
-        return (file_str, 0, 0)
-    start = range_data.get("start")
-    if not isinstance(start, dict):
-        return (file_str, 0, 0)
-    line = coerce_int(start.get("line", 0))
-    col = coerce_int(start.get("column", 0))
-    return (file_str, line, col)
+    return (match.file, match.range.start.line, match.range.start.column)
 
 
 def collect_match_spans(

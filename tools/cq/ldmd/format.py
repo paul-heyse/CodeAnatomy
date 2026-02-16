@@ -6,7 +6,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from tools.cq.cli_app.types import LdmdSliceMode
+from tools.cq.core.types import LdmdSliceMode
 
 
 class LdmdParseError(Exception):

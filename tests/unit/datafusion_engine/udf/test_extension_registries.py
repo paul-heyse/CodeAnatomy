@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from datafusion import SessionContext
 
-from datafusion_engine.udf import extension_runtime
-from datafusion_engine.udf.extension_runtime import ExtensionRegistries
+from datafusion_engine.udf import extension_core
+from datafusion_engine.udf.extension_core import ExtensionRegistries
 
 
 def test_extension_registries_isolate_context_tracking() -> None:
@@ -23,7 +23,7 @@ def test_rust_runtime_install_payload_reads_injected_registry() -> None:
     registries = ExtensionRegistries()
     registries.runtime_payloads[ctx] = {"contract_version": 3, "runtime_install_mode": "modular"}
 
-    payload = extension_runtime.rust_runtime_install_payload(ctx, registries=registries)
+    payload = extension_core.rust_runtime_install_payload(ctx, registries=registries)
 
     assert payload["contract_version"] == 3
     assert payload["runtime_install_mode"] == "modular"
@@ -39,11 +39,11 @@ def test_rust_udf_docs_cache_is_scoped_by_registry(monkeypatch) -> None:
         calls.append(1)
         return {"revision": len(calls)}
 
-    monkeypatch.setattr(extension_runtime, "_build_docs_snapshot", _fake_docs_snapshot)
+    monkeypatch.setattr(extension_core, "_build_docs_snapshot", _fake_docs_snapshot)
 
-    docs_first = extension_runtime.rust_udf_docs(ctx, registries=first)
-    docs_first_cached = extension_runtime.rust_udf_docs(ctx, registries=first)
-    docs_second = extension_runtime.rust_udf_docs(ctx, registries=second)
+    docs_first = extension_core.rust_udf_docs(ctx, registries=first)
+    docs_first_cached = extension_core.rust_udf_docs(ctx, registries=first)
+    docs_second = extension_core.rust_udf_docs(ctx, registries=second)
 
     assert docs_first["revision"] == 1
     assert docs_first_cached["revision"] == 1

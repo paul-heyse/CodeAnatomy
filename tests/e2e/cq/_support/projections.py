@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from tools.cq.core.front_door_render import coerce_front_door_insight
 from tools.cq.core.schema import CqResult
+from tools.cq.core.summary_contract import CqSummary, SemanticTelemetryV1
 
 _DURATION_PATTERN = re.compile(r"(\*\*(?:Created|Elapsed):\*\*)\s+[0-9]+(?:\.[0-9]+)?ms")
 _BUNDLE_ID_PATTERN = re.compile(r"(\*\*Bundle ID:\*\*)\s+\S+")
@@ -29,8 +31,51 @@ def _normalize_path(path: str) -> str:
     return path.removeprefix("./")
 
 
-def _project_front_door_insight(summary: dict[str, object]) -> dict[str, Any] | None:
-    insight = coerce_front_door_insight(summary.get("front_door_insight"))
+def _summary_mapping(summary: CqSummary | Mapping[str, object]) -> Mapping[str, object]:
+    if isinstance(summary, CqSummary):
+        return summary.to_dict()
+    return summary
+
+
+def _project_semantic_telemetry(value: object) -> dict[str, int] | None:
+    if isinstance(value, SemanticTelemetryV1):
+        return {
+            "attempted": value.attempted,
+            "applied": value.applied,
+            "failed": value.failed,
+            "skipped": value.skipped,
+            "timed_out": value.timed_out,
+        }
+    if isinstance(value, Mapping):
+        return {
+            "attempted": int(value.get("attempted", 0) or 0),
+            "applied": int(value.get("applied", 0) or 0),
+            "failed": int(value.get("failed", 0) or 0),
+            "skipped": int(value.get("skipped", 0) or 0),
+            "timed_out": int(value.get("timed_out", 0) or 0),
+        }
+    return None
+
+
+def _int_or_fallback(value: object, fallback: int) -> int:
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, int):
+        return value
+    return fallback
+
+
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _project_front_door_insight(summary: CqSummary | Mapping[str, object]) -> dict[str, Any] | None:
+    summary_map = _summary_mapping(summary)
+    insight = coerce_front_door_insight(summary_map.get("front_door_insight"))
     if insight is None:
         return None
     return {
@@ -86,8 +131,8 @@ def _project_front_door_insight(summary: dict[str, object]) -> dict[str, Any] | 
     }
 
 
-def _project_step_summaries(summary: dict[str, object]) -> dict[str, Any]:
-    step_summaries = summary.get("step_summaries")
+def _project_step_summaries(summary: CqSummary | Mapping[str, object]) -> dict[str, Any]:
+    step_summaries = _summary_mapping(summary).get("step_summaries")
     if not isinstance(step_summaries, dict):
         return {}
     projected: dict[str, Any] = {}
@@ -103,8 +148,12 @@ def _project_step_summaries(summary: dict[str, object]) -> dict[str, Any]:
         projected[step_id] = {
             "mode": step_summary.get("mode"),
             "query": step_summary.get("query"),
-            "python_semantic_telemetry": step_summary.get("python_semantic_telemetry"),
-            "rust_semantic_telemetry": step_summary.get("rust_semantic_telemetry"),
+            "python_semantic_telemetry": _project_semantic_telemetry(
+                step_summary.get("python_semantic_telemetry")
+            ),
+            "rust_semantic_telemetry": _project_semantic_telemetry(
+                step_summary.get("rust_semantic_telemetry")
+            ),
             "front_door_degradation_semantic": degradation,
         }
     return projected
@@ -117,28 +166,50 @@ def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
     enrichment telemetry while preserving top-level behavioral contracts.
     """
     summary = result.summary
+    summary_map = _summary_mapping(summary)
     projected_step_summaries = _project_step_summaries(summary)
+    include_neighborhood_totals = result.run.macro == "neighborhood"
     projected_summary = {
-        "mode": summary.get("mode"),
-        "query": summary.get("query"),
-        "lang_scope": summary.get("lang_scope"),
-        "language_order": summary.get("language_order"),
-        "steps": summary.get("steps"),
-        "plan_version": summary.get("plan_version"),
-        "target": summary.get("target"),
-        "target_name": summary.get("target_name"),
-        "target_file": summary.get("target_file"),
-        "target_resolution_kind": summary.get("target_resolution_kind"),
-        "top_k": summary.get("top_k"),
-        "enable_semantic_enrichment": summary.get("enable_semantic_enrichment"),
-        "total_slices": summary.get("total_slices"),
-        "total_nodes": summary.get("total_nodes"),
-        "total_edges": summary.get("total_edges"),
-        "total_diagnostics": summary.get("total_diagnostics"),
-        "python_semantic_telemetry": summary.get("python_semantic_telemetry"),
-        "rust_semantic_telemetry": summary.get("rust_semantic_telemetry"),
-        "semantic_planes_present": isinstance(summary.get("semantic_planes"), dict)
-        and bool(summary.get("semantic_planes")),
+        "mode": summary_map.get("mode"),
+        "query": summary_map.get("query"),
+        "lang_scope": summary_map.get("lang_scope"),
+        "language_order": summary_map.get("language_order"),
+        "steps": summary_map.get("steps"),
+        "plan_version": summary_map.get("plan_version"),
+        "target": summary_map.get("target"),
+        "target_name": summary_map.get("target_name"),
+        "target_file": summary_map.get("target_file"),
+        "target_resolution_kind": summary_map.get("target_resolution_kind"),
+        "top_k": summary_map.get("top_k"),
+        "enable_semantic_enrichment": summary_map.get("enable_semantic_enrichment"),
+        "total_slices": (
+            _int_or_fallback(summary_map.get("total_slices"), summary.total_slices)
+            if include_neighborhood_totals
+            else _int_or_none(summary_map.get("total_slices"))
+        ),
+        "total_nodes": (
+            _int_or_fallback(summary_map.get("total_nodes"), summary.total_nodes)
+            if include_neighborhood_totals
+            else _int_or_none(summary_map.get("total_nodes"))
+        ),
+        "total_edges": (
+            _int_or_fallback(summary_map.get("total_edges"), summary.total_edges)
+            if include_neighborhood_totals
+            else _int_or_none(summary_map.get("total_edges"))
+        ),
+        "total_diagnostics": (
+            _int_or_fallback(summary_map.get("total_diagnostics"), summary.total_diagnostics)
+            if include_neighborhood_totals
+            else _int_or_none(summary_map.get("total_diagnostics"))
+        ),
+        "python_semantic_telemetry": _project_semantic_telemetry(
+            summary_map.get("python_semantic_telemetry")
+        ),
+        "rust_semantic_telemetry": _project_semantic_telemetry(
+            summary_map.get("rust_semantic_telemetry")
+        ),
+        "semantic_planes_present": isinstance(summary_map.get("semantic_planes"), dict)
+        and bool(summary_map.get("semantic_planes")),
         "front_door_insight": _project_front_door_insight(summary),
     }
     if projected_step_summaries:

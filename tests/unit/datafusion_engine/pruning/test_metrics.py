@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import msgspec
+import pytest
 
 from datafusion_engine.pruning.metrics import PruningMetrics
 from tests.test_helpers.immutability import assert_immutable_assignment
@@ -31,7 +32,7 @@ class TestPruningMetricsCreation:
         assert m.pages_pruned == 0
         assert m.filters_pushed == 0
         assert m.statistics_available is False
-        assert m.pruning_effectiveness == 0.0
+        assert m.pruning_effectiveness == pytest.approx(0.0)
 
     @staticmethod
     def test_full_construction() -> None:

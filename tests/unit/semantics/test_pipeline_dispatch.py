@@ -1,0 +1,14 @@
+# ruff: noqa: D103
+"""Tests for semantic pipeline dispatch split module."""
+
+from __future__ import annotations
+
+import inspect
+
+from semantics import pipeline_dispatch
+
+
+def test_pipeline_dispatch_owns_dispatch_helpers() -> None:
+    source = inspect.getsource(pipeline_dispatch)
+    assert "def _dispatch_from_registry" in source
+    assert "pipeline_build as _core" not in source

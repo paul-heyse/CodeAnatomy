@@ -10,8 +10,8 @@ from datafusion import col, lit
 from datafusion import functions as f
 
 from obs.metrics import quality_issue_rows
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_SEMANTICS, stage_span
+from semantics.diagnostics.builder_base import DiagnosticBatchBuilder
 from semantics.diagnostics.coverage import MIN_EXTRACTION_COUNT
 from semantics.diagnostics.quality_metrics import build_relationship_quality_metrics
 
@@ -142,7 +142,9 @@ def _issue_rows_from_df(
 ) -> list[dict[str, object]]:
     limited = df.limit(max_rows)
     table = limited.to_arrow_table()
-    return cast("list[dict[str, object]]", table.to_pylist())
+    builder = DiagnosticBatchBuilder()
+    builder.add_many(cast("list[dict[str, object]]", table.to_pylist()))
+    return builder.rows()
 
 
 def build_quality_summary(

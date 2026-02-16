@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from semantics.naming import canonical_output_name
 from semantics.quality import QualityRelationshipSpec
-from semantics.spec_registry import RELATIONSHIP_SPECS
+from semantics.registry import RELATIONSHIP_SPECS
 
 
 class TestSemanticRelationshipSpecs:

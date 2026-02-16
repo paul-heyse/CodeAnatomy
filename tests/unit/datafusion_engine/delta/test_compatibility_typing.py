@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
-from datafusion_engine.delta.control_plane import _compatibility_message
+from datafusion_engine.delta.control_plane_core import _compatibility_message
 from datafusion_engine.delta.provider_artifacts import (
     DeltaProviderBuildRequest,
     build_delta_provider_build_result,

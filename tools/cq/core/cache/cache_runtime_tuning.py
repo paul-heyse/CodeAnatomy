@@ -6,6 +6,13 @@ import os
 from contextlib import suppress
 
 from tools.cq.core.cache.base_contracts import CacheRuntimeTuningV1
+from tools.cq.core.cache.defaults import (
+    DEFAULT_CACHE_CULL_LIMIT,
+    DEFAULT_CACHE_EVICTION_POLICY,
+    DEFAULT_CACHE_SQLITE_CACHE_SIZE,
+    DEFAULT_CACHE_SQLITE_MMAP_SIZE,
+    DEFAULT_CACHE_TRANSACTION_BATCH_SIZE,
+)
 from tools.cq.core.cache.policy import CqCachePolicyV1
 
 
@@ -15,15 +22,24 @@ def resolve_cache_runtime_tuning(policy: CqCachePolicyV1) -> CacheRuntimeTuningV
     Returns:
         CacheRuntimeTuningV1: Effective runtime tuning configuration.
     """
-    mmap_size = int(os.getenv("CQ_CACHE_SQLITE_MMAP_SIZE", str(policy.sqlite_mmap_size)) or 0)
-    cache_size = int(os.getenv("CQ_CACHE_SQLITE_CACHE_SIZE", str(policy.sqlite_cache_size)) or 0)
-    cull_limit = int(os.getenv("CQ_CACHE_CULL_LIMIT", str(policy.cull_limit)) or policy.cull_limit)
+    mmap_size = int(
+        os.getenv("CQ_CACHE_SQLITE_MMAP_SIZE", str(policy.sqlite_mmap_size))
+        or DEFAULT_CACHE_SQLITE_MMAP_SIZE
+    )
+    cache_size = int(
+        os.getenv("CQ_CACHE_SQLITE_CACHE_SIZE", str(policy.sqlite_cache_size))
+        or DEFAULT_CACHE_SQLITE_CACHE_SIZE
+    )
+    cull_limit = int(
+        os.getenv("CQ_CACHE_CULL_LIMIT", str(policy.cull_limit)) or DEFAULT_CACHE_CULL_LIMIT
+    )
     batch_size = int(
         os.getenv("CQ_CACHE_TRANSACTION_BATCH_SIZE", str(policy.transaction_batch_size))
-        or policy.transaction_batch_size
+        or DEFAULT_CACHE_TRANSACTION_BATCH_SIZE
     )
     eviction_policy = (
-        os.getenv("CQ_CACHE_EVICTION_POLICY", policy.eviction_policy) or policy.eviction_policy
+        os.getenv("CQ_CACHE_EVICTION_POLICY", policy.eviction_policy)
+        or DEFAULT_CACHE_EVICTION_POLICY
     ).strip()
     stats_enabled_raw = os.getenv("CQ_CACHE_STATISTICS_ENABLED")
     stats_enabled = policy.statistics_enabled

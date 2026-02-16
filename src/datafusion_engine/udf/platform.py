@@ -44,7 +44,7 @@ from datafusion_engine.expr.planner import (
     install_expr_planners,
 )
 from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
-from datafusion_engine.udf.extension_runtime import (
+from datafusion_engine.udf.extension_core import (
     ExtensionRegistries,
     register_rust_udfs,
     rust_runtime_install_payload,
@@ -388,7 +388,7 @@ def install_rust_udf_platform(
         if isinstance(request.options, dict)
         else RustUdfPlatformOptions()
     )
-    from datafusion_engine.udf.extension_runtime import validate_extension_capabilities
+    from datafusion_engine.udf.extension_core import validate_extension_capabilities
 
     _ = validate_extension_capabilities(strict=resolved.strict, ctx=ctx)
     resolved_registries = registries or RustUdfPlatformRegistries()

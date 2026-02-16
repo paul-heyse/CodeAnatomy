@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
     from datafusion import SessionContext
 
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.session.runtime_session import SessionRuntime
 
 
 def build_plan_manifest_for_sql(

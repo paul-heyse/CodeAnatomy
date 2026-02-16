@@ -10,9 +10,9 @@ from datafusion_engine.plan.perf_policy import (
     StatisticsPolicy,
 )
 from datafusion_engine.session.contracts import IdentifierNormalizationMode
-from datafusion_engine.session.runtime import (
-    DataFusionJoinPolicy,
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_config_policies import DataFusionJoinPolicy
+from datafusion_engine.session.runtime_profile_config import (
     DiagnosticsConfig,
     ExecutionConfig,
     FeatureGatesConfig,

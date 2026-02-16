@@ -63,7 +63,7 @@ from serde_msgspec import to_builtins
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scheduling import ScanUnit
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.session.runtime_session import SessionRuntime
     from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
 
@@ -959,7 +959,10 @@ def _record_extract_view_artifact(
     """Record a deterministic view artifact for extract outputs."""
     profile = runtime_profile
     from datafusion_engine.lineage.reporting import extract_lineage
-    from datafusion_engine.session.runtime import record_view_definition, session_runtime_hash
+    from datafusion_engine.session.runtime_session import (
+        record_view_definition,
+        session_runtime_hash,
+    )
     from datafusion_engine.views.artifacts import (
         ViewArtifactLineage,
         ViewArtifactRequest,

@@ -1,496 +1,355 @@
-# Design Review: tools/cq/search/ (Pipeline & Infrastructure)
+# Design Review: CQ Search Pipeline and Supporting Infrastructure
 
 **Date:** 2026-02-16
-**Scope:** `tools/cq/search/{pipeline,_shared,rg,enrichment,semantic,objects}`
-**Focus:** All principles (1-24)
-**Depth:** deep
-**Files reviewed:** 49
+**Scope:** `tools/cq/search/pipeline/` + `tools/cq/search/_shared/` + `tools/cq/search/rg/` + `tools/cq/search/objects/` + `tools/cq/search/semantic/` + `tools/cq/search/cache/` + `tools/cq/search/generated/`
+**Focus:** Boundaries (1-6), Knowledge (7-11), Correctness (16-18)
+**Depth:** moderate
+**Files reviewed:** 20 of 49 total
 
 ## Executive Summary
 
-The search pipeline demonstrates strong ports-and-adapters design in the enrichment subsystem and clean contract usage via msgspec Structs. However, the pipeline layer is dominated by `smart_search.py` (~2046 LOC, 24 exports) which concentrates candidate collection, classification, enrichment, summary building, and section rendering into a single module. This god-module pattern cascades into SRP violations, testability gaps, and three thin wrapper modules that exist only because the extraction was incomplete. Six module-level mutable caches in `classifier_runtime.py` with manual clear lifecycle create hidden coupling across the pipeline. The highest-priority improvements are decomposing `smart_search.py`, replacing mutable global caches with an injected cache context, and eliminating `Any` types from `partition_pipeline.py`.
+The CQ search pipeline demonstrates strong contract typing (msgspec structs, frozen dataclasses) and a well-reasoned phased architecture (candidate, classify, enrich, assemble). However, the central `smart_search.py` (1,981 LOC) concentrates too many responsibilities -- candidate collection, classification orchestration, relevance scoring, section rendering, summary construction, and followup generation all live in a single module. This creates a systemic SRP violation that the recent extraction of `candidate_phase.py`, `classify_phase.py`, `enrichment_phase.py`, `smart_search_sections.py`, `smart_search_summary.py`, and `smart_search_followups.py` has begun to address, but the original implementations remain duplicated in `smart_search.py`. The `classifier_runtime.py` module uses a process-level singleton cache (`_DEFAULT_CACHE_CONTEXT`) that is well-encapsulated in a `ClassifierCacheContext` class but reaches callers via module-level fallback resolution, creating implicit coupling. Enrichment payloads use `dict[str, object]` throughout, forgoing the type safety that msgspec provides elsewhere in the pipeline.
 
 ## Alignment Scorecard
 
 | # | Principle | Alignment | Effort | Risk | Key Finding |
 |---|-----------|-----------|--------|------|-------------|
-| 1 | Information hiding | 1 | medium | medium | 6 module-level mutable caches exposed for manual clearing |
-| 2 | Separation of concerns | 1 | large | high | `smart_search.py` mixes 5+ concerns in 2046 lines |
-| 3 | SRP | 1 | large | high | `smart_search.py` changes for candidate, classify, enrich, summary, section reasons |
-| 4 | High cohesion, low coupling | 1 | medium | medium | `_shared/core.py` is a grab-bag; thin wrappers import back into god module |
-| 5 | Dependency direction | 2 | small | low | Core contracts are clean; some reverse imports in wrappers |
-| 6 | Ports & Adapters | 3 | - | - | `LanguageEnrichmentPort` protocol + adapter registry is well done |
-| 7 | DRY | 1 | medium | medium | Rust telemetry accumulation duplicated across 3 modules |
-| 8 | Design by contract | 1 | medium | medium | `Any` types in `partition_pipeline.py`; `*args/**kwargs` in `build_summary` |
-| 9 | Parse, don't validate | 2 | small | low | Boundary coercion present but `_coerce_summary_inputs` uses runtime casts |
-| 10 | Illegal states | 2 | small | low | Frozen msgspec Structs enforce invariants; some dict-typed payloads remain |
-| 11 | CQS | 2 | small | low | `append_source` and `set_degraded` are clean mutators; minor mixed returns in caches |
-| 12 | DI + explicit composition | 1 | medium | medium | Module-level caches are hidden creation; no injection path |
-| 13 | Composition over inheritance | 3 | - | - | Adapter pattern used throughout; no deep hierarchies |
-| 14 | Law of Demeter | 2 | small | low | Some deep dict drilling in telemetry; mostly clean |
-| 15 | Tell, don't ask | 2 | small | low | `_resolution_key_payload` in resolve.py does quality-gated identity extraction |
-| 16 | Functional core, imperative shell | 2 | medium | low | Pure transforms exist but interleaved with cache I/O in partition_pipeline |
-| 17 | Idempotency | 3 | - | - | Search is read-only; cache writes are idempotent by key |
-| 18 | Determinism | 3 | - | - | `build_rg_command` is deterministic; `_JSON_ENCODER` uses deterministic ordering |
-| 19 | KISS | 2 | small | low | `_coerce_summary_inputs` adds complexity for backward compat |
-| 20 | YAGNI | 2 | small | low | `_SUMMARY_ARGS_COUNT` legacy path may be removable |
-| 21 | Least astonishment | 1 | medium | medium | `build_summary(*args, **kwargs)` signature hides expected types |
-| 22 | Declare public contracts | 2 | small | low | `__all__` lists present; some internal types leak via re-exports |
-| 23 | Design for testability | 1 | medium | high | Module-level caches require `clear_caches()` calls; no DI seam |
-| 24 | Observability | 2 | small | low | Telemetry well-structured but duplicated across modules |
+| 1 | Information hiding | 2 | small | low | `smart_search.py` exports 18 symbols including internal helpers; cache context uses module-level singleton |
+| 2 | Separation of concerns | 1 | large | high | `smart_search.py` mixes candidate collection, classification, scoring, rendering, and summary in one module |
+| 3 | SRP | 1 | large | high | `smart_search.py` has at least 6 reasons to change; extracted phase modules duplicate rather than replace |
+| 4 | High cohesion, low coupling | 1 | medium | medium | Phase modules import heavily from `smart_search.py` and each other in circular patterns |
+| 5 | Dependency direction | 2 | medium | medium | Pipeline phases depend on shared types correctly; `assembly.py` imports from `smart_search.py` for `classify_match` |
+| 6 | Ports & Adapters | 2 | medium | low | `rg/runner.py` is a clean adapter; `semantic/front_door.py` is a clean port; enrichment providers lack port abstraction |
+| 7 | DRY | 0 | medium | high | `collect_candidates`, `_build_search_stats`, `_identifier_pattern`, `_symtable_flags`, `_merge_enrichment_payloads` are duplicated verbatim between `smart_search.py` and extracted phase modules |
+| 8 | Design by contract | 2 | small | low | Strong use of frozen msgspec structs and typed dataclasses; `SearchLimits` uses constrained types |
+| 9 | Parse, don't validate | 1 | medium | medium | Enrichment payloads remain `dict[str, object]` throughout; `_coerce_search_request` manually validates kwargs |
+| 10 | Make illegal states unrepresentable | 2 | small | low | `MatchCategory` is a Literal union; `QueryMode` is an Enum; `SearchResultAssembly.partition_results` typed as `list[object]` |
+| 11 | CQS | 2 | small | low | `_build_search_context` calls `clear_caches()` as side effect before returning config; minor violation |
+| 16 | Functional core, imperative shell | 2 | medium | low | Classification and scoring logic is pure; cache/IO in `partition_pipeline.py` is well-separated |
+| 17 | Idempotency | 3 | - | - | Search operations are read-only; cache writes use content-hash keys; re-running produces same results |
+| 18 | Determinism | 2 | small | low | `build_rg_command` is deterministic; match ordering depends on `rg` output order; final sort by relevance is deterministic |
 
 ## Detailed Findings
 
-### Category: Boundaries
+### Category: Boundaries (Principles 1-6)
 
-#### P1. Information hiding -- Alignment: 1/3
+#### P1. Information Hiding -- Alignment: 2/3
 
 **Current state:**
-Six module-level mutable dict caches in `classifier_runtime.py:65-70` (`_sg_cache`, `_source_cache`, `_def_lines_cache`, `_symtable_cache`, `_record_context_cache`, `_node_index_cache`) are directly accessed by functions in the same module but require external callers to invoke `clear_classifier_caches()` (`classifier_runtime.py:428`) to manage their lifecycle. The `classifier.py:620` `clear_caches()` function further chains this with `clear_python_enrichment_cache()` and `clear_tree_sitter_rust_cache()`, coupling cache lifecycle knowledge across three modules.
+The pipeline's internal cache machinery is well-encapsulated inside `ClassifierCacheContext` (`classifier_runtime.py:64-93`). However, the module-level singleton `_DEFAULT_CACHE_CONTEXT` at line 95 is accessed via `_resolve_cache_context()` as implicit fallback in every cache-aware function (e.g., `get_sg_root` at line 424, `get_cached_source` at line 459). This means callers get correct behavior by default but cannot reason about which cache instance is active without reading the fallback logic.
 
 **Findings:**
-- `classifier_runtime.py:65-70`: Six bare module-level dicts hold mutable cache state with no size bounds or eviction policy.
-- `classifier.py:620-627`: `clear_caches()` reaches across module boundaries to clear caches in `python/extractors.py` and `tree_sitter/rust_lane/runtime.py`.
-- `_shared/core.py:29-43`: `_RUNTIME_ONLY_ATTR_NAMES` frozenset leaks internal attribute naming conventions to callers.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classifier_runtime.py:95`: `_DEFAULT_CACHE_CONTEXT = ClassifierCacheContext()` is a module-level mutable singleton.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classifier_runtime.py:103-106`: `_resolve_cache_context()` silently falls back to global singleton when `None` is passed.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1964-1981`: `__all__` exports 18 symbols including `assemble_smart_search_result` (assembly internals) and `pop_search_object_view_for_run` (cache side-effect).
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/runtime_context.py:23-33`: `build_search_runtime_context` creates a `SearchRuntimeContext` but its `classifier_cache` is never threaded to the actual classification functions -- they still use the global singleton.
 
 **Suggested improvement:**
-Introduce a `ClassificationCacheContext` dataclass that owns all six caches and is passed through classification functions via a parameter rather than module globals. This allows test isolation without `clear_caches()` calls and enables bounded eviction via `BoundedCache` (already available at `_shared/bounded_cache.py`).
+Thread the `ClassifierCacheContext` from `SearchRuntimeContext` through phase execution so that each search invocation operates on an explicit cache instance. Remove the `_resolve_cache_context` fallback pattern and make the `cache_context` parameter required in the four cache-aware functions (`get_sg_root`, `get_cached_source`, `get_symtable_table`, `get_def_lines_cached`).
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- test pollution between runs, unbounded memory growth in long-running sessions.
+**Risk if unaddressed:** low -- The global singleton works correctly for single-threaded use, but process-pool classification creates fresh instances per worker anyway.
 
 ---
 
-#### P2. Separation of concerns -- Alignment: 1/3
+#### P2. Separation of Concerns -- Alignment: 1/3
 
 **Current state:**
-`smart_search.py` (~2046 lines) contains candidate collection (`collect_candidates`, `run_candidate_phase`), match classification (`classify_match`, `_run_classification_phase`), enrichment orchestration (`_maybe_python_enrichment`, `_maybe_rust_tree_sitter_enrichment`, `_maybe_python_semantic_enrichment`), summary construction (`build_summary`, `_build_summary`, `_build_search_summary`), section rendering (`build_sections`, `build_finding`), follow-up generation (`build_followups`), scoring (`compute_relevance_score`), and the main entry point (`smart_search`). These are independent concerns that change for different reasons.
+`smart_search.py` is 1,981 LOC and contains code for at least six distinct concerns: (1) candidate collection (`collect_candidates`, `_run_candidate_phase`), (2) match classification (`classify_match`, `_resolve_match_classification`), (3) enrichment orchestration (`_maybe_python_enrichment`, `_maybe_rust_tree_sitter_enrichment`), (4) relevance scoring (`compute_relevance_score`, `KIND_WEIGHTS`), (5) section rendering (`build_sections`, `build_followups`), and (6) summary construction (`build_summary`, `_build_summary`).
+
+Recent extractions created dedicated modules (`candidate_phase.py`, `classify_phase.py`, `enrichment_phase.py`, `smart_search_sections.py`, `smart_search_summary.py`, `smart_search_followups.py`), but the original implementations remain in `smart_search.py` as the canonical versions that the extracted modules import from or duplicate.
 
 **Findings:**
-- `smart_search.py:1-2046`: Single module with 24 exports in `__all__` spanning 5+ distinct concerns.
-- `smart_search_followups.py:20-22`: `generate_followup_suggestions` is a 1-line wrapper that imports from `smart_search.build_followups` -- evidence of incomplete extraction.
-- `smart_search_sections.py`: Similar thin wrapper pattern, delegating back to `smart_search.build_sections`.
-- `smart_search_summary.py`: Delegates to `smart_search._build_search_summary` and `build_summary`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:358-410`: `collect_candidates` -- candidate collection logic.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:413-517`: `classify_match` -- 104-line classification orchestrator.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:910-943`: `compute_relevance_score` -- scoring logic.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1208-1310`: `_build_summary` -- 100-line summary constructor.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1313-1375`: `build_sections` -- section assembly.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1129-1205`: `build_followups` -- followup generation.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classify_phase.py:23`: `_classify_partition_batch` imports `classify_match` from `smart_search` via lazy import inside function body.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/partition_pipeline.py:493`: `_classify_enrichment_miss_batch` also imports `classify_match` from `smart_search` lazily.
 
 **Suggested improvement:**
-Complete the extraction that was started. Move candidate collection to a dedicated `candidate_phase.py`, classification to `classify_phase.py`, enrichment to `enrichment_phase.py`, and summary/section builders into their existing wrapper modules (removing the circular delegation). The `smart_search.py` entry point should become a thin orchestrator (~200 lines) that composes phases.
+Complete the extraction: make the dedicated phase modules (`candidate_phase.py`, `classify_phase.py`, `smart_search_sections.py`, `smart_search_summary.py`, `smart_search_followups.py`) the authoritative implementations and reduce `smart_search.py` to a thin orchestrator that imports from them. Move `classify_match` to a `classification.py` module to break the circular import pattern where phase modules lazily import from the orchestrator.
 
 **Effort:** large
-**Risk if unaddressed:** high -- any change to scoring, classification, or rendering risks breaking unrelated functionality.
+**Risk if unaddressed:** high -- Every new feature or bugfix to any pipeline phase requires understanding the full 1,981-line file; bugs from stale duplicate logic are likely.
 
 ---
 
-#### P3. SRP (one reason to change) -- Alignment: 1/3
+#### P3. SRP (One Reason to Change) -- Alignment: 1/3
 
 **Current state:**
-`smart_search.py` changes for at least five independent reasons: ripgrep candidate collection logic, AST/symtable classification rules, Python/Rust enrichment orchestration, summary/section output format, and relevance scoring weights. `_shared/core.py` similarly mixes byte-offset helpers, JSON encoder singletons, serializable contracts, runtime-only dataclass handles, request envelopes, and timeout utilities.
+`smart_search.py` would need to change for any of: (a) ripgrep candidate collection changes, (b) AST classification logic changes, (c) enrichment provider changes, (d) relevance scoring algorithm changes, (e) output rendering format changes, (f) summary payload schema changes.
 
 **Findings:**
-- `smart_search.py:2024-2045`: 24 symbols in `__all__` spanning candidate, classify, enrich, summary, section, and scoring concerns.
-- `_shared/core.py:1`: Module docstring explicitly names "helpers, contracts, runtime handles, requests, and timeout utilities" -- five responsibilities.
-- `semantic/models.py:1`: "Consolidated semantic contracts, state, helpers, and front-door adapter functions" -- four responsibilities.
+- Same evidence as P2 -- the six concerns represent six distinct change vectors.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:883-907`: `_classify_file_role` is a rendering concern embedded in the classification module.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1039-1105`: `_build_match_data`, `_populate_optional_fields`, `_merge_enrichment_payloads` are output serialization concerns.
 
 **Suggested improvement:**
-For `_shared/core.py`: split into `_shared/helpers.py` (byte offset, truncate, hash), `_shared/encoding.py` (JSON encoder/decoder -- already has a facade file that could become the owner), `_shared/requests.py` (RgRunRequest, enrichment request types), and `_shared/timeout.py` (already has a facade). For `semantic/models.py`: separate contracts (Structs) from helper functions (`call_with_retry`, `budget_for_mode`, `resolve_language_provider_root`).
+Same as P2: complete the extraction. Additionally, move `_classify_file_role` and relevance scoring to a dedicated `scoring.py` module, and move `_build_match_data`/`_merge_enrichment_payloads` to `smart_search_sections.py` (where duplicates already exist).
 
-**Effort:** large (smart_search.py), medium (_shared/core.py, semantic/models.py)
-**Risk if unaddressed:** high -- maintainers cannot reason about change impact when a single file owns unrelated concerns.
+**Effort:** large
+**Risk if unaddressed:** high -- Changes to any concern risk regressions in unrelated concerns.
 
 ---
 
-#### P4. High cohesion, low coupling -- Alignment: 1/3
+#### P4. High Cohesion, Low Coupling -- Alignment: 1/3
 
 **Current state:**
-The thin wrapper modules (`smart_search_followups.py`, `smart_search_sections.py`, `smart_search_summary.py`) create a circular dependency pattern: they import from `smart_search.py` to re-export functions that were nominally "extracted" but never actually moved. This makes `smart_search.py` the gravitational center with high fan-in from its own supposed decomposition.
+The extracted phase modules have high cohesion individually but are tightly coupled to `smart_search.py` through lazy imports. The circular dependency pattern (`classify_phase.py` -> `smart_search.py:classify_match` -> `classifier.py` -> `classifier_runtime.py`) creates a fragile import graph.
 
 **Findings:**
-- `smart_search_followups.py:20`: `from tools.cq.search.pipeline.smart_search import build_followups` -- the "extracted" module imports back from the monolith.
-- `partition_pipeline.py:46`: Imports `run_file_lanes_parallel` from `tree_sitter.core.infrastructure` -- cross-cutting coupling to tree-sitter internals.
-- `_shared/core.py` re-export facades (`encoding.py`, `timeout.py`, `rg_request.py`): These add indirection without cohesion benefit since the implementations remain in `core.py`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classify_phase.py:23`: Lazy import of `classify_match` from `smart_search` inside `_classify_partition_batch`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classify_phase.py:60`: Second lazy import of `classify_match` inside single-threaded fallback path.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classify_phase.py:80`: Third lazy import in timeout fallback path.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classify_phase.py:94`: Fourth lazy import in exception fallback path.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/partition_pipeline.py:493`: Fifth lazy import of `classify_match` in enrichment miss batch.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/assembly.py:19`: `assembly.py` imports `get_sg_root` from `classifier` and `classify_match` indirectly.
 
 **Suggested improvement:**
-Move the function implementations from `smart_search.py` into their respective wrapper modules, then have `smart_search.py` import from them (inverting the current direction). Promote `_shared/encoding.py`, `_shared/timeout.py`, and `_shared/rg_request.py` from re-export facades to owning modules by moving the relevant code out of `core.py`.
+Extract `classify_match` and its immediate helpers (`_resolve_match_classification`, `_classify_from_node`, `_maybe_symtable_enrichment`, `_build_context_enrichment`, `_maybe_python_enrichment`, `_maybe_rust_tree_sitter_enrichment`, `_maybe_python_semantic_enrichment`) into a dedicated `classification.py` module. This module would depend on `classifier.py` and `classifier_runtime.py` (downward), and the phase modules would import from it (no circular dependency).
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- the circular delegation pattern confuses contributors about where to make changes.
+**Risk if unaddressed:** medium -- Lazy imports mask circular dependencies that could break under import-order changes.
 
 ---
 
-#### P5. Dependency direction -- Alignment: 2/3
+#### P5. Dependency Direction -- Alignment: 2/3
 
 **Current state:**
-Core contracts (`contracts.py`, `smart_search_types.py`, `_shared/types.py`) are properly dependency-free. The `LanguageEnrichmentPort` protocol in `enrichment/contracts.py` defines the abstraction that adapters implement. However, `front_door.py:33-34` imports concrete extractors (`enrich_python_context_by_byte_range`, `enrich_rust_context_by_byte_range`) directly rather than going through the port abstraction.
+The dependency direction is mostly correct: types flow from `smart_search_types.py` and `contracts.py` (leaf modules) upward through classifier, enrichment, and orchestration layers. The `_shared/` package provides foundation types (`QueryMode`, `SearchLimits`) that higher layers depend on. The main violation is that `assembly.py` (assembly layer) reaches back into `classifier.py` for `get_sg_root` to check AST parsability.
 
 **Findings:**
-- `enrichment/contracts.py:42-61`: `LanguageEnrichmentPort` protocol is well-defined with three methods.
-- `semantic/front_door.py:33-35`: Imports concrete Python and Rust extractors directly, bypassing the adapter pattern.
-- `partition_pipeline.py:9`: Imports `Any` from typing -- the `_EnrichmentMissTask.items` field at line 78 uses `list[tuple[int, Any, str, str]]` instead of a typed tuple.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/assembly.py:19`: Assembly imports `get_sg_root` from classifier layer -- assembly should not depend on classification internals.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/assembly.py:252-280`: `_ast_grep_prefilter_scope_paths` uses `get_sg_root` to check parsability, which is a classification-layer concern leaking into assembly.
 
 **Suggested improvement:**
-Have `front_door.py` dispatch to language-specific providers via the `LanguageEnrichmentPort` registry rather than importing concrete extractors. This would make the semantic front door extensible to new languages without modification.
+Move the `_ast_grep_prefilter_scope_paths` helper into the candidate or enrichment phase where AST parsability is a natural concern, and pass pre-filtered scope paths into assembly.
 
 **Effort:** small
-**Risk if unaddressed:** low -- currently only Python and Rust are supported, so the concrete imports work.
+**Risk if unaddressed:** low -- The dependency direction violation is isolated.
 
 ---
 
-#### P6. Ports & Adapters -- Alignment: 3/3
+#### P6. Ports & Adapters -- Alignment: 2/3
 
 **Current state:**
-The enrichment subsystem is a clean ports-and-adapters implementation. `LanguageEnrichmentPort` (protocol at `enrichment/contracts.py:42`) defines three methods. `PythonEnrichmentAdapter` and `RustEnrichmentAdapter` implement the protocol. `language_registry.py` provides a simple registry with lazy default registration. This is the strongest design in the scope.
+The ripgrep integration (`rg/runner.py`) is a well-structured adapter with clear request/response contracts (`RgRunRequest`, `RgProcessResult`, `RgCountRequest`). The semantic enrichment front door (`semantic/front_door.py`) provides a clean language-dispatched facade. However, the enrichment providers for Python and Rust are called directly via concrete functions (`enrich_python_context_by_byte_range`, `enrich_rust_context_by_byte_range`) without a port abstraction, making it harder to add new language enrichment providers.
 
 **Findings:**
-- No significant gaps. The port/adapter/registry pattern is well-executed.
-
-**Effort:** --
-**Risk if unaddressed:** --
-
----
-
-### Category: Knowledge
-
-#### P7. DRY (knowledge, not lines) -- Alignment: 1/3
-
-**Current state:**
-Rust telemetry accumulation logic is implemented three times: `rust_adapter.py:86-125` (`_accumulate_runtime_flags`, `_accumulate_bundle_drift`), `smart_search_telemetry.py:218-287` (`accumulate_rust_runtime`, `accumulate_rust_bundle`), and partially in `smart_search_telemetry.py:189-216` (`accumulate_rust_enrichment`). The `_counter` / `int_counter` helper appears twice with identical semantics (`rust_adapter.py:86-87` and `smart_search_telemetry.py:203-209`).
-
-Additionally, the set of metadata/excluded keys is repeated: `enrichment/core.py:20-22` (`_DEFAULT_METADATA_KEYS`), `enrichment/core.py:239-251` (`_PY_FLAT_EXCLUDED_KEYS`), and `enrichment/core.py:363-385` (inline set literal in `normalize_rust_payload`).
-
-**Findings:**
-- `rust_adapter.py:86-87` vs `smart_search_telemetry.py:203-209`: Identical `_counter`/`int_counter` helper duplicated.
-- `rust_adapter.py:90-125` vs `smart_search_telemetry.py:218-287`: Same runtime flag and bundle drift accumulation logic duplicated.
-- `enrichment/core.py:239-251` vs `enrichment/core.py:373-385`: Excluded key set duplicated as frozenset vs inline literal.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/rg/runner.py:181-210`: `build_rg_command` cleanly separates command construction from execution -- good adapter pattern.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/semantic/front_door.py:214-218`: `_execute_provider` dispatches via dict lookup `{"python": ..., "rust": ...}` -- ad-hoc dispatch rather than a protocol.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:762-789`: `_maybe_rust_tree_sitter_enrichment` calls `enrich_rust_context_by_byte_range` directly.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:792-851`: `_maybe_python_enrichment` calls `enrich_python_context_by_byte_range` directly.
 
 **Suggested improvement:**
-The `build_enrichment_telemetry` function in `smart_search_telemetry.py:290-321` already delegates to `adapter.accumulate_telemetry()` via the port. Remove the duplicated `accumulate_rust_runtime` and `accumulate_rust_bundle` functions from `smart_search_telemetry.py` -- they are only called from `accumulate_rust_enrichment` which is itself bypassed by the port-based path. Extract the metadata key exclusion set to a single constant in `enrichment/contracts.py`.
+Define a `LanguageEnrichmentProvider` protocol with a `enrich_by_byte_range(source_bytes, byte_start, byte_end, cache_key, budget_ms)` method. Register concrete implementations for Python and Rust. This would let the classification code dispatch to a provider interface instead of language-conditional branches.
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- divergent telemetry logic will produce inconsistent metrics.
+**Risk if unaddressed:** low -- The current two-language approach works; this becomes important if/when more languages are added.
 
 ---
 
-#### P8. Design by contract -- Alignment: 1/3
+### Category: Knowledge (Principles 7-11)
+
+#### P7. DRY (Knowledge, Not Lines) -- Alignment: 0/3
 
 **Current state:**
-`partition_pipeline.py` uses `Any` types extensively, undermining static analysis. The `build_summary` function at `smart_search.py:1215` accepts `*args: object, **kwargs: object` and performs runtime type coercion via `_coerce_summary_inputs` with unchecked `cast()` calls, creating a dynamically-typed boundary in an otherwise statically-typed codebase.
+This is the most severe violation in the scope. The recent phase extraction created duplicate implementations of core pipeline functions. The same business logic exists in two places, and both are actively reachable.
 
 **Findings:**
-- `partition_pipeline.py:78`: `_EnrichmentMissTask.items: list[tuple[int, Any, str, str]]` -- the `Any` hides what the second element actually is.
-- `partition_pipeline.py:84,87`: `_EnrichmentMissResult.raw: Any` and `enriched_match: Any` -- concrete types are known but not declared.
-- `smart_search.py:1215-1228`: `build_summary(*args, **kwargs)` with `_coerce_summary_inputs` doing runtime type negotiation.
-- `smart_search.py:1242-1274`: 10+ `cast()` calls to coerce `object` to specific types without validation.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:358-410` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/candidate_phase.py:88-123` -- `collect_candidates` is implemented in both files with identical logic.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:325-355` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/candidate_phase.py:55-85` -- `_build_search_stats` is implemented in both.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:286-292` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/candidate_phase.py:26-27` -- `_identifier_pattern`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1108-1126` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search_sections.py:61-79` -- `_symtable_flags`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1076-1105` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search_sections.py:97-115` -- `_merge_enrichment_payloads`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1052-1073` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search_sections.py:82-94` -- `_populate_optional_fields`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1129-1205` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search_followups.py:10-77` -- `build_followups`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1219-1310` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search_summary.py:38-134` -- `_build_summary` / `build_language_summary`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1550-1601` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classify_phase.py:35-99` -- `_run_classification_phase` / `run_classify_phase`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1796-1879` duplicates `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search_summary.py:206-296` -- `_build_search_summary` / `build_search_summary`.
 
 **Suggested improvement:**
-Replace `Any` in `_EnrichmentMissTask` and `_EnrichmentMissResult` with the concrete types (`RawMatch`, `EnrichedMatch`). Replace `build_summary(*args, **kwargs)` with two explicit overloads: `build_summary(inputs: SearchSummaryInputs)` and a deprecated `build_summary_legacy(query, mode, stats, matches, limits, **kwargs)` with proper types.
+Complete the extraction by making the extracted modules authoritative and removing the duplicate implementations from `smart_search.py`. `smart_search.py` should import from the extracted modules rather than maintaining its own copies. This is a single coordinated change that removes ~500 lines of duplication.
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- type errors in enrichment cache payloads will not be caught statically.
+**Risk if unaddressed:** high -- Any bugfix applied to one copy but not the other will create silent behavioral divergence. This is already the kind of drift that is hardest to debug.
 
 ---
 
-#### P9. Parse, don't validate -- Alignment: 2/3
+#### P8. Design by Contract -- Alignment: 2/3
 
 **Current state:**
-Boundary parsing is generally well done. `rg/codec.py` uses msgspec tagged union decoders (`_RG_TYPED_DECODER`) to parse ripgrep JSON into typed events at the boundary. `enrichment/core.py:57-82` provides `parse_python_enrichment` and `parse_rust_enrichment` using `msgspec.convert()` for boundary coercion. However, `_coerce_summary_inputs` at `smart_search.py:1230-1274` re-validates and casts types at an internal boundary rather than parsing once.
+The pipeline makes good use of frozen msgspec structs with constrained types for its core contracts. `SearchLimits` uses `PositiveInt` and `PositiveFloat` constraints. `RawMatch`, `EnrichedMatch`, `SearchStats` are frozen structs with clear field semantics. `SearchPartitionPlanV1` and `SearchConfig` provide well-documented configuration contracts.
 
 **Findings:**
-- `rg/codec.py:70-85`: Clean tagged union parsing with fallback decoder -- good boundary design.
-- `smart_search.py:1230-1274`: `_coerce_summary_inputs` performs runtime type negotiation instead of requiring callers to provide the parsed type.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/_shared/types.py:22-53`: `SearchLimits` uses `PositiveInt` and `PositiveFloat` constraints -- strong contract enforcement.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/contracts.py:21-33`: `SearchPartitionPlanV1` is a clean serializable contract.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/cache/contracts.py:43-52`: `SearchEnrichmentAnchorCacheV1` uses `NonNegativeInt` constraints on line/col.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1882-1939`: `smart_search()` accepts `**kwargs: object` and manually coerces each field in `_coerce_search_request` -- the public API lacks typed contract enforcement.
 
 **Suggested improvement:**
-Require all callers of `build_summary` to construct `SearchSummaryInputs` directly, eliminating the coercion layer.
+Replace the `**kwargs: object` signature of `smart_search()` with the already-existing `SearchRequest` struct as the public API entry point. The coercion logic in `_coerce_search_request` can remain as an internal compatibility adapter for legacy callers.
 
 **Effort:** small
-**Risk if unaddressed:** low -- the coercion layer works but adds maintenance burden.
+**Risk if unaddressed:** low -- The current coercion works but doesn't document or enforce the contract at the API surface.
 
 ---
 
-#### P10. Make illegal states unrepresentable -- Alignment: 2/3
+#### P9. Parse, Don't Validate -- Alignment: 1/3
 
 **Current state:**
-Frozen msgspec Structs (`SearchConfig`, `SearchRequest`, `EnrichedMatch`, `RawMatch`) prevent mutation after construction. `SearchLimits` uses `PositiveInt` and `PositiveFloat` constrained types. However, many internal data structures use `dict[str, object]` for payloads (e.g., `EnrichmentMeta.data`, telemetry buckets), allowing arbitrary key/value combinations.
+Enrichment payloads flow through the pipeline as `dict[str, object]`, requiring repeated `isinstance` checks at every access point. The `_payload_views` function in `objects/resolve.py` extracts structured sub-payloads but returns them as untyped dicts. The `search_semantic.py` module contains extensive defensive type checking (`isinstance(status, str)`, `isinstance(coverage, dict)`, etc.) because payloads are never parsed into typed representations.
 
 **Findings:**
-- `_shared/types.py:39-54`: `SearchLimits` with positively-constrained fields -- good design.
-- `enrichment/contracts.py:32,39`: `PythonEnrichmentPayload.data` and `RustEnrichmentPayload.data` are `dict[str, object]` -- no structural constraint on the data plane.
-- `smart_search_telemetry.py:44-90`: `empty_enrichment_telemetry` builds a nested dict template -- the shape is only enforced by convention, not types.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search_types.py:127-129`: `MatchEnrichment` contains `rust_tree_sitter: dict[str, object] | None`, `python_enrichment: dict[str, object] | None`, `python_semantic_enrichment: dict[str, object] | None` -- three untyped payload fields.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search_types.py:219-222`: `EnrichedMatch` carries the same three `dict[str, object]` fields through the entire pipeline.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/search_semantic.py:44-69`: `_payload_coverage_status` performs 8 `isinstance` checks to extract two strings from an untyped dict.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/search_semantic.py:72-104`: `_rust_payload_has_signal` performs 10+ `isinstance` checks on nested dict fields.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/objects/resolve.py:144-192`: `_payload_views` performs 15+ `isinstance` checks to decompose enrichment payloads.
 
 **Suggested improvement:**
-Replace the telemetry template dict with a frozen msgspec Struct (`EnrichmentTelemetryV1`) that makes the expected shape explicit. This prevents typos in key names and enables static validation.
-
-**Effort:** small
-**Risk if unaddressed:** low -- current tests catch shape errors, but the risk grows with new languages.
-
----
-
-#### P11. CQS -- Alignment: 2/3
-
-**Current state:**
-Most functions follow CQS. `enrichment/core.py:85-103` has clean command functions (`append_source`, `set_degraded`) that mutate payloads without returning values. `enrichment/core.py:127-151` `enforce_payload_budget` is a command that also returns `(dropped_keys, final_size)` -- this is a minor CQS tension but the return value reports the effect of the mutation.
-
-**Findings:**
-- `enrichment/core.py:127-151`: `enforce_payload_budget` mutates `payload` in-place AND returns `(dropped, size)`. The return could be separated.
-- `classifier_runtime.py:77-100`: `get_record_context` queries cache AND populates it on miss -- acceptable cache pattern.
-
-**Suggested improvement:**
-Consider splitting `enforce_payload_budget` into a query (`compute_fields_to_drop`) and a command (`drop_fields`), but this is low priority given the pattern is common for budget-enforcement APIs.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-### Category: Composition
-
-#### P12. DI + explicit composition -- Alignment: 1/3
-
-**Current state:**
-The six module-level caches in `classifier_runtime.py:65-70` are the primary DI gap. These are created implicitly at module import time and accessed as hidden global state. `front_door.py:12` calls `get_cq_cache_backend()` as a service locator rather than receiving a cache instance. `smart_search.py:128` imports `get_python_analysis_session` as another service locator call.
-
-**Findings:**
-- `classifier_runtime.py:65-70`: Six module-level mutable dicts -- no injection path, no lifecycle management beyond `clear()`.
-- `front_door.py:12`: `get_cq_cache_backend()` service locator pattern rather than DI.
-- `semantic/models.py:439`: `enrich_with_language_semantics` performs a deferred import of `run_language_semantic_enrichment` -- hiding the dependency.
-
-**Suggested improvement:**
-Define a `SearchRuntimeContext` protocol or dataclass that bundles cache backend, analysis session, and classifier caches. Thread it through `smart_search()` -> `_run_language_partitions()` -> `classify_match()`. This enables test isolation and explicit lifecycle management.
+Define msgspec structs for the three enrichment payload types: `RustTreeSitterEnrichmentV1`, `PythonEnrichmentV1`, `PythonSemanticEnrichmentV1`. Parse raw dict payloads into these structs at the enrichment boundary (where `normalize_python_payload`/`normalize_rust_payload` already run), and carry the typed structs through the pipeline. This eliminates hundreds of scattered `isinstance` checks downstream.
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- test isolation requires manual `clear_caches()` calls, which are easy to forget.
+**Risk if unaddressed:** medium -- Untyped payloads are the primary source of defensive coding throughout the pipeline. Missing an `isinstance` check on a new field path silently produces `None` or wrong-type values.
 
 ---
 
-#### P13. Composition over inheritance -- Alignment: 3/3
+#### P10. Make Illegal States Unrepresentable -- Alignment: 2/3
 
 **Current state:**
-No inheritance hierarchies exist in this scope. The enrichment subsystem uses protocol-based composition. `SearchPipeline` (`orchestration.py:66`) is a simple dataclass facade. All type contracts use frozen msgspec Structs without inheritance depth.
+Core types are well-modeled. `MatchCategory` is a `Literal` union preventing invalid categories. `QueryMode` is an `Enum`. `SearchLimits` uses constrained positive types. However, `SearchResultAssembly.partition_results` is typed as `list[object]` (line 338 of `smart_search_types.py`), which permits any list content.
 
 **Findings:**
-- No issues. The codebase correctly favors composition and protocols.
-
----
-
-#### P14. Law of Demeter -- Alignment: 2/3
-
-**Current state:**
-Most access chains are short. The telemetry accumulation functions drill into nested dicts (`payload.get("meta").get("stage_status")`), but this is mitigated by isinstance guards at each level.
-
-**Findings:**
-- `smart_search_telemetry.py:145-155`: `accumulate_python_enrichment` navigates `payload -> meta -> stage_status -> stages_bucket` with isinstance guards -- acceptable for dict-typed data but fragile.
-- `smart_search.py:684-689`: `enrichment.rust_tree_sitter.get("impl_type")` -- reaching into enrichment dict internals.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search_types.py:333-338`: `SearchResultAssembly.partition_results: list[object]` -- should be `list[LanguageSearchResult]`.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1949`: `assemble_result` casts `assembly.partition_results` to `list[LanguageSearchResult]` -- the cast would be unnecessary with correct typing.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/partition_pipeline.py:90-95`: `run_search_partition` returns `object` instead of `LanguageSearchResult` -- the cast in `enrichment_phase.py:26` compensates.
 
 **Suggested improvement:**
-Extract accessor methods on the enrichment adapter or enrichment types that encapsulate the dict traversal, e.g., `adapter.containing_scope(enrichment)` rather than inline dict drilling.
+Change `SearchResultAssembly.partition_results` to `list[LanguageSearchResult]` and `run_search_partition` return type to `LanguageSearchResult`. Remove the compensating casts.
 
 **Effort:** small
-**Risk if unaddressed:** low
+**Risk if unaddressed:** low -- The casts work but hide type errors that could be caught at definition time.
 
 ---
 
-#### P15. Tell, don't ask -- Alignment: 2/3
+#### P11. CQS (Command-Query Separation) -- Alignment: 2/3
 
 **Current state:**
-The object resolution pipeline in `objects/resolve.py` follows a "ask then decide" pattern: `_payload_views` extracts views, then `_resolution_key_payload` inspects them to determine quality level. This could be refactored to have the payload objects self-describe their resolution quality.
+Most pipeline functions follow CQS well. The one notable violation is `_build_search_context` which performs a side effect (`clear_caches()`) before returning a value.
 
 **Findings:**
-- `objects/resolve.py:37-43`: `_PayloadViews` is a passive data holder; resolution quality logic is external.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1406-1434`: `_build_search_context` calls `clear_caches()` at line 1414 as a side effect while constructing and returning `SearchConfig`. Cache clearing is a command; config construction is a query.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/assembly.py:688-696`: `_assemble_smart_search_result` calls `register_search_object_view` (a command) as part of result construction (a query) -- minor CQS violation.
 
 **Suggested improvement:**
-Add a `resolution_quality` computed property or factory method to `_PayloadViews` that encapsulates the quality assessment.
+Move `clear_caches()` to the beginning of `smart_search()` (the top-level orchestrator) before calling `_build_search_context`, making the side effect visible at the orchestration level rather than hidden inside a construction function.
 
 **Effort:** small
-**Risk if unaddressed:** low
+**Risk if unaddressed:** low -- The violation is localized and does not affect correctness.
 
 ---
 
-### Category: Correctness
+### Category: Correctness (Principles 16-18)
 
-#### P16. Functional core, imperative shell -- Alignment: 2/3
+#### P16. Functional Core, Imperative Shell -- Alignment: 2/3
 
 **Current state:**
-Pure transform functions exist (`compute_relevance_score`, `_build_summary`, `build_static_semantic_planes`). However, `partition_pipeline.py` interleaves pure match processing with cache I/O operations (cache probe, writeback, telemetry recording) throughout `run_search_partition`. The cache orchestration is tightly coupled with the search logic.
+The classification logic (`classify_heuristic`, `classify_from_node`, `classify_from_records`) is pure and deterministic, forming a genuine functional core. Scoring (`compute_relevance_score`) is pure. The imperative shell is concentrated in `partition_pipeline.py` (cache I/O, worker scheduling) and `rg/runner.py` (subprocess execution). The boundary between pure and impure is somewhat blurred in `classify_match` which mixes pure classification with impure file I/O (`get_cached_source` reads files).
 
 **Findings:**
-- `partition_pipeline.py:90-100`: `run_search_partition` mixes cache context setup with search execution in a single flow.
-- `enrichment/core.py:106-124`: `merge_gap_fill_payload` is a clean pure function -- good example.
-- `semantic/models.py:236-290`: `build_static_semantic_planes` is a clean pure function.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classifier.py:310-388`: `classify_heuristic` is pure -- good functional core.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classifier.py:391-460`: `classify_from_node` and `classify_from_resolved_node` are pure given a parsed AST.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:413-517`: `classify_match` mixes pure classification with impure I/O (`get_cached_source`, `get_sg_root` read files).
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/rg/runner.py:225-276`: `run_rg_json` is a clean imperative shell function.
 
 **Suggested improvement:**
-Separate `run_search_partition` into a pure phase-planning function that returns a partition plan, and an imperative executor that handles cache I/O. This would allow testing the partition logic without cache infrastructure.
+Extract the pure classification decision logic from `classify_match` into a function that takes pre-loaded source and AST as parameters. Let the impure caller (`classify_match` or `_classify_enrichment_miss_batch`) handle file loading.
 
 **Effort:** medium
-**Risk if unaddressed:** low -- the current design works but makes partition logic hard to test in isolation.
+**Risk if unaddressed:** low -- The current structure works but makes unit-testing classification logic harder than necessary.
 
 ---
 
 #### P17. Idempotency -- Alignment: 3/3
 
 **Current state:**
-Search operations are read-only. Cache writes use content-hash-based keys, making them naturally idempotent. `file_content_hash` at `partition_pipeline.py:13` ensures cache keys are deterministic.
-
----
-
-#### P18. Determinism / reproducibility -- Alignment: 3/3
-
-**Current state:**
-`rg/runner.py` `build_rg_command` constructs deterministic argument lists. `_shared/core.py:45` uses `msgspec.json.Encoder(order="deterministic")`. `enrichment/core.py:288` uses `dict.fromkeys(degrade)` for ordered dedup. The pipeline produces reproducible results given the same inputs.
-
----
-
-### Category: Simplicity
-
-#### P19. KISS -- Alignment: 2/3
-
-**Current state:**
-The `_coerce_summary_inputs` function at `smart_search.py:1230-1274` adds substantial complexity to support a legacy calling convention alongside the typed `SearchSummaryInputs` path. The three thin wrapper modules add indirection without simplification.
+Search operations are inherently idempotent: re-running the same query with the same inputs produces the same outputs. Cache writes use content-hash-based keys, so writing the same result twice is a no-op. The `file_content_hash` in enrichment cache keys ensures stale results are never returned for changed files.
 
 **Findings:**
-- `smart_search.py:1230-1274`: 44 lines of runtime type coercion to support two calling conventions.
-- `smart_search_followups.py`: 26 lines total; the function body is a single import + delegation.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/partition_pipeline.py:344-371`: Enrichment cache keys include `file_content_hash` -- ensures cache correctness after file changes.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/partition_pipeline.py:196-209`: Candidate cache keys include `snapshot_digest` -- ensures partition-level correctness.
+
+No action needed.
+
+---
+
+#### P18. Determinism / Reproducibility -- Alignment: 2/3
+
+**Current state:**
+Ripgrep command construction is deterministic (`build_rg_command`). Match output order depends on `rg`'s traversal order, which can vary across runs (file modification times, filesystem ordering). The pipeline applies a deterministic relevance sort afterward, but intermediate processing order is not guaranteed. The parallel classification phase preserves original index ordering via `indexed_results.sort()`.
+
+**Findings:**
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/rg/runner.py:181-210`: `build_rg_command` builds a deterministic command from structured inputs.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/classify_phase.py:98`: Classification results are sorted by original index after parallel execution -- preserves deterministic ordering.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/pipeline/smart_search.py:1600`: Same pattern in the duplicate classification phase.
+- `/Users/paulheyse/CodeAnatomy/tools/cq/search/objects/resolve.py:117-132`: Summaries and occurrences are sorted deterministically by occurrence count, symbol, file, and line.
 
 **Suggested improvement:**
-Deprecate and remove the legacy `build_summary` calling convention. Audit callers to migrate to `SearchSummaryInputs`.
+If fully reproducible output is required regardless of filesystem traversal order, add `--sort path` to the default `SearchLimits` configuration (currently `sort_by_path: bool = False`). This trades some performance for guaranteed determinism.
 
 **Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P20. YAGNI -- Alignment: 2/3
-
-**Current state:**
-The `SearchLimits` at `_shared/types.py` has reasonable defaults. The `profiles.py` presets (DEFAULT, INTERACTIVE, AUDIT, CI, LITERAL) serve documented use cases. Minor concern: `_SUMMARY_ARGS_COUNT = 5` legacy support may be unused.
-
-**Findings:**
-- `smart_search.py:1239`: Legacy 5-argument path may have no remaining callers.
-
-**Suggested improvement:**
-Search for callers of `build_summary` with positional arguments. If none exist, remove the legacy path.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P21. Least astonishment -- Alignment: 1/3
-
-**Current state:**
-`build_summary(*args: object, **kwargs: object)` at `smart_search.py:1215` has a signature that provides no type information to callers. A developer reading the API would have no idea what arguments are expected without reading the implementation. The `run_search_partition` return type is `object` (`partition_pipeline.py:95`), hiding the actual `LanguageSearchResult` type.
-
-**Findings:**
-- `smart_search.py:1215`: `build_summary(*args, **kwargs)` -- opaque signature.
-- `partition_pipeline.py:95`: `run_search_partition(...) -> object` -- return type hides actual type.
-- `semantic/models.py:293-318`: `call_with_retry` returns `tuple[object | None, bool]` -- the first element's type depends on the callback.
-
-**Suggested improvement:**
-Type `build_summary` with explicit parameters. Change `run_search_partition` return type to `LanguageSearchResult`. Parameterize `call_with_retry` with a TypeVar for the return type.
-
-**Effort:** medium
-**Risk if unaddressed:** medium -- developers will make incorrect assumptions about expected arguments and return types.
-
----
-
-#### P22. Declare and version public contracts -- Alignment: 2/3
-
-**Current state:**
-All modules have `__all__` lists. Contract types use version suffixes (`SearchPartitionPlanV1`, `SemanticOutcomeV1`, `SemanticOutcomeCacheV1`). However, `smart_search.py` exports 24 symbols including internal helpers like `pop_search_object_view_for_run` that belong to other modules.
-
-**Findings:**
-- `smart_search.py:2024-2045`: `__all__` re-exports `pop_search_object_view_for_run` which is imported from `search_object_view_store.py` -- leaking another module's API.
-- `_shared/__init__.py`: Re-exports from `core.py` but the actual boundaries are unclear.
-
-**Suggested improvement:**
-Remove re-exports of symbols that belong to other modules. Each module should export only its own symbols.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-### Category: Quality
-
-#### P23. Design for testability -- Alignment: 1/3
-
-**Current state:**
-Testing `classify_match` or `_run_classification_phase` requires either the module-level caches to be populated or `clear_caches()` to be called between tests. `run_search_partition` depends on `get_cq_cache_backend()` service locator, making it impossible to test without disk cache infrastructure. The `*args/**kwargs` signature on `build_summary` makes it difficult to write type-safe test calls.
-
-**Findings:**
-- `classifier_runtime.py:65-70`: Six module-level mutable caches that persist across test cases.
-- `classifier_runtime.py:428-435`: `clear_classifier_caches()` must be called explicitly in test teardown.
-- `partition_pipeline.py:90-100`: `run_search_partition` creates cache backend internally -- no injection seam.
-- `front_door.py:12`: `get_cq_cache_backend()` service locator prevents test substitution.
-
-**Suggested improvement:**
-Accept a `CqCacheBackend` parameter in `run_search_partition` (defaulting to `get_cq_cache_backend()` for backward compatibility). Bundle classifier caches into an injectable context object. This enables fast unit tests with in-memory substitutes.
-
-**Effort:** medium
-**Risk if unaddressed:** high -- test isolation failures lead to flaky tests and slow test suites requiring process-level isolation.
-
----
-
-#### P24. Observability -- Alignment: 2/3
-
-**Current state:**
-Enrichment telemetry is well-structured via `build_enrichment_telemetry` and the adapter-based accumulation pattern. `SearchStats` captures scan-level metrics (scanned files, matched files, timeouts, caps hit). However, the duplicated telemetry paths (adapter-based vs direct accumulation in `smart_search_telemetry.py`) could produce inconsistent metrics.
-
-**Findings:**
-- `smart_search_telemetry.py:290-321`: `build_enrichment_telemetry` uses the port-based path (clean).
-- `smart_search_telemetry.py:133-164`: `accumulate_python_enrichment` is a separate non-port path that duplicates logic.
-- `assembly.py:39`: `MAX_EVIDENCE = 100` cap applied silently -- no diagnostic emitted when evidence is truncated.
-
-**Suggested improvement:**
-Remove the non-port telemetry accumulation functions (`accumulate_python_enrichment`, `accumulate_rust_enrichment`) and route all telemetry through the adapter protocol. Add a diagnostic finding when `MAX_EVIDENCE` truncation occurs.
-
-**Effort:** small
-**Risk if unaddressed:** low
+**Risk if unaddressed:** low -- Non-deterministic intermediate ordering is masked by final deterministic sort.
 
 ---
 
 ## Cross-Cutting Themes
 
-### Theme 1: Incomplete decomposition of smart_search.py
+### Theme 1: Incomplete Extraction (Root Cause of P2, P3, P4, P7)
 
-The god module `smart_search.py` has undergone partial extraction: telemetry, types, followups, sections, and summary modules exist but contain thin wrappers that import back into the monolith. This creates the worst of both worlds -- more modules to navigate without actual separation of concerns. The root cause is that function implementations were not moved during extraction.
+The recent extraction of phase modules (`candidate_phase.py`, `classify_phase.py`, `smart_search_sections.py`, `smart_search_summary.py`, `smart_search_followups.py`, `enrichment_phase.py`) was structurally sound but incomplete. The original implementations remain in `smart_search.py`, and the extracted modules either duplicate the code or lazily import from the original. This is the single root cause behind the SRP, DRY, coupling, and separation-of-concerns violations.
 
-**Affected principles:** P2, P3, P4, P21, P23
-**Suggested approach:** Complete the extraction by moving implementations into the wrapper modules, then reduce `smart_search.py` to a thin orchestrator that composes phases.
+**Affected principles:** P2, P3, P4, P7
+**Suggested approach:** Complete the extraction in a single coordinated change:
+1. Move `classify_match` and its helpers to a new `classification.py` module
+2. Make extracted phase modules the authoritative implementations
+3. Remove duplicates from `smart_search.py`
+4. Reduce `smart_search.py` to a thin orchestrator (target: ~400 LOC)
 
-### Theme 2: Global mutable state as hidden coupling
+### Theme 2: Untyped Enrichment Payloads (Root Cause of P9)
 
-Six classifier caches, service locator calls (`get_cq_cache_backend()`, `get_python_analysis_session()`), and deferred imports (`semantic/models.py:439`) create implicit dependencies that cannot be statically traced. This makes the system hard to test, hard to reason about lifecycle, and prone to state leakage.
+The three enrichment payload fields on `EnrichedMatch` (`rust_tree_sitter`, `python_enrichment`, `python_semantic_enrichment`) are all `dict[str, object]`. This forces every downstream consumer to perform defensive type checking. The normalization functions (`normalize_python_payload`, `normalize_rust_payload`) already exist at the boundary -- they just produce dicts instead of typed structs.
 
-**Affected principles:** P1, P12, P23
-**Suggested approach:** Introduce a `SearchRuntimeContext` that bundles all runtime dependencies and thread it through the pipeline.
+**Affected principles:** P9, P8
+**Suggested approach:** Define three msgspec structs for enrichment payloads and parse into them at the normalization boundary. This is a medium-effort change that eliminates ~200 scattered `isinstance` checks.
 
-### Theme 3: Duplicated telemetry knowledge
+### Theme 3: Well-Designed Foundation Types
 
-Rust telemetry accumulation is implemented in three locations with near-identical logic. The `_counter`/`int_counter` helper appears twice. This creates a maintenance risk where a fix in one location is not applied to others.
-
-**Affected principles:** P7, P24
-**Suggested approach:** Consolidate all telemetry accumulation into the adapter protocol path (`build_enrichment_telemetry` -> `adapter.accumulate_telemetry()`), removing the direct accumulation functions.
+Despite the issues above, the foundation type layer (`_shared/types.py`, `smart_search_types.py`, `contracts.py`, `cache/contracts.py`) is well-designed. Frozen structs with constrained types, clear separation of serializable contracts from runtime handles, and consistent use of `CqStruct`/`CqSettingsStruct`/`CqCacheStruct` base classes demonstrate strong type discipline. The `_shared/core.py` module cleanly separates serializable settings from runtime-only handles via `to_settings()`/`to_runtime()` methods.
 
 ## Quick Wins (Top 5)
 
 | Priority | Principle | Finding | Effort | Impact |
 |----------|-----------|---------|--------|--------|
-| 1 | P8 | Replace `Any` types in `_EnrichmentMissTask` and `_EnrichmentMissResult` with concrete types | small | Enables static type checking for cache payloads |
-| 2 | P21 | Type `build_summary` with explicit parameters, deprecate `*args/**kwargs` | small | API is self-documenting, IDE support works |
-| 3 | P7 | Remove duplicated `accumulate_rust_runtime`/`accumulate_rust_bundle` from `smart_search_telemetry.py` | small | Single source of truth for Rust telemetry |
-| 4 | P22 | Remove re-exports of foreign symbols from `smart_search.py.__all__` | small | Clear module ownership boundaries |
-| 5 | P21 | Change `run_search_partition` return type from `object` to `LanguageSearchResult` | small | Callers get type safety without casts |
+| 1 | P7 (DRY) | Remove duplicate `_symtable_flags`, `_merge_enrichment_payloads`, `_populate_optional_fields`, `build_followups` from `smart_search.py` -- import from extracted modules instead | small | Eliminates 4 duplicate function pairs (~80 lines) |
+| 2 | P10 | Change `SearchResultAssembly.partition_results` from `list[object]` to `list[LanguageSearchResult]`; fix `run_search_partition` return type | small | Removes 3 compensating casts; catches type errors at definition |
+| 3 | P11 | Move `clear_caches()` from `_build_search_context` to `smart_search()` top | small | Makes side effect visible at orchestration level |
+| 4 | P8 | Replace `smart_search(**kwargs: object)` with `smart_search(request: SearchRequest)` as primary API | small | Self-documenting API; removes ~40 lines of coercion |
+| 5 | P5 | Move `_ast_grep_prefilter_scope_paths` from `assembly.py` to enrichment phase | small | Removes classifier dependency from assembly layer |
 
 ## Recommended Action Sequence
 
-1. **Replace `Any` types in `partition_pipeline.py`** (P8, P10). Change `_EnrichmentMissTask.items` to `list[tuple[int, RawMatch, str, str]]` and `_EnrichmentMissResult.raw`/`enriched_match` to `RawMatch`/`EnrichedMatch`. Fix `run_search_partition` return type to `LanguageSearchResult`. These are safe, local changes.
+1. **Quick wins first** (P7 small, P10, P11, P8, P5) -- These are independent, low-risk changes that improve code health immediately. Complete all 5 in a single PR.
 
-2. **Type and deprecate `build_summary`** (P8, P21). Create `build_summary_from_inputs(inputs: SearchSummaryInputs) -> dict[str, object]` with the clean signature. Mark the `*args/**kwargs` variant as deprecated. Migrate callers.
+2. **Extract `classification.py`** (P2, P3, P4) -- Move `classify_match` and its 8 helper functions out of `smart_search.py` into a dedicated module. This breaks the circular import pattern and enables step 3.
 
-3. **Consolidate Rust telemetry** (P7, P24). Remove `accumulate_rust_runtime`, `accumulate_rust_bundle`, and `accumulate_rust_enrichment` from `smart_search_telemetry.py`. The port-based `build_enrichment_telemetry` already delegates to `RustEnrichmentAdapter.accumulate_telemetry`.
+3. **Complete phase extraction** (P2, P3, P7) -- Make `candidate_phase.py`, `classify_phase.py`, `smart_search_sections.py`, `smart_search_summary.py` authoritative. Remove ~500 lines of duplicates from `smart_search.py`.
 
-4. **Extract classifier cache context** (P1, P12, P23). Create `ClassifierCacheContext` dataclass owning the six caches. Pass it through `get_record_context`, `get_sg_root`, `get_node_index`, etc. This unblocks test isolation and bounded eviction.
+4. **Type enrichment payloads** (P9) -- Define msgspec structs for `RustTreeSitterEnrichmentV1`, `PythonEnrichmentV1`, `PythonSemanticEnrichmentV1`. Parse at normalization boundary. Update `EnrichedMatch` fields to use typed structs.
 
-5. **Complete smart_search.py decomposition** (P2, P3, P4). Move candidate collection, classification, enrichment, summary, and section implementations into their respective modules. Reduce `smart_search.py` to a ~200-line orchestrator. This depends on steps 2-4 being complete first to avoid merge conflicts.
+5. **Thread `ClassifierCacheContext`** (P1) -- Pass the cache context from `SearchRuntimeContext` through classification functions. Remove the global singleton fallback pattern.
 
-6. **Split `_shared/core.py`** (P3, P4). Promote the re-export facades (`encoding.py`, `timeout.py`, `rg_request.py`) to owning modules by moving implementations from `core.py`. Reduce `core.py` to byte-offset helpers only.
-
-7. **Introduce `SearchRuntimeContext`** (P12, P23). Bundle cache backend, analysis session, and classifier cache context into a single injectable object. Thread through `smart_search()` -> partition -> classify -> enrich. This is the capstone change that enables full test isolation.
+6. **Define `LanguageEnrichmentProvider` protocol** (P6) -- Only if/when a third language enrichment provider is needed. Design the seam now but defer the abstraction per YAGNI.

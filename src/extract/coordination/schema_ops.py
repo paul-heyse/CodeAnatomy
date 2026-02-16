@@ -17,10 +17,11 @@ from datafusion_engine.extract.registry import (
     dataset_spec,
 )
 from datafusion_engine.schema.finalize import FinalizeContext, FinalizeResult, FinalizeRunRequest
-from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from datafusion_engine.schema.policy import SchemaPolicy
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, sql_options_for_profile
-from schema_spec.contracts import validate_arrow_table, validation_policy_to_arrow_options
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.sql.options import sql_options_for_profile
+from schema_spec.dataset_spec import validate_arrow_table, validation_policy_to_arrow_options
 
 
 def schema_policy_for_dataset(
@@ -173,7 +174,7 @@ def finalize_context_for_dataset(
         runtime_profile=runtime_profile,
         normalize=normalize,
     )
-    from schema_spec.contracts import dataset_spec_contract
+    from schema_spec.dataset_spec import dataset_spec_contract
 
     contract = dataset_spec_contract(dataset_spec(name))
     return FinalizeContext(contract=contract, schema_policy=policy)

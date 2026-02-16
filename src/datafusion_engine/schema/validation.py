@@ -22,7 +22,7 @@ from datafusion_engine.arrow.interop import (
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.schema.alignment import AlignmentInfo, CastErrorPolicy, align_to_schema
-from datafusion_engine.schema.introspection import table_constraint_rows
+from datafusion_engine.schema.introspection_core import table_constraint_rows
 from datafusion_engine.schema.spec_protocol import ArrowFieldSpec, TableSchemaSpec
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import sql_options_for_profile

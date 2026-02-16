@@ -12,6 +12,7 @@ from tools.cq.core.artifacts import (
 )
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 from tools.cq.core.schema import CqResult, RunMeta
+from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.search.objects.render import ResolvedObjectRef, SearchObjectSummaryV1
 
 
@@ -26,7 +27,7 @@ def test_save_and_load_search_artifact_bundle(tmp_path: Path) -> None:
         toolchain={},
         run_id="run-abc",
     )
-    result = CqResult(run=run, summary={"query": "build_graph"})
+    result = CqResult(run=run, summary=summary_from_mapping({"query": "build_graph"}))
     bundle = SearchArtifactBundleV1(
         run_id="run-abc",
         query="build_graph",

@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from datafusion_engine.session import runtime as runtime_module
+from datafusion_engine.session.runtime_compile import (
+    compile_resolver_invariants_strict_mode,
+    record_compile_resolver_invariants,
+)
+from datafusion_engine.session.runtime_dataset_io import record_dataset_readiness
 
 DISTINCT_RESOLVER_COUNT = 2
 
@@ -22,7 +26,7 @@ def test_compile_resolver_invariants_strict_mode_defaults_non_strict(
     """Runtime default should be non-strict when no env flag is set."""
     monkeypatch.delenv("CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT", raising=False)
     monkeypatch.delenv("CI", raising=False)
-    assert runtime_module.compile_resolver_invariants_strict_mode() is False
+    assert compile_resolver_invariants_strict_mode() is False
 
 
 def test_compile_resolver_invariants_strict_mode_defaults_to_ci(
@@ -31,7 +35,7 @@ def test_compile_resolver_invariants_strict_mode_defaults_to_ci(
     """CI should enable strict mode by default when no explicit override is set."""
     monkeypatch.delenv("CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT", raising=False)
     monkeypatch.setenv("CI", "true")
-    assert runtime_module.compile_resolver_invariants_strict_mode() is True
+    assert compile_resolver_invariants_strict_mode() is True
 
 
 def test_compile_resolver_invariants_strict_mode_explicit_override(
@@ -40,7 +44,7 @@ def test_compile_resolver_invariants_strict_mode_explicit_override(
     """Explicit strict env should override CI fallback behavior."""
     monkeypatch.setenv("CI", "true")
     monkeypatch.setenv("CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT", "false")
-    assert runtime_module.compile_resolver_invariants_strict_mode() is False
+    assert compile_resolver_invariants_strict_mode() is False
 
 
 def test_record_compile_resolver_invariants_strict_raises_after_recording() -> None:
@@ -52,7 +56,7 @@ def test_record_compile_resolver_invariants_strict_raises_after_recording() -> N
     )
 
     with pytest.raises(RuntimeError, match="compile mismatch"):
-        runtime_module.record_compile_resolver_invariants(
+        record_compile_resolver_invariants(
             cast("DataFusionRuntimeProfile", profile),
             label="unit-test",
             compile_count=0,
@@ -87,7 +91,7 @@ def test_record_dataset_readiness_records_resolver_identity(
         diagnostics=SimpleNamespace(diagnostics_sink=None),
     )
 
-    runtime_module.record_dataset_readiness(
+    record_dataset_readiness(
         cast("DataFusionRuntimeProfile", profile),
         dataset_names=(),
         dataset_resolver=cast("ManifestDatasetResolver", resolver),

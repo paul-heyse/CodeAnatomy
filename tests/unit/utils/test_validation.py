@@ -5,11 +5,11 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.arrow.coercion import ensure_arrow_table
 from utils.validation import (
     ensure_callable,
     ensure_mapping,
     ensure_sequence,
-    ensure_table,
     find_missing,
     validate_required_items,
 )
@@ -65,7 +65,7 @@ def test_find_missing_and_validate_required_items() -> None:
 def test_ensure_table_accepts_table() -> None:
     """Ensure ensure_table accepts PyArrow tables."""
     table = pa.table({"x": [1, 2]})
-    result = ensure_table(table, label="input")
+    result = ensure_arrow_table(table, label="input")
     assert result.schema == table.schema
     assert result.num_rows == table.num_rows
 
@@ -75,11 +75,11 @@ def test_ensure_table_accepts_reader() -> None:
     expected_rows = 2
     batch = pa.record_batch([pa.array([1, 2])], names=["x"])
     reader = pa.RecordBatchReader.from_batches(batch.schema, [batch])
-    result = ensure_table(reader, label="input")
+    result = ensure_arrow_table(reader, label="input")
     assert result.num_rows == expected_rows
 
 
 def test_ensure_table_rejects_invalid() -> None:
     """Ensure ensure_table rejects invalid inputs."""
     with pytest.raises(TypeError, match="value must be Table/RecordBatch/RecordBatchReader"):
-        ensure_table(123, label="value")
+        ensure_arrow_table(123, label="value")

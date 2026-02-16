@@ -20,12 +20,13 @@ from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
 from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.pipeline.classifier_runtime import (
+    ClassifierCacheContext,
     _find_containing_scope,
     _find_node_at_position,
     _is_docstring_context,
-    clear_classifier_caches,
     get_cached_source,
     get_def_lines_cached,
+    get_default_classifier_cache_context,
     get_node_index,
     get_record_context,
     get_sg_root,
@@ -393,6 +394,7 @@ def classify_from_node(
     col: int,
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+    cache_context: ClassifierCacheContext | None = None,
 ) -> NodeClassification | None:
     """Classify using ast-grep node lookup.
 
@@ -412,7 +414,7 @@ def classify_from_node(
     NodeClassification | None
         Classification result, or None if no classifiable node found.
     """
-    node = _find_node_at_position(sg_root, line, col, lang=lang)
+    node = _find_node_at_position(sg_root, line, col, lang=lang, cache_context=cache_context)
     if node is None:
         return None
     return classify_from_resolved_node(node)
@@ -465,6 +467,7 @@ def classify_from_records(
     col: int,
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+    cache_context: ClassifierCacheContext | None = None,
 ) -> NodeClassification | None:
     """Classify using cached ast-grep records.
 
@@ -486,7 +489,7 @@ def classify_from_records(
     NodeClassification | None
         Classification result, or None if no record matches.
     """
-    context = get_record_context(file_path, root, lang=lang)
+    context = get_record_context(file_path, root, lang=lang, cache_context=cache_context)
     if not context.records:
         return None
 
@@ -619,7 +622,7 @@ def enrich_with_symtable_from_table(
 
 def clear_caches() -> None:
     """Clear per-file caches and dependent enrichment caches."""
-    clear_classifier_caches()
+    get_default_classifier_cache_context().clear()
     from tools.cq.search.python.extractors import clear_python_enrichment_cache
     from tools.cq.search.tree_sitter.rust_lane.runtime import clear_tree_sitter_rust_cache
 

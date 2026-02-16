@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from tools.cq.cli_app import contracts
+import importlib.util
 
 
-def test_cli_contracts_module_exists() -> None:
-    """Test CLI contracts module is importable.
+def test_cli_contracts_module_removed() -> None:
+    """CLI contracts placeholder module is removed after hard cutover.
 
-    Note: This module is now a placeholder for future CLI-specific contracts.
-    Run step parsing has moved to tools.cq.run.step_decode.
+    Run step parsing and typed contracts now live in runtime/core packages.
     """
-    assert contracts.__all__ == []
+    assert importlib.util.find_spec("tools.cq.cli_app.contracts") is None

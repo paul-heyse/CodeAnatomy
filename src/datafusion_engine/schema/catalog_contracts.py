@@ -9,7 +9,7 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.schema.contracts import SchemaContract
-from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from serde_msgspec import dumps_msgpack
 from validation.violations import ValidationViolation, ViolationType
 

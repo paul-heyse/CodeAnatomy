@@ -13,7 +13,7 @@ from typing import cast
 
 import msgspec
 
-from cli.config_models import (
+from core.config_specs import (
     CacheConfigSpec,
     DataFusionCacheConfigSpec,
     DataFusionCachePolicySpec,
@@ -28,7 +28,7 @@ from cli.config_models import (
 )
 from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 from datafusion_engine.compile.options import DataFusionCompileOptionsSpec
-from datafusion_engine.delta.control_plane import (
+from datafusion_engine.delta.control_plane_core import (
     DeltaAddConstraintsRequest,
     DeltaAddFeaturesRequest,
     DeltaCdfProviderBundle,
@@ -61,7 +61,7 @@ from datafusion_engine.plan.diagnostics import (
 from datafusion_engine.schema.alignment import SchemaEvolutionSpec
 from datafusion_engine.schema.validation import ArrowValidationOptions
 from datafusion_engine.udf.metadata import DataFusionUdfSpecSnapshot, UdfCatalogSnapshot
-from obs.otel.config import OtelConfigSpec
+from obs.otel import OtelConfigSpec
 from relspec.inferred_deps import InferredDeps
 from schema_spec.arrow_types import (
     ArrowDecimalSpec,
@@ -78,7 +78,7 @@ from schema_spec.arrow_types import (
     ArrowStructSpec,
     ArrowTimestampSpec,
 )
-from schema_spec.contracts import (
+from schema_spec.dataset_spec import (
     ContractSpec,
     DatasetPolicies,
     DatasetSpec,

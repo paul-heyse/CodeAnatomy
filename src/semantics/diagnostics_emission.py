@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from datafusion_engine.identity import schema_identity_hash
-from datafusion_engine.io.write import WritePipeline
+from datafusion_engine.io.write_core import WritePipeline
 from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
 from obs.diagnostics import (
     SemanticQualityArtifact,
@@ -17,7 +17,7 @@ from obs.diagnostics import (
     record_semantic_quality_events,
 )
 from obs.metrics import record_quality_issue_counts
-from obs.otel.run_context import get_run_id, reset_run_id, set_run_id
+from obs.otel import get_run_id, reset_run_id, set_run_id
 from semantics.diagnostics import (
     DEFAULT_MAX_ISSUE_ROWS,
     SEMANTIC_DIAGNOSTIC_VIEW_NAMES,
@@ -25,6 +25,7 @@ from semantics.diagnostics import (
     semantic_diagnostic_view_builders,
     semantic_quality_issue_batches,
 )
+from semantics.diagnostics.builder_base import DiagnosticBatchBuilder
 from semantics.incremental.metadata import (
     SemanticDiagnosticsSnapshot,
     write_semantic_diagnostics_snapshots,
@@ -232,14 +233,17 @@ def emit_semantic_quality_view(
         df=df,
         max_rows=DEFAULT_MAX_ISSUE_ROWS,
     ):
+        row_builder = DiagnosticBatchBuilder()
+        row_builder.add_many(batch.rows)
+        rows = tuple(row_builder.rows())
         record_quality_issue_counts(
             issue_kind=batch.issue_kind,
-            count=len(batch.rows),
+            count=len(rows),
         )
         record_semantic_quality_events(
             context.diagnostics_sink,
             name="semantic_quality_issues_v1",
-            rows=batch.rows,
+            rows=rows,
         )
 
 

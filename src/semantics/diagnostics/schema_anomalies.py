@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.schema.introspection import table_names_snapshot
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
-from semantics.diagnostics.quality_metrics import _empty_table
+from datafusion_engine.schema.introspection_core import table_names_snapshot
+from obs.otel import SCOPE_SEMANTICS, stage_span
+from semantics.diagnostics._utils import empty_diagnostic_frame
+from semantics.diagnostics.builder_base import DiagnosticBatchBuilder
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -40,9 +40,9 @@ def build_schema_anomalies_view(ctx: SessionContext) -> DataFrame:
         scope_name=SCOPE_SEMANTICS,
     ):
         available = table_names_snapshot(ctx)
-        rows: list[dict[str, object]] = []
+        builder = DiagnosticBatchBuilder()
         for spec in dataset_specs():
-            from schema_spec.contracts import dataset_spec_name
+            from schema_spec.dataset_spec import dataset_spec_name
 
             name = dataset_spec_name(spec)
             if name not in available:
@@ -51,20 +51,18 @@ def build_schema_anomalies_view(ctx: SessionContext) -> DataFrame:
             schema = arrow_schema_from_df(df)
             contract = schema_contract_from_dataset_spec(name=name, spec=spec)
             violations = contract_violations_for_schema(contract=contract, schema=schema)
-            rows.extend(
-                [
+            for violation in violations:
+                builder.add(
                     {
                         "view_name": name,
                         "violation_type": violation.violation_type.value,
                         "column_name": violation.column_name,
                         "detail": str(violation),
                     }
-                    for violation in violations
-                ]
-            )
-        if not rows:
-            return _empty_table(ctx, _SCHEMA_ANOMALY_SCHEMA)
-        table = pa.Table.from_pylist(rows, schema=pa.schema(_SCHEMA_ANOMALY_SCHEMA))
+                )
+        if len(builder) == 0:
+            return empty_diagnostic_frame(ctx, pa.schema(_SCHEMA_ANOMALY_SCHEMA))
+        table = builder.build_table(schema=pa.schema(_SCHEMA_ANOMALY_SCHEMA))
         return ctx.from_arrow(table)
 
 

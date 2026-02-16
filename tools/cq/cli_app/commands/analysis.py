@@ -86,7 +86,6 @@ def calls(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.core.bootstrap import resolve_runtime_services
 
     ctx = require_context(ctx)
     if opts is None:
@@ -96,8 +95,7 @@ def calls(
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.calls(request_ctx, function_name=function)
 
-    services = resolve_runtime_services(ctx.root)
-    result = services.calls.execute(request)
+    result = ctx.services.calls.execute(request)
 
     return CliResult(result=result, context=ctx, filters=options)
 

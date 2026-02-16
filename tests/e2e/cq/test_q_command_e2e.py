@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 import pytest
 from tools.cq.core.schema import CqResult
+from tools.cq.core.summary_contract import SemanticTelemetryV1
 
 from tests.e2e.cq._support.goldens import assert_json_snapshot_data, load_golden_spec
 from tests.e2e.cq._support.projections import result_snapshot_projection
@@ -68,7 +69,7 @@ def test_q_rust_compile_target_golden(
     insight = result.summary.get("front_door_insight")
     assert isinstance(insight, dict)
     rust_semantic_telemetry = result.summary.get("rust_semantic_telemetry")
-    assert isinstance(rust_semantic_telemetry, dict)
+    assert isinstance(rust_semantic_telemetry, SemanticTelemetryV1)
     neighborhood = insight.get("neighborhood")
     assert isinstance(neighborhood, dict)
     callers = neighborhood.get("callers")
@@ -96,7 +97,7 @@ def test_q_pattern_query_excludes_front_door_insight(
         ]
     )
     assert result.summary.get("mode") == "pattern"
-    assert "front_door_insight" not in result.summary
+    assert result.summary.front_door_insight is None
 
 
 @pytest.mark.e2e

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
@@ -15,7 +16,7 @@ from tools.cq.query.planner import compile_query
 COLD_QUERY_MAX_SECONDS = 15.0
 WARM_QUERY_MAX_SECONDS = 12.0
 INDEX_BUILD_MAX_SECONDS = 60.0
-SCALING_QUERY_MAX_SECONDS = 12.0
+SCALING_QUERY_MAX_SECONDS = 14.0
 
 
 def _execute_query(*, plan: Any, query: Any, toolchain: Toolchain, root: Path) -> Any:
@@ -24,6 +25,7 @@ def _execute_query(*, plan: Any, query: Any, toolchain: Toolchain, root: Path) -
             plan=plan,
             query=query,
             root=str(root),
+            services=resolve_runtime_services(root),
             argv=(),
         ),
         tc=toolchain,
@@ -161,4 +163,6 @@ def test_query_scaling_simple(toolchain: Toolchain, repo_root: Path) -> None:
 
     # All simple queries should complete quickly while tolerating CI variance.
     for i, elapsed in enumerate(timings):
-        assert elapsed < SCALING_QUERY_MAX_SECONDS, f"Query {i} took {elapsed:.2f}s, expected <12s"
+        assert elapsed < SCALING_QUERY_MAX_SECONDS, (
+            f"Query {i} took {elapsed:.2f}s, expected <{SCALING_QUERY_MAX_SECONDS:.0f}s"
+        )

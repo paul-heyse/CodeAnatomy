@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from tools.cq.core.cache.contracts import SearchCandidatesCacheV1
 from tools.cq.core.cache.fragment_codecs import (
     decode_fragment_payload,
     encode_fragment_payload,
     is_fragment_cache_payload,
 )
+from tools.cq.search.cache.contracts import SearchCandidatesCacheV1
 
 
 def test_fragment_codec_roundtrip_via_msgpack_bytes() -> None:

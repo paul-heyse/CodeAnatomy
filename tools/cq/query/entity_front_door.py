@@ -30,6 +30,7 @@ from tools.cq.core.semantic_contracts import (
     derive_semantic_contract_state,
 )
 from tools.cq.core.snb_schema import SemanticNodeRefV1
+from tools.cq.core.summary_contract import CqSummary, build_semantic_telemetry
 from tools.cq.query.language import QueryLanguage
 from tools.cq.query.shared_utils import extract_missing_languages
 from tools.cq.search.semantic.models import (
@@ -73,7 +74,7 @@ def attach_entity_front_door_insight(
     relationship_detail_max_matches: int,
 ) -> None:
     """Build and attach front-door insight card to an entity result."""
-    mode_value = result.summary.get("mode")
+    mode_value = result.summary.mode
     if isinstance(mode_value, str) and mode_value == "pattern":
         return
 
@@ -110,21 +111,19 @@ def attach_entity_front_door_insight(
     if missing:
         insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
 
-    result.summary["python_semantic_telemetry"] = {
-        "attempted": telemetry.py_attempted,
-        "applied": telemetry.py_applied,
-        "failed": max(telemetry.py_failed, telemetry.py_attempted - telemetry.py_applied),
-        "skipped": 0,
-        "timed_out": telemetry.py_timed_out,
-    }
-    result.summary["rust_semantic_telemetry"] = {
-        "attempted": telemetry.rust_attempted,
-        "applied": telemetry.rust_applied,
-        "failed": max(telemetry.rust_failed, telemetry.rust_attempted - telemetry.rust_applied),
-        "skipped": 0,
-        "timed_out": telemetry.rust_timed_out,
-    }
-    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
+    result.summary.python_semantic_telemetry = build_semantic_telemetry(
+        attempted=telemetry.py_attempted,
+        applied=telemetry.py_applied,
+        failed=telemetry.py_failed,
+        timed_out=telemetry.py_timed_out,
+    )
+    result.summary.rust_semantic_telemetry = build_semantic_telemetry(
+        attempted=telemetry.rust_attempted,
+        applied=telemetry.rust_applied,
+        failed=telemetry.rust_failed,
+        timed_out=telemetry.rust_timed_out,
+    )
+    result.summary.front_door_insight = to_public_front_door_insight_dict(insight)
 
 
 def _build_candidate_neighborhood(result: CqResult) -> CandidateNeighborhood:
@@ -195,8 +194,8 @@ def _build_candidate_neighborhood(result: CqResult) -> CandidateNeighborhood:
     )
 
 
-def _build_degradation(summary: dict[str, object]) -> InsightDegradationV1:
-    dropped = summary.get("dropped_by_scope")
+def _build_degradation(summary: CqSummary) -> InsightDegradationV1:
+    dropped = summary.dropped_by_scope
     scope_filter_status = "dropped" if isinstance(dropped, dict) and dropped else "none"
     notes: list[str] = []
     if isinstance(dropped, dict) and dropped:
@@ -205,9 +204,9 @@ def _build_degradation(summary: dict[str, object]) -> InsightDegradationV1:
         semantic="skipped",
         scan=(
             "timed_out"
-            if bool(summary.get("timed_out"))
+            if bool(summary.timed_out)
             else "truncated"
-            if bool(summary.get("truncated"))
+            if bool(summary.truncated)
             else "ok"
         ),
         scope_filter=scope_filter_status,
@@ -223,7 +222,7 @@ def _run_entity_semantic(
     relationship_detail_max_matches: int,
 ) -> tuple[FrontDoorInsightV1, EntitySemanticTelemetry]:
     telemetry = EntitySemanticTelemetry()
-    summary_matches = result.summary.get("matches")
+    summary_matches = result.summary.matches
     match_count = summary_matches if isinstance(summary_matches, int) else len(result.key_findings)
     runtime_semantic_enabled = semantic_runtime_enabled()
     run_entity_semantic = (
@@ -313,7 +312,7 @@ def _apply_candidate_semantic(
     insight = augment_insight_with_semantic(insight, payload, preview_per_slice=5)
     semantic_planes = payload.get("semantic_planes")
     if isinstance(semantic_planes, dict):
-        result.summary["semantic_planes"] = dict(semantic_planes)
+        result.summary.semantic_planes = dict(semantic_planes)
     return insight
 
 

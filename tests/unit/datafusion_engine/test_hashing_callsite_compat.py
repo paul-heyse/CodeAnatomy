@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import cast
 
 from datafusion_engine.delta.scan_config import delta_scan_identity_hash
-from datafusion_engine.plan.artifact_store import _plan_identity_payload
+from datafusion_engine.plan.artifact_store_core import _plan_identity_payload
 from datafusion_engine.plan.bundle_artifact import (
     DataFusionPlanArtifact,
     PlanFingerprintInputs,

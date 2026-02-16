@@ -40,7 +40,6 @@
   },
   "sections": [],
   "summary": {
-    "cross_language_diagnostics": [],
     "front_door_insight": {
       "artifact_refs": {
         "diagnostics": null,
@@ -243,23 +242,8 @@
       }
     },
     "mode": "entity",
-    "python_semantic_diagnostics": [],
-    "python_semantic_overview": {},
-    "python_semantic_telemetry": {
-      "applied": 0,
-      "attempted": 0,
-      "failed": 0,
-      "skipped": 0,
-      "timed_out": 0
-    },
+    "python_semantic_telemetry": {},
     "query": "entity=import name=Path",
-    "rust_semantic_telemetry": {
-      "applied": 0,
-      "attempted": 0,
-      "failed": 0,
-      "skipped": 0,
-      "timed_out": 0
-    },
-    "semantic_planes": {}
+    "rust_semantic_telemetry": {}
   }
 }

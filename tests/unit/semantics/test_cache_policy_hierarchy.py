@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datafusion_engine.views.artifacts import CachePolicy
-from semantics.pipeline import _resolve_cache_policy_hierarchy
+from semantics.pipeline_build import _resolve_cache_policy_hierarchy
 
 
 class TestResolveCachePolicyHierarchy:

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.schema import CqResult
 from tools.cq.core.services import EntityFrontDoorRequest
+from tools.cq.core.summary_contract import CqSummary, coerce_semantic_telemetry
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.orchestration.multilang_orchestrator import (
     merge_language_cq_results,
@@ -26,31 +27,36 @@ from tools.cq.search.semantic.diagnostics import (
     is_python_oriented_query_ir,
 )
 
+if TYPE_CHECKING:
+    from tools.cq.core.bootstrap import CqRuntimeServices
 
-def _coerce_semantic_telemetry(payload: object) -> tuple[int, int, int, int]:
-    if not isinstance(payload, dict):
-        return 0, 0, 0, 0
-    attempted = payload.get("attempted")
-    applied = payload.get("applied")
-    failed = payload.get("failed")
-    timed_out = payload.get("timed_out")
-    return (
-        attempted if isinstance(attempted, int) else 0,
-        applied if isinstance(applied, int) else 0,
-        failed if isinstance(failed, int) else 0,
-        timed_out if isinstance(timed_out, int) else 0,
-    )
+
+@dataclass(frozen=True)
+class MergeAutoScopeQueryRequestV1:
+    """Request contract for auto-scope query result merging."""
+
+    query: Query
+    results: dict[QueryLanguage, CqResult]
+    root: Path
+    argv: tuple[str, ...]
+    tc: Toolchain
+    summary_common: dict[str, object]
+    services: CqRuntimeServices
 
 
 def _merge_semantic_contract_inputs(
-    summary: dict[str, object],
+    summary: CqSummary,
 ) -> tuple[str, bool, int, int, int, int]:
-    py_attempted, py_applied, py_failed, py_timed_out = _coerce_semantic_telemetry(
-        summary.get("python_semantic_telemetry")
-    )
-    rust_attempted, rust_applied, rust_failed, rust_timed_out = _coerce_semantic_telemetry(
-        summary.get("rust_semantic_telemetry")
-    )
+    py_telemetry = coerce_semantic_telemetry(summary.python_semantic_telemetry)
+    rust_telemetry = coerce_semantic_telemetry(summary.rust_semantic_telemetry)
+    py_attempted = py_telemetry.attempted if py_telemetry is not None else 0
+    py_applied = py_telemetry.applied if py_telemetry is not None else 0
+    py_failed = py_telemetry.failed if py_telemetry is not None else 0
+    py_timed_out = py_telemetry.timed_out if py_telemetry is not None else 0
+    rust_attempted = rust_telemetry.attempted if rust_telemetry is not None else 0
+    rust_applied = rust_telemetry.applied if rust_telemetry is not None else 0
+    rust_failed = rust_telemetry.failed if rust_telemetry is not None else 0
+    rust_timed_out = rust_telemetry.timed_out if rust_telemetry is not None else 0
     provider = "none"
     if rust_attempted > 0 and py_attempted <= 0:
         provider = "rust_static"
@@ -58,7 +64,7 @@ def _merge_semantic_contract_inputs(
         provider = "python_static"
     elif rust_attempted > 0:
         provider = "rust_static"
-    elif summary.get("lang_scope") == "auto":
+    elif summary.lang_scope == "auto":
         provider = "python_static"
     attempted = py_attempted + rust_attempted
     applied = py_applied + rust_applied
@@ -81,10 +87,10 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
         derive_semantic_contract_state,
     )
 
-    insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
+    insight = coerce_front_door_insight(result.summary.front_door_insight)
     if insight is None:
         return
-    lang_scope = result.summary.get("lang_scope")
+    lang_scope = result.summary.lang_scope
     if isinstance(lang_scope, str) and lang_scope == "auto":
         missing = extract_missing_languages(result.summary)
         if missing:
@@ -110,23 +116,17 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
             notes=tuple(dict.fromkeys([*insight.degradation.notes, *semantic_state.reasons])),
         ),
     )
-    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
+    result.summary.front_door_insight = to_public_front_door_insight_dict(insight)
 
 
-def merge_auto_scope_query_results(
-    *,
-    query: Query,
-    results: dict[QueryLanguage, CqResult],
-    root: Path,
-    argv: list[str],
-    tc: Toolchain,
-    summary_common: dict[str, object],
-) -> CqResult:
+def merge_auto_scope_query_results(request: MergeAutoScopeQueryRequestV1) -> CqResult:
     """Merge per-language query results using canonical executor behavior.
 
     Returns:
         Merged CQ result using canonical auto-scope semantics.
     """
+    query = request.query
+    results = request.results
     diagnostics = build_cross_language_diagnostics(
         lang_scope=query.lang_scope,
         python_matches=count_result_matches(results.get("python")),
@@ -142,9 +142,9 @@ def merge_auto_scope_query_results(
     language_capabilities = build_language_capabilities(lang_scope=query.lang_scope)
     run = runmeta_for_scope_merge(
         macro="q",
-        root=root,
-        argv=argv,
-        tc=tc,
+        root=request.root,
+        argv=list(request.argv),
+        tc=request.tc,
     )
     merged = merge_language_cq_results(
         MergeResultsRequest(
@@ -154,19 +154,18 @@ def merge_auto_scope_query_results(
             diagnostics=diagnostics,
             diagnostic_payloads=diagnostic_payloads,
             language_capabilities=language_capabilities,
-            summary_common=summary_common,
+            summary_common=request.summary_common,
         )
     )
     if query.is_pattern_query:
         return merged
-    if "front_door_insight" in merged.summary:
+    if merged.summary.front_door_insight is not None:
         _mark_entity_insight_partial_from_summary(merged)
         return merged
-    services = resolve_runtime_services(root)
-    services.entity.attach_front_door(
+    request.services.entity.attach_front_door(
         EntityFrontDoorRequest(result=merged),
     )
     return merged
 
 
-__all__ = ["merge_auto_scope_query_results"]
+__all__ = ["MergeAutoScopeQueryRequestV1", "merge_auto_scope_query_results"]

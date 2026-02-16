@@ -8,9 +8,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration_core import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
-from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec

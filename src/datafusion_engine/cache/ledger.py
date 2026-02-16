@@ -17,9 +17,9 @@ from datafusion_engine.cache.commit_metadata import (
 )
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.facade import DataFusionExecutionFacade
-from obs.otel.run_context import get_run_id
+from obs.otel import get_run_id
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:

@@ -23,9 +23,7 @@ from extraction.contracts import (
     with_compat_aliases,
 )
 from extraction.options import ExtractionRunOptions, normalize_extraction_options
-from obs.otel.metrics import record_error, record_stage_duration
-from obs.otel.scopes import SCOPE_EXTRACT
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_EXTRACT, record_error, record_stage_duration, stage_span
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -590,7 +588,7 @@ def _extract_ast(
     Raises:
         ValueError: If extraction produces no outputs.
     """
-    from extract.extractors.ast_extract import extract_ast_tables
+    from extract.extractors.ast import extract_ast_tables
 
     outputs = extract_ast_tables(
         repo_files=repo_files,
@@ -631,7 +629,7 @@ def _extract_cst(
     Raises:
         ValueError: If extraction produces no outputs.
     """
-    from extract.extractors.cst_extract import extract_cst_tables
+    from extract.extractors.cst import extract_cst_tables
 
     outputs = extract_cst_tables(
         repo_files=repo_files,
@@ -672,7 +670,7 @@ def _extract_tree_sitter(
     Raises:
         ValueError: If extraction produces no outputs.
     """
-    from extract.extractors.tree_sitter.extract import extract_ts_tables
+    from extract.extractors.tree_sitter import extract_ts_tables
 
     outputs = extract_ts_tables(
         repo_files=repo_files,
@@ -710,7 +708,7 @@ def _extract_bytecode(
     pa.Table
         Bytecode files table.
     """
-    from extract.extractors.bytecode_extract import extract_bytecode_table
+    from extract.extractors.bytecode import extract_bytecode_table
 
     table = extract_bytecode_table(
         repo_files=repo_files,

@@ -9,11 +9,11 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from datafusion import SessionContext
 
-from datafusion_engine.schema.introspection import (
+from datafusion_engine.schema.introspection_core import (
     parameters_snapshot_table,
     routines_snapshot_table,
 )
-from datafusion_engine.udf.extension_runtime import (
+from datafusion_engine.udf.extension_core import (
     snapshot_function_names,
     snapshot_parameter_names,
     snapshot_return_types,
@@ -28,8 +28,8 @@ from serde_msgspec import StructBaseCompat
 from utils.registry_protocol import Registry, SnapshotRegistry
 
 if TYPE_CHECKING:
-    from datafusion_engine.schema.introspection import SchemaIntrospector
-    from datafusion_engine.udf.extension_runtime import ExtensionRegistries
+    from datafusion_engine.schema.introspection_core import SchemaIntrospector
+    from datafusion_engine.udf.extension_core import ExtensionRegistries
 
 # UdfTier type - Rust-only execution
 UdfTier = Literal["builtin"]
@@ -1159,7 +1159,7 @@ def _rust_udf_snapshot(
     *,
     registries: ExtensionRegistries | None = None,
 ) -> Mapping[str, object]:
-    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
+    from datafusion_engine.udf.extension_core import rust_udf_snapshot
 
     return rust_udf_snapshot(ctx, registries=registries)
 

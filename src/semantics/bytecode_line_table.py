@@ -13,10 +13,9 @@ from datafusion.dataframe import DataFrame
 from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.arrow.semantic import span_metadata, span_type
 from datafusion_engine.schema import extract_schema_for
-from datafusion_engine.schema.introspection import table_names_snapshot
+from datafusion_engine.schema.introspection_core import table_names_snapshot
 from datafusion_engine.udf.expr import udf_expr
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_SEMANTICS, stage_span
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datafusion import SessionContext
 
 from datafusion_engine.dataset import table_registration
-from datafusion_engine.dataset.registration import DataFusionCachePolicy
+from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 

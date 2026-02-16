@@ -1,43 +1,31 @@
-# Design Review: tools/cq CLI, Execution, and Supporting Modules
+# Design Review: tools/cq CLI, Run Engine, Orchestration, and Supporting Modules
 
 **Date:** 2026-02-16
-**Scope:** `tools/cq/{cli_app,run,orchestration,index,introspection,astgrep,ldmd,utils,perf}`
-**Focus:** All principles (1-24)
+**Scope:** `tools/cq/cli_app/` + `tools/cq/run/` + `tools/cq/orchestration/` + `tools/cq/ldmd/` + `tools/cq/utils/` + `tools/cq/perf/`
+**Focus:** Boundaries (1-6), Simplicity (19-22), Quality (23-24)
 **Depth:** deep
-**Files reviewed:** 71
+**Files reviewed:** 50
 
 ## Executive Summary
 
-These modules form the outer shell of the CQ tool: CLI parsing, multi-step execution, orchestration, repository indexing, and supporting utilities. Overall alignment is strong. The CLI layer demonstrates disciplined separation between cyclopts parameter types (dataclasses) and internal option structs (msgspec), and the run engine uses tagged unions effectively for step dispatch. The most significant design debt is duplicated neighborhood orchestration logic between the CLI command and the run step executor, and the pervasive use of `result.summary[key] = value` as an untyped side-channel that undermines several principles simultaneously. The index and introspection modules are clean, focused, and well-isolated.
+The CQ CLI and execution layer demonstrate strong architectural discipline overall. The CLI (`cli_app/`) cleanly separates cyclopts parameter parsing from domain logic via the Params/Options/Context layering, and the run engine (`run/`) correctly uses a tagged-union step specification with a dispatch table for extensibility. The strongest design wins are the `RequestFactory` as a canonical request construction boundary (centralizing 9 macro request types), the `RunStepBase` tagged union with msgspec for parse-don't-validate step decoding, and the clean functional core in `ldmd/format.py`. The primary areas for improvement are: (1) duplicated `_result_match_count` implementations between `q_step_collapsing.py` and `multilang_orchestrator.py`, (2) direct mutation of `CqResult.summary` fields in the run engine violating CQS, and (3) the `result.py` module combining filtering, rendering, artifact persistence, and output emission in a single 382-line file that changes for four distinct reasons.
 
 ## Alignment Scorecard
 
 | # | Principle | Alignment | Effort | Risk | Key Finding |
 |---|-----------|-----------|--------|------|-------------|
-| 1 | Information hiding | 2 | small | low | `result.summary` dict used as public mutation surface |
-| 2 | Separation of concerns | 2 | medium | medium | Neighborhood CLI command embeds full orchestration logic |
-| 3 | SRP | 2 | medium | medium | `step_executors.py` owns both dispatch and neighborhood orchestration |
-| 4 | High cohesion, low coupling | 3 | - | - | Modules well-partitioned; narrow cross-module imports |
-| 5 | Dependency direction | 2 | small | low | `ldmd/format.py` imports from `cli_app/types.py` |
-| 6 | Ports & Adapters | 3 | - | - | `RenderEnrichmentPort` adapter pattern well-implemented |
-| 7 | DRY (knowledge) | 1 | medium | high | Neighborhood orchestration duplicated across two files |
-| 8 | Design by contract | 2 | medium | medium | `result.summary` lacks typed contract for mutation keys |
-| 9 | Parse, don't validate | 3 | - | - | Step decode, query parse, target spec parse all at boundary |
-| 10 | Make illegal states unrepresentable | 2 | small | low | `RunPlan.steps` permits empty tuple; `SearchStep.mode` uses raw strings |
-| 11 | CQS | 2 | small | low | `_save_general_artifacts` and `_save_search_artifacts` both mutate and return |
-| 12 | DI + explicit composition | 2 | small | low | `RequestFactory` uses lazy imports instead of injected dependencies |
-| 13 | Prefer composition over inheritance | 3 | - | - | `FilterParams` inheritance is shallow and appropriate |
-| 14 | Law of Demeter | 2 | small | low | `result.run.run_id`, `ctx.toolchain.to_dict()` chains acceptable but common |
-| 15 | Tell, don't ask | 2 | medium | medium | `result.summary.get("error")` pattern spreads decision logic to callers |
-| 16 | Functional core, imperative shell | 2 | medium | medium | Run engine mixes pure step compilation with IO execution |
-| 17 | Idempotency | 3 | - | - | UUID7-based run IDs and deterministic merge ensure safe re-execution |
-| 18 | Determinism | 3 | - | - | `normalize_step_ids()` and deterministic merge ordering |
-| 19 | KISS | 3 | - | - | Modules are appropriately simple for their responsibilities |
-| 20 | YAGNI | 2 | small | low | `contracts.py` is an empty placeholder; `_STEP_TAGS` unused externally |
-| 21 | Least astonishment | 2 | small | low | `handle_result` silently pops search object views as side effect |
-| 22 | Declare public contracts | 2 | small | low | `__all__` used consistently; some internal helpers lack underscore prefix |
-| 23 | Design for testability | 2 | medium | medium | `_execute_neighborhood_step` hard to test without full stack |
-| 24 | Observability | 2 | small | low | 5 of 9 modules use logging; CLI telemetry good but not all modules covered |
+| 1 | Information hiding | 2 | small | low | `result.py` exposes artifact persistence internals; `CliContext.build` assembles services inline |
+| 2 | Separation of concerns | 1 | medium | medium | `result.py` handles filtering + rendering + persistence + output in one module |
+| 3 | SRP (one reason to change) | 2 | medium | medium | `step_executors.py` combines dispatch registry + parallel scheduling + scope filtering |
+| 4 | High cohesion, low coupling | 2 | small | low | Good use of `RequestFactory`; minor coupling via `RunOptions` import in `run/loader.py` |
+| 5 | Dependency direction | 2 | small | low | `run/loader.py` imports `cli_app.options.RunOptions`; should depend on spec-layer types |
+| 6 | Ports & Adapters | 3 | - | - | `RenderEnrichmentPort` protocol properly implemented; `RequestFactory` is a clean adapter |
+| 19 | KISS | 2 | small | low | `telemetry.py` triple-nested try/except; `_NON_SEARCH_DISPATCH` dict is simple and good |
+| 20 | YAGNI | 2 | small | low | `uuid_factory.py` exposes 14 public symbols including v6/v8 variants of limited demonstrated use |
+| 21 | Least astonishment | 2 | small | low | `CliResult.result` union of `CqResult | CliTextResult | int` requires isinstance checks everywhere |
+| 22 | Declare and version public contracts | 3 | - | - | Strong: versioned V1 structs, `__all__` exports, tagged unions |
+| 23 | Design for testability | 2 | medium | medium | `CliContext.build()` calls `Toolchain.detect()` and `resolve_runtime_services` -- hard to inject |
+| 24 | Observability | 2 | small | low | Run engine has structured logging; telemetry events are well-structured but not emitted to OpenTelemetry |
 
 ## Detailed Findings
 
@@ -46,299 +34,131 @@ These modules form the outer shell of the CQ tool: CLI parsing, multi-step execu
 #### P1. Information hiding -- Alignment: 2/3
 
 **Current state:**
-The CLI layer properly hides cyclopts details behind the params/options conversion boundary. Internal dispatch tables (`_STEP_BUILDERS` in `chain.py:188`, `_NON_SEARCH_DISPATCH` in `step_executors.py:494`) are module-private. However, `CqResult.summary` is a `dict[str, object]` used as a public mutation surface throughout the execution layer.
+Modules generally hide their internals well. The `RequestFactory` class in `request_factory.py` centralizes request construction behind a stable API, and the cyclopts `Parameter(parse=False)` pattern correctly hides context injection from the CLI framework. However, `result.py` exposes artifact persistence details (search artifact bundle construction, diagnostic artifact saving) that are implementation details of the output pipeline.
 
 **Findings:**
-- `run/q_execution.py:119-126` and `run/q_execution.py:185-192`: Direct dict mutation of `result.summary["lang"]` and `result.summary["query_text"]` after execution, repeated identically in both entity and pattern paths.
-- `run/runner.py:83`: `merged.summary["plan_version"] = plan.version` -- run metadata injected via untyped dict.
-- `run/step_executors.py:435`: `result.summary["target_resolution_kind"] = resolved.resolution_kind` -- neighborhood metadata via dict.
-- `cli_app/result.py:61`: `result.summary["front_door_insight"] = to_public_front_door_insight_dict(updated)` -- insight data via dict.
+- `tools/cq/cli_app/result.py:260-335` -- `_save_search_artifacts` and `_build_search_artifact_bundle` contain deep knowledge of `SearchObjectResolvedViewV1` internals (accessing `.summaries`, `.occurrences`, `.snippets`), coupling the CLI output layer to search object model details.
+- `tools/cq/cli_app/context.py:107-126` -- `CliContext.build()` directly calls `Toolchain.detect()` and `resolve_runtime_services(root)`, hiding these behind a classmethod but making them untestable without monkeypatching.
+- `tools/cq/cli_app/result.py:37-62` -- `_attach_insight_artifact_refs` directly mutates `result.summary.front_door_insight`, reaching through the result to modify an internal payload.
 
 **Suggested improvement:**
-Define a `RunSummaryFields` TypedDict (or msgspec Struct) that declares the known summary keys (`lang`, `query_text`, `plan_version`, `target_resolution_kind`, `front_door_insight`, `error`, `cache_backend`). Use a typed helper function like `set_summary_field(result, key, value)` that validates against the contract, or migrate `summary` to a typed struct.
-
-**Effort:** medium
-**Risk if unaddressed:** medium -- Any consumer of `result.summary` must guess which keys exist; typos in key names silently create new entries.
-
----
-
-#### P2. Separation of concerns -- Alignment: 2/3
-
-**Current state:**
-The CLI layer properly separates parameter parsing (params.py) from domain logic (commands/*.py) from output rendering (result.py). The run engine separates plan loading (loader.py) from execution (runner.py) from step dispatch (step_executors.py). However, two modules embed orchestration logic that belongs in a shared service.
-
-**Findings:**
-- `cli_app/commands/neighborhood.py:56-113`: The CLI command directly imports and orchestrates `parse_target_spec`, `resolve_target`, `BundleBuildRequest`, `build_neighborhood_bundle`, `render_snb_result`, `mk_runmeta`, `assign_result_finding_ids`, and `maybe_evict_run_cache_tag`. This is a full orchestration pipeline embedded in a CLI handler.
-- `run/step_executors.py:353-438`: `_execute_neighborhood_step` contains nearly identical orchestration logic with the same imports, same field-by-field `BundleBuildRequest` construction, and same post-processing steps.
-- `cli_app/result.py:247-265`: `_handle_artifact_persistence` mixes concerns of search artifact lifecycle management (popping search object views) with general artifact saving.
-
-**Suggested improvement:**
-Extract a shared `execute_neighborhood()` function in a new `tools/cq/neighborhood/executor.py` (or extend the existing neighborhood module) that both the CLI command and the run step executor delegate to. The function should accept a simple request struct and return a `CqResult`, encapsulating all internal orchestration.
-
-**Effort:** medium
-**Risk if unaddressed:** medium -- Bug fixes or feature additions to neighborhood must be applied in two places, and they can drift silently.
-
----
-
-#### P3. SRP (one reason to change) -- Alignment: 2/3
-
-**Current state:**
-Most modules have a single clear responsibility. `spec.py` owns step types, `chain.py` owns chain compilation, `loader.py` owns plan loading. The main SRP tension is in `step_executors.py`.
-
-**Findings:**
-- `run/step_executors.py` (513 lines): This module owns three distinct responsibilities: (a) the non-Q step dispatch table and routing logic (lines 53-83, 494-504), (b) individual step executor implementations for 8+ step types (lines 279-351), and (c) the full neighborhood orchestration pipeline (lines 353-438). Changes to neighborhood logic, changes to dispatch routing, and adding new step types all require modifying this single file.
-- `cli_app/result.py` (382 lines): Combines result rendering (`render_result`), result filtering (`apply_result_filters`), artifact persistence (`_handle_artifact_persistence`, `_save_search_artifacts`, `_save_general_artifacts`), search artifact bundle construction (`_build_search_artifact_bundle`), and output emission (`_emit_output`). These are at least three distinct concerns.
-
-**Suggested improvement:**
-Split `step_executors.py` into: (a) `step_dispatch.py` for the dispatch table and routing, (b) keep individual executors in `step_executors.py`, and (c) delegate neighborhood to the shared executor from P2. For `result.py`, extract artifact persistence into `artifact_persistence.py` within `cli_app/`.
-
-**Effort:** medium
-**Risk if unaddressed:** low -- The current state is manageable but will degrade as step types grow.
-
----
-
-#### P4. High cohesion, low coupling -- Alignment: 3/3
-
-**Current state:**
-Module boundaries are well-chosen. The `index/` package is self-contained with only `protocol.py` defining its external contract. `introspection/` has zero imports from other CQ packages. `astgrep/` imports only from the scanner contract. Cross-module imports within scope are narrow and follow a clear layering: `cli_app` -> `run` -> `orchestration` -> `core`.
-
-No action needed.
-
----
-
-#### P5. Dependency direction -- Alignment: 2/3
-
-**Current state:**
-Generally correct. Core modules (`introspection/`, `utils/`, `index/`) do not depend on outer layers. However, one inversion exists.
-
-**Findings:**
-- `ldmd/format.py:9`: `from tools.cq.cli_app.types import LdmdSliceMode` -- The LDMD format parser (a library-level utility) imports an enum from the CLI application layer. This means the LDMD format module cannot be used independently of the CLI layer.
-- `utils/interval_index.py:7`: `from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file` -- The generic interval index utility depends on a specific scanner type. The generic `IntervalIndex[T]` is properly parameterized, but `FileIntervalIndex` and `from_records` hard-code `SgRecord`.
-
-**Suggested improvement:**
-Move `LdmdSliceMode` to a shared types module (e.g., `tools/cq/core/types.py` or `tools/cq/ldmd/types.py`) so the LDMD format parser does not depend on the CLI layer. For `interval_index.py`, keep `IntervalIndex[T]` generic and move the `SgRecord`-specific `FileIntervalIndex` to `tools/cq/astgrep/` or `tools/cq/query/`.
-
-**Effort:** small
-**Risk if unaddressed:** low -- The LDMD format module is tightly coupled to CLI but unlikely to be reused independently soon.
-
----
-
-#### P6. Ports & Adapters -- Alignment: 3/3
-
-**Current state:**
-The adapter pattern is well-applied. `orchestration/render_enrichment.py` implements `RenderEnrichmentPort` from `core/ports.py`, cleanly adapting smart-search classification for the render layer. `index/protocol.py` defines `SymbolIndex` as a Protocol for dependency injection. `run/helpers.py:15` defines `RunContextLike` Protocol and `run/q_execution.py:27` defines `ParsedQStepLike` Protocol, both enabling clean structural typing.
-
-No action needed.
-
----
-
-### Category: Knowledge (7-11)
-
-#### P7. DRY (knowledge, not lines) -- Alignment: 1/3
-
-**Current state:**
-The most significant DRY violation in scope is the duplicated neighborhood orchestration knowledge.
-
-**Findings:**
-- `cli_app/commands/neighborhood.py:56-113` and `run/step_executors.py:353-438`: Both locations encode identical knowledge about: (a) how to parse target specs, (b) how to resolve targets with language casting, (c) the full field list for `BundleBuildRequest` construction, (d) post-render steps (`assign_result_finding_ids`, `maybe_evict_run_cache_tag`, setting `target_resolution_kind` on summary). If the `BundleBuildRequest` contract adds a field, both sites must be updated.
-- `run/q_execution.py:119-126` and `run/q_execution.py:185-192`: The four-line block `result.summary["lang"] = step.plan.lang; result.summary["query_text"] = step.step.query; results.append(...)` appears identically in both the success and error paths of both `execute_entity_q_steps` and `execute_pattern_q_steps` (4 total repetitions).
-- `run/step_executors.py:222-238` and `run/step_executors.py:258-276`: `_execute_search_step` and `execute_search_fallback` both construct `RequestContextV1` and call `RequestFactory.search` with overlapping construction patterns. The `_build_search_includes` call and `resolve_runtime_services(ctx.root).search.execute(request)` pattern is duplicated.
-
-**Suggested improvement:**
-(1) Extract neighborhood orchestration into a shared function as described in P2. (2) Extract a `_annotate_q_result(result, step)` helper for the repeated summary annotation. (3) Consider a `_build_search_request(plan, ctx, ...)` factory helper to consolidate search request construction.
-
-**Effort:** medium
-**Risk if unaddressed:** high -- The neighborhood duplication is the most likely source of future drift bugs.
-
----
-
-#### P8. Design by contract -- Alignment: 2/3
-
-**Current state:**
-Typed contracts are used well for step types (`RunStep` tagged union), CLI options (msgspec structs), and index types (`FnDecl`, `ClassDecl`). The primary gap is the untyped `result.summary` dict.
-
-**Findings:**
-- `result.summary` is typed as `dict[str, object]` but functions throughout the codebase write specific keys with specific expected types. At least 15 distinct keys are written across the scoped modules (`lang`, `query_text`, `plan_version`, `error`, `cache_backend`, `target_resolution_kind`, `front_door_insight`, `python_semantic_telemetry`, `rust_semantic_telemetry`, `semantic_planes`, `mode`, `query`, `macro_summaries`, `step_summaries`, `skipped`). None of these are declared as part of a contract.
-- `run/runner.py:218`: `_results_have_error` checks `"error" in result.summary` -- the error signaling mechanism is a string key existence check with no typed contract.
-
-**Suggested improvement:**
-Define a `SummaryContract` TypedDict with known keys and their expected types. Use helper functions for reading and writing summary fields that provide runtime validation in debug mode.
-
-**Effort:** medium
-**Risk if unaddressed:** medium -- Silent key typos and type mismatches are possible.
-
----
-
-#### P9. Parse, don't validate -- Alignment: 3/3
-
-**Current state:**
-Boundary parsing is consistently applied. `run/step_decode.py` parses JSON into typed `RunStep` objects using msgspec at the boundary. `run/chain.py` compiles raw CLI tokens into typed `ChainCommand` then `RunStep` objects. `run/loader.py` loads TOML into validated `RunPlan` at entry. `cli_app/params.py` uses cyclopts converters (`_run_step_converter`, `_run_steps_converter`) to parse JSON strings into typed objects at the CLI boundary. `ldmd/format.py` parses raw LDMD text into a validated `LdmdIndex` with stack-based section tracking.
-
-No action needed.
-
----
-
-#### P10. Make illegal states unrepresentable -- Alignment: 2/3
-
-**Current state:**
-The tagged union pattern for `RunStep` types is well-chosen and prevents most invalid step configurations. However, some opportunities remain.
-
-**Findings:**
-- `run/spec.py:15-30`: `RunPlan.steps` is typed as `tuple[RunStep, ...]` which permits an empty tuple. The `loader.py:57-59` validates non-emptiness at load time, but the type itself does not prevent construction of an empty plan elsewhere.
-- `run/spec.py`: `SearchStep.mode` is `str | None` where the valid values are `"regex"`, `"literal"`, or `None`. A `Literal["regex", "literal"] | None` type would prevent invalid mode strings.
-- `cli_app/context.py:56-80`: `CliContext.output_format` is `OutputFormat | None` where `None` means "use default". The default resolution happens in `result.py:174`. A non-optional field with a default would be clearer.
-
-**Suggested improvement:**
-Use `Literal["regex", "literal"] | None` for `SearchStep.mode`. Consider a `NewType` or validation in `RunPlan.__post_init__` for non-empty steps (msgspec supports `__post_init__`).
-
-**Effort:** small
-**Risk if unaddressed:** low -- Current validation catches these at runtime.
-
----
-
-#### P11. CQS (Command-Query Separation) -- Alignment: 2/3
-
-**Current state:**
-Most functions follow CQS cleanly. The main violations are in the artifact persistence path.
-
-**Findings:**
-- `cli_app/result.py:268-291` (`_save_search_artifacts`): This function both saves artifacts to disk (command) and mutates `result.artifacts` (command) and mutates `result.summary["front_door_insight"]` via `_attach_insight_artifact_refs` (command). The caller has no indication that the result object is being mutated in-place.
-- `cli_app/result.py:294-308` (`_save_general_artifacts`): Same pattern -- saves to disk, appends to `result.artifacts`, and mutates `result.summary`.
-- `cli_app/result.py:143-197` (`handle_result`): Combines filtering (transform), artifact persistence (command), rendering (query), and output emission (command) in a single function, though this is acceptable as a top-level orchestrator.
-
-**Suggested improvement:**
-Have artifact saving functions return the artifact references and let the caller decide whether to attach them to the result. This separates the IO side effect from the result mutation.
-
-**Effort:** small
-**Risk if unaddressed:** low -- The mutation is localized and unlikely to cause bugs in practice.
-
----
-
-### Category: Composition (12-15)
-
-#### P12. DI + explicit composition -- Alignment: 2/3
-
-**Current state:**
-Dependency injection is used effectively in some areas (Protocol types, `SymbolIndex`, `RunContextLike`). However, `RequestFactory` in `orchestration/request_factory.py` uses lazy imports inside methods rather than injected dependencies.
-
-**Findings:**
-- `orchestration/request_factory.py:64-158`: All `RequestFactory` static methods use lazy `from tools.cq.macros.contracts import ...` imports inside the method body. This avoids circular imports but hides the dependency graph. The factory cannot be easily tested with alternative implementations.
-- `run/step_executors.py:237`: `services = resolve_runtime_services(ctx.root)` -- runtime service resolution happens inside the executor rather than being injected. This pattern repeats at lines 237, 275, 283, 284.
-
-**Suggested improvement:**
-Pass `runtime_services` as a parameter through `RunExecutionContext` rather than resolving them inside each executor. For `RequestFactory`, the lazy imports are an acceptable pragmatic choice given the circular dependency constraints, but documenting which contracts each method requires would improve clarity.
-
-**Effort:** small
-**Risk if unaddressed:** low -- The current approach works; the main cost is testing difficulty.
-
----
-
-#### P13. Prefer composition over inheritance -- Alignment: 3/3
-
-**Current state:**
-Inheritance is used sparingly and appropriately. `FilterParams` is a base dataclass extended by `QueryParams`, `SearchParams`, `ReportParams`, etc. in `cli_app/params.py`. This is a single level of inheritance for parameter grouping, which is the right tool for the job. `RunStepBase` uses msgspec's tagged union via `tag=True, tag_field="type"` rather than class hierarchy dispatch.
-
-No action needed.
-
----
-
-#### P14. Law of Demeter -- Alignment: 2/3
-
-**Current state:**
-Most access chains are short (one or two dots). The primary concern is the `result.run.run_id` and `result.summary.get(key)` patterns which appear throughout.
-
-**Findings:**
-- `cli_app/result.py:255`: `result.run.run_id` -- reaching through `result` to `run` to `run_id`.
-- `cli_app/result.py:256`: `result.run.macro == "search"` -- behavioral dispatch based on reaching into nested fields.
-- `run/step_executors.py:420`: `ctx.toolchain.to_dict()` -- acceptable since `toolchain` is a direct collaborator property.
-- `orchestration/bundles.py:232`: `merged.summary["macro_summaries"] = merged.summary.get("step_summaries", {})` -- reading and writing to the same nested dict.
-
-**Suggested improvement:**
-Add convenience methods on `CqResult` like `result.is_search_macro()` and `result.get_run_id()` to encapsulate these access patterns. This is a minor improvement; the current chains are shallow.
+Extract `_build_search_artifact_bundle` and `_save_search_artifacts` into `tools/cq/core/artifacts.py` (which already owns `save_artifact_json` and `save_search_artifact_bundle_cache`). The artifact bundle construction belongs with the artifact persistence layer, not the CLI result handler.
 
 **Effort:** small
 **Risk if unaddressed:** low
 
 ---
 
-#### P15. Tell, don't ask -- Alignment: 2/3
+#### P2. Separation of concerns -- Alignment: 1/3
 
 **Current state:**
-The dispatch-table patterns in `step_executors.py` and `chain.py` follow tell-don't-ask well. However, several locations inspect `result.summary` to make decisions externally.
+The CLI command modules (`commands/search.py`, `commands/query.py`, etc.) are well-separated: each command function does minimal work (parse options, build request, delegate to service, wrap in CliResult). However, `result.py` is a significant concern-mixing module.
 
 **Findings:**
-- `run/runner.py:218`: `_results_have_error` inspects `"error" in result.summary` to decide whether to stop execution. The result object should be able to tell the caller whether it represents an error.
-- `cli_app/result.py:256`: `if result.run.macro == "search"` -- dispatching artifact behavior based on interrogating the result object rather than having the result know how to persist itself.
-- `run/step_executors.py:150`: `if stop_on_error and result.summary.get("error")` -- same pattern of asking the result about its error state.
+- `tools/cq/cli_app/result.py` (382 LOC) handles four distinct concerns in one module: (a) result filtering via `apply_result_filters` (lines 65-97), (b) rendering via `render_result` (lines 100-141), (c) artifact persistence via `_handle_artifact_persistence`, `_save_search_artifacts`, `_save_general_artifacts` (lines 248-309), and (d) output emission via `_emit_output` and `_handle_non_cq_result` (lines 201-235). Each concern changes for a different reason: adding a new format changes rendering; changing the cache schema changes persistence; adding a new filter type changes filtering.
+- `tools/cq/run/step_executors.py` (457 LOC) mixes dispatch registration (`_NON_SEARCH_DISPATCH` dict at line 439), parallel execution scheduling (lines 151-195), scope filtering (lines 386-427), and individual step executor implementations (lines 273-383). The step executors themselves are clean functions, but the module has too many reasons to change.
 
 **Suggested improvement:**
-Add a `CqResult.has_error` property (or `is_error` boolean field) to encapsulate error detection logic. For artifact persistence dispatch, consider a strategy pattern keyed by macro type.
+Split `result.py` into three focused modules: `result_filter.py` (filtering), `result_render.py` (format dispatch and rendering), and `result_persist.py` (artifact saving). Keep `handle_result` as the orchestrator in a thin `result.py` that delegates to these three. For `step_executors.py`, extract `_apply_run_scope_filter` to `run/scope.py` (which already exists and handles scope merging).
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- As the number of summary-key-based decisions grows, the fragility increases.
+**Risk if unaddressed:** medium -- as new output formats and artifact types are added, this module will grow and become a merge-conflict hotspot.
 
 ---
 
-### Category: Correctness (16-18)
-
-#### P16. Functional core, imperative shell -- Alignment: 2/3
+#### P3. SRP (one reason to change) -- Alignment: 2/3
 
 **Current state:**
-The separation is partially achieved. Pure computation (query parsing, plan compilation, chain compilation, step normalization) is well-separated from IO. However, the run engine interleaves pure and effectful operations.
+Most modules have clear single responsibilities. The command modules are exemplary: each command function is a thin adapter between cyclopts parameters and the request/service layer.
 
 **Findings:**
-- `run/runner.py:59-126` (`execute_run_plan`): Mixes pure operations (step partitioning, normalization, result merging) with IO operations (step execution, cache eviction, backend metrics snapshot). The pure planning phase is not separated from the execution phase.
-- `run/step_executors.py:353-438` (`_execute_neighborhood_step`): Mixes target resolution (pure-ish) with bundle building (IO), rendering (transform), cache eviction (IO), and result annotation (mutation) in a single function.
-- The chain compilation path (`chain.py`) is entirely pure, which is good.
+- `tools/cq/run/runner.py` (288 LOC) changes for two reasons: (1) the run orchestration algorithm (step ordering, stop-on-error, caching) and (2) the Q-step preparation/expansion logic (`_prepare_q_step`, `_expand_q_step_by_scope`, `_partition_q_steps`). The preparation logic could live with Q-step execution.
+- `tools/cq/orchestration/bundles.py` (429 LOC) has a clear single purpose (bundle preset execution) but the four `_run_*` functions (lines 256-414) contain inline request construction that duplicates the `RequestFactory` patterns. The `BundleContext` correctly encapsulates the needed state.
 
 **Suggested improvement:**
-In `execute_run_plan`, separate into two phases: (1) `compile_run_execution(plan, ctx)` returns a pure execution plan with partitioned steps and scope resolutions, (2) `execute_compiled_plan(compiled, ctx)` performs IO. This enables testing the compilation logic without executing steps.
+Move `_prepare_q_step`, `_expand_q_step_by_scope`, and `_partition_q_steps` from `runner.py` to `q_execution.py`, which already handles Q-step execution. This keeps Q-step concerns together.
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- Testing the run engine requires full integration setup.
+**Risk if unaddressed:** low
 
 ---
 
-#### P17. Idempotency -- Alignment: 3/3
+#### P4. High cohesion, low coupling -- Alignment: 2/3
 
 **Current state:**
-UUID7-based run IDs (`utils/uuid_factory.py`) provide unique identity for each invocation. `normalize_step_ids()` in `spec.py` ensures deterministic step naming. The `maybe_evict_run_cache_tag` call at the end of run execution is safe on re-invocation. Artifact saving uses unique paths derived from run IDs.
+The `RequestFactory` in `orchestration/request_factory.py` is a high-cohesion success: it centralizes 9 request construction patterns behind static methods, reducing coupling between command surfaces and macro internals. The `RunStep` tagged union in `run/spec.py` keeps all step types cohesive.
 
-No action needed.
+**Findings:**
+- `tools/cq/run/loader.py:11` -- imports `RunOptions` from `tools.cq.cli_app.options`. This creates a coupling from the run engine (domain layer) to the CLI layer (presentation layer). `RunOptions` contains CLI-specific concerns (inherits `CommonFilters` with impact/confidence/severity filter fields) that are irrelevant to plan loading.
+- `tools/cq/run/q_step_collapsing.py:10-11` imports `merge_language_cq_results` and `runmeta_for_scope_merge` from `orchestration/multilang_orchestrator.py`. This cross-cutting dependency is reasonable since Q-step collapsing genuinely requires multi-language merge, but creates a bidirectional concern between run and orchestration layers.
+
+**Suggested improvement:**
+Define a `RunLoadOptions` protocol or struct in `run/spec.py` containing only the fields needed for plan loading (`plan: Path | None`, `step: list[RunStep]`, `steps: list[RunStep]`). Have `load_run_plan` accept this narrower type, and construct it from `RunOptions` at the CLI boundary.
+
+**Effort:** small
+**Risk if unaddressed:** low
 
 ---
 
-#### P18. Determinism / reproducibility -- Alignment: 3/3
+#### P5. Dependency direction (inward dependencies) -- Alignment: 2/3
 
 **Current state:**
-Step ID assignment is deterministic via `normalize_step_ids()`. Multi-language result merging uses sorted language keys in `multilang_orchestrator.py`. The interval tree construction in `interval_index.py` uses stable sorting. The run summary aggregation collects metrics deterministically.
+Dependencies generally flow correctly: CLI commands depend on `orchestration/request_factory.py` which depends on `core` and `macros`. The `ldmd/format.py` module correctly depends on `core/types.py` for `LdmdSliceMode` (not on `cli_app/types.py` -- the suspected violation is a false positive). The `orchestration/` layer correctly serves as an intermediary between CLI and core.
 
-No action needed.
+**Findings:**
+- `tools/cq/run/loader.py:11` -- `from tools.cq.cli_app.options import RunOptions` is an inward-to-outward dependency violation. The run engine (`run/`) is a domain execution layer; importing from `cli_app/` (the outermost shell) inverts the dependency direction. The loader should depend on its own spec types.
+- `tools/cq/cli_app/result.py:165` -- `from tools.cq.search.pipeline.smart_search import pop_search_object_view_for_run` -- the CLI result handler reaches into the search pipeline's module-level state to pop cached search views. This is a deep coupling from the output layer into search engine internals.
+- `tools/cq/cli_app/result.py:207` -- `from tools.cq.cli_app.app import console` -- the result module imports a module-level console singleton from app.py, creating a circular-prone dependency between the app module and its result handler.
+
+**Suggested improvement:**
+For the `loader.py` issue: extract a `RunLoadInput` struct into `run/spec.py` with only `plan`, `step`, `steps` fields. For the `pop_search_object_view_for_run` issue: have the search service return the object view as part of the result or attach it to the `CqResult.artifacts`, eliminating the need for module-level state mutation.
+
+**Effort:** small (loader) + medium (search view)
+**Risk if unaddressed:** low
+
+---
+
+#### P6. Ports & Adapters -- Alignment: 3/3
+
+**Current state:**
+Well aligned. `RenderEnrichmentPort` in `core/ports.py` is implemented by `SmartSearchRenderEnrichmentAdapter` in `orchestration/render_enrichment.py` -- a textbook port/adapter pattern. The `RequestFactory` serves as an adapter layer between CLI concerns and macro request contracts. `NeighborhoodExecutionRequest` in `neighborhood/executor.py` acts as a clean port between the CLI and the neighborhood execution engine.
+
+**Findings:**
+No significant gaps. The design correctly uses protocols (`ParsedQStepLike` in `q_execution.py:27-46`) to decouple the Q-step execution from the concrete `ParsedQStep` dataclass defined in `runner.py`.
 
 ---
 
 ### Category: Simplicity (19-22)
 
-#### P19. KISS -- Alignment: 3/3
+#### P19. KISS -- Alignment: 2/3
 
 **Current state:**
-Modules are appropriately simple. The `introspection/` package uses standard library facilities (dis, symtable) with thin wrappers. `astgrep/rules.py` is a straightforward dispatch. `ldmd/format.py` uses a stack-based parser that is clear and minimal. `utils/uuid_factory.py` wraps uuid6 with minimal added complexity. The chain compilation in `chain.py` reuses cyclopts parsing infrastructure rather than building a custom parser.
+The CLI commands are refreshingly simple -- each is typically under 80 lines with a clear flow: require context, parse options, build request, execute, wrap result. The run engine's `_NON_SEARCH_DISPATCH` dict at `step_executors.py:439` is a simple and effective dispatch pattern.
 
-No action needed.
+**Findings:**
+- `tools/cq/cli_app/telemetry.py:60-155` -- `invoke_with_telemetry` has a triple-nested try/except structure (parse error -> execution error -> runtime error) that is harder to follow than necessary. The CycloptsError handling is duplicated between the inner and outer catch blocks (lines 97-111 and lines 126-140 produce nearly identical `CqInvokeEvent` payloads).
+- `tools/cq/run/runner.py:129-172` -- `_execute_q_steps` builds an intermediate `batch_specs` tuple-of-tuples to iterate over two groups (entity steps, pattern steps). The double-dispatch via `_run_grouped_q_batches` adds indirection; a simpler approach would sequentially process entity steps then pattern steps explicitly.
+- `tools/cq/cli_app/types.py:190-270` -- `comma_separated_list` and `comma_separated_enum` are nearly identical functions (7 lines differ by one call). The generic `comma_separated_list(str)` and `comma_separated_list(SomeEnum)` would suffice if `str` and enum constructors had the same interface.
+
+**Suggested improvement:**
+Refactor `invoke_with_telemetry` to use an early-return pattern with a shared `_build_error_event` helper, eliminating the duplicated event construction. Merge `comma_separated_enum` into `comma_separated_list` -- they are functionally identical.
+
+**Effort:** small
+**Risk if unaddressed:** low
 
 ---
 
 #### P20. YAGNI -- Alignment: 2/3
 
 **Current state:**
-Almost no speculative generality. Two minor exceptions exist.
+Most code is exercised by the CLI, run engine, or test suite. The `RequestFactory` was a justified investment -- it eliminated scattered inline request construction across 3 call sites per macro.
 
 **Findings:**
-- `cli_app/contracts.py`: Empty placeholder file containing only `__all__: list[str] = []`. This is a speculative placeholder for "future CLI-specific contracts" per its docstring. It should be deleted until needed.
-- `run/spec.py`: `_STEP_TAGS` dict (mapping step type to tag string) is defined but only used by `step_type()` which is a simple accessor. The dict duplicates information already encoded in the msgspec tag metadata.
+- `tools/cq/utils/uuid_factory.py` exposes 14 public symbols in `__all__`, including `uuid8_or_uuid7`, `legacy_compatible_event_id`, and `normalize_legacy_identity`. The UUIDv6 and UUIDv8 variants are speculative extensions: `uuid8_or_uuid7` is called from `uuid_temporal_contracts.py:gated_uuid8` but that function has no callers outside tests. The codebase consistently uses `uuid7_str()` and `run_id()`.
+- `tools/cq/cli_app/result_action.py` -- The `apply_result_action` function supports a sequence of result-action policies (lines 43-55), but the actual usage is always a fixed 2-tuple: `(cq_result_action, "return_int_as_exit_code_else_zero")`. The flexible policy chain is unused beyond this single configuration.
 
 **Suggested improvement:**
-Delete `contracts.py`. For `_STEP_TAGS`, consider using `msgspec.structs.struct_info()` to derive tags dynamically rather than maintaining a parallel dict.
+Consider making `uuid8_or_uuid7`, `legacy_compatible_event_id`, and `normalize_legacy_identity` private (prefixed with `_`) until there is a concrete second use case. The flexible result-action policy chain is harmless but worth noting as a seam that hasn't needed extension.
 
 **Effort:** small
 **Risk if unaddressed:** low
@@ -348,35 +168,28 @@ Delete `contracts.py`. For `_STEP_TAGS`, consider using `msgspec.structs.struct_
 #### P21. Least astonishment -- Alignment: 2/3
 
 **Current state:**
-APIs are generally predictable. The main surprise is a hidden side effect in the result handling pipeline.
+The CLI commands behave as expected. The `--format` flag correctly dispatches to 8 renderers. The `--in` flag on search correctly scopes to directories. The `q` command's fallback to search for non-query strings is a well-documented and intuitive behavior.
 
 **Findings:**
-- `cli_app/result.py:164`: `handle_result` calls `pop_search_object_view_for_run(run_id)` which destructively consumes a search object view from a global registry as a side effect. The function name `handle_result` does not suggest it will pop items from a global cache.
-- `cli_app/result.py:254-258`: When `no_save` is True for a search macro, the function still pops the search object view (to prevent memory leaks), which is correct behavior but surprising -- "no save" still has a side effect.
-- `run/chain.py:82`: `cast("Any", cli_app)` -- casting to `Any` to work around cyclopts type narrowing is unexpected but documented by the context.
+- `tools/cq/cli_app/context.py:159` -- `CliResultPayload = CqResult | CliTextResult | int` is a union of three unrelated types. Callers must use `isinstance` checks (`is_cq_result` property at line 182, `_handle_non_cq_result` at `result.py:220`). An `int` exit code as a valid result payload is surprising; it conflates the result with the exit code.
+- `tools/cq/run/q_step_collapsing.py:140-158` -- `_normalize_single_group_result` mutates its input (`result.summary.query = ...`, `result.summary.lang = None`). The function name suggests normalization (which typically implies producing a new value), but it mutates in place and returns the same object. This is surprising for a frozen-looking CqResult.
+- `tools/cq/cli_app/commands/ldmd.py:145-149` -- The `root` alias resolution (`if section_id == "root"`) is implemented inline in the `get` command but the same `_resolve_section_id` function already exists in `ldmd/format.py:161-167`. The LDMD command duplicates this logic.
 
 **Suggested improvement:**
-Rename the pop call to something more explicit like `_cleanup_search_state(result, no_save)` that encapsulates the lifecycle concern. Add a comment explaining why cleanup is needed even in the no-save path.
+Remove `int` from the `CliResultPayload` union. Exit codes should be conveyed through `CliResult.exit_code`, not through the `result` field. For the Q-step collapsing mutation, either make it explicitly named `_mutate_single_group_result` or use `msgspec.structs.replace` to produce a new summary.
 
 **Effort:** small
 **Risk if unaddressed:** low
 
 ---
 
-#### P22. Declare and version public contracts -- Alignment: 2/3
+#### P22. Declare and version public contracts -- Alignment: 3/3
 
 **Current state:**
-`__all__` exports are declared consistently in every module (verified across all 71 files). The `run/__init__.py` re-exports key step types. `introspection/__init__.py` re-exports all public symbols. The `orchestration/__init__.py` uses lazy `__getattr__` for deferred module loading.
+Excellent contract discipline. All cross-boundary structs use V1 suffixes (`RequestContextV1`, `SearchRequestOptionsV1`, `RunIdentityContractV1`, `TemporalUuidInfoV1`, `FrontDoorInsightV1`). The `run/spec.py` module explicitly versions the `RunPlan` (`version: int = 1`) and uses tagged unions for step types. `__all__` exports are declared in all modules.
 
 **Findings:**
-- Several internal helper functions lack leading underscores despite being implementation details: `error_result` in `run/helpers.py:30` (re-imported with underscore alias in `step_executors.py:23` showing the intent), `merge_in_dir` in `run/helpers.py:56`.
-- `index/def_index.py`: `SELF_CLS_NAMES` (line ~25) is a module-level constant imported by `arg_binder.py` and `call_resolver.py`. It is part of the public contract but not declared in `__all__` of the index package.
-
-**Suggested improvement:**
-Prefix internal helpers with underscores at the definition site. Add `SELF_CLS_NAMES` to the index package `__all__` if it is intentionally public.
-
-**Effort:** small
-**Risk if unaddressed:** low
+No significant gaps. The contract versioning is consistent and well-maintained.
 
 ---
 
@@ -385,88 +198,96 @@ Prefix internal helpers with underscores at the definition site. Add `SELF_CLS_N
 #### P23. Design for testability -- Alignment: 2/3
 
 **Current state:**
-Pure modules (`introspection/`, `utils/interval_index.py`, `ldmd/format.py`, `run/spec.py`, `run/chain.py`, `run/scope.py`) are fully testable without IO. The Protocol types (`SymbolIndex`, `RunContextLike`, `ParsedQStepLike`) enable test doubles. However, several key functions are hard to test in isolation.
+The command functions are testable by constructing a `CliContext` and passing it directly (the `ctx` parameter accepts injection). The `ParsedQStepLike` protocol in `q_execution.py` enables testing with lightweight fakes. The pure functions in `ldmd/format.py` (parsing bytes, building indexes) are directly testable.
 
 **Findings:**
-- `run/step_executors.py:353-438` (`_execute_neighborhood_step`): Requires `parse_target_spec`, `resolve_target`, `build_neighborhood_bundle`, `render_snb_result`, and cache eviction -- all tightly coupled internal imports that cannot be swapped without monkeypatching.
-- `run/step_executors.py:202-238` (`_execute_search_step`): Calls `resolve_runtime_services(ctx.root)` to get a search service, then immediately executes. The service resolution is not injectable.
-- `cli_app/result.py:143-197` (`handle_result`): Depends on `console` (imported from `app.py`), `FilterConfig`, `OutputFormat`, and `pop_search_object_view_for_run` -- all resolved via lazy imports inside the function body.
+- `tools/cq/cli_app/context.py:107-126` -- `CliContext.build()` calls `Toolchain.detect()` (probes the filesystem for ast-grep binary) and `resolve_runtime_services(root)` (constructs real service instances). Tests must either monkeypatch these or construct `CliContext` directly, bypassing the `build()` classmethod.
+- `tools/cq/cli_app/result.py:207` -- `_emit_output` imports `console` from `tools.cq.cli_app.app`, a module-level singleton. Testing output emission requires capturing the console's file stream.
+- `tools/cq/perf/smoke_report.py:59-108` -- `build_perf_smoke_report` directly calls `Toolchain.detect()`, `resolve_runtime_services`, and real search/query/calls macros with no injection seams. This is appropriate for a benchmark harness but means it cannot be unit-tested.
+- `tools/cq/run/step_executors.py:39-45` -- `RUN_STEP_NON_FATAL_EXCEPTIONS` is a module-level tuple imported by `q_execution.py:24`. This shared exception list works but makes it impossible to test different error-handling policies without monkeypatching.
 
 **Suggested improvement:**
-For step executors, accept a `services` parameter (or include it in `RunExecutionContext`) rather than resolving inside the function. For `handle_result`, the lazy imports are a pragmatic circular-dependency avoidance, but the function could accept a `ConsoleAdapter` protocol for the output sink.
+Add a `CliContext.from_parts()` factory method that accepts pre-built `Toolchain` and `CqRuntimeServices` instances (similar to `RunContext.from_parts()`). This would make `CliContext` directly constructible in tests without filesystem probing. The `console` singleton could be made injectable via a `ConsolePort` protocol or passed explicitly to `_emit_output`.
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- Integration tests compensate but are slower and more fragile.
+**Risk if unaddressed:** medium -- as the CLI grows, test setup becomes increasingly complex without proper injection.
 
 ---
 
 #### P24. Observability -- Alignment: 2/3
 
 **Current state:**
-Logging is present in 5 of 9 scoped packages: `run/step_executors.py`, `run/runner.py`, `ldmd/format.py`, `introspection/symtable_extract.py`, and `index/def_index.py`. The CLI telemetry system (`cli_app/telemetry.py`) provides structured event capture with UUID7 identity, timing, and error classification.
+The run engine uses structured `logging.debug` calls with consistent field ordering (`"Executing run plan steps=%d stop_on_error=%s root=%s"`). The `CqInvokeEvent` telemetry struct in `telemetry.py` captures parse/exec timing, command name, error classification, and UUID-based event identity -- a well-structured observability contract.
 
 **Findings:**
-- `cli_app/commands/neighborhood.py`: No logging despite being a complex orchestration path. Failures in target resolution or bundle building would produce no diagnostic output.
-- `orchestration/multilang_orchestrator.py`: No logger despite orchestrating parallel language-scoped execution. Timeouts or fallbacks would be silent.
-- `orchestration/bundles.py`: No logger despite running multi-step report bundles. The `result.summary["skipped"] = reason` at line 422 writes a skip reason to the summary dict but does not log it.
-- `index/files.py`: No logging for file tabulation, which can silently produce empty file lists.
+- `tools/cq/run/runner.py:76-77,125` -- Debug logging uses structured format strings (`"Executing run plan steps=%d stop_on_error=%s root=%s"`) which is good, but there is no warning/error level logging when Q-step preparation fails silently (error results are appended to `immediate_results` without logging at line 189).
+- `tools/cq/cli_app/telemetry.py:24-36` -- `CqInvokeEvent` captures timing and error info but is never emitted to any telemetry backend (no OpenTelemetry span, no file logging, no metrics). It's returned from `invoke_with_telemetry` but the caller (`launcher` at `app.py:225`) discards the event.
+- `tools/cq/ldmd/format.py:115,133,230,245-247` -- LDMD parsing warnings use `logger.warning` with descriptive messages ("LDMD parse failure: %s", "LDMD TLDR parse failed"), which is appropriate for a parser module.
 
 **Suggested improvement:**
-Add `logger = logging.getLogger(__name__)` and debug-level logging to `neighborhood.py`, `multilang_orchestrator.py`, `bundles.py`, and `files.py`. Log at minimum: entry/exit with key parameters, error conditions, and performance-relevant metrics (file count, step count, execution time).
+Add warning-level logging in `_partition_q_steps` when a step produces an immediate error result. The `CqInvokeEvent` is well-structured but currently dead -- either wire it to a metrics sink (even a simple file) or document it as a structured contract for future observability integration.
 
 **Effort:** small
-**Risk if unaddressed:** low -- The telemetry system captures high-level events, but per-module diagnostics are missing for troubleshooting.
+**Risk if unaddressed:** low
 
 ---
 
 ## Cross-Cutting Themes
 
-### Theme 1: Untyped Summary Dict as Communication Channel
+### Theme 1: Duplicated knowledge between run engine and orchestration
 
-**Root cause:** `CqResult.summary` is `dict[str, object]`, used as the universal metadata carrier across the entire execution pipeline. At least 15 distinct keys are written by scoped modules, with no compile-time or runtime contract.
+The `_result_match_count` function exists in two places: `tools/cq/run/q_step_collapsing.py:79-88` and `tools/cq/orchestration/multilang_orchestrator.py:152-159`. Both extract match counts from `CqResult.summary` using the same field-probing logic (`summary.matches` -> `summary.total_matches` -> `len(key_findings)`). The implementations differ only in whether they accept `CqResult | None` vs `CqResult`. This is a classic DRY violation on knowledge: the "how to extract match count from a summary" truth is duplicated.
 
-**Affected principles:** P1 (information hiding), P8 (design by contract), P10 (make illegal states), P15 (tell don't ask).
+**Root cause:** The run engine's Q-step collapsing module needed the same summary introspection that the orchestration layer already had, but imported the merge function rather than the utility.
 
-**Suggested approach:** Introduce a `SummaryFields` TypedDict or frozen struct that declares the known keys. Migration can be incremental: define the type, add a helper to write fields, then migrate call sites one at a time. This is the single highest-value improvement across all principles.
+**Affected principles:** P7 (DRY), P4 (cohesion)
 
-### Theme 2: Neighborhood Duplication
+**Suggested approach:** Move `_result_match_count` to `tools/cq/core/schema.py` or `tools/cq/core/summary_contract.py` as a public utility (e.g., `extract_match_count(summary: CqSummary) -> int`), and have both modules call it.
 
-**Root cause:** The neighborhood command was implemented as a CLI command first, then the run-step executor was added independently with copy-paste adaptation.
+### Theme 2: Mutable summary fields treated as an output builder
 
-**Affected principles:** P2 (separation of concerns), P3 (SRP), P7 (DRY), P23 (testability).
+Across the run engine (`q_step_collapsing.py`, `q_execution.py`, `run_summary.py`, `runner.py`), `CqResult.summary` is mutated directly via attribute assignment. There are 14 such mutations in `run/` alone (e.g., `result.summary.lang = step.plan.lang`, `merged.summary.plan_version = plan.version`). This pattern treats `CqSummary` as a mutable builder despite the rest of the architecture using frozen msgspec structs.
 
-**Suggested approach:** Extract a `tools/cq/neighborhood/executor.py:execute_neighborhood()` function that accepts a typed request and returns a `CqResult`. Both `cli_app/commands/neighborhood.py` and `run/step_executors.py:_execute_neighborhood_step` delegate to it.
+**Root cause:** `CqSummary` appears to be intentionally mutable (it's not frozen) to allow incremental summary population. This is a pragmatic choice but it means any code holding a reference to a `CqResult` can observe unexpected mutations.
 
-### Theme 3: Runtime Service Resolution Inside Executors
+**Affected principles:** P11 (CQS -- functions both mutate and return), P21 (least astonishment)
 
-**Root cause:** `resolve_runtime_services(ctx.root)` is called inside individual step executors rather than being provided via the execution context.
+**Suggested approach:** Consider a builder pattern (`CqSummaryBuilder`) that produces a frozen summary at the end of the pipeline, or document the mutation convention explicitly and ensure mutations only happen during the "build" phase before the result is returned to callers.
 
-**Affected principles:** P12 (DI), P23 (testability), P16 (functional core/imperative shell).
+### Theme 3: `result.py` as a growing concern-aggregation point
 
-**Suggested approach:** Add a `services` field to `RunExecutionContext` that is resolved once at run plan entry and threaded through. This enables test doubles and separates service resolution from step execution.
+`tools/cq/cli_app/result.py` (382 LOC) is the most concern-dense module in scope. It handles result filtering, format rendering, artifact persistence (with two distinct artifact strategies: search vs general), output emission, and insight card attachment. Every new feature (format, filter type, artifact kind) touches this file.
+
+**Root cause:** The initial design correctly centralized "handle result" as a single entry point, but as the system grew (LDMD format, search artifact bundles, insight cards, diagnostics artifacts), the module accumulated responsibilities without splitting.
+
+**Affected principles:** P2 (separation of concerns), P3 (SRP), P1 (information hiding)
+
+**Suggested approach:** Decompose into `result_filter.py`, `result_render.py`, `result_persist.py` as described in P2. Keep `handle_result` as the top-level coordinator.
 
 ## Quick Wins (Top 5)
 
 | Priority | Principle | Finding | Effort | Impact |
 |----------|-----------|---------|--------|--------|
-| 1 | P7/P2 | Extract shared neighborhood executor | medium | Eliminates highest-risk duplication |
-| 2 | P5 | Move `LdmdSliceMode` out of `cli_app/types.py` | small | Fixes dependency inversion |
-| 3 | P20 | Delete empty `cli_app/contracts.py` | small | Removes speculative placeholder |
-| 4 | P24 | Add loggers to 4 modules missing observability | small | Improves troubleshooting coverage |
-| 5 | P22 | Prefix internal helpers with underscores | small | Clarifies public API surface |
+| 1 | P7/DRY | Deduplicate `_result_match_count` into `core/summary_contract.py` | small | Eliminates knowledge duplication between run and orchestration |
+| 2 | P5 | Replace `RunOptions` import in `run/loader.py` with a narrower spec-layer type | small | Fixes inward-to-outward dependency violation |
+| 3 | P19/KISS | Merge `comma_separated_enum` into `comma_separated_list` in `cli_app/types.py` | small | Removes 35 lines of duplicated converter logic |
+| 4 | P21 | Use `_resolve_section_id` from `ldmd/format.py` instead of inline root-alias logic in `ldmd` command | small | Eliminates duplicated root-section resolution |
+| 5 | P24 | Add warning-level log in `_partition_q_steps` when step produces error result | small | Makes Q-step failures visible in logs |
 
 ## Recommended Action Sequence
 
-1. **Extract neighborhood executor** (P7, P2, P3, P23): Create `tools/cq/neighborhood/executor.py` with a shared `execute_neighborhood()` function. Update both `cli_app/commands/neighborhood.py` and `run/step_executors.py` to delegate to it. This resolves the highest-risk duplication and the primary SRP violation.
+1. **Deduplicate `_result_match_count`** (P7) -- Extract to `core/summary_contract.py` as a public helper. Both `q_step_collapsing.py` and `multilang_orchestrator.py` import and use the shared version. No behavioral change.
 
-2. **Fix dependency inversion in LDMD** (P5): Move `LdmdSliceMode` from `cli_app/types.py` to `ldmd/types.py` (or `core/types.py`). Update the import in `ldmd/format.py`.
+2. **Fix `run/loader.py` dependency direction** (P5) -- Define a `RunLoadInput` protocol or struct in `run/spec.py` with fields `plan`, `step`, `steps`. Update `load_run_plan` to accept it. Update the CLI command to construct `RunLoadInput` from `RunOptions`.
 
-3. **Add observability to uncovered modules** (P24): Add `logger = logging.getLogger(__name__)` and structured debug logging to `neighborhood.py`, `multilang_orchestrator.py`, `bundles.py`, and `files.py`.
+3. **Merge `comma_separated_enum` into `comma_separated_list`** (P19) -- The enum converter is functionally identical to the generic list converter. Remove the separate function and use `comma_separated_list(SomeEnum)` in `params.py`.
 
-4. **Define summary field contract** (P1, P8, P15): Introduce a `SummaryFields` TypedDict declaring known keys. Add read/write helpers. Migrate call sites incrementally.
+4. **Remove inline root-alias logic in LDMD `get` command** (P21) -- Use the existing `_resolve_section_id` function from `ldmd/format.py` instead of the 4-line inline version at `commands/ldmd.py:144-149`.
 
-5. **Clean up public surface** (P20, P22): Delete `contracts.py`. Prefix `error_result` and `merge_in_dir` in `helpers.py` with underscores. Add `SELF_CLS_NAMES` to index `__all__`.
+5. **Add `CliContext.from_parts` factory** (P23) -- Create an alternative constructor that accepts pre-built `Toolchain` and `CqRuntimeServices`, enabling lightweight test construction without filesystem probing.
 
-6. **Thread runtime services through context** (P12, P23): Add a `services` field to `RunExecutionContext`, resolve once in `execute_run_plan()`, and pass through to step executors.
+6. **Add warning logging to `_partition_q_steps`** (P24) -- Log at warning level when a step produces an immediate error result, including the step ID and error message.
 
-7. **Tighten step type constraints** (P10): Use `Literal["regex", "literal"] | None` for `SearchStep.mode`. Consider validating non-empty steps in `RunPlan`.
+7. **Split `result.py` into focused modules** (P2/P3) -- Decompose into `result_filter.py`, `result_render.py`, `result_persist.py`. This is the highest-effort item but addresses the most structural debt. Depends on items 1-6 being complete to avoid merge conflicts.
+
+8. **Extract Q-step preparation to `q_execution.py`** (P3) -- Move `_prepare_q_step`, `_expand_q_step_by_scope`, and `_partition_q_steps` from `runner.py` to `q_execution.py` to co-locate all Q-step concerns.

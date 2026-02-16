@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from datafusion_engine.session.runtime import (
-    CACHE_PROFILES,
-    DataFusionRuntimeProfile,
-    PolicyBundleConfig,
-    cache_prefix_for_delta_snapshot,
-)
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_config_policies import CACHE_PROFILES
+from datafusion_engine.session.runtime_dataset_io import cache_prefix_for_delta_snapshot
+from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
 
 
 def test_cache_prefix_for_delta_snapshot() -> None:

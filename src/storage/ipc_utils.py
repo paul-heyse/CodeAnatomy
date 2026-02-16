@@ -5,16 +5,25 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, TypeGuard, cast
 
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 
 from core_types import JsonDict, PathLike, ensure_path
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
-from extraction.plan_product import PlanProduct
 from utils.hashing import hash_sha256_hex
 
-type IpcWriteInput = TableLike | RecordBatchReaderLike | PlanProduct
+
+class PlanProductLike(Protocol):
+    """Narrow protocol for extraction plan-product wrappers."""
+
+    writer_strategy: str
+
+    def value(self) -> TableLike | RecordBatchReaderLike: ...
+
+
+type IpcWriteInput = TableLike | RecordBatchReaderLike | PlanProductLike
 
 
 @dataclass(frozen=True)
@@ -184,13 +193,17 @@ def ipc_table(payload: bytes) -> pa.Table:
     return reader.read_all()
 
 
+def _is_plan_product_like(value: object) -> TypeGuard[PlanProductLike]:
+    return hasattr(value, "writer_strategy") and callable(getattr(value, "value", None))
+
+
 def _resolve_plan_product(value: IpcWriteInput) -> TableLike | RecordBatchReaderLike:
-    if isinstance(value, PlanProduct):
+    if _is_plan_product_like(value):
         if value.writer_strategy != "arrow":
             msg = "IPC writes require an Arrow writer strategy."
             raise ValueError(msg)
         return value.value()
-    return value
+    return cast("TableLike | RecordBatchReaderLike", value)
 
 
 def _ensure_dir(path: Path) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datafusion import SessionContext
 
 from datafusion_engine.delta import table_management
-from datafusion_engine.delta.control_plane import DeltaProviderRequest, DeltaSnapshotRequest
+from datafusion_engine.delta.control_plane_core import DeltaProviderRequest, DeltaSnapshotRequest
 
 
 def test_provider_bundle_delegates(monkeypatch) -> None:

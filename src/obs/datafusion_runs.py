@@ -13,7 +13,7 @@ from utils.uuid_factory import uuid7_str
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from storage.deltalake.delta import IdempotentWriteOptions
+    from storage.deltalake.delta_read import IdempotentWriteOptions
 
 from datafusion_engine.lineage.diagnostics import DiagnosticsSink, ensure_recorder_sink
 from serde_artifact_specs import DATAFUSION_RUN_FINISHED_SPEC, DATAFUSION_RUN_STARTED_SPEC
@@ -59,7 +59,7 @@ class DataFusionRun:
         >>> print(options.version)
         1
         """
-        from storage.deltalake.delta import IdempotentWriteOptions
+        from storage.deltalake.delta_read import IdempotentWriteOptions
 
         options = IdempotentWriteOptions(
             app_id=self.run_id,

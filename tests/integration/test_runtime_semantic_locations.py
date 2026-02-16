@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_dataset_io import normalize_dataset_locations_for_profile
+from datafusion_engine.session.runtime_profile_config import (
     DataSourceConfig,
     SemanticOutputConfig,
-    normalize_dataset_locations_for_profile,
 )
-from schema_spec.contracts import dataset_spec_name, dataset_spec_schema
+from schema_spec.dataset_spec import dataset_spec_name, dataset_spec_schema
 from semantics.catalog.dataset_specs import dataset_spec
 from semantics.compile_context import build_semantic_execution_context
 from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest

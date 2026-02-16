@@ -16,7 +16,7 @@ from tests.test_helpers.arrow_seed import register_arrow_table
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.session.runtime_session import SessionRuntime
 
 
 def bundle_for_table(

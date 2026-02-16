@@ -10,6 +10,13 @@ import datafusion
 from datafusion import SessionConfig
 
 from core.config_base import config_fingerprint
+from datafusion_engine.session._session_constants import (
+    CACHE_PROFILES,
+    GIB,
+    KIB,
+    MIB,
+    parse_major_version,
+)
 from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
@@ -35,24 +42,13 @@ __all__ = [
     "DataFusionJoinPolicy",
     "DataFusionSettingsContract",
     "SchemaHardeningProfile",
+    "resolved_config_policy",
+    "resolved_schema_hardening",
 ]
 
-# Note: Helper functions (_parse_major_version, _catalog_autoload_settings, _ansi_mode,
+# Note: Helper functions (_catalog_autoload_settings, _ansi_mode,
 # _resolved_config_policy_for_profile, _resolved_schema_hardening_for_profile,
 # _effective_catalog_autoload_for_profile) are intentionally private (not in __all__)
-
-
-# Memory size constants
-KIB: int = 1024
-MIB: int = 1024 * KIB
-GIB: int = 1024 * MIB
-
-
-def _parse_major_version(version: str) -> int | None:
-    major = version.split(".", maxsplit=1)[0]
-    if major.isdigit():
-        return int(major)
-    return None
 
 
 def _catalog_autoload_settings() -> dict[str, str]:
@@ -74,7 +70,7 @@ def _ansi_mode(settings: Mapping[str, str]) -> bool | None:
 
 
 # Version constants for DataFusion
-DATAFUSION_MAJOR_VERSION: int | None = _parse_major_version(datafusion.__version__)
+DATAFUSION_MAJOR_VERSION: int | None = parse_major_version(datafusion.__version__)
 DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION: int = 51
 DATAFUSION_OPTIMIZER_DYNAMIC_FILTER_SKIP_VERSION: int = 51
 
@@ -444,22 +440,6 @@ DATAFUSION_POLICY_PRESETS: Mapping[str, DataFusionConfigPolicy] = {
     "symtable": SYMTABLE_DF_POLICY,
 }
 
-CACHE_PROFILES: Mapping[str, Mapping[str, str]] = {
-    "snapshot_pinned": {
-        "datafusion.runtime.list_files_cache_limit": str(64 * MIB),
-        "datafusion.runtime.metadata_cache_limit": str(128 * MIB),
-    },
-    "always_latest_ttl30s": {
-        "datafusion.runtime.list_files_cache_limit": str(64 * MIB),
-        "datafusion.runtime.list_files_cache_ttl": "30s",
-        "datafusion.runtime.metadata_cache_limit": str(128 * MIB),
-    },
-    "multi_tenant_strict": {
-        "datafusion.runtime.list_files_cache_limit": "0",
-        "datafusion.runtime.metadata_cache_limit": "0",
-    },
-}
-
 SCHEMA_HARDENING_PRESETS: Mapping[str, SchemaHardeningProfile] = {
     "schema_hardening": SchemaHardeningProfile(),
     "arrow_performance": SchemaHardeningProfile(enable_view_types=True),
@@ -490,6 +470,16 @@ def _resolved_schema_hardening_for_profile(
         profile.policies.schema_hardening_name,
         SCHEMA_HARDENING_PRESETS["schema_hardening"],
     )
+
+
+def resolved_config_policy(profile: DataFusionRuntimeProfile) -> DataFusionConfigPolicy | None:
+    """Return resolved config policy for a runtime profile."""
+    return _resolved_config_policy_for_profile(profile)
+
+
+def resolved_schema_hardening(profile: DataFusionRuntimeProfile) -> SchemaHardeningProfile | None:
+    """Return resolved schema-hardening profile for a runtime profile."""
+    return _resolved_schema_hardening_for_profile(profile)
 
 
 def _effective_catalog_autoload_for_profile(

@@ -18,9 +18,7 @@ import msgspec
 from opentelemetry import trace
 
 from graph.contracts import OrchestrateBuildRequestV1
-from obs.otel.logs import emit_diagnostics_event
-from obs.otel.scopes import SCOPE_PIPELINE
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_PIPELINE, emit_diagnostics_event, stage_span
 from planning_engine.output_contracts import (
     CPG_OUTPUT_CANONICAL_TO_LEGACY,
     ENGINE_CPG_OUTPUTS,

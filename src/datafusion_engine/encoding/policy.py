@@ -13,6 +13,7 @@ from datafusion import SessionContext, col
 
 from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow.chunking import ChunkPolicy
+from datafusion_engine.arrow.coercion import ensure_arrow_table
 from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import (
     DataTypeLike,
@@ -22,7 +23,6 @@ from datafusion_engine.arrow.types import DEFAULT_DICTIONARY_INDEX_TYPE
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.session.helpers import temp_table
 from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_to_pyarrow
-from utils.validation import ensure_table
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -84,7 +84,7 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
         logger.debug("Encoding policy contains no dictionary columns; returning input table")
         return table
     df_ctx = _datafusion_context()
-    resolved = ensure_table(table, label="table")
+    resolved = ensure_arrow_table(table, label="table")
     logger.debug(
         "Applying dictionary encoding to %s columns for table with %s rows",
         len(policy.dictionary_cols),

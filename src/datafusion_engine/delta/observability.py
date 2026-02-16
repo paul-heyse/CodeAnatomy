@@ -34,14 +34,14 @@ from datafusion_engine.delta.payload import (
 from datafusion_engine.errors import DataFusionEngineError
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.io.write import (
+from datafusion_engine.io.write_core import (
     WriteFormat,
     WriteMode,
     WritePipeline,
     WriteRequest,
 )
 from datafusion_engine.session.facade import DataFusionExecutionFacade
-from obs.otel.run_context import get_run_id
+from obs.otel import get_run_id
 from serde_msgspec import StructBaseStrict
 from utils.value_coercion import coerce_int
 

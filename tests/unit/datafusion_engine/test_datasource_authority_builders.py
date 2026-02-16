@@ -7,13 +7,15 @@ from pathlib import Path
 import pytest
 
 from datafusion_engine.dataset.registry import DatasetLocation
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_dataset_io import (
+    datasource_config_from_manifest,
+    datasource_config_from_profile,
+)
+from datafusion_engine.session.runtime_profile_config import (
     DataSourceConfig,
     ExtractOutputConfig,
     SemanticOutputConfig,
-    datasource_config_from_manifest,
-    datasource_config_from_profile,
 )
 from semantics.ir import SemanticIR
 from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest

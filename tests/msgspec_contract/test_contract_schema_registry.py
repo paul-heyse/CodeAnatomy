@@ -36,7 +36,7 @@ def test_array_like_structs_are_telemetry_only() -> None:
     """Restrict array-like structs to telemetry payloads only."""
     allowed_array_like: set[type[StructBaseCompat]] = {ScanTelemetry}
     try:
-        from datafusion_engine.session.runtime import FeatureStateSnapshot
+        from datafusion_engine.session.features import FeatureStateSnapshot
     except ImportError:
         feature_state_snapshot_type = None
     else:

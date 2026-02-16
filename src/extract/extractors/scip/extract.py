@@ -36,8 +36,7 @@ from extract.infrastructure.string_utils import normalize_string_items
 from extract.session import ExtractSession, build_extract_session
 from extraction.diagnostics import EngineEventRecorder, ExtractQualityEvent
 from extraction.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
-from obs.otel.scopes import SCOPE_EXTRACT
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_EXTRACT, stage_span
 
 if TYPE_CHECKING:
     from datafusion_engine.schema.policy import SchemaPolicy

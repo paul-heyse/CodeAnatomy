@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.cli_app.types import LdmdSliceMode
+from tools.cq.core.types import LdmdSliceMode
 from tools.cq.ldmd.format import (
     LdmdParseError,
     _safe_utf8_truncate,

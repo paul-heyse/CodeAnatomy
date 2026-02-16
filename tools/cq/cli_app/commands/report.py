@@ -63,6 +63,7 @@ def report(
 
     bundle_ctx = BundleContext(
         tc=ctx.toolchain,
+        services=ctx.services,
         root=ctx.root,
         argv=ctx.argv,
         target=target_spec,

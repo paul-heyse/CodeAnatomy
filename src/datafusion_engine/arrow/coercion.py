@@ -124,8 +124,25 @@ def to_arrow_table(value: object) -> pa.Table:
     return pa.Table.from_pydict(resolved.to_pydict())
 
 
+def ensure_arrow_table(value: object, *, label: str = "input") -> pa.Table:
+    """Convert table-like input into a PyArrow table.
+
+    Returns:
+        pa.Table: Converted PyArrow table.
+
+    Raises:
+        TypeError: If *value* cannot be converted into a table.
+    """
+    try:
+        return to_arrow_table(value)
+    except TypeError as exc:
+        msg = f"{label} must be Table/RecordBatch/RecordBatchReader, got {type(value).__name__}"
+        raise TypeError(msg) from exc
+
+
 __all__ = [
     "coerce_table_to_storage",
+    "ensure_arrow_table",
     "storage_schema",
     "storage_type",
     "to_arrow_table",

@@ -18,8 +18,8 @@ from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import SchemaContract, ValidationViolation, ViolationType
-from datafusion_engine.schema.introspection import SchemaIntrospector
-from datafusion_engine.udf.extension_runtime import (
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
+from datafusion_engine.udf.extension_core import (
     udf_names_from_snapshot,
     validate_required_udfs,
     validate_rust_udf_snapshot,
@@ -272,7 +272,7 @@ def register_view_graph(
 def _runtime_hash(runtime_profile: DataFusionRuntimeProfile | None) -> str | None:
     if runtime_profile is None:
         return None
-    from datafusion_engine.session.runtime import session_runtime_hash
+    from datafusion_engine.session.runtime_session import session_runtime_hash
 
     return session_runtime_hash(runtime_profile.session_runtime())
 
@@ -440,7 +440,7 @@ def _maybe_record_view_definition(
     if node.plan_bundle is None:
         msg = f"View {node.name!r} missing plan bundle for artifact recording."
         raise ValueError(msg)
-    from datafusion_engine.session.runtime import record_view_definition
+    from datafusion_engine.session.runtime_session import record_view_definition
 
     artifact = build_view_artifact_from_bundle(
         node.plan_bundle,
@@ -497,7 +497,7 @@ def _persist_plan_artifacts(
     runtime_profile = context.runtime.runtime_profile
     if runtime_profile is None or not runtime_profile.diagnostics.capture_plan_artifacts:
         return
-    from datafusion_engine.plan.artifact_store import (
+    from datafusion_engine.plan.artifact_store_core import (
         PlanArtifactsForViewsRequest,
         persist_plan_artifacts_for_views,
     )
@@ -540,7 +540,7 @@ def _record_udf_audit(context: ViewGraphContext) -> None:
     profile = context.runtime.runtime_profile
     if profile is None:
         return
-    from datafusion_engine.udf.extension_runtime import udf_audit_payload
+    from datafusion_engine.udf.extension_core import udf_audit_payload
     from serde_artifact_specs import UDF_AUDIT_SPEC
 
     payload = udf_audit_payload(context.snapshot)
@@ -681,13 +681,13 @@ def _register_delta_staging_cache(registration: CacheRegistrationContext) -> Dat
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.delta import enforce_schema_evolution
     from datafusion_engine.delta.contracts import DeltaSchemaMismatchError
-    from datafusion_engine.io.write import (
+    from datafusion_engine.io.write_core import (
         WriteFormat,
         WriteMode,
         WritePipeline,
         WriteRequest,
     )
-    from obs.otel.cache import cache_span
+    from obs.otel import cache_span
     from storage.deltalake import DeltaSchemaRequest
 
     try:
@@ -877,13 +877,13 @@ def _register_delta_output_cache(
     )
     from datafusion_engine.delta import enforce_schema_evolution
     from datafusion_engine.delta.contracts import DeltaSchemaMismatchError
-    from datafusion_engine.io.write import (
+    from datafusion_engine.io.write_core import (
         WriteFormat,
         WriteMode,
         WritePipeline,
         WriteRequest,
     )
-    from obs.otel.cache import cache_span
+    from obs.otel import cache_span
     from storage.deltalake import DeltaSchemaRequest
 
     allow_evolution = _allow_schema_evolution(location)
@@ -1088,7 +1088,7 @@ def _cache_partition_by(
 ) -> tuple[str, ...]:
     policy_partition_by: tuple[str, ...] = ()
     if location is not None:
-        policy = location.resolved.delta_write_policy
+        policy = location.delta_write_policy
         if policy is not None:
             policy_partition_by = tuple(str(name) for name in policy.partition_by)
     available = set(schema.names)
@@ -1108,7 +1108,7 @@ def _default_partition_candidates(schema: pa.Schema) -> tuple[str, ...]:
 
 
 def _allow_schema_evolution(location: DatasetLocation) -> bool:
-    policy = location.resolved.delta_schema_policy
+    policy = location.delta_schema_policy
     schema_mode = getattr(policy, "schema_mode", None) if policy is not None else None
     if isinstance(schema_mode, str):
         normalized = schema_mode.strip().lower()
@@ -1326,7 +1326,7 @@ def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -
         if isinstance(name, str):
             available.add(name.lower())
     try:
-        from datafusion_engine.udf.extension_runtime import (
+        from datafusion_engine.udf.extension_core import (
             rust_udf_snapshot,
             udf_names_from_snapshot,
         )
@@ -1347,23 +1347,6 @@ def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -
         missing = [name for name in required if name.lower() not in available]
         msg = f"information_schema missing required functions: {sorted(missing)}."
         raise ValueError(msg) from None
-
-
-def _schema_from_table(ctx: SessionContext, name: str) -> pa.Schema:
-    try:
-        schema = ctx.table(name).schema()
-    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to resolve schema for {name!r}."
-        raise ValueError(msg) from exc
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    msg = f"Failed to resolve DataFusion schema for {name!r}."
-    raise TypeError(msg)
 
 
 def _topo_sort_nodes(nodes: Sequence[ViewNode]) -> tuple[ViewNode, ...]:

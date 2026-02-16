@@ -12,7 +12,7 @@ import pyarrow as pa
 from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.arrow.schema import dataset_name_field
 from datafusion_engine.delta.store_policy import resolve_delta_store_policy
-from datafusion_engine.io.write import WriteMode
+from datafusion_engine.io.write_core import WriteMode
 from datafusion_engine.views.artifacts import view_artifact_payload_table
 from extraction.runtime_profile import runtime_profile_snapshot
 from semantics.incremental.cdf_cursors import CdfCursorStore

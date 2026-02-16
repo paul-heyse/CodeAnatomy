@@ -46,7 +46,7 @@ def test_coerce_float() -> None:
     """Return expected values for float coercion."""
     assert coerce_float(None) is None
     assert coerce_float(value=False) is None
-    assert coerce_float(1) == 1.0
+    assert coerce_float(1) == pytest.approx(1.0)
     assert coerce_float(FLOAT_SAMPLE) == FLOAT_SAMPLE
     assert coerce_float(FLOAT_STRING_SAMPLE) == FLOAT_STRING_EXPECTED
     assert coerce_float("bad") is None

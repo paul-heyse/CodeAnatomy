@@ -18,7 +18,7 @@ from datafusion_engine.delta.contracts import (
     build_delta_cdf_contract,
     build_delta_provider_contract,
 )
-from datafusion_engine.delta.control_plane import (
+from datafusion_engine.delta.control_plane_core import (
     DeltaProviderRequest,
     delta_cdf_provider,
     delta_provider_from_session,
@@ -32,11 +32,11 @@ from datafusion_engine.tables.metadata import TableProviderCapsule
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
-    from datafusion_engine.delta.control_plane import DeltaProviderBundle
+    from datafusion_engine.delta.control_plane_core import DeltaProviderBundle
     from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
     from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.contracts import DeltaScanOptions, ScanPolicyConfig
+    from schema_spec.dataset_spec import DeltaScanOptions, ScanPolicyConfig
     from semantics.program_manifest import ManifestDatasetResolver
 
 DatasetProviderKind = Literal["delta", "delta_cdf"]
@@ -107,7 +107,7 @@ def _resolve_delta_table(request: DatasetResolutionRequest) -> DatasetResolution
         request.location,
         runtime_profile=request.runtime_profile,
     )
-    gate = request.location.resolved.delta_feature_gate
+    gate = request.location.delta_feature_gate
     provider_request = contract.to_request(
         predicate=request.predicate,
         gate=gate,

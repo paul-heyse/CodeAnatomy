@@ -11,11 +11,9 @@ import pyarrow as pa
 from core_types import DeterminismTier
 from datafusion_engine.catalog.introspection import invalidate_introspection_cache
 from datafusion_engine.io.adapter import DataFusionIOAdapter
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
-    PolicyBundleConfig,
-    SessionRuntime,
-)
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
+from datafusion_engine.session.runtime_session import SessionRuntime
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
@@ -25,7 +23,7 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.store_policy import DeltaStorePolicy
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.registry_facade import RegistryFacade
-    from schema_spec.contracts import ScanPolicyConfig
+    from schema_spec.dataset_spec import ScanPolicyConfig
     from semantics.program_manifest import ManifestDatasetResolver
 
 

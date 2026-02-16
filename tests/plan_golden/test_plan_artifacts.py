@@ -30,7 +30,7 @@ require_datafusion_udfs()
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.session.runtime_session import SessionRuntime
 
 
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -257,7 +257,8 @@ def _write_golden(path: Path, payload: Mapping[str, object]) -> None:
 
 def test_plan_artifact_golden_fixture() -> None:
     """Compare plan artifacts to the golden fixture for regressions."""
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_profile_config import FeatureGatesConfig
 
     profile = DataFusionRuntimeProfile(
         features=FeatureGatesConfig(
@@ -286,7 +287,8 @@ def test_plan_artifact_golden_fixture() -> None:
 def test_plan_manifest_payload_contract() -> None:
     """Ensure plan manifest payload remains deterministic across builds."""
     from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_profile_config import FeatureGatesConfig
 
     profile = DataFusionRuntimeProfile(
         features=FeatureGatesConfig(

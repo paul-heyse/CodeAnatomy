@@ -7,9 +7,9 @@ from typing import cast
 
 import msgspec
 from tools.cq.core.contract_codec import (
-    dumps_json_value,
-    loads_json_result,
-    loads_json_value,
+    decode_json,
+    decode_json_result,
+    encode_json,
     to_public_dict,
     to_public_list,
 )
@@ -26,29 +26,29 @@ class _SampleStruct(CqStruct, frozen=True):
     count: int = 0
 
 
-class TestDumpsJsonValue:
+class TestEncodeJson:
     @staticmethod
     def test_roundtrip_dict() -> None:
         val = {"key": "value", "num": 42}
-        encoded = dumps_json_value(val)
-        decoded = loads_json_value(encoded)
+        encoded = encode_json(val)
+        decoded = decode_json(encoded)
         assert decoded == val
 
     @staticmethod
     def test_with_indent() -> None:
         val = {"a": 1}
-        encoded = dumps_json_value(val, indent=2)
+        encoded = encode_json(val, indent=2)
         assert "\n" in encoded
 
     @staticmethod
     def test_roundtrip_list() -> None:
         val = [1, "two", 3.0, None, True]
-        encoded = dumps_json_value(val)
-        decoded = loads_json_value(encoded)
+        encoded = encode_json(val)
+        decoded = decode_json(encoded)
         assert decoded == val
 
 
-class TestLoadsJsonResult:
+class TestDecodeJsonResult:
     @staticmethod
     def test_decode_minimal_result() -> None:
         result = CqResult(
@@ -61,7 +61,7 @@ class TestLoadsJsonResult:
             )
         )
         encoded = msgspec.json.encode(result)
-        decoded = loads_json_result(encoded)
+        decoded = decode_json_result(encoded)
         assert isinstance(decoded, CqResult)
 
 

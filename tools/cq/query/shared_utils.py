@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tools.cq.astgrep.sgpy_scanner import SgRecord
     from tools.cq.core.schema import CqResult
+    from tools.cq.core.summary_contract import CqSummary
 
 
 def count_result_matches(result: CqResult | None) -> int:
@@ -25,29 +26,29 @@ def count_result_matches(result: CqResult | None) -> int:
     """
     if result is None:
         return 0
-    summary_matches = result.summary.get("matches")
+    summary_matches = result.summary.matches
     if isinstance(summary_matches, int):
         return summary_matches
-    summary_total = result.summary.get("total_matches")
+    summary_total = result.summary.total_matches
     if isinstance(summary_total, int):
         return summary_total
     return len(result.key_findings)
 
 
-def extract_missing_languages(summary: dict[str, object]) -> list[str]:
-    """Extract missing_languages list from summary dict.
+def extract_missing_languages(summary: CqSummary) -> list[str]:
+    """Extract missing_languages list from typed summary.
 
     Parameters
     ----------
-    summary : dict[str, object]
-        Summary dictionary containing language results.
+    summary : CqSummary
+        Result summary containing language partition payload.
 
     Returns:
     -------
     list[str]
         List of language names that had no matches.
     """
-    languages = summary.get("languages")
+    languages = summary.languages
     if not isinstance(languages, dict):
         return []
     missing: list[str] = []

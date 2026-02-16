@@ -9,21 +9,23 @@ from datafusion_engine.compile.options import DataFusionCompileOptionsSpec
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.plan.cache import PlanCacheKey
-from datafusion_engine.session.runtime import (
-    CatalogConfig,
+from datafusion_engine.session.runtime_config_policies import (
     DataFusionConfigPolicy,
     DataFusionFeatureGates,
     DataFusionJoinPolicy,
     DataFusionSettingsContract,
+    SchemaHardeningProfile,
+)
+from datafusion_engine.session.runtime_profile_config import (
+    CatalogConfig,
     DataSourceConfig,
     ExecutionConfig,
     FeatureGatesConfig,
-    SchemaHardeningProfile,
 )
 from datafusion_engine.udf.metadata import DataFusionUdfSpecSnapshot, UdfCatalogSnapshot
 from obs.otel.config import OtelConfigSpec
 from schema_spec.arrow_types import ArrowPrimitiveSpec
-from schema_spec.contracts import (
+from schema_spec.dataset_spec import (
     DatasetPolicies,
     DatasetSpec,
     DeltaPolicyBundle,

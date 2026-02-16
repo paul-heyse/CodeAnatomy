@@ -130,33 +130,6 @@ def require_mapping(value: object) -> dict[str, object]:
     raise TypeError(msg)
 
 
-def dumps_json_value(value: object, *, indent: int | None = None) -> str:
-    """Encode a value to JSON with deterministic ordering.
-
-    Returns:
-        str: Function return value.
-    """
-    return encode_json(value, indent=indent)
-
-
-def loads_json_value(payload: bytes | str) -> object:
-    """Decode JSON into a Python value.
-
-    Returns:
-        object: Function return value.
-    """
-    return decode_json(payload)
-
-
-def loads_json_result(payload: bytes | str) -> CqResult:
-    """Decode JSON into a CqResult.
-
-    Returns:
-        CqResult: Function return value.
-    """
-    return decode_json_result(payload)
-
-
 __all__ = [
     "JSON_DECODER",
     "JSON_ENCODER",
@@ -168,11 +141,8 @@ __all__ = [
     "decode_json_result",
     "decode_msgpack",
     "decode_msgpack_result",
-    "dumps_json_value",
     "encode_json",
     "encode_msgpack",
-    "loads_json_result",
-    "loads_json_value",
     "require_mapping",
     "to_contract_builtins",
     "to_public_dict",

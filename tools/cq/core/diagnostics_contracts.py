@@ -43,21 +43,19 @@ def build_diagnostics_artifact_payload(result: CqResult) -> DiagnosticsArtifactP
         Typed diagnostics payload, or ``None`` when no diagnostic data is present.
     """
     summary = result.summary
-    if not isinstance(summary, dict):
-        return None
     payload = DiagnosticsArtifactPayloadV1(
         run_meta=DiagnosticsArtifactRunMetaV1(
             macro=result.run.macro,
             root=result.run.root,
             run_id=result.run.run_id,
         ),
-        enrichment_telemetry=_safe_dict(summary.get("enrichment_telemetry")),
-        python_semantic_telemetry=_safe_dict(summary.get("python_semantic_telemetry")),
-        rust_semantic_telemetry=_safe_dict(summary.get("rust_semantic_telemetry")),
-        semantic_planes=_safe_dict(summary.get("semantic_planes")),
-        python_semantic_diagnostics=_safe_list_of_dict(summary.get("python_semantic_diagnostics")),
-        language_capabilities=_safe_dict(summary.get("language_capabilities")),
-        cross_language_diagnostics=_safe_list_of_dict(summary.get("cross_language_diagnostics")),
+        enrichment_telemetry=_safe_dict(summary.enrichment_telemetry),
+        python_semantic_telemetry=_safe_dict(summary.python_semantic_telemetry),
+        rust_semantic_telemetry=_safe_dict(summary.rust_semantic_telemetry),
+        semantic_planes=_safe_dict(summary.semantic_planes),
+        python_semantic_diagnostics=_safe_list_of_dict(summary.python_semantic_diagnostics),
+        language_capabilities=_safe_dict(summary.language_capabilities),
+        cross_language_diagnostics=_safe_list_of_dict(summary.cross_language_diagnostics),
     )
     has_data = any(
         (

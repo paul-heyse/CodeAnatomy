@@ -5,11 +5,9 @@ from datafusion_engine.session.contracts import (
     IdentifierNormalizationMode,
     TelemetryEnrichmentPolicy,
 )
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
-    FeatureGatesConfig,
-    effective_ident_normalization,
-)
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_compile import effective_ident_normalization
+from datafusion_engine.session.runtime_profile_config import FeatureGatesConfig
 
 
 def test_identifier_normalization_mode_values_are_stable() -> None:

@@ -7,8 +7,8 @@ from functools import lru_cache
 
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.capabilities import is_delta_extension_compatible
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import (
     DataSourceConfig,
     DiagnosticsConfig,
     ExtractOutputConfig,

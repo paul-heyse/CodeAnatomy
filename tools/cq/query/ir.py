@@ -638,24 +638,7 @@ class Query(msgspec.Struct, frozen=True):
         Query
             New Query instance with updated scope.
         """
-        return Query(
-            entity=self.entity,
-            name=self.name,
-            expand=self.expand,
-            scope=scope,
-            fields=self.fields,
-            limit=self.limit,
-            explain=self.explain,
-            pattern_spec=self.pattern_spec,
-            relational=self.relational,
-            scope_filter=self.scope_filter,
-            decorator_filter=self.decorator_filter,
-            joins=self.joins,
-            metavar_filters=self.metavar_filters,
-            composite=self.composite,
-            nth_child=self.nth_child,
-            lang_scope=self.lang_scope,
-        )
+        return msgspec.structs.replace(self, scope=scope)
 
     def with_expand(self, *expanders: Expander) -> Query:
         """Return a new Query with additional expanders.
@@ -667,24 +650,7 @@ class Query(msgspec.Struct, frozen=True):
         Query
             New Query instance with expanded graph options.
         """
-        return Query(
-            entity=self.entity,
-            name=self.name,
-            expand=self.expand + expanders,
-            scope=self.scope,
-            fields=self.fields,
-            limit=self.limit,
-            explain=self.explain,
-            pattern_spec=self.pattern_spec,
-            relational=self.relational,
-            scope_filter=self.scope_filter,
-            decorator_filter=self.decorator_filter,
-            joins=self.joins,
-            metavar_filters=self.metavar_filters,
-            composite=self.composite,
-            nth_child=self.nth_child,
-            lang_scope=self.lang_scope,
-        )
+        return msgspec.structs.replace(self, expand=self.expand + expanders)
 
     def with_fields(self, *fields: FieldType) -> Query:
         """Return a new Query with specified fields.
@@ -696,24 +662,7 @@ class Query(msgspec.Struct, frozen=True):
         Query
             New Query instance with updated field selection.
         """
-        return Query(
-            entity=self.entity,
-            name=self.name,
-            expand=self.expand,
-            scope=self.scope,
-            fields=fields,
-            limit=self.limit,
-            explain=self.explain,
-            pattern_spec=self.pattern_spec,
-            relational=self.relational,
-            scope_filter=self.scope_filter,
-            decorator_filter=self.decorator_filter,
-            joins=self.joins,
-            metavar_filters=self.metavar_filters,
-            composite=self.composite,
-            nth_child=self.nth_child,
-            lang_scope=self.lang_scope,
-        )
+        return msgspec.structs.replace(self, fields=fields)
 
     def with_relational(self, *constraints: RelationalConstraint) -> Query:
         """Return a new Query with additional relational constraints.
@@ -725,24 +674,7 @@ class Query(msgspec.Struct, frozen=True):
         Query
             New Query instance with appended relational constraints.
         """
-        return Query(
-            entity=self.entity,
-            name=self.name,
-            expand=self.expand,
-            scope=self.scope,
-            fields=self.fields,
-            limit=self.limit,
-            explain=self.explain,
-            pattern_spec=self.pattern_spec,
-            relational=self.relational + constraints,
-            scope_filter=self.scope_filter,
-            decorator_filter=self.decorator_filter,
-            joins=self.joins,
-            metavar_filters=self.metavar_filters,
-            composite=self.composite,
-            nth_child=self.nth_child,
-            lang_scope=self.lang_scope,
-        )
+        return msgspec.structs.replace(self, relational=self.relational + constraints)
 
     def get_all_relational_constraints(self) -> list[RelationalConstraint]:
         """Get all relational constraints.

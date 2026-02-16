@@ -8,7 +8,7 @@ confidence, degradation status, budgets, and artifact references.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Literal
 
 import msgspec
@@ -20,6 +20,7 @@ from tools.cq.core.semantic_contracts import (
 )
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.summary_contract import CqSummary, coerce_semantic_telemetry
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ InsightSource = Literal["search", "calls", "entity"]
 Availability = Literal["full", "partial", "unavailable"]
 NeighborhoodSource = Literal["structural", "semantic", "heuristic", "none"]
 RiskLevel = Literal["low", "med", "high"]
+type SummaryLike = CqSummary | Mapping[str, object]
 
 _DEFAULT_TOP_CANDIDATES = 3
 _DEFAULT_PREVIEW_PER_SLICE = 5
@@ -39,6 +41,12 @@ _MEDIUM_CALLER_STRICT_THRESHOLD = 3
 _ARG_VARIANCE_THRESHOLD = 3
 _FILES_WITH_CALLS_THRESHOLD = 3
 _DEFAULT_SEMANTIC_TARGETS = 1
+
+
+def _summary_value(summary: SummaryLike, key: str) -> object:
+    if isinstance(summary, CqSummary):
+        return getattr(summary, key)
+    return summary.get(key)
 
 
 class InsightLocationV1(CqStruct, frozen=True):
@@ -149,7 +157,7 @@ class FrontDoorInsightV1(CqStruct, frozen=True):
 class SearchInsightBuildRequestV1(CqStruct, frozen=True):
     """Typed request contract for search insight assembly."""
 
-    summary: dict[str, object]
+    summary: SummaryLike
     primary_target: Finding | None
     target_candidates: tuple[Finding, ...]
     neighborhood: InsightNeighborhoodV1 | None = None
@@ -177,7 +185,7 @@ class CallsInsightBuildRequestV1(CqStruct, frozen=True):
 class EntityInsightBuildRequestV1(CqStruct, frozen=True):
     """Typed request contract for entity insight assembly."""
 
-    summary: dict[str, object]
+    summary: SummaryLike
     primary_target: Finding | None
     neighborhood: InsightNeighborhoodV1 | None = None
     risk: InsightRiskV1 | None = None
@@ -444,7 +452,8 @@ def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsig
     """
     target = _target_from_finding(
         request.primary_target,
-        fallback_symbol=_string_or_none(request.summary.get("query")) or "search target",
+        fallback_symbol=_string_or_none(_summary_value(request.summary, "query"))
+        or "search target",
         fallback_kind="query",
         selection_reason=(
             "top_definition" if request.primary_target is not None else "fallback_query"
@@ -455,7 +464,7 @@ def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsig
         confidence,
         evidence_kind=confidence.evidence_kind
         if confidence.evidence_kind != "unknown"
-        else _string_or_none(request.summary.get("scan_method")) or "resolved_ast",
+        else _string_or_none(_summary_value(request.summary, "scan_method")) or "resolved_ast",
     )
 
     neighborhood = request.neighborhood or _empty_neighborhood()
@@ -531,10 +540,10 @@ def build_entity_insight(request: EntityInsightBuildRequestV1) -> FrontDoorInsig
     """
     target = _target_from_finding(
         request.primary_target,
-        fallback_symbol=_string_or_none(request.summary.get("query"))
-        or _string_or_none(request.summary.get("entity_kind"))
+        fallback_symbol=_string_or_none(_summary_value(request.summary, "query"))
+        or _string_or_none(_summary_value(request.summary, "entity_kind"))
         or "entity target",
-        fallback_kind=_string_or_none(request.summary.get("entity_kind")) or "entity",
+        fallback_kind=_string_or_none(_summary_value(request.summary, "entity_kind")) or "entity",
         selection_reason=(
             "top_entity_result" if request.primary_target is not None else "fallback_query"
         ),
@@ -766,7 +775,7 @@ def _confidence_from_findings(findings: Sequence[Finding]) -> InsightConfidenceV
     )
 
 
-def _degradation_from_summary(summary: dict[str, object]) -> InsightDegradationV1:
+def _degradation_from_summary(summary: SummaryLike) -> InsightDegradationV1:
     provider, semantic_available = _semantic_provider_and_availability(summary)
     attempted, applied, failed, timed_out = _read_semantic_telemetry(summary)
     semantic_reasons: list[str] = []
@@ -792,13 +801,13 @@ def _degradation_from_summary(summary: dict[str, object]) -> InsightDegradationV
     )
 
     scan = "ok"
-    if bool(summary.get("timed_out")):
+    if bool(_summary_value(summary, "timed_out")):
         scan = "timed_out"
-    elif bool(summary.get("truncated")):
+    elif bool(_summary_value(summary, "truncated")):
         scan = "truncated"
 
     scope_filter = "none"
-    dropped = summary.get("dropped_by_scope")
+    dropped = _summary_value(summary, "dropped_by_scope")
     if isinstance(dropped, dict) and dropped:
         scope_filter = "dropped"
 
@@ -1006,105 +1015,38 @@ def _empty_neighborhood() -> InsightNeighborhoodV1:
 
 
 def to_public_front_door_insight_dict(insight: FrontDoorInsightV1) -> dict[str, object]:
-    """Serialize insight with explicit/full schema fields for public JSON output.
+    """Serialize insight contract to deterministic builtins mapping.
 
     Returns:
-        Public JSON-compatible dictionary representation of insight.
+    -------
+    dict[str, object]
+        Deterministic JSON-serializable mapping.
     """
-    return {
-        "source": insight.source,
-        "schema_version": insight.schema_version,
-        "target": _serialize_target(insight.target),
-        "neighborhood": {
-            "callers": _serialize_slice(insight.neighborhood.callers),
-            "callees": _serialize_slice(insight.neighborhood.callees),
-            "references": _serialize_slice(insight.neighborhood.references),
-            "hierarchy_or_scope": _serialize_slice(insight.neighborhood.hierarchy_or_scope),
-        },
-        "risk": {
-            "level": insight.risk.level,
-            "drivers": list(insight.risk.drivers),
-            "counters": _serialize_risk_counters(insight.risk.counters),
-        },
-        "confidence": {
-            "evidence_kind": insight.confidence.evidence_kind,
-            "score": float(insight.confidence.score),
-            "bucket": insight.confidence.bucket,
-        },
-        "degradation": {
-            "semantic": insight.degradation.semantic,
-            "scan": insight.degradation.scan,
-            "scope_filter": insight.degradation.scope_filter,
-            "notes": list(insight.degradation.notes),
-        },
-        "budget": {
-            "top_candidates": int(insight.budget.top_candidates),
-            "preview_per_slice": int(insight.budget.preview_per_slice),
-            "semantic_targets": int(insight.budget.semantic_targets),
-        },
-        "artifact_refs": {
-            "diagnostics": insight.artifact_refs.diagnostics,
-            "telemetry": insight.artifact_refs.telemetry,
-            "neighborhood_overflow": insight.artifact_refs.neighborhood_overflow,
-        },
-    }
+    from tools.cq.core.front_door_serialization import (
+        to_public_front_door_insight_dict as _serialize_front_door,
+    )
 
-
-def _serialize_target(target: InsightTargetV1) -> dict[str, object]:
-    return {
-        "symbol": target.symbol,
-        "kind": target.kind,
-        "location": {
-            "file": target.location.file,
-            "line": target.location.line,
-            "col": target.location.col,
-        },
-        "signature": target.signature,
-        "qualname": target.qualname,
-        "selection_reason": target.selection_reason,
-    }
-
-
-def _serialize_slice(slice_payload: InsightSliceV1) -> dict[str, object]:
-    return {
-        "total": int(slice_payload.total),
-        "preview": [msgspec.to_builtins(node) for node in slice_payload.preview],
-        "availability": slice_payload.availability,
-        "source": slice_payload.source,
-        "overflow_artifact_ref": slice_payload.overflow_artifact_ref,
-    }
-
-
-def _serialize_risk_counters(counters: InsightRiskCountersV1) -> dict[str, int]:
-    return {
-        "callers": int(counters.callers),
-        "callees": int(counters.callees),
-        "files_with_calls": int(counters.files_with_calls),
-        "arg_shape_count": int(counters.arg_shape_count),
-        "forwarding_count": int(counters.forwarding_count),
-        "hazard_count": int(counters.hazard_count),
-        "closure_capture_count": int(counters.closure_capture_count),
-    }
+    return _serialize_front_door(insight)
 
 
 def _semantic_provider_and_availability(
-    summary: dict[str, object],
+    summary: SummaryLike,
 ) -> tuple[Literal["python_static", "rust_static", "none"], bool]:
     py_attempted = 0
     rust_attempted = 0
-    py_telemetry = summary.get("python_semantic_telemetry")
-    if isinstance(py_telemetry, dict):
-        py_attempted = _int_or_none(py_telemetry.get("attempted")) or 0
-    rust_telemetry = summary.get("rust_semantic_telemetry")
-    if isinstance(rust_telemetry, dict):
-        rust_attempted = _int_or_none(rust_telemetry.get("attempted")) or 0
+    py_telemetry = coerce_semantic_telemetry(_summary_value(summary, "python_semantic_telemetry"))
+    if py_telemetry is not None:
+        py_attempted = py_telemetry.attempted
+    rust_telemetry = coerce_semantic_telemetry(_summary_value(summary, "rust_semantic_telemetry"))
+    if rust_telemetry is not None:
+        rust_attempted = rust_telemetry.attempted
     if rust_attempted > 0 and py_attempted <= 0:
         return "rust_static", True
     if py_attempted > 0:
         return "python_static", True
 
-    scope = _string_or_none(summary.get("lang_scope")) or "auto"
-    order_raw = summary.get("language_order")
+    scope = _string_or_none(_summary_value(summary, "lang_scope")) or "auto"
+    order_raw = _summary_value(summary, "language_order")
     order: tuple[str, ...]
     if isinstance(order_raw, list):
         order = tuple(str(item) for item in order_raw)
@@ -1120,19 +1062,19 @@ def _semantic_provider_and_availability(
     return "none", False
 
 
-def _read_semantic_telemetry(summary: dict[str, object]) -> tuple[int, int, int, int]:
+def _read_semantic_telemetry(summary: SummaryLike) -> tuple[int, int, int, int]:
     attempted = 0
     applied = 0
     failed = 0
     timed_out = 0
     for key in ("python_semantic_telemetry", "rust_semantic_telemetry"):
-        telemetry = summary.get(key)
-        if not isinstance(telemetry, dict):
+        telemetry = coerce_semantic_telemetry(_summary_value(summary, key))
+        if telemetry is None:
             continue
-        attempted += _int_or_none(telemetry.get("attempted")) or 0
-        applied += _int_or_none(telemetry.get("applied")) or 0
-        failed += _int_or_none(telemetry.get("failed")) or 0
-        timed_out += _int_or_none(telemetry.get("timed_out")) or 0
+        attempted += telemetry.attempted
+        applied += telemetry.applied
+        failed += telemetry.failed
+        timed_out += telemetry.timed_out
     return attempted, applied, failed, timed_out
 
 

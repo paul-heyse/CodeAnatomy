@@ -100,7 +100,7 @@ def relationship_quality_metrics_df_builder(ctx: SessionContext) -> DataFrame:
         ValueError: If no relationship metric rows can be generated.
     """
     from semantics.diagnostics import build_relationship_quality_metrics
-    from semantics.spec_registry import relationship_names
+    from semantics.registry import relationship_names
 
     reports: list[DataFrame] = []
     for name in relationship_names():
@@ -131,7 +131,7 @@ def relationship_ambiguity_report_df_builder(ctx: SessionContext) -> DataFrame:
         ValueError: If no ambiguity report rows can be generated.
     """
     from semantics.diagnostics import build_ambiguity_analysis
-    from semantics.spec_registry import relationship_names
+    from semantics.registry import relationship_names
 
     reports: list[DataFrame] = []
     for name in relationship_names():
@@ -168,9 +168,9 @@ def relationship_decisions_df_builder(ctx: SessionContext) -> DataFrame:
     Returns:
         DataFrame: Flattened relationship decision diagnostics.
     """
-    from semantics.diagnostics import build_relationship_decisions_view
+    from semantics.diagnostics import build_relationship_candidates_view
 
-    return build_relationship_decisions_view(ctx)
+    return build_relationship_candidates_view(ctx)
 
 
 def schema_anomalies_df_builder(ctx: SessionContext) -> DataFrame:

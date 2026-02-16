@@ -25,7 +25,7 @@ if TYPE_CHECKING:
         ErrorKind,
     )
     from datafusion_engine.io.adapter import DataFusionIOAdapter
-    from datafusion_engine.io.write import (
+    from datafusion_engine.io.write_core import (
         WriteFormat,
         WriteMode,
         WritePipeline,
@@ -67,23 +67,27 @@ if TYPE_CHECKING:
         ValidationViolation,
         ViolationType,
     )
-    from datafusion_engine.schema.introspection import SchemaIntrospector
+    from datafusion_engine.schema.introspection_core import SchemaIntrospector
     from datafusion_engine.session.facade import (
         DataFusionExecutionFacade,
         ExecutionResult,
         ExecutionResultKind,
     )
-    from datafusion_engine.session.runtime import (
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_config_policies import (
         DEFAULT_DF_POLICY,
         SCHEMA_HARDENING_PRESETS,
-        AdapterExecutionPolicy,
         DataFusionConfigPolicy,
-        DataFusionRuntimeProfile,
-        ExecutionLabel,
-        MemoryPool,
         SchemaHardeningProfile,
+    )
+    from datafusion_engine.session.runtime_hooks import (
         apply_execution_label,
         apply_execution_policy,
+    )
+    from datafusion_engine.session.runtime_profile_config import (
+        AdapterExecutionPolicy,
+        ExecutionLabel,
+        MemoryPool,
     )
     from datafusion_engine.session.streaming import StreamingExecutionResult
     from datafusion_engine.tables.param import (
@@ -164,21 +168,36 @@ __all__ = [
 
 _EXPORTS: dict[str, tuple[str, str]] = {
     # Runtime and configuration
-    "DEFAULT_DF_POLICY": ("datafusion_engine.session.runtime", "DEFAULT_DF_POLICY"),
-    "SCHEMA_HARDENING_PRESETS": ("datafusion_engine.session.runtime", "SCHEMA_HARDENING_PRESETS"),
-    "AdapterExecutionPolicy": ("datafusion_engine.session.runtime", "AdapterExecutionPolicy"),
-    "ExecutionLabel": ("datafusion_engine.session.runtime", "ExecutionLabel"),
+    "DEFAULT_DF_POLICY": (
+        "datafusion_engine.session.runtime_config_policies",
+        "DEFAULT_DF_POLICY",
+    ),
+    "SCHEMA_HARDENING_PRESETS": (
+        "datafusion_engine.session.runtime_config_policies",
+        "SCHEMA_HARDENING_PRESETS",
+    ),
+    "AdapterExecutionPolicy": (
+        "datafusion_engine.session.runtime_profile_config",
+        "AdapterExecutionPolicy",
+    ),
+    "ExecutionLabel": ("datafusion_engine.session.runtime_profile_config", "ExecutionLabel"),
     "DataFusionCompileOptions": ("datafusion_engine.compile.options", "DataFusionCompileOptions"),
-    "DataFusionConfigPolicy": ("datafusion_engine.session.runtime", "DataFusionConfigPolicy"),
+    "DataFusionConfigPolicy": (
+        "datafusion_engine.session.runtime_config_policies",
+        "DataFusionConfigPolicy",
+    ),
     "DataFusionEngineError": ("datafusion_engine.errors", "DataFusionEngineError"),
     "DataFusionRuntimeProfile": ("datafusion_engine.session.runtime", "DataFusionRuntimeProfile"),
     "DeltaStorePolicy": ("datafusion_engine.delta.store_policy", "DeltaStorePolicy"),
     "ErrorKind": ("datafusion_engine.errors", "ErrorKind"),
-    "SchemaHardeningProfile": ("datafusion_engine.session.runtime", "SchemaHardeningProfile"),
+    "SchemaHardeningProfile": (
+        "datafusion_engine.session.runtime_config_policies",
+        "SchemaHardeningProfile",
+    ),
     "DataFusionSqlPolicy": ("datafusion_engine.compile.options", "DataFusionSqlPolicy"),
-    "MemoryPool": ("datafusion_engine.session.runtime", "MemoryPool"),
-    "apply_execution_label": ("datafusion_engine.session.runtime", "apply_execution_label"),
-    "apply_execution_policy": ("datafusion_engine.session.runtime", "apply_execution_policy"),
+    "MemoryPool": ("datafusion_engine.session.runtime_profile_config", "MemoryPool"),
+    "apply_execution_label": ("datafusion_engine.session.runtime_hooks", "apply_execution_label"),
+    "apply_execution_policy": ("datafusion_engine.session.runtime_hooks", "apply_execution_policy"),
     # Catalog and schema
     "RegistryCatalogProvider": ("datafusion_engine.catalog.provider", "RegistryCatalogProvider"),
     "RegistrySchemaProvider": ("datafusion_engine.catalog.provider", "RegistrySchemaProvider"),
@@ -197,7 +216,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "datafusion_engine.schema.nested_views",
         "extract_nested_schema_names",
     ),
-    "SchemaIntrospector": ("datafusion_engine.schema.introspection", "SchemaIntrospector"),
+    "SchemaIntrospector": ("datafusion_engine.schema.introspection_core", "SchemaIntrospector"),
     # Bridge and execution
     # Streaming Execution
     "StreamingExecutionResult": (
@@ -229,10 +248,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     # IO Adapter
     "DataFusionIOAdapter": ("datafusion_engine.io.adapter", "DataFusionIOAdapter"),
     # Write Pipeline
-    "WriteFormat": ("datafusion_engine.io.write", "WriteFormat"),
-    "WriteMode": ("datafusion_engine.io.write", "WriteMode"),
-    "WritePipeline": ("datafusion_engine.io.write", "WritePipeline"),
-    "WriteRequest": ("datafusion_engine.io.write", "WriteRequest"),
+    "WriteFormat": ("datafusion_engine.io.write_core", "WriteFormat"),
+    "WriteMode": ("datafusion_engine.io.write_core", "WriteMode"),
+    "WritePipeline": ("datafusion_engine.io.write_core", "WritePipeline"),
+    "WriteRequest": ("datafusion_engine.io.write_core", "WriteRequest"),
     # Schema Contracts
     "ContractRegistry": ("datafusion_engine.schema.contracts", "ContractRegistry"),
     "EvolutionPolicy": ("datafusion_engine.schema.contracts", "EvolutionPolicy"),

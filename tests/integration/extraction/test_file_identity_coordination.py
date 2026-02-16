@@ -13,8 +13,8 @@ from typing import Protocol, cast
 import pyarrow as pa
 import pytest
 
-from extract.extractors.ast_extract import AstExtractOptions, extract_ast_tables
-from extract.extractors.cst_extract import CstExtractOptions, extract_cst_tables
+from extract.extractors.ast import AstExtractOptions, extract_ast_tables
+from extract.extractors.cst import CstExtractOptions, extract_cst_tables
 from extract.extractors.symtable_extract import SymtableExtractOptions, extract_symtables_table
 
 SHA256_HEX_LENGTH = 64

@@ -7,7 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from tests.harness.profiles import conformance_profile
 from tests.harness.snapshot_key import assert_snapshot_key_payload, snapshot_key_payload
 from tests.test_helpers.arrow_seed import register_arrow_table

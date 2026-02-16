@@ -41,7 +41,8 @@ def test_dml_policy_enforces_read_only() -> None:
 
 def test_statement_sql_options_respect_runtime_service_policy() -> None:
     """Test statement sql options respect runtime service policy."""
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
 
     profile = DataFusionRuntimeProfile(
         policies=PolicyBundleConfig(sql_policy_name="service"),

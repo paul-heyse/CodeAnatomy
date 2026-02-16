@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from storage.deltalake.delta import snapshot_key_for_table
+from storage.deltalake.delta_metadata import snapshot_key_for_table
 
 
 def snapshot_key_payload(table_uri: str, version: int) -> dict[str, object]:

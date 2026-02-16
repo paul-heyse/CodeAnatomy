@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
+from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.core.schema import Anchor, CqResult, Finding
 from tools.cq.core.scoring import (
     ConfidenceSignals,
@@ -75,8 +76,8 @@ def process_import_query(
             matching_imports,
         )
 
-    result.summary["total_imports"] = len(import_records)
-    result.summary["matches"] = len(result.key_findings)
+    result.summary.total_imports = len(import_records)
+    result.summary.matches = len(result.key_findings)
 
 
 def process_def_query(
@@ -250,9 +251,9 @@ def finalize_def_query_summary(result: CqResult, scan_ctx: ScanContext) -> None:
     scan_ctx
         Scan context
     """
-    result.summary["total_defs"] = len(scan_ctx.def_records)
-    result.summary["total_calls"] = len(scan_ctx.call_records)
-    result.summary["matches"] = len(result.key_findings)
+    result.summary.total_defs = len(scan_ctx.def_records)
+    result.summary.total_calls = len(scan_ctx.call_records)
+    result.summary.matches = len(result.key_findings)
 
 
 def filter_to_matching(
@@ -304,37 +305,13 @@ def matches_entity(record: SgRecord, entity: str | None) -> bool:
     bool
         True if the record matches the entity type
     """
-    function_kinds = {
-        "function",
-        "async_function",
-        "function_typeparams",
-    }
-    class_kinds = {
-        "class",
-        "class_bases",
-        "class_typeparams",
-        "class_typeparams_bases",
-        "struct",
-        "enum",
-        "trait",
-    }
-    import_kinds = {
-        "import",
-        "import_as",
-        "from_import",
-        "from_import_as",
-        "from_import_multi",
-        "from_import_paren",
-        "use_declaration",
-    }
-    decorator_kinds = function_kinds | class_kinds
     if entity is None:
         return False
 
     if entity == "function":
-        is_match = record.kind in function_kinds
+        is_match = record.kind in ENTITY_KINDS.function_kinds
     elif entity == "class":
-        is_match = record.kind in class_kinds
+        is_match = record.kind in ENTITY_KINDS.class_kinds
     elif entity == "method":
         # Methods are functions inside classes - would need context analysis
         is_match = record.kind in {"function", "async_function"}
@@ -343,10 +320,10 @@ def matches_entity(record: SgRecord, entity: str | None) -> bool:
     elif entity == "callsite":
         is_match = record.record == "call"
     elif entity == "import":
-        is_match = record.kind in import_kinds
+        is_match = record.kind in ENTITY_KINDS.import_kinds
     elif entity == "decorator":
         # Decorators are applied to functions/classes - check for decorated definitions
-        is_match = record.kind in decorator_kinds
+        is_match = record.kind in ENTITY_KINDS.decorator_kinds
     else:
         is_match = False
 

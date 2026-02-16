@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from typing import cast
 
 import pytest
@@ -26,53 +26,53 @@ def test_table_provider_metadata_with_schema_adapter_enabled() -> None:
     assert metadata.schema_adapter_enabled is True
 
 
-def test_with_schema_adapter_method() -> None:
-    """with_schema_adapter method should update the flag."""
+def test_dataclass_replace_updates_schema_adapter_flag() -> None:
+    """dataclasses.replace should update schema_adapter_enabled."""
     metadata = TableProviderMetadata(table_name="test_table")
     assert metadata.schema_adapter_enabled is False
 
-    enabled_metadata = metadata.with_schema_adapter(enabled=True)
+    enabled_metadata = replace(metadata, schema_adapter_enabled=True)
     assert enabled_metadata.schema_adapter_enabled is True
     assert not metadata.schema_adapter_enabled  # Original unchanged
 
-    disabled_metadata = enabled_metadata.with_schema_adapter(enabled=False)
+    disabled_metadata = replace(enabled_metadata, schema_adapter_enabled=False)
     assert disabled_metadata.schema_adapter_enabled is False
 
 
-def test_with_schema_adapter_default_enabled() -> None:
-    """with_schema_adapter should default to enabled=True."""
+def test_dataclass_replace_schema_adapter_default_enabled() -> None:
+    """dataclasses.replace can enable schema_adapter_enabled."""
     metadata = TableProviderMetadata(table_name="test_table")
-    enabled_metadata = metadata.with_schema_adapter()
+    enabled_metadata = replace(metadata, schema_adapter_enabled=True)
     assert enabled_metadata.schema_adapter_enabled is True
 
 
-def test_with_ddl_preserves_schema_adapter_flag() -> None:
-    """with_ddl should preserve schema_adapter_enabled."""
+def test_replace_ddl_preserves_schema_adapter_flag() -> None:
+    """replace(ddl=...) should preserve schema_adapter_enabled."""
     metadata = TableProviderMetadata(
         table_name="test_table",
         schema_adapter_enabled=True,
     )
-    updated = metadata.with_ddl("CREATE EXTERNAL TABLE test_table ...")
+    updated = replace(metadata, ddl="CREATE EXTERNAL TABLE test_table ...")
     assert updated.schema_adapter_enabled is True
 
 
-def test_with_constraints_preserves_schema_adapter_flag() -> None:
-    """with_constraints should preserve schema_adapter_enabled."""
+def test_replace_constraints_preserves_schema_adapter_flag() -> None:
+    """replace(constraints=...) should preserve schema_adapter_enabled."""
     metadata = TableProviderMetadata(
         table_name="test_table",
         schema_adapter_enabled=True,
     )
-    updated = metadata.with_constraints(("constraint1",))
+    updated = replace(metadata, constraints=("constraint1",))
     assert updated.schema_adapter_enabled is True
 
 
-def test_with_schema_identity_hash_preserves_schema_adapter_flag() -> None:
-    """with_schema_identity_hash should preserve schema_adapter_enabled."""
+def test_replace_schema_identity_hash_preserves_schema_adapter_flag() -> None:
+    """replace(schema_identity_hash=...) should preserve schema_adapter_enabled."""
     metadata = TableProviderMetadata(
         table_name="test_table",
         schema_adapter_enabled=True,
     )
-    updated = metadata.with_schema_identity_hash("fingerprint123")
+    updated = replace(metadata, schema_identity_hash="fingerprint123")
     assert updated.schema_adapter_enabled is True
 
 

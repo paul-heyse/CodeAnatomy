@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datafusion import SessionContext
 
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_compile import effective_ident_normalization
+from datafusion_engine.session.runtime_session import (
     SessionRuntime,
-    effective_ident_normalization,
     session_runtime_for_context,
 )
 

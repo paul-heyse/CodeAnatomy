@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.dataset.registration import DataFusionCachePolicy
+    from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.tables.spec import TableSpec
@@ -186,7 +186,7 @@ class ProviderRegistry(
         Raises:
             ValueError: If a conflicting registration exists and overwrite is false.
         """
-        from datafusion_engine.schema.introspection import table_names_snapshot
+        from datafusion_engine.schema.introspection_core import table_names_snapshot
         from datafusion_engine.session.helpers import deregister_table
 
         if not overwrite:
@@ -310,7 +310,7 @@ class ProviderRegistry(
         """
         if self._udf_snapshot_hash is not None:
             return self._udf_snapshot_hash
-        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
+        from datafusion_engine.udf.extension_core import rust_udf_snapshot
 
         try:
             snapshot = rust_udf_snapshot(self.ctx)
@@ -363,7 +363,7 @@ class ProviderRegistry(
         Raises:
             ValueError: If runtime profile is not configured.
         """
-        from datafusion_engine.dataset.registration import (
+        from datafusion_engine.dataset.registration_core import (
             _build_registration_context,
             _register_dataset_with_context,
         )
@@ -375,7 +375,7 @@ class ProviderRegistry(
 
         dataset_spec = spec.dataset_spec
         if dataset_spec is None:
-            from schema_spec.contracts import dataset_spec_from_schema
+            from schema_spec.dataset_spec import dataset_spec_from_schema
 
             dataset_spec = dataset_spec_from_schema(spec.name, spec.schema)
         overrides = None

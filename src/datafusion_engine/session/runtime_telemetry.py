@@ -16,6 +16,7 @@ from datafusion_engine.delta.store_policy import DeltaStorePolicy, delta_store_p
 from datafusion_engine.plan.perf_policy import (
     PerformancePolicy,
 )
+from datafusion_engine.session._session_constants import CACHE_PROFILES
 from datafusion_engine.session.contracts import (
     IdentifierNormalizationMode,
     TelemetryEnrichmentPolicy,
@@ -41,34 +42,12 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-KIB: int = 1024
-MIB: int = 1024 * KIB
-
 SETTINGS_HASH_VERSION: int = 1
 TELEMETRY_PAYLOAD_VERSION: int = 2
 
 _TELEMETRY_MSGPACK_ENCODER = MSGPACK_ENCODER
 
 _DEFAULT_PERFORMANCE_POLICY = PerformancePolicy()
-
-CACHE_PROFILES: Mapping[str, Mapping[str, str]] = {
-    "snapshot_pinned": {
-        "datafusion.runtime.list_files_cache_limit": str(64 * MIB),
-        "datafusion.runtime.metadata_cache_limit": str(128 * MIB),
-    },
-    "always_latest_ttl30s": {
-        "datafusion.runtime.list_files_cache_limit": str(64 * MIB),
-        "datafusion.runtime.list_files_cache_ttl": "30s",
-        "datafusion.runtime.metadata_cache_limit": str(128 * MIB),
-    },
-    "multi_tenant_strict": {
-        "datafusion.runtime.list_files_cache_limit": "0",
-        "datafusion.runtime.metadata_cache_limit": "0",
-    },
-}
 
 # ---------------------------------------------------------------------------
 # PyArrow Schema Constants

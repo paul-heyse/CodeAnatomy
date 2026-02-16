@@ -17,8 +17,8 @@ from datafusion_engine.bootstrap.zero_row import (
 )
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.session.facade import DataFusionExecutionFacade
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import (
     DataSourceConfig,
     ExtractOutputConfig,
     SemanticOutputConfig,

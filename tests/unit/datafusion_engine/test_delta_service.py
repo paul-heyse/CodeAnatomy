@@ -14,8 +14,9 @@ from datafusion_engine.dataset.resolution import DatasetResolution
 from datafusion_engine.delta import service as delta_service
 from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
 from datafusion_engine.delta.store_policy import DeltaStorePolicy
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
-from storage.deltalake.delta import DeltaReadRequest
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
+from storage.deltalake.delta_read import DeltaReadRequest
 
 DELTA_VERSION = 7
 FINGERPRINT_LENGTH = 16

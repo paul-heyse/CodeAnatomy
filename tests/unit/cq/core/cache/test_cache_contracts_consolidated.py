@@ -17,13 +17,15 @@ from tools.cq.core.cache.base_contracts import (
 )
 from tools.cq.core.cache.contracts import (
     CallsTargetCacheV1,
-    PatternFragmentCacheV1,
-    QueryEntityScanCacheV1,
     ScopeFileStatCacheV1,
     ScopeSnapshotCacheV1,
     SearchArtifactBundleV1,
     SearchArtifactIndexEntryV1,
     SearchArtifactIndexV1,
+)
+from tools.cq.search.cache.contracts import (
+    PatternFragmentCacheV1,
+    QueryEntityScanCacheV1,
     SearchCandidatesCacheV1,
     SearchEnrichmentAnchorCacheV1,
     SgRecordCacheV1,

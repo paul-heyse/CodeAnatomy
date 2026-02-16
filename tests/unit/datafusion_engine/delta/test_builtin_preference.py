@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from datafusion_engine.delta.service import DeltaFeatureOps, DeltaService
-from storage.deltalake.delta import DeltaFeatureMutationOptions
+from storage.deltalake.delta_read import DeltaFeatureMutationOptions
 
 
 @dataclass

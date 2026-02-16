@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tools.cq.astgrep.sgpy_scanner import SgRecord
+    from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.schema import CqResult
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.index.files import FileFilterDecision
@@ -29,6 +30,7 @@ class EntityQueryRequest:
     paths: list[Path]
     scope_globs: list[str] | None
     argv: list[str]
+    services: CqRuntimeServices
     run_id: str | None = None
     query_text: str | None = None
     match_spans: dict[str, list[tuple[int, int]]] | None = None
@@ -45,6 +47,7 @@ class PatternQueryRequest:
     root: Path
     files: list[Path]
     argv: list[str]
+    services: CqRuntimeServices
     run_id: str | None = None
     query_text: str | None = None
     decisions: list[FileFilterDecision] | None = None

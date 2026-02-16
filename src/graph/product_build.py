@@ -19,12 +19,15 @@ from obs.otel import (
     OtelBootstrapOptions,
     configure_otel,
     emit_diagnostics_event,
+    record_exception,
+    reset_run_id,
+    root_span,
+    set_run_id,
+    set_span_attributes,
     snapshot_diagnostics,
     start_build_heartbeat,
     write_run_diagnostics_bundle,
 )
-from obs.otel.run_context import reset_run_id, set_run_id
-from obs.otel.tracing import record_exception, root_span, set_span_attributes
 from planning_engine.output_contracts import (
     CPG_OUTPUT_CANONICAL_TO_LEGACY,
     ENGINE_CPG_OUTPUTS,

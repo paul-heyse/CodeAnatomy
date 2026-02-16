@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 from datafusion import SessionContext
 
-from datafusion_engine.delta.control_plane import (
+from datafusion_engine.delta.control_plane_core import (
     DeltaDeleteRequest,
     DeltaMergeRequest,
     DeltaUpdateRequest,

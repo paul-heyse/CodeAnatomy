@@ -15,7 +15,7 @@ from datafusion import DataFrame, SessionContext
 from opentelemetry.semconv.attributes import db_attributes
 
 from datafusion_engine.io.adapter import DataFusionIOAdapter
-from datafusion_engine.io.write import (
+from datafusion_engine.io.write_core import (
     WritePipeline,
     WriteRequest,
     WriteViewRequest,
@@ -31,10 +31,17 @@ from datafusion_engine.plan.result_types import (
     ExecutionResult,
     ExecutionResultKind,
 )
-from datafusion_engine.session.runtime import session_runtime_for_context
-from obs.otel.metrics import record_datafusion_duration, record_error, record_write_duration
-from obs.otel.scopes import SCOPE_DATAFUSION
-from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, span_attributes
+from datafusion_engine.session.runtime_session import session_runtime_for_context
+from obs.otel import (
+    SCOPE_DATAFUSION,
+    get_tracer,
+    record_datafusion_duration,
+    record_error,
+    record_exception,
+    record_write_duration,
+    set_span_attributes,
+    span_attributes,
+)
 from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
@@ -42,11 +49,12 @@ if TYPE_CHECKING:
         ZeroRowBootstrapReport,
         ZeroRowBootstrapRequest,
     )
-    from datafusion_engine.dataset.registration import DataFusionCachePolicy
+    from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scheduling import ScanUnit
-    from datafusion_engine.schema.introspection import SchemaIntrospector
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.schema.introspection_core import SchemaIntrospector
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_session import SessionRuntime
     from semantics.program_manifest import ManifestDatasetResolver, SemanticProgramManifest
 
 
@@ -81,7 +89,7 @@ def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanArtifac
     Raises:
         RuntimeError: If the operation cannot be completed.
     """
-    from datafusion_engine.udf.extension_runtime import (
+    from datafusion_engine.udf.extension_core import (
         rust_udf_snapshot,
         rust_udf_snapshot_hash,
         validate_required_udfs,
@@ -138,7 +146,7 @@ class DataFusionExecutionFacade:
 
         """
         from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
-        from datafusion_engine.udf.extension_runtime import extension_capabilities_report
+        from datafusion_engine.udf.extension_core import extension_capabilities_report
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
@@ -461,7 +469,7 @@ class DataFusionExecutionFacade:
             or not self.runtime_profile.diagnostics.capture_plan_artifacts
         ):
             return
-        from datafusion_engine.plan.artifact_store import (
+        from datafusion_engine.plan.artifact_store_core import (
             PlanArtifactBuildRequest,
             persist_execution_artifact,
         )
@@ -892,7 +900,7 @@ class DataFusionExecutionFacade:
         SchemaIntrospector
             Introspector for information_schema queries.
         """
-        from datafusion_engine.schema.introspection import SchemaIntrospector
+        from datafusion_engine.schema.introspection_core import SchemaIntrospector
 
         sql_options = (
             self.runtime_profile.sql_options() if self.runtime_profile is not None else None

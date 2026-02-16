@@ -21,12 +21,12 @@ from tools.cq.macros.calls_target_cache import (
     resolve_target_payload_state,
     target_scope_snapshot_digest,
 )
+from tools.cq.macros.constants import CALLS_TARGET_CALLEE_PREVIEW
 from tools.cq.query.language import QueryLanguage
 from tools.cq.query.sg_parser import SgRecord, sg_scan
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 
-_CALLS_TARGET_CALLEE_PREVIEW = 10
 _RUST_DEF_RE = re.compile(
     r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?"
     r"(?:extern(?:\s+\"[^\"]+\")?\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b"
@@ -421,7 +421,7 @@ def add_target_callees_section(
     target_callees: Counter[str],
     score: ScoreDetails | None,
     *,
-    preview_limit: int = _CALLS_TARGET_CALLEE_PREVIEW,
+    preview_limit: int = CALLS_TARGET_CALLEE_PREVIEW,
 ) -> None:
     """Append bounded target-callee preview section."""
     if not target_callees:
@@ -450,7 +450,7 @@ class AttachTargetMetadataRequestV1(CqStruct, frozen=True):
     root: Path
     function_name: str
     score: ScoreDetails | None = None
-    preview_limit: int = _CALLS_TARGET_CALLEE_PREVIEW
+    preview_limit: int = CALLS_TARGET_CALLEE_PREVIEW
     target_language: QueryLanguage | None = None
     run_id: str | None = None
 
@@ -508,8 +508,8 @@ def attach_target_metadata(
             run_id=request.run_id,
         )
     if target_location is not None:
-        result.summary["target_file"] = target_location[0]
-        result.summary["target_line"] = target_location[1]
+        result.summary.target_file = target_location[0]
+        result.summary.target_line = target_location[1]
     add_target_callees_section(
         result,
         target_callees,

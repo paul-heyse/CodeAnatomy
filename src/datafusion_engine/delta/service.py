@@ -29,9 +29,15 @@ from datafusion_engine.delta.store_policy import (
     resolve_delta_store_policy,
 )
 from datafusion_engine.lineage.diagnostics import record_artifact
-from obs.otel.run_context import get_run_id
+from obs.otel import get_run_id
 from serde_msgspec import StructBaseStrict
-from storage.deltalake.delta import (
+from storage.deltalake.delta_maintenance import (
+    cleanup_delta_log,
+    create_delta_checkpoint,
+    vacuum_delta,
+)
+from storage.deltalake.delta_metadata import delta_table_schema
+from storage.deltalake.delta_read import (
     DeltaCdfOptions,
     DeltaDeleteWhereRequest,
     DeltaFeatureMutationOptions,
@@ -40,15 +46,12 @@ from storage.deltalake.delta import (
     DeltaSchemaRequest,
     DeltaVacuumOptions,
     StorageOptions,
-    cleanup_delta_log,
-    create_delta_checkpoint,
     delta_add_constraints,
     delta_cdf_enabled,
     delta_delete_where,
     delta_history_snapshot,
     delta_merge_arrow,
     delta_protocol_snapshot,
-    delta_table_schema,
     delta_table_version,
     enable_delta_change_data_feed,
     enable_delta_check_constraints,
@@ -62,7 +65,6 @@ from storage.deltalake.delta import (
     read_delta_cdf_eager,
     read_delta_table,
     read_delta_table_eager,
-    vacuum_delta,
 )
 
 if TYPE_CHECKING:
@@ -883,24 +885,8 @@ class DeltaService:
         raise ValueError(msg)
 
 
-def delta_service_for_profile(profile: DataFusionRuntimeProfile | None) -> DeltaService:
-    """Return a DeltaService for the provided runtime profile.
-
-    Returns:
-    -------
-    DeltaService
-        Delta service bound to the resolved runtime profile.
-    """
-    if profile is None:
-        from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-        profile = DataFusionRuntimeProfile()
-    return DeltaService(profile=profile)
-
-
 __all__ = [
     "DeltaFeatureMutationRequest",
     "DeltaMutationRequest",
     "DeltaService",
-    "delta_service_for_profile",
 ]

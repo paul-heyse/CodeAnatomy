@@ -18,12 +18,11 @@ from extract.coordination.context import (
     FileContext,
     SpanSpec,
     attrs_map,
-    bytes_from_file_ctx,
     file_identity_row,
     span_dict,
     text_from_file_ctx,
 )
-from extract.coordination.line_offsets import LineOffsets
+from extract.coordination.line_offsets import LineOffsets, line_offsets_from_file_ctx
 from extract.coordination.materialization import (
     ExtractMaterializeOptions,
     ExtractPlanOptions,
@@ -49,8 +48,7 @@ from extract.infrastructure.worklists import (
     iter_worklist_contexts,
     worklist_queue_name,
 )
-from obs.otel.scopes import SCOPE_EXTRACT
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_EXTRACT, stage_span
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
@@ -131,13 +129,6 @@ def _symtable_cache_key(
     if not file_ctx.file_id or file_ctx.file_sha256 is None:
         return None
     return (file_ctx.file_id, file_ctx.file_sha256, symtable_files_fingerprint(), compile_type)
-
-
-def _line_offsets(file_ctx: FileContext) -> LineOffsets | None:
-    data = bytes_from_file_ctx(file_ctx)
-    if data is None:
-        return None
-    return LineOffsets.from_bytes(data)
 
 
 def _effective_max_workers(
@@ -536,7 +527,7 @@ def _symtable_file_row(
     cache: Cache | FanoutCache | None,
     cache_ttl: float | None,
 ) -> dict[str, object] | None:
-    line_offsets = _line_offsets(file_ctx)
+    line_offsets = line_offsets_from_file_ctx(file_ctx)
     scope_rows, symbol_rows, scope_edge_rows = _extract_symtable_for_context(
         file_ctx,
         compile_type=options.compile_type,

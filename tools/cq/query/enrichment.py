@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.introspection.symtable_extract import ScopeGraph, extract_scope_graph
 from tools.cq.query.shared_utils import extract_def_name
 
@@ -274,15 +275,12 @@ def _enrich_record(
         Enrichment data (may be empty)
     """
     enrichment: dict[str, object] = {}
-    function_kinds = {"function", "async_function", "function_typeparams"}
-    class_kinds = {"class", "class_bases", "class_typeparams", "class_typeparams_bases"}
-
     # Add symtable info for function/class definitions
-    if record.kind in function_kinds | class_kinds:
+    if record.kind in ENTITY_KINDS.decorator_kinds:
         try:
             matched_lines = source.splitlines()[record.start_line - 1 : record.end_line]
             matched_text = "\n".join(matched_lines)
-            kind = "function" if record.kind in function_kinds else "class"
+            kind = "function" if record.kind in ENTITY_KINDS.function_kinds else "class"
             name = _extract_definition_name(matched_text, kind)
             if name and name in symtable_map:
                 enrichment["symtable_info"] = symtable_map[name]
@@ -290,7 +288,7 @@ def _enrich_record(
             pass
 
     # Add bytecode info for function definitions
-    if tree is not None and record.kind in function_kinds:
+    if tree is not None and record.kind in ENTITY_KINDS.function_kinds:
         bytecode_info = _enrich_with_bytecode(tree, record, file_path)
         if bytecode_info is not None:
             enrichment["bytecode_info"] = bytecode_info

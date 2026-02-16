@@ -37,7 +37,7 @@ from datafusion_engine.kernels import (
     dedupe_kernel,
 )
 from datafusion_engine.schema.alignment import AlignmentInfo, align_table
-from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from datafusion_engine.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema.validation import ArrowValidationOptions
 from datafusion_engine.session.helpers import deregister_table, register_temp_table, temp_table
@@ -79,7 +79,7 @@ def _validate_arrow_table(
     options: ArrowValidationOptions,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> TableLike:
-    module = importlib.import_module("schema_spec.contracts")
+    module = importlib.import_module("schema_spec.dataset_spec")
     validate_fn = cast("_ValidateArrowTable", module.validate_arrow_table)
     return validate_fn(table, spec=spec, options=options, runtime_profile=runtime_profile)
 
@@ -655,7 +655,7 @@ def _datafusion_context(runtime_profile: DataFusionRuntimeProfile | None) -> Ses
 
 
 def _supports_error_detail_aggregation(ctx: SessionContext) -> bool:
-    from datafusion_engine.session.runtime import sql_options_for_profile
+    from datafusion_engine.sql.options import sql_options_for_profile
 
     try:
         names = SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None)).function_names()

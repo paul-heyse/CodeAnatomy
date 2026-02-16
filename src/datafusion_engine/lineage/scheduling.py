@@ -15,7 +15,7 @@ from datafusion_engine.dataset.registry import (
     resolve_datafusion_provider,
 )
 from datafusion_engine.delta.contracts import build_delta_provider_contract
-from datafusion_engine.delta.control_plane import DeltaSnapshotRequest, delta_add_actions
+from datafusion_engine.delta.control_plane_core import DeltaSnapshotRequest, delta_add_actions
 from datafusion_engine.delta.protocol import (
     DeltaProtocolCompatibility,
     DeltaProtocolSnapshot,
@@ -26,9 +26,7 @@ from datafusion_engine.delta.scan_config import (
     delta_scan_identity_hash,
 )
 from datafusion_engine.lineage.reporting import ScanLineage
-from obs.otel.run_context import get_run_id
-from obs.otel.scopes import SCOPE_SCHEDULING
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_SCHEDULING, get_run_id, stage_span
 from serde_artifacts import DeltaScanConfigSnapshot
 from serde_msgspec import to_builtins
 from storage.deltalake import build_delta_file_index_from_add_actions
@@ -479,7 +477,7 @@ def _delta_snapshot_request(location: DatasetLocation) -> DeltaSnapshotRequest:
         ),
         version=pinned_version,
         timestamp=pinned_timestamp,
-        gate=location.resolved.delta_feature_gate,
+        gate=location.delta_feature_gate,
     )
 
 

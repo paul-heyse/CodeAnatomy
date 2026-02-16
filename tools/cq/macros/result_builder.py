@@ -58,17 +58,6 @@ class MacroResultBuilder:
         self.result.summary.update(kwargs)
         return self
 
-    def set_summary_mapping(self, summary: dict[str, object]) -> MacroResultBuilder:
-        """Replace result summary with a copied mapping and return builder.
-
-        Returns:
-        -------
-        MacroResultBuilder
-            Current builder for fluent chaining.
-        """
-        self.result.summary = dict(summary)
-        return self
-
     def set_scoring(self, details: ScoringDetailsV1 | None) -> MacroResultBuilder:
         """Set scoring details used by macro callers and return builder.
 

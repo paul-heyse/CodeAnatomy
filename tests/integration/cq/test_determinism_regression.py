@@ -6,7 +6,10 @@ which is critical for caching and reproducibility guarantees.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
@@ -25,6 +28,7 @@ def test_repeated_runs_produce_identical_summary_payload() -> None:
     """
     # Detect available toolchain
     tc = Toolchain.detect()
+    services = resolve_runtime_services(Path())
 
     # Parse a simple query
     query = parse_query("entity=function in=src/relspec")
@@ -37,6 +41,7 @@ def test_repeated_runs_produce_identical_summary_payload() -> None:
         plan=plan,
         query=query,
         root=".",
+        services=services,
         argv=("cq", "q", "entity=function in=src/relspec"),
     )
 
@@ -79,6 +84,7 @@ def test_pattern_query_determinism() -> None:
     Pattern queries use ast-grep rules and should also be deterministic.
     """
     tc = Toolchain.detect()
+    services = resolve_runtime_services(Path())
 
     # Parse a pattern query
     query = parse_query("pattern='def $F($$$)' in=src/relspec")
@@ -91,6 +97,7 @@ def test_pattern_query_determinism() -> None:
         plan=plan,
         query=query,
         root=".",
+        services=services,
         argv=("cq", "q", "pattern='def $F($$$)' in=src/relspec"),
     )
 

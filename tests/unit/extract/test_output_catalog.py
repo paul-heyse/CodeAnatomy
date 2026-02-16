@@ -7,11 +7,11 @@ from pathlib import Path
 from datafusion_engine.extract.metadata import extract_metadata_specs
 from datafusion_engine.extract.output_catalog import build_extract_output_catalog
 from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_dataset_io import extract_output_locations_for_profile
+from datafusion_engine.session.runtime_profile_config import (
     DataSourceConfig,
     ExtractOutputConfig,
-    extract_output_locations_for_profile,
 )
 from tests.test_helpers.optional_deps import require_datafusion
 

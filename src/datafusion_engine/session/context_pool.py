@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Protocol, cast
 import datafusion
 from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 
+from datafusion_engine.session._session_constants import parse_major_version
+
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
@@ -33,17 +35,7 @@ from datafusion_engine.session.helpers import deregister_table
 _DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION = 51
 
 
-def _parse_major_version(version: str) -> int | None:
-    head = version.split(".", 1)[0]
-    if not head:
-        return None
-    try:
-        return int(head)
-    except ValueError:
-        return None
-
-
-_DATAFUSION_MAJOR_VERSION = _parse_major_version(datafusion.__version__)
+_DATAFUSION_MAJOR_VERSION = parse_major_version(datafusion.__version__)
 
 
 class _SettingsProvider(Protocol):
@@ -276,14 +268,16 @@ class SessionFactory:
         SessionConfig
             Configured SessionConfig instance.
         """
-        from datafusion_engine.session.runtime import (
+        from datafusion_engine.session.runtime_compile import (
             effective_catalog_autoload,
             effective_ident_normalization,
-            performance_policy_settings,
-            resolved_config_policy,
-            resolved_schema_hardening,
             supports_explain_analyze_level,
         )
+        from datafusion_engine.session.runtime_config_policies import (
+            resolved_config_policy,
+            resolved_schema_hardening,
+        )
+        from datafusion_engine.session.runtime_telemetry import performance_policy_settings
 
         profile = self.profile
         config = SessionConfig()
@@ -409,7 +403,7 @@ class SessionFactory:
 
     def _build_local_context(self) -> SessionContext:
         profile = self.profile
-        from datafusion_engine.session.runtime import record_delta_session_defaults
+        from datafusion_engine.session.runtime_extensions import record_delta_session_defaults
 
         if not profile.features.enable_delta_session_defaults:
             return SessionContext(self.build_config(), self.build_runtime_env())

@@ -17,9 +17,10 @@ from datafusion_engine.dataset.resolution import (
     DatasetResolutionRequest,
     resolve_dataset_provider,
 )
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DiagnosticsConfig
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import DiagnosticsConfig
 from tests.harness.profiles import conformance_profile
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import (

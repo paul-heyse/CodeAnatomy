@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import msgspec
 
 from arrow_utils.core.ordering import OrderingLevel
-from schema_spec.contracts import (
+from schema_spec.dataset_spec import (
     ArrowValidationOptions,
     DataFusionScanOptions,
     DatasetSpec,
@@ -123,7 +123,7 @@ def resolve_datafusion_scan_options(
     DataFusionScanOptions | None
         Resolved DataFusion scan options.
     """
-    from schema_spec.contracts import dataset_spec_datafusion_scan, dataset_spec_ordering
+    from schema_spec.dataset_spec import dataset_spec_datafusion_scan, dataset_spec_ordering
 
     scan = override or (
         dataset_spec_datafusion_scan(dataset_spec) if dataset_spec is not None else None
@@ -176,7 +176,7 @@ def merge_delta_policy_bundle(
         return base
     if base is None:
         return override
-    from schema_spec.contracts import DeltaPolicyBundle as _DeltaPolicyBundle
+    from schema_spec.dataset_spec import DeltaPolicyBundle as _DeltaPolicyBundle
 
     return _DeltaPolicyBundle(
         scan=override.scan or base.scan,
@@ -206,7 +206,7 @@ def resolve_delta_scan_options(
         return None
     base = _DEFAULT_DELTA_SCAN
     if dataset_spec is not None:
-        from schema_spec.contracts import dataset_spec_delta_scan
+        from schema_spec.dataset_spec import dataset_spec_delta_scan
 
         delta_scan = dataset_spec_delta_scan(dataset_spec)
         if delta_scan is not None:
@@ -230,7 +230,7 @@ def apply_scan_policy_defaults(
     """
     if policy is None:
         return datafusion_scan, delta_scan
-    from schema_spec.contracts import apply_delta_scan_policy, apply_scan_policy
+    from schema_spec.dataset_spec import apply_delta_scan_policy, apply_scan_policy
 
     datafusion_scan = apply_scan_policy(
         datafusion_scan,

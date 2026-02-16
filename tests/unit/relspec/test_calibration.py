@@ -252,7 +252,7 @@ class TestCalibrateOff:
             bounds=DEFAULT_CALIBRATION_BOUNDS,
             mode="off",
         )
-        assert result.calibration_confidence.confidence_score == 0.0
+        assert result.calibration_confidence.confidence_score == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------

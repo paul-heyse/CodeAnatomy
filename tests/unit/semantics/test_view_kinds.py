@@ -200,7 +200,7 @@ class TestSingleAuthorityConsumers:
         """``SemanticSpecIndex.kind`` should resolve to ``ViewKindStr``."""
         from typing import get_type_hints
 
-        from semantics.spec_registry import SemanticSpecIndex
+        from semantics.registry import SemanticSpecIndex
 
         assert get_type_hints(SemanticSpecIndex)["kind"] == ViewKindStr
 
@@ -235,7 +235,7 @@ class TestSingleAuthorityConsumers:
     @staticmethod
     def test_semantic_spec_index_accepts_string_kind() -> None:
         """``SemanticSpecIndex`` must accept string literals for ``kind``."""
-        from semantics.spec_registry import SemanticSpecIndex
+        from semantics.registry import SemanticSpecIndex
 
         spec = SemanticSpecIndex(
             name="test_spec",

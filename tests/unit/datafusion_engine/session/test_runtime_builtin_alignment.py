@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datafusion_engine.catalog import introspection
-from datafusion_engine.session.runtime import DEFAULT_DF_POLICY
+from datafusion_engine.session.runtime_config_policies import DEFAULT_DF_POLICY
 
 
 def test_default_runtime_policy_contains_builtin_datafusion_tuning_keys() -> None:

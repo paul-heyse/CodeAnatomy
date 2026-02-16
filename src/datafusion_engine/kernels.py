@@ -114,9 +114,9 @@ MIN_JOIN_PARTITIONS: int = 2
 
 def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> SessionContext:
     if runtime_profile is None:
-        from datafusion_engine.session.runtime import DataFusionRuntimeProfile as RuntimeProfile
+        from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
-        profile = RuntimeProfile()
+        profile = DataFusionRuntimeProfile()
     else:
         profile = runtime_profile
     session_runtime = profile.session_runtime()
@@ -131,7 +131,7 @@ def _ensure_required_udfs(
 ) -> bool:
     if not required:
         return True
-    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
 
     try:
         snapshot = rust_udf_snapshot(ctx)
@@ -173,7 +173,7 @@ def _batch_size_from_profile(runtime_profile: DataFusionRuntimeProfile | None) -
 def _arrow_ingest_hook(
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> Callable[[Mapping[str, object]], None] | None:
-    from datafusion_engine.session.runtime import diagnostics_arrow_ingest_hook
+    from datafusion_engine.session.runtime_hooks import diagnostics_arrow_ingest_hook
 
     if runtime_profile is None:
         return None

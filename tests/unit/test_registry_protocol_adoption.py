@@ -10,7 +10,7 @@ import pyarrow as pa
 
 from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
 from datafusion_engine.schema.contracts import ContractRegistry, SchemaContract
-from datafusion_engine.session.runtime import DataFusionViewRegistry
+from datafusion_engine.session.runtime_session import DataFusionViewRegistry
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec

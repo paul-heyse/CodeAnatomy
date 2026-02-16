@@ -7,8 +7,9 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
-from storage.deltalake.delta import DeltaVacuumOptions, vacuum_delta
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from storage.deltalake.delta_maintenance import vacuum_delta
+from storage.deltalake.delta_read import DeltaVacuumOptions
 from tests.harness.profiles import conformance_profile
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import (

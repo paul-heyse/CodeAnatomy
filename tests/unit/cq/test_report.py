@@ -3,27 +3,20 @@
 from __future__ import annotations
 
 import importlib
-import os
-import time
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from tools.cq.core.report import (
-    RenderEnrichmentResult,
+from tools.cq.core.render_enrichment_orchestrator import (
     RenderEnrichmentTask,
-    render_markdown,
 )
-from tools.cq.core.runtime.worker_scheduler import WorkerBatchResult
+from tools.cq.core.report import render_markdown
 from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
+from tools.cq.core.summary_contract import summary_from_mapping
 
 _RenderEnrichTask = RenderEnrichmentTask
-_RenderEnrichResult = RenderEnrichmentResult
 
 EXPECTED_ENRICHMENT_TASKS = 6
-EXPECTED_TIMEOUT_SECONDS = 6.0
-EXPECTED_MAX_WORKERS = 4
-MIN_PARALLEL_PIDS = 2
+EXPECTED_SKIPPED_TASKS = 2
 
 
 def _run_meta() -> RunMeta:
@@ -85,22 +78,6 @@ def _extract_python_enrichment_pids(result: CqResult) -> set[int]:
     return pids
 
 
-def _sleeping_pid_worker(
-    task: _RenderEnrichTask,
-) -> _RenderEnrichResult:
-    time.sleep(0.2)
-    return RenderEnrichmentResult(
-        file=task.file,
-        line=task.line,
-        col=task.col,
-        language=task.language,
-        payload={
-            "language": task.language,
-            "python": {"pid": os.getpid()},
-        },
-    )
-
-
 def test_render_summary_compacts_output() -> None:
     """Test render summary compacts output."""
     run = RunMeta(
@@ -113,16 +90,18 @@ def test_render_summary_compacts_output() -> None:
     )
     result = CqResult(
         run=run,
-        summary={
-            "query": "build_graph",
-            "mode": "identifier",
-            "lang_scope": "auto",
-            "language_order": ["python", "rust"],
-            "languages": {"python": {"total_matches": 1}, "rust": {"total_matches": 0}},
-            "cross_language_diagnostics": [],
-            "language_capabilities": {"python": {}, "rust": {}, "shared": {}},
-            "pattern": r"\bbuild_graph\b",
-        },
+        summary=summary_from_mapping(
+            {
+                "query": "build_graph",
+                "mode": "identifier",
+                "lang_scope": "auto",
+                "language_order": ["python", "rust"],
+                "languages": {"python": {"total_matches": 1}, "rust": {"total_matches": 0}},
+                "cross_language_diagnostics": [],
+                "language_capabilities": {"python": {}, "rust": {}, "shared": {}},
+                "pattern": r"\bbuild_graph\b",
+            }
+        ),
     )
 
     output = render_markdown(result)
@@ -149,7 +128,7 @@ def test_render_search_hides_summary_and_context_blocks() -> None:
     )
     result = CqResult(
         run=_run_meta(),
-        summary={"query": "build_graph", "mode": "identifier"},
+        summary=summary_from_mapping({"query": "build_graph", "mode": "identifier"}),
         key_findings=[finding],
         sections=[Section(title="Resolved Objects", findings=[finding])],
     )
@@ -225,16 +204,18 @@ def test_render_includes_python_semantic_overview_and_code_facts() -> None:
     )
     result = CqResult(
         run=_run_meta(),
-        summary={
-            "query": "target",
-            "mode": "identifier",
-            "lang_scope": "python",
-            "language_order": ["python"],
-            "languages": {"python": {"total_matches": 1}},
-            "cross_language_diagnostics": [],
-            "language_capabilities": {"python": {}, "rust": {}, "shared": {}},
-            "python_semantic_overview": {"primary_symbol": "target", "matches_enriched": 1},
-        },
+        summary=summary_from_mapping(
+            {
+                "query": "target",
+                "mode": "identifier",
+                "lang_scope": "python",
+                "language_order": ["python"],
+                "languages": {"python": {"total_matches": 1}},
+                "cross_language_diagnostics": [],
+                "language_capabilities": {"python": {}, "rust": {}, "shared": {}},
+                "python_semantic_overview": {"primary_symbol": "target", "matches_enriched": 1},
+            }
+        ),
         key_findings=[finding],
     )
 
@@ -428,7 +409,7 @@ def test_render_code_overview_falls_back_for_run_query_mode() -> None:
     )
     result = CqResult(
         run=run,
-        summary={"steps": ["q_0", "search_1"]},
+        summary=summary_from_mapping({"steps": ["q_0", "search_1"]}),
     )
     output = render_markdown(result)
     assert "- Query: `multi-step plan (2 steps)`" in output
@@ -447,12 +428,14 @@ def test_render_code_overview_derives_language_scope_from_step_summaries() -> No
     )
     result = CqResult(
         run=run,
-        summary={
-            "step_summaries": {
-                "q_0": {"lang_scope": "python"},
-                "q_1": {"lang_scope": "python"},
+        summary=summary_from_mapping(
+            {
+                "step_summaries": {
+                    "q_0": {"lang_scope": "python"},
+                    "q_1": {"lang_scope": "python"},
+                }
             }
-        },
+        ),
     )
     output = render_markdown(result)
     assert "- Language Scope: `python`" in output
@@ -468,103 +451,142 @@ def test_render_code_overview_falls_back_for_macro_query_mode() -> None:
         elapsed_ms=5.0,
         toolchain={},
     )
-    result = CqResult(run=run, summary={})
+    result = CqResult(run=run, summary=summary_from_mapping({}))
     output = render_markdown(result)
     assert "- Query: `build_graph`" in output
     assert "- Mode: `macro:calls`" in output
 
 
-def test_render_enrichment_uses_fixed_process_pool_workers(
+def test_render_enrichment_metrics_flow_through_orchestrator(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test render enrichment uses fixed process pool workers."""
+    """Render markdown should compute enrichment metrics from orchestrator outputs."""
     report_module = importlib.import_module("tools.cq.core.report")
     result = _build_enrichment_result(tmp_path, file_count=6)
 
-    submit_count = 0
-    collect_called = False
-    timeout_seconds_seen = 0.0
+    def _fake_select(_result: CqResult) -> set[str]:
+        return {"src/module_0.py", "src/module_1.py"}
 
-    class FakeScheduler:
-        @staticmethod
-        def submit_cpu(
-            fn: Callable[[_RenderEnrichTask], _RenderEnrichResult],
-            task: _RenderEnrichTask,
-        ) -> _RenderEnrichResult:
-            nonlocal submit_count
-            submit_count += 1
-            return fn(task)
+    def _fake_count(*, result: CqResult, root: Path, allowed_files: set[str] | None) -> int:
+        _ = (result, root, allowed_files)
+        return 8
 
-        @staticmethod
-        def collect_bounded(
-            futures: list[_RenderEnrichResult],
-            *,
-            timeout_seconds: float,
-        ) -> WorkerBatchResult[_RenderEnrichResult]:
-            nonlocal collect_called, timeout_seconds_seen
-            collect_called = True
-            timeout_seconds_seen = timeout_seconds
-            done = list(futures)
-            return WorkerBatchResult(done=done, timed_out=0)
+    def _fake_precompute(
+        *,
+        result: CqResult,
+        root: Path,
+        cache: dict[tuple[str, int, int, str], dict[str, object]],
+        allowed_files: set[str] | None,
+        port: object,
+    ) -> list[_RenderEnrichTask]:
+        _ = (result, root, allowed_files, port)
+        tasks = [
+            RenderEnrichmentTask(
+                root=str(tmp_path),
+                file=f"src/module_{idx}.py",
+                line=1,
+                col=0,
+                language="python",
+                candidates=("target",),
+            )
+            for idx in range(EXPECTED_ENRICHMENT_TASKS)
+        ]
+        for task in tasks:
+            cache[task.file, task.line, task.col, task.language] = {"python": {"pid": 7}}
+        return tasks
 
-    def _fake_worker(
-        task: _RenderEnrichTask,
-    ) -> _RenderEnrichResult:
-        return RenderEnrichmentResult(
-            file=task.file,
-            line=task.line,
-            col=task.col,
-            language=task.language,
-            payload={
-                "language": task.language,
-                "python": {"pid": 7},
-            },
+    captured: dict[str, int] = {}
+
+    def _fake_metrics(
+        summary: object,
+        *,
+        attempted: int,
+        applied: int,
+        failed: int,
+        skipped: int,
+    ) -> object:
+        _ = summary
+        captured.update(
+            {
+                "attempted": attempted,
+                "applied": applied,
+                "failed": failed,
+                "skipped": skipped,
+            }
         )
+        return summary
 
-    def _fake_get_worker_scheduler() -> FakeScheduler:
-        return FakeScheduler()
-
-    monkeypatch.setattr(report_module, "get_worker_scheduler", _fake_get_worker_scheduler)
-    monkeypatch.setattr(report_module, "_compute_render_enrichment_worker", _fake_worker)
-
+    monkeypatch.setattr(report_module, "_select_enrichment_target_files_orchestrator", _fake_select)
+    monkeypatch.setattr(report_module, "_count_render_enrichment_tasks_orchestrator", _fake_count)
+    monkeypatch.setattr(
+        report_module,
+        "_precompute_render_enrichment_cache_orchestrator",
+        _fake_precompute,
+    )
+    monkeypatch.setattr(report_module, "_summary_with_render_enrichment_metrics", _fake_metrics)
     render_markdown(result)
 
-    assert collect_called
-    assert submit_count == EXPECTED_ENRICHMENT_TASKS
-    assert timeout_seconds_seen == EXPECTED_TIMEOUT_SECONDS
-    assert (
-        min(EXPECTED_ENRICHMENT_TASKS, report_module.MAX_RENDER_ENRICH_WORKERS)
-        == EXPECTED_MAX_WORKERS
-    )
+    assert captured["attempted"] == EXPECTED_ENRICHMENT_TASKS
+    assert captured["applied"] == EXPECTED_ENRICHMENT_TASKS
+    assert captured["failed"] == 0
+    assert captured["skipped"] == EXPECTED_SKIPPED_TASKS
 
 
-def test_render_enrichment_parallelization_workers_1_vs_4(
+def test_render_enrichment_can_attach_payloads_via_precompute(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test render enrichment parallelization workers 1 vs 4."""
+    """Render markdown should apply precomputed enrichment payloads."""
     report_module = importlib.import_module("tools.cq.core.report")
+    result = _build_enrichment_result(tmp_path, file_count=2)
 
-    monkeypatch.setattr(report_module, "_compute_render_enrichment_worker", _sleeping_pid_worker)
+    def _fake_precompute(
+        *,
+        result: CqResult,
+        root: Path,
+        cache: dict[tuple[str, int, int, str], dict[str, object]],
+        allowed_files: set[str] | None,
+        port: object,
+    ) -> list[_RenderEnrichTask]:
+        _ = (result, root, allowed_files, port)
+        tasks = [
+            RenderEnrichmentTask(
+                root=str(tmp_path),
+                file=f"src/module_{idx}.py",
+                line=1,
+                col=0,
+                language="python",
+                candidates=("target",),
+            )
+            for idx in range(2)
+        ]
+        for task in tasks:
+            cache[task.file, task.line, task.col, task.language] = {
+                "language": "python",
+                "python": {"pid": 99},
+            }
+        return tasks
 
-    serial_result = _build_enrichment_result(tmp_path, file_count=8)
-    monkeypatch.setattr(report_module, "MAX_RENDER_ENRICH_WORKERS", 1)
-    serial_start = time.perf_counter()
-    render_markdown(serial_result)
-    serial_elapsed = time.perf_counter() - serial_start
-    serial_pids = _extract_python_enrichment_pids(serial_result)
+    monkeypatch.setattr(
+        report_module,
+        "_precompute_render_enrichment_cache_orchestrator",
+        _fake_precompute,
+    )
+    monkeypatch.setattr(
+        report_module,
+        "_select_enrichment_target_files_orchestrator",
+        lambda _result: {"src/module_0.py", "src/module_1.py"},
+    )
+    monkeypatch.setattr(
+        report_module,
+        "_count_render_enrichment_tasks_orchestrator",
+        lambda **_kwargs: 2,
+    )
 
-    parallel_result = _build_enrichment_result(tmp_path, file_count=8)
-    monkeypatch.setattr(report_module, "MAX_RENDER_ENRICH_WORKERS", 4)
-    parallel_start = time.perf_counter()
-    render_markdown(parallel_result)
-    parallel_elapsed = time.perf_counter() - parallel_start
-    parallel_pids = _extract_python_enrichment_pids(parallel_result)
-
-    assert len(serial_pids) == 1
-    assert len(parallel_pids) >= MIN_PARALLEL_PIDS
-    assert parallel_elapsed < serial_elapsed * 0.8
+    render_markdown(result)
+    pids = _extract_python_enrichment_pids(result)
+    assert pids == {99}
 
 
 def test_render_markdown_keeps_compact_diagnostics_without_payload_dump() -> None:
@@ -579,12 +601,14 @@ def test_render_markdown_keeps_compact_diagnostics_without_payload_dump() -> Non
     )
     result = CqResult(
         run=run,
-        summary={
-            "query": "target",
-            "mode": "identifier",
-            "python_semantic_diagnostics": [{"message": "diag"}],
-            "cross_language_diagnostics": [{"code": "ML001"}],
-        },
+        summary=summary_from_mapping(
+            {
+                "query": "target",
+                "mode": "identifier",
+                "python_semantic_diagnostics": [{"message": "diag"}],
+                "cross_language_diagnostics": [{"code": "ML001"}],
+            }
+        ),
         key_findings=[Finding(category="definition", message="function: target")],
     )
     output = render_markdown(result)

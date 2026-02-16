@@ -19,7 +19,6 @@ from datafusion_engine.schema import (
     PIPELINE_TASK_GROUPING_SCHEMA,
     PIPELINE_TASK_SUBMISSION_SCHEMA,
     SYMTABLE_FILES_SCHEMA,
-    _semantic_validation_tables,
     nested_view_spec,
     validate_ast_views,
     validate_required_bytecode_functions,
@@ -28,6 +27,7 @@ from datafusion_engine.schema import (
     validate_required_symtable_functions,
     validate_semantic_types,
 )
+from datafusion_engine.schema.observability_schemas import _semantic_validation_tables
 from datafusion_engine.udf.platform import ensure_rust_udfs
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion_udfs

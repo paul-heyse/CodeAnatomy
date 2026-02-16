@@ -15,7 +15,7 @@ def test_get_record_context_disables_prefilter_for_single_file(
     tmp_path: Path,
 ) -> None:
     """Disable prefilter when running single-file record-context queries."""
-    classifier_runtime.clear_classifier_caches()
+    classifier_runtime.get_default_classifier_cache_context().clear()
     file_path = tmp_path / "a.py"
     file_path.write_text("def foo():\n    return 1\n", encoding="utf-8")
 

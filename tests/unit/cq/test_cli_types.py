@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from tools.cq.cli_app.types import (
     ImpactBucket,
-    LdmdSliceMode,
     NeighborhoodLanguageToken,
     OutputFormat,
     ReportPreset,
@@ -14,6 +13,7 @@ from tools.cq.cli_app.types import (
     comma_separated_enum,
     comma_separated_list,
 )
+from tools.cq.core.types import LdmdSliceMode
 
 
 class TestOutputFormatEnum:

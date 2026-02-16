@@ -11,9 +11,10 @@ import pytest
 
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
-from datafusion_engine.io.write import WriteViewRequest
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
-from schema_spec.contracts import (
+from datafusion_engine.io.write_core import WriteViewRequest
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import FeatureGatesConfig
+from schema_spec.dataset_spec import (
     DeltaPolicyBundle,
     dataset_spec_delta_constraints,
     dataset_spec_delta_feature_gate,
@@ -27,7 +28,7 @@ from semantics.output_materialization import SemanticOutputWriteContext, write_s
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.io.write import WritePipeline
+    from datafusion_engine.io.write_core import WritePipeline
 
 
 @dataclass

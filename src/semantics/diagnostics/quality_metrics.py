@@ -2,36 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from datafusion import col, lit
 from datafusion import functions as f
 
-from datafusion_engine.arrow.interop import empty_table_for_schema
-from datafusion_engine.schema.introspection import table_names_snapshot
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
+from datafusion_engine.schema.introspection_core import table_names_snapshot
+from obs.otel import SCOPE_SEMANTICS, stage_span
+from semantics.diagnostics._utils import empty_diagnostic_frame
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
     from datafusion.expr import Expr
-
-
-def _empty_table(
-    ctx: SessionContext,
-    schema_fields: Sequence[tuple[str, pa.DataType]],
-) -> DataFrame:
-    """Create an empty DataFrame for the supplied Arrow schema fields.
-
-    Returns:
-        DataFrame: Empty DataFrame with the specified schema.
-    """
-    schema = pa.schema(schema_fields)
-    table = empty_table_for_schema(schema)
-    return ctx.from_arrow(table)
 
 
 def _optional_col(df: DataFrame, name: str, dtype: pa.DataType) -> Expr:
@@ -214,29 +198,14 @@ def build_relationship_candidates_view(ctx: SessionContext) -> DataFrame:
                 )
             )
         if not frames:
-            return _empty_table(ctx, _RELATIONSHIP_DIAG_SCHEMA)
+            return empty_diagnostic_frame(ctx, pa.schema(_RELATIONSHIP_DIAG_SCHEMA))
         result = frames[0]
         for frame in frames[1:]:
             result = result.union(frame)
         return result
 
 
-def build_relationship_decisions_view(ctx: SessionContext) -> DataFrame:
-    """Build relationship decision diagnostics view.
-
-    Returns:
-        DataFrame: Decision diagnostics rows mirroring candidate diagnostics.
-    """
-    with stage_span(
-        "semantics.build_relationship_decisions_view",
-        stage="semantics",
-        scope_name=SCOPE_SEMANTICS,
-    ):
-        return build_relationship_candidates_view(ctx)
-
-
 __all__ = [
     "build_relationship_candidates_view",
-    "build_relationship_decisions_view",
     "build_relationship_quality_metrics",
 ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from tools.cq.core.render_utils import clean_scalar as _clean_scalar
@@ -11,6 +12,7 @@ from tools.cq.core.render_utils import na as _na
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding
+    from tools.cq.core.summary_contract import CqSummary
 
 
 MAX_CODE_OVERVIEW_ITEMS = 5
@@ -104,7 +106,7 @@ def _summarize_categories(findings: list[Finding]) -> str:
     return f"`{category_summary}`"
 
 
-def _format_python_semantic_overview(summary: dict[str, object]) -> str:
+def _format_python_semantic_overview(summary: CqSummary) -> str:
     """Format Python semantic overview from summary.
 
     Parameters
@@ -117,7 +119,7 @@ def _format_python_semantic_overview(summary: dict[str, object]) -> str:
     str
         Formatted overview or N/A message.
     """
-    payload = summary.get("python_semantic_overview")
+    payload = summary.python_semantic_overview
     if not isinstance(payload, dict) or not payload:
         return _na("python_semantic_overview_missing")
     fields: tuple[tuple[str, str], ...] = (
@@ -154,7 +156,7 @@ def _merge_language_order(ordered: list[str], raw_order: object) -> None:
             ordered.append(item)
 
 
-def _scope_from_step_summaries(step_summaries: dict[str, object]) -> str | None:
+def _scope_from_step_summaries(step_summaries: Mapping[str, object]) -> str | None:
     """Infer language scope from step summaries.
 
     Parameters
@@ -185,7 +187,7 @@ def _scope_from_step_summaries(step_summaries: dict[str, object]) -> str | None:
     return None
 
 
-def _format_language_scope(summary: dict[str, object]) -> str:
+def _format_language_scope(summary: CqSummary) -> str:
     """Format language scope from summary.
 
     Parameters
@@ -198,13 +200,13 @@ def _format_language_scope(summary: dict[str, object]) -> str:
     str
         Formatted language scope or N/A message.
     """
-    lang_scope = summary.get("lang_scope")
+    lang_scope = summary.lang_scope
     if isinstance(lang_scope, str) and lang_scope:
         return f"`{lang_scope}`"
-    language_order = summary.get("language_order")
+    language_order = summary.language_order
     if isinstance(language_order, list) and language_order:
         return f"`{', '.join(str(item) for item in language_order)}`"
-    step_summaries = summary.get("step_summaries")
+    step_summaries = summary.step_summaries
     if isinstance(step_summaries, dict):
         inferred_scope = _scope_from_step_summaries(step_summaries)
         if inferred_scope is not None:
@@ -231,7 +233,7 @@ def render_code_overview(result: CqResult) -> list[str]:
     all_findings = _iter_result_findings(result)
     lines.append(f"- Query: {summary_string(result, key='query', missing_reason='query_missing')}")
     lines.append(f"- Mode: {summary_string(result, key='mode', missing_reason='mode_missing')}")
-    summary = result.summary if isinstance(result.summary, dict) else {}
+    summary = result.summary
     lines.append(f"- Language Scope: {_format_language_scope(summary)}")
     lines.append(f"- Top Symbols: {_collect_top_symbols(all_findings)}")
     lines.append(f"- Top Files: {_collect_top_files(all_findings)}")

@@ -14,6 +14,12 @@ from tools.cq.core.semantic_contracts import (
     SemanticProvider,
     derive_semantic_contract_state,
 )
+from tools.cq.core.summary_contract import (
+    CqSummary,
+    SemanticTelemetryV1,
+    build_semantic_telemetry,
+    coerce_semantic_telemetry,
+)
 from tools.cq.query.language import QueryLanguage
 from tools.cq.search.pipeline._semantic_helpers import (
     count_mapping_rows as _count_mapping_rows,
@@ -373,7 +379,7 @@ def collect_search_semantic_outcome(
 
 
 def update_search_summary_semantic_telemetry(
-    summary: dict[str, object],
+    summary: CqSummary,
     outcome: _SearchSemanticOutcome,
 ) -> None:
     """Update search summary with semantic enrichment telemetry.
@@ -392,17 +398,24 @@ def update_search_summary_semantic_telemetry(
         if outcome.target_language == "python"
         else "rust_semantic_telemetry"
     )
-    telemetry = summary.get(telemetry_key)
-    if not isinstance(telemetry, dict):
-        return
-    telemetry["attempted"] = int(telemetry.get("attempted", 0) or 0) + outcome.attempted
-    telemetry["applied"] = int(telemetry.get("applied", 0) or 0) + outcome.applied
-    telemetry["failed"] = int(telemetry.get("failed", 0) or 0) + outcome.failed
-    telemetry["timed_out"] = int(telemetry.get("timed_out", 0) or 0) + outcome.timed_out
+    telemetry = coerce_semantic_telemetry(getattr(summary, telemetry_key))
+    if telemetry is None:
+        telemetry = SemanticTelemetryV1()
+    updated = build_semantic_telemetry(
+        attempted=telemetry.attempted + outcome.attempted,
+        applied=telemetry.applied + outcome.applied,
+        failed=telemetry.failed + outcome.failed,
+        skipped=telemetry.skipped,
+        timed_out=telemetry.timed_out + outcome.timed_out,
+    )
+    if telemetry_key == "python_semantic_telemetry":
+        summary.python_semantic_telemetry = updated
+    else:
+        summary.rust_semantic_telemetry = updated
 
 
 def read_semantic_telemetry(
-    summary: dict[str, object],
+    summary: CqSummary,
     *,
     language: QueryLanguage | None,
 ) -> tuple[int, int, int, int]:
@@ -421,27 +434,23 @@ def read_semantic_telemetry(
         Attempted, applied, failed, and timed_out counts.
     """
 
-    def _read_entry(raw: object) -> tuple[int, int, int, int]:
-        if not isinstance(raw, dict):
+    def _read_entry(raw: SemanticTelemetryV1 | None) -> tuple[int, int, int, int]:
+        if raw is None:
             return 0, 0, 0, 0
-        attempted = raw.get("attempted")
-        applied = raw.get("applied")
-        failed = raw.get("failed")
-        timed_out = raw.get("timed_out")
         return (
-            attempted if isinstance(attempted, int) else 0,
-            applied if isinstance(applied, int) else 0,
-            failed if isinstance(failed, int) else 0,
-            timed_out if isinstance(timed_out, int) else 0,
+            raw.attempted,
+            raw.applied,
+            raw.failed,
+            raw.timed_out,
         )
 
     if language == "python":
-        return _read_entry(summary.get("python_semantic_telemetry"))
+        return _read_entry(coerce_semantic_telemetry(summary.python_semantic_telemetry))
     if language == "rust":
-        return _read_entry(summary.get("rust_semantic_telemetry"))
+        return _read_entry(coerce_semantic_telemetry(summary.rust_semantic_telemetry))
 
-    py = _read_entry(summary.get("python_semantic_telemetry"))
-    rust = _read_entry(summary.get("rust_semantic_telemetry"))
+    py = _read_entry(coerce_semantic_telemetry(summary.python_semantic_telemetry))
+    rust = _read_entry(coerce_semantic_telemetry(summary.rust_semantic_telemetry))
     return (
         py[0] + rust[0],
         py[1] + rust[1],
@@ -450,7 +459,7 @@ def read_semantic_telemetry(
     )
 
 
-def derive_semantic_provider_from_summary(summary: dict[str, object]) -> SemanticProvider:
+def derive_semantic_provider_from_summary(summary: CqSummary) -> SemanticProvider:
     """Derive semantic provider from summary telemetry.
 
     Parameters
@@ -479,7 +488,7 @@ def derive_semantic_provider_from_summary(summary: dict[str, object]) -> Semanti
 
 
 def derive_search_semantic_state(
-    summary: dict[str, object],
+    summary: CqSummary,
     outcome: _SearchSemanticOutcome,
 ) -> SemanticContractStateV1:
     """Derive semantic contract state from outcome and summary.
@@ -531,7 +540,7 @@ def apply_search_semantic_insight(
     *,
     ctx: SearchConfig,
     insight: FrontDoorInsightV1,
-    summary: dict[str, object],
+    summary: CqSummary,
     primary_target_finding: Finding | None,
     primary_target_match: EnrichedMatch | None,
 ) -> FrontDoorInsightV1:
@@ -566,7 +575,7 @@ def apply_search_semantic_insight(
         insight = augment_insight_with_semantic(insight, outcome.payload)
         semantic_planes = outcome.payload.get("semantic_planes")
         if isinstance(semantic_planes, dict):
-            summary["semantic_planes"] = dict(semantic_planes)
+            summary.semantic_planes = dict(semantic_planes)
     update_search_summary_semantic_telemetry(summary, outcome)
     semantic_state = derive_search_semantic_state(summary, outcome)
     return msgspec.structs.replace(

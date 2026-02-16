@@ -30,11 +30,11 @@ from datafusion_engine.schema import (
     validate_semantic_types,
     validate_udf_info_schema_parity,
 )
-from datafusion_engine.schema.introspection import (
-    SchemaIntrospector,
+from datafusion_engine.schema.introspection_core import (
     catalogs_snapshot,
     constraint_rows,
 )
+from datafusion_engine.session._session_constants import create_schema_introspector
 from datafusion_engine.session.runtime_config_policies import (
     _effective_catalog_autoload_for_profile,
 )
@@ -73,32 +73,6 @@ if TYPE_CHECKING:
     from serde_schema_registry import ArtifactSpec
 
 logger = logging.getLogger(__name__)
-
-
-def _create_schema_introspector(
-    profile: DataFusionRuntimeProfile, ctx: SessionContext
-) -> SchemaIntrospector:
-    """Create a schema introspector for the profile and context.
-
-    Args:
-        profile: Runtime profile.
-        ctx: Session context.
-
-    Returns:
-        SchemaIntrospector instance.
-    """
-    from cache.diskcache_factory import cache_for_kind
-
-    diskcache_profile = profile.policies.diskcache_profile
-    cache = cache_for_kind(diskcache_profile, "schema") if diskcache_profile is not None else None
-    cache_ttl = diskcache_profile.ttl_for("schema") if diskcache_profile is not None else None
-    return SchemaIntrospector(
-        ctx,
-        sql_options=sql_options_for_profile(profile),
-        cache=cache,
-        cache_prefix=profile.context_cache_key(),
-        cache_ttl=cache_ttl,
-    )
 
 
 def _resolved_table_schema(ctx: SessionContext, name: str) -> pa.Schema | None:
@@ -358,7 +332,7 @@ def record_schema_snapshots_for_profile(profile: DataFusionRuntimeProfile) -> No
         return
     ctx = profile.session_context()
 
-    introspector = _create_schema_introspector(profile, ctx)
+    introspector = create_schema_introspector(profile, ctx)
     payload: dict[str, object] = {
         "event_time_unix_ms": int(time.time() * 1000),
     }
@@ -421,7 +395,7 @@ def _record_schema_registry_validation(
     expected = tuple(sorted(set(expected_names or ())))
     missing = missing_schema_names(ctx, expected=expected) if expected else ()
     type_errors: dict[str, str] = {}
-    introspector = _create_schema_introspector(profile, ctx)
+    introspector = create_schema_introspector(profile, ctx)
     constraint_drift = _constraint_drift_entries(
         introspector,
         names=expected,
@@ -495,7 +469,7 @@ def _record_catalog_autoload_snapshot(
     catalog_location, catalog_format = _effective_catalog_autoload_for_profile(profile)
     if catalog_location is None and catalog_format is None:
         return
-    introspector = _create_schema_introspector(profile, ctx)
+    introspector = create_schema_introspector(profile, ctx)
     template_names = sorted(profile.data_sources.dataset_templates)
     payload: dict[str, object] = {
         "event_time_unix_ms": int(time.time() * 1000),
@@ -526,14 +500,14 @@ def _ast_feature_gates(
     Returns:
         Tuple of (enabled_views, disabled_views, payload).
     """
-    from datafusion_engine.session.runtime_config_policies import _parse_major_version
+    from datafusion_engine.session._session_constants import parse_major_version
 
     version = _datafusion_version(ctx)
     version_source = "sql"
     if version is None:
         version = datafusion.__version__
         version_source = "package"
-    major = _parse_major_version(version) if version else None
+    major = parse_major_version(version) if version else None
     functions = _datafusion_function_names(ctx)
     function_support = {name: name in functions for name in ("map_entries", "arrow_metadata")}
     enabled_optional: list[str] = []
@@ -864,7 +838,7 @@ def _validate_ast_catalog_autoload(profile: DataFusionRuntimeProfile, ctx: Sessi
     if not profile.catalog.enable_information_schema:
         return
     try:
-        _create_schema_introspector(profile, ctx).table_column_names("ast_files_v1")
+        create_schema_introspector(profile, ctx).table_column_names("ast_files_v1")
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"AST catalog column introspection failed: {exc}."
         raise ValueError(msg) from exc
@@ -893,7 +867,7 @@ def _validate_bytecode_catalog_autoload(
     if not profile.catalog.enable_information_schema:
         return
     try:
-        _create_schema_introspector(profile, ctx).table_column_names("bytecode_files_v1")
+        create_schema_introspector(profile, ctx).table_column_names("bytecode_files_v1")
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Bytecode catalog column introspection failed: {exc}."
         raise ValueError(msg) from exc
@@ -928,7 +902,7 @@ def _record_cst_schema_diagnostics(profile: DataFusionRuntimeProfile, ctx: Sessi
         default_entries = _default_value_entries(schema) if schema is not None else None
         payload["default_values"] = default_entries or None
         payload["diagnostics"] = rows[0] if rows else None
-        introspector = _create_schema_introspector(profile, ctx)
+        introspector = create_schema_introspector(profile, ctx)
         payload["table_definition"] = introspector.table_definition("libcst_files_v1")
         payload["table_constraints"] = (
             list(introspector.table_constraints("libcst_files_v1")) or None
@@ -961,7 +935,7 @@ def _record_tree_sitter_stats(profile: DataFusionRuntimeProfile, ctx: SessionCon
         if schema is not None:
             payload["schema_identity_hash"] = schema_identity_hash(schema)
         payload["stats"] = rows[0] if rows else None
-        introspector = _create_schema_introspector(profile, ctx)
+        introspector = create_schema_introspector(profile, ctx)
         payload["table_definition"] = introspector.table_definition("tree_sitter_files_v1")
         payload["table_constraints"] = (
             list(introspector.table_constraints("tree_sitter_files_v1")) or None
@@ -989,7 +963,7 @@ def _record_tree_sitter_view_schemas(
         "views": views,
     }
     errors: dict[str, str] = {}
-    introspector = _create_schema_introspector(profile, ctx)
+    introspector = create_schema_introspector(profile, ctx)
     for name in TREE_SITTER_VIEW_NAMES:
         try:
             plan = _table_logical_plan(ctx, name=name)
@@ -1179,7 +1153,7 @@ def _record_bytecode_metadata(profile: DataFusionRuntimeProfile, ctx: SessionCon
         if schema is not None:
             payload["schema_identity_hash"] = schema_identity_hash(schema)
         payload["metadata"] = rows[0] if rows else None
-        introspector = _create_schema_introspector(profile, ctx)
+        introspector = create_schema_introspector(profile, ctx)
         payload["table_definition"] = introspector.table_definition("bytecode_files_v1")
         payload["table_constraints"] = (
             list(introspector.table_constraints("bytecode_files_v1")) or None
@@ -1200,7 +1174,7 @@ def _record_schema_snapshots(profile: DataFusionRuntimeProfile, ctx: SessionCont
         return
     if not profile.catalog.enable_information_schema:
         return
-    introspector = _create_schema_introspector(profile, ctx)
+    introspector = create_schema_introspector(profile, ctx)
     payload: dict[str, object] = {
         "event_time_unix_ms": int(time.time() * 1000),
     }
@@ -1314,7 +1288,7 @@ def _validate_schema_views(
     Returns:
         View validation errors.
     """
-    from datafusion_engine.udf.extension_runtime import extension_capabilities_report
+    from datafusion_engine.udf.extension_core import extension_capabilities_report
 
     _ = ast_view_names
     view_errors: dict[str, str] = {}

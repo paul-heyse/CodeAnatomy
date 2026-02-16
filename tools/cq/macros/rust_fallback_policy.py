@@ -50,8 +50,7 @@ def apply_rust_fallback_policy(
 
     fallback_matches = 0
     if policy.fallback_matches_summary_key:
-        summary = result.summary if isinstance(result.summary, dict) else {}
-        raw = summary.get(policy.fallback_matches_summary_key, 0)
+        raw = getattr(result.summary, policy.fallback_matches_summary_key, 0)
         fallback_matches = int(raw) if isinstance(raw, int) else 0
 
     apply_rust_macro_fallback(

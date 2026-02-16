@@ -24,7 +24,7 @@ from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import planning_sql_options
 from datafusion_engine.tables.metadata import table_provider_metadata
-from schema_spec.contracts import (
+from schema_spec.dataset_spec import (
     DatasetSpec,
     DeltaScanOptions,
     dataset_spec_from_schema,
@@ -342,7 +342,7 @@ def read_delta_as_reader(
 
     overrides = None
     if delta_scan is not None:
-        from schema_spec.contracts import DeltaPolicyBundle
+        from schema_spec.dataset_spec import DeltaPolicyBundle
 
         overrides = DatasetLocationOverrides(delta=DeltaPolicyBundle(scan=delta_scan))
     location = DatasetLocation(
@@ -470,7 +470,7 @@ def _normalize_dataset_locations_for_root(
     if normalize_root is None:
         return {}
     root = Path(normalize_root)
-    from schema_spec.contracts import dataset_spec_name
+    from schema_spec.dataset_spec import dataset_spec_name
     from semantics.catalog.dataset_specs import dataset_specs
 
     locations: dict[str, DatasetLocation] = {}
@@ -677,7 +677,7 @@ def record_dataset_readiness(
     if profile.diagnostics.diagnostics_sink is None:
         return
     from datafusion_engine.lineage.diagnostics import record_artifact
-    from obs.otel.heartbeat import set_heartbeat_blockers
+    from obs.otel import set_heartbeat_blockers
     from serde_artifact_specs import DATASET_READINESS_SPEC
 
     blockers: list[str] = []

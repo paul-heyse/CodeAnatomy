@@ -37,7 +37,6 @@ def search(
     Returns:
         CliResult: Renderable command result payload.
     """
-    from tools.cq.core.bootstrap import resolve_runtime_services
     from tools.cq.query.language import parse_query_language_scope
     from tools.cq.search._shared.types import QueryMode
     from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
@@ -78,7 +77,6 @@ def search(
         ),
     )
 
-    services = resolve_runtime_services(ctx.root)
-    result = services.search.execute(request)
+    result = ctx.services.search.execute(request)
 
     return CliResult(result=result, context=ctx, filters=options)

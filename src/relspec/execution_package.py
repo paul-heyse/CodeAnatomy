@@ -15,13 +15,49 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from serde_msgspec import StructBaseCompat
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
     from semantics.program_manifest import SemanticProgramManifest
+
+
+class SemanticIrHashLike(Protocol):
+    """Protocol for semantic IR hash access."""
+
+    ir_hash: str
+
+
+class ManifestHashLike(Protocol):
+    """Protocol for manifest hash access."""
+
+    model_hash: str
+
+
+class ManifestWithSemanticIr(Protocol):
+    """Protocol for manifest objects carrying semantic IR payloads."""
+
+    semantic_ir: SemanticIrHashLike | None
+
+
+class PolicyFingerprintLike(Protocol):
+    """Protocol for compiled policy fingerprint access."""
+
+    policy_fingerprint: str | None
+
+
+class SettingsHashValueLike(Protocol):
+    """Protocol for settings hash attribute access."""
+
+    settings_hash: str
+
+
+class SettingsHashCallableLike(Protocol):
+    """Protocol for settings hash method access."""
+
+    def settings_hash(self) -> str: ...
 
 
 class ExecutionPackageArtifact(StructBaseCompat, frozen=True):
@@ -41,20 +77,22 @@ class ExecutionPackageArtifact(StructBaseCompat, frozen=True):
     created_at_unix_ms: int
 
 
-def _hash_manifest(manifest: object | None) -> str:
+def _hash_manifest(
+    manifest: SemanticProgramManifest | ManifestHashLike | ManifestWithSemanticIr | object | None,
+) -> str:
     if manifest is None:
         return ""
     model_hash = getattr(manifest, "model_hash", None)
     if isinstance(model_hash, str) and model_hash:
         return model_hash
     ir = getattr(manifest, "semantic_ir", None)
-    ir_hash = getattr(ir, "ir_hash", None) if ir is not None else None
+    ir_hash = getattr(ir, "ir_hash", None)
     if isinstance(ir_hash, str) and ir_hash:
         return ir_hash
     return hash_msgpack_canonical(repr(manifest))
 
 
-def _hash_policy(compiled_policy: object | None) -> str:
+def _hash_policy(compiled_policy: PolicyFingerprintLike | object | None) -> str:
     if compiled_policy is None:
         return ""
     fingerprint = getattr(compiled_policy, "policy_fingerprint", None)
@@ -63,7 +101,9 @@ def _hash_policy(compiled_policy: object | None) -> str:
     return hash_msgpack_canonical(repr(compiled_policy))
 
 
-def _hash_capability_snapshot(capability_snapshot: object | None) -> str:
+def _hash_capability_snapshot(
+    capability_snapshot: SettingsHashValueLike | object | None,
+) -> str:
     if capability_snapshot is None:
         return ""
     settings_hash = getattr(capability_snapshot, "settings_hash", None)
@@ -72,18 +112,20 @@ def _hash_capability_snapshot(capability_snapshot: object | None) -> str:
     return hash_msgpack_canonical(repr(capability_snapshot))
 
 
-def _hash_session_config(session_config: object | None) -> str:
+def _hash_session_config(
+    session_config: SettingsHashValueLike | SettingsHashCallableLike | str | object | None,
+) -> str:
     if session_config is None:
         return ""
     if isinstance(session_config, str):
         return session_config
-    settings_hash = getattr(session_config, "settings_hash", None)
-    if callable(settings_hash):
-        result = settings_hash()
+    settings_hash_method = getattr(session_config, "settings_hash", None)
+    if callable(settings_hash_method):
+        result = settings_hash_method()
         if isinstance(result, str):
             return result
-    if isinstance(settings_hash, str) and settings_hash:
-        return settings_hash
+    if isinstance(settings_hash_method, str) and settings_hash_method:
+        return settings_hash_method
     return hash_msgpack_canonical(repr(session_config))
 
 

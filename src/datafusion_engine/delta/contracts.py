@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
-from datafusion_engine.delta.control_plane import DeltaCdfRequest, DeltaProviderRequest
+from datafusion_engine.delta.control_plane_core import DeltaCdfRequest, DeltaProviderRequest
 from datafusion_engine.delta.payload import settings_bool
 from datafusion_engine.delta.scan_config import (
     delta_scan_config_snapshot_from_options,
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.contracts import DeltaScanOptions
+    from schema_spec.dataset_spec import DeltaScanOptions
 
 
 @dataclass(frozen=True)
@@ -139,7 +139,7 @@ def build_delta_provider_contract(
         table_uri=str(location.path),
         storage_options=merged_storage_options(
             location.storage_options,
-            location.resolved.delta_log_storage_options,
+            location.resolved_delta_log_storage_options,
         ),
         version=location.delta_version,
         timestamp=location.delta_timestamp,
@@ -166,12 +166,12 @@ def build_delta_cdf_contract(location: DatasetLocation) -> DeltaCdfContract:
         table_uri=str(location.path),
         storage_options=merged_storage_options(
             location.storage_options,
-            location.resolved.delta_log_storage_options,
+            location.resolved_delta_log_storage_options,
         ),
         version=location.delta_version,
         timestamp=location.delta_timestamp,
         options=location.delta_cdf_options,
-        gate=location.resolved.delta_feature_gate,
+        gate=location.delta_feature_gate,
     )
 
 
@@ -256,9 +256,9 @@ def delta_schema_identity_hash(request: DeltaSchemaRequest) -> str | None:
     str | None
         Schema identity hash when available.
     """
-    from datafusion_engine.delta.service import delta_service_for_profile
+    from storage.deltalake.delta_metadata import delta_table_schema
 
-    schema = delta_service_for_profile(None).table_schema(request)
+    schema = delta_table_schema(request)
     if schema is None:
         return None
     return schema_identity_hash(schema)

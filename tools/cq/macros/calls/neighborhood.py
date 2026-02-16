@@ -15,11 +15,10 @@ import msgspec
 
 from tools.cq.core.schema import Finding, ScoreDetails
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
 
 if TYPE_CHECKING:
     from tools.cq.core.front_door_builders import InsightNeighborhoodV1
-
-_FRONT_DOOR_PREVIEW_PER_SLICE = 5
 
 
 @dataclass(frozen=True)
@@ -32,7 +31,7 @@ class CallsNeighborhoodRequest:
     target_callees: Counter[str]
     analysis: CallAnalysisSummary
     score: ScoreDetails | None
-    preview_per_slice: int
+    preview_per_slice: int = FRONT_DOOR_PREVIEW_PER_SLICE
 
 
 @dataclass(frozen=True)

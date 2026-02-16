@@ -12,7 +12,7 @@ import pyarrow as pa
 import pytest
 from deltalake import DeltaTable, write_deltalake
 
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import (
@@ -38,7 +38,8 @@ def test_idempotent_write_deduplication(tmp_path: Path) -> None:
     This test validates the stable contract: a duplicated write carries the
     same app transaction metadata and produces monotonic Delta versions.
     """
-    from storage.deltalake.delta import IdempotentWriteOptions, idempotent_commit_properties
+    from storage.deltalake.delta_read import IdempotentWriteOptions
+    from storage.deltalake.delta_write import idempotent_commit_properties
 
     table_path = tmp_path / "idempotent_table"
     data = pa.table({"id": [1, 2], "value": ["a", "b"]})
@@ -74,7 +75,8 @@ def test_idempotent_different_versions_both_commit(tmp_path: Path) -> None:
     delta_table.version() should be incremented twice, history should show both
     app transactions.
     """
-    from storage.deltalake.delta import IdempotentWriteOptions, idempotent_commit_properties
+    from storage.deltalake.delta_read import IdempotentWriteOptions
+    from storage.deltalake.delta_write import idempotent_commit_properties
 
     table_path = tmp_path / "multi_version_table"
     data = pa.table({"id": [1, 2], "value": ["a", "b"]})
@@ -104,7 +106,8 @@ def test_commit_metadata_includes_operation_and_mode(tmp_path: Path) -> None:
 
     Commit info metadata should contain expected keys with correct values.
     """
-    from storage.deltalake.delta import IdempotentWriteOptions, idempotent_commit_properties
+    from storage.deltalake.delta_read import IdempotentWriteOptions
+    from storage.deltalake.delta_write import idempotent_commit_properties
 
     table_path = tmp_path / "metadata_table"
     data = pa.table({"id": [1], "value": ["a"]})
@@ -131,7 +134,8 @@ def test_extra_metadata_propagated(tmp_path: Path) -> None:
 
     Commit metadata should contain run_id: 'abc'.
     """
-    from storage.deltalake.delta import IdempotentWriteOptions, idempotent_commit_properties
+    from storage.deltalake.delta_read import IdempotentWriteOptions
+    from storage.deltalake.delta_write import idempotent_commit_properties
 
     table_path = tmp_path / "extra_metadata_table"
     data = pa.table({"id": [1], "value": ["a"]})
@@ -157,7 +161,7 @@ def test_no_idempotent_options_still_requires_metadata(tmp_path: Path) -> None:
 
     Should return valid CommitProperties with metadata but no app_transaction.
     """
-    from storage.deltalake.delta import idempotent_commit_properties
+    from storage.deltalake.delta_write import idempotent_commit_properties
 
     table_path = tmp_path / "no_idempotent_table"
     data = pa.table({"id": [1], "value": ["a"]})

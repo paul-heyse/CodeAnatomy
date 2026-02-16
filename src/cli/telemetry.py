@@ -17,11 +17,15 @@ from opentelemetry import trace
 
 from cli.context import RunContext
 from cli.exit_codes import ExitCode
-from obs.otel.config import resolve_otel_config
-from obs.otel.logs import emit_diagnostics_event
-from obs.otel.run_context import reset_run_id, set_run_id
-from obs.otel.scopes import SCOPE_OBS
-from obs.otel.tracing import root_span, set_span_attributes
+from obs.otel import (
+    SCOPE_OBS,
+    emit_diagnostics_event,
+    reset_run_id,
+    resolve_otel_config,
+    root_span,
+    set_run_id,
+    set_span_attributes,
+)
 
 _LOGGER = logging.getLogger(__name__)
 tracer = trace.get_tracer("codeanatomy.cli")

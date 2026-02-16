@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
@@ -61,6 +62,7 @@ def _execute_query(query_text: str, toolchain: Toolchain, repo_root: Path) -> Cq
             plan=plan,
             query=query,
             root=str(repo_root),
+            services=resolve_runtime_services(repo_root),
             argv=(),
             query_text=query_text,
         ),
@@ -303,6 +305,7 @@ def test_q_explicit_lang_summary_preserves_scope_and_query_text(
             plan=plan,
             query=query,
             root=str(repo_root),
+            services=resolve_runtime_services(repo_root),
             argv=(),
             query_text=query_text,
         ),

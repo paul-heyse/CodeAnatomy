@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from tools.cq.core.contract_codec import dumps_json_value
+from tools.cq.core.contract_codec import encode_json
 from tools.cq.core.front_door_render import render_insight_card
 from tools.cq.core.front_door_schema import FrontDoorInsightV1
 from tools.cq.core.render_utils import na as _na
@@ -14,6 +14,7 @@ from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding
+    from tools.cq.core.summary_contract import CqSummary
 
 
 SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
@@ -54,13 +55,19 @@ ARTIFACT_ONLY_KEYS: frozenset[str] = frozenset(
 RUN_QUERY_ARG_START_INDEX = 2
 
 
+def _summary_value(summary: CqSummary | dict[str, object], key: str) -> object:
+    if isinstance(summary, dict):
+        return summary.get(key)
+    return getattr(summary, key, None)
+
+
 def _derive_query_fallback(result: CqResult) -> str | None:
     run = result.run
     if run.macro == "run":
-        steps = result.summary.get("steps")
+        steps = result.summary.steps
         if isinstance(steps, list):
             return f"multi-step plan ({len(steps)} steps)"
-        step_summaries = result.summary.get("step_summaries")
+        step_summaries = result.summary.step_summaries
         if isinstance(step_summaries, dict):
             return f"multi-step plan ({len(step_summaries)} steps)"
         return "multi-step plan"
@@ -115,8 +122,7 @@ def summary_string(
     str
         Formatted summary value or N/A message.
     """
-    summary: dict[str, object] = result.summary if isinstance(result.summary, dict) else {}
-    value = summary.get(key)
+    value = _summary_value(result.summary, key)
     if isinstance(value, str) and value:
         return f"`{value}`"
     fallback: str | None = None
@@ -129,7 +135,7 @@ def summary_string(
     return _na(missing_reason)
 
 
-def _ordered_summary_payload(summary: dict[str, object]) -> dict[str, object]:
+def _ordered_summary_payload(summary: CqSummary | dict[str, object]) -> dict[str, object]:
     """Order summary keys by priority.
 
     Parameters
@@ -155,7 +161,7 @@ def _ordered_summary_payload(summary: dict[str, object]) -> dict[str, object]:
     return ordered
 
 
-def render_summary(summary: dict[str, object]) -> list[str]:
+def render_summary(summary: CqSummary | dict[str, object]) -> list[str]:
     """Render summary section lines.
 
     Parameters
@@ -172,13 +178,13 @@ def render_summary(summary: dict[str, object]) -> list[str]:
         return []
     lines = ["## Summary"]
     summary_payload = _ordered_summary_payload(summary)
-    rendered = dumps_json_value(summary_payload, indent=None)
+    rendered = encode_json(summary_payload, indent=None)
     lines.append(f"- {rendered}")
     lines.append("")
     return lines
 
 
-def render_insight_card_from_summary(summary: dict[str, object]) -> list[str]:
+def render_insight_card_from_summary(summary: CqSummary | dict[str, object]) -> list[str]:
     """Extract and render insight card from summary.
 
     Parameters
@@ -191,7 +197,7 @@ def render_insight_card_from_summary(summary: dict[str, object]) -> list[str]:
     list[str]
         Insight card markdown lines, or empty list if not present.
     """
-    raw = summary.get("front_door_insight")
+    raw = _summary_value(summary, "front_door_insight")
     if raw is None:
         return []
     if isinstance(raw, FrontDoorInsightV1):
@@ -402,7 +408,7 @@ def _derive_compact_status(key: str, value: object) -> str | None:
 
 
 def compact_summary_for_rendering(
-    summary: dict[str, object],
+    summary: CqSummary | dict[str, object],
 ) -> tuple[dict[str, object], list[tuple[str, object]]]:
     """Split summary into compact display and artifact detail payloads.
 
@@ -422,7 +428,8 @@ def compact_summary_for_rendering(
     """
     compact: dict[str, object] = {}
     offloaded: list[tuple[str, object]] = []
-    for key, value in summary.items():
+    items = summary.items() if isinstance(summary, dict) else summary.to_dict().items()
+    for key, value in items:
         if key in ARTIFACT_ONLY_KEYS:
             offloaded.append((key, value))
             status = _derive_compact_status(key, value)
@@ -500,16 +507,16 @@ def render_summary_condensed(result: CqResult) -> str:
     if result.summary:
         # Extract key metrics from summary
         for key in ("total_sites", "call_sites", "total_raises", "total_catches"):
-            if key in result.summary:
-                value = result.summary[key]
+            value = _summary_value(result.summary, key)
+            if value is not None:
                 label = key.replace("_", " ")
                 summary_parts.append(f"{value} {label}")
 
         # For sig-impact, show breakage counts
         if "would_break" in result.summary:
-            wb = result.summary["would_break"]
-            amb = result.summary.get("ambiguous", 0)
-            ok = result.summary.get("ok", 0)
+            wb = result.summary.would_break
+            amb = result.summary.ambiguous
+            ok = result.summary.ok
             summary_parts = [f"break:{wb}", f"ambiguous:{amb}", f"ok:{ok}"]
 
     if not summary_parts:

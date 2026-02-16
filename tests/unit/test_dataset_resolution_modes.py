@@ -10,7 +10,7 @@ import pytest
 from datafusion_engine.dataset import resolution
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.contracts import DeltaCdfContract
-from datafusion_engine.delta.control_plane import DeltaProviderRequest
+from datafusion_engine.delta.control_plane_core import DeltaProviderRequest
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 
 if TYPE_CHECKING:

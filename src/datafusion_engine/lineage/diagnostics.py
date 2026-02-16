@@ -755,7 +755,7 @@ def view_udf_parity_payload(
     dict[str, object]
         Diagnostics payload describing required/missing UDFs per view.
     """
-    from datafusion_engine.udf.extension_runtime import udf_names_from_snapshot
+    from datafusion_engine.udf.extension_core import udf_names_from_snapshot
 
     def _required_udfs(node: ViewNode) -> tuple[str, ...]:
         return tuple(node.required_udfs)
@@ -763,7 +763,7 @@ def view_udf_parity_payload(
     available = udf_names_from_snapshot(snapshot)
     info_available: set[str] | None = None
     if ctx is not None:
-        from datafusion_engine.schema.introspection import SchemaIntrospector
+        from datafusion_engine.schema.introspection_core import SchemaIntrospector
 
         introspector = SchemaIntrospector(ctx)
         catalog = introspector.function_catalog_snapshot(include_parameters=False)
@@ -851,7 +851,7 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, objec
     dict[str, object]
         Summary payload with counts and metadata coverage.
     """
-    from datafusion_engine.udf.extension_runtime import (
+    from datafusion_engine.udf.extension_core import (
         rust_udf_snapshot_hash,
         udf_names_from_snapshot,
     )
@@ -903,6 +903,6 @@ def otel_diagnostics_sink() -> DiagnosticsSink:
     DiagnosticsSink
         Diagnostics sink that emits OpenTelemetry logs.
     """
-    from obs.otel.logs import OtelDiagnosticsSink
+    from obs.otel import OtelDiagnosticsSink
 
     return OtelDiagnosticsSink()

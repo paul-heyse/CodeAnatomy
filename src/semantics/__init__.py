@@ -29,7 +29,7 @@ if TYPE_CHECKING:
         JoinStrategyType,
         infer_join_strategy,
     )
-    from semantics.pipeline import CpgBuildOptions, build_cpg, build_cpg_from_inferred_deps
+    from semantics.pipeline_build import CpgBuildOptions, build_cpg, build_cpg_from_inferred_deps
     from semantics.schema import SemanticSchema
     from semantics.scip_normalize import scip_to_byte_offsets
 
@@ -59,7 +59,7 @@ __all__ = [
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "ColumnType": ("semantics.column_types", "ColumnType"),
-    "CpgBuildOptions": ("semantics.pipeline", "CpgBuildOptions"),
+    "CpgBuildOptions": ("semantics.pipeline_build", "CpgBuildOptions"),
     "JoinInferenceError": ("semantics.joins", "JoinInferenceError"),
     "JoinStrategy": ("semantics.joins", "JoinStrategy"),
     "JoinStrategyType": ("semantics.joins", "JoinStrategyType"),
@@ -69,8 +69,8 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "SemanticSchema": ("semantics.schema", "SemanticSchema"),
     "TableInfo": ("semantics.compiler", "TableInfo"),
     "TableType": ("semantics.column_types", "TableType"),
-    "build_cpg": ("semantics.pipeline", "build_cpg"),
-    "build_cpg_from_inferred_deps": ("semantics.pipeline", "build_cpg_from_inferred_deps"),
+    "build_cpg": ("semantics.pipeline_build", "build_cpg"),
+    "build_cpg_from_inferred_deps": ("semantics.pipeline_build", "build_cpg_from_inferred_deps"),
     "infer_column_type": ("semantics.column_types", "infer_column_type"),
     "infer_join_strategy": ("semantics.joins", "infer_join_strategy"),
     "infer_table_type": ("semantics.column_types", "infer_table_type"),

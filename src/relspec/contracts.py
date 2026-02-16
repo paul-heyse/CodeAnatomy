@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import cache
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 import msgspec
 
@@ -27,17 +27,42 @@ REL_IMPORT_SYMBOL_NAME: Final[str] = REL_IMPORT_SYMBOL_OUTPUT
 REL_DEF_SYMBOL_NAME: Final[str] = REL_DEF_SYMBOL_OUTPUT
 REL_CALLSITE_SYMBOL_NAME: Final[str] = REL_CALLSITE_SYMBOL_OUTPUT
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.views.graph import ViewNode
+    from relspec.pipeline_policy import DiagnosticsPolicy
+    from semantics.ir import SemanticIR
+
+
+class OutDegreeGraph(Protocol):
+    def out_degree(self, node_idx: object) -> int: ...
+
+
+class TaskGraphLike(Protocol):
+    task_idx: Mapping[str, object]
+    graph: OutDegreeGraph
+
+
+class ScanOverrideLike(Protocol):
+    dataset_name: str
+    policy: object
+    reasons: object
+    inference_confidence: object | None
+
 
 class CompileExecutionPolicyRequestV1(msgspec.Struct, frozen=True):
     """Request envelope for execution-policy compilation."""
 
-    task_graph: Any
-    output_locations: dict[str, Any]
-    runtime_profile: Any
-    view_nodes: tuple[Any, ...] | None = None
-    semantic_ir: Any | None = None
-    scan_overrides: tuple[Any, ...] = ()
-    diagnostics_policy: Any | None = None
+    task_graph: TaskGraphLike
+    output_locations: dict[str, DatasetLocation]
+    runtime_profile: DataFusionRuntimeProfile
+    view_nodes: tuple[ViewNode, ...] | None = None
+    semantic_ir: SemanticIR | None = None
+    scan_overrides: tuple[ScanOverrideLike, ...] = ()
+    diagnostics_policy: DiagnosticsPolicy | None = None
     workload_class: str | None = None
 
 

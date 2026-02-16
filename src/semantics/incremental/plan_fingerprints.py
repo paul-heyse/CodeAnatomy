@@ -15,7 +15,7 @@ from datafusion_engine.arrow.schema import (
     task_name_field,
     version_field,
 )
-from datafusion_engine.io.write import WriteMode
+from datafusion_engine.io.write_core import WriteMode
 from semantics.incremental.delta_context import read_delta_table_via_facade
 from semantics.incremental.write_helpers import (
     IncrementalDeltaWriteRequest,

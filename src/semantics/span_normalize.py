@@ -10,8 +10,7 @@ from datafusion import col, lit
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.udf.expr import udf_expr
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_SEMANTICS, stage_span
 from semantics.normalization_helpers import LineIndexJoinOptions, byte_offset_expr, line_index_join
 
 if TYPE_CHECKING:

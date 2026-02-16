@@ -83,7 +83,7 @@ def validate_required_udfs_from_plan(
     registry_snapshot: Mapping[str, object],
 ) -> None:
     """Validate that all UDFs in a plan are registered."""
-    from datafusion_engine.udf.extension_runtime import validate_required_udfs
+    from datafusion_engine.udf.extension_core import validate_required_udfs
 
     required_udfs = extract_udfs_from_logical_plan(
         logical_plan,
@@ -99,7 +99,7 @@ def validate_required_udfs_from_bundle(
     registry_snapshot: Mapping[str, object],
 ) -> None:
     """Validate that all UDFs in a plan bundle are registered."""
-    from datafusion_engine.udf.extension_runtime import validate_required_udfs
+    from datafusion_engine.udf.extension_core import validate_required_udfs
 
     required_udfs = extract_udfs_from_plan_bundle(bundle)
     if required_udfs:
@@ -136,7 +136,7 @@ def ensure_plan_udfs_available(
     frozenset[str]
         UDF names required by the DataFrame plan.
     """
-    from datafusion_engine.udf.extension_runtime import validate_required_udfs
+    from datafusion_engine.udf.extension_core import validate_required_udfs
 
     required_udfs = extract_udfs_from_dataframe(df, udf_snapshot=registry_snapshot)
     if required_udfs:

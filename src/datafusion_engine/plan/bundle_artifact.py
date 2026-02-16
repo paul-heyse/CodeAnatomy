@@ -28,9 +28,8 @@ from datafusion_engine.plan.cache import PlanProtoCacheEntry
 from datafusion_engine.plan.diagnostics import PlanPhaseDiagnostics, record_plan_phase_diagnostics
 from datafusion_engine.plan.normalization import normalize_substrait_plan
 from datafusion_engine.plan.profiler import ExplainCapture, capture_explain
-from datafusion_engine.schema.introspection import SchemaIntrospector
-from obs.otel.scopes import SCOPE_PLANNING
-from obs.otel.tracing import stage_span
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
+from obs.otel import SCOPE_PLANNING, stage_span
 from serde_artifacts import DeltaInputPin, PlanArtifacts, PlanProtoStatus
 from serde_msgspec import to_builtins
 from serde_msgspec_ext import (
@@ -51,7 +50,8 @@ if TYPE_CHECKING:
 
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scheduling import ScanUnit
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_session import SessionRuntime
     from datafusion_engine.sql.options import SQLOptions
     from semantics.program_manifest import ManifestDatasetResolver
 
@@ -1202,7 +1202,7 @@ def _validate_bundle_required_udfs(
 ) -> None:
     if not options.validate_udfs or not required.required_udfs:
         return
-    from datafusion_engine.udf.extension_runtime import validate_required_udfs
+    from datafusion_engine.udf.extension_core import validate_required_udfs
 
     validate_required_udfs(snapshot, required=required.required_udfs)
 
@@ -2433,7 +2433,7 @@ def _df_settings_snapshot(
 ) -> Mapping[str, str]:
     if session_runtime is not None and session_runtime.ctx is ctx:
         return dict(session_runtime.df_settings)
-    from datafusion_engine.schema.introspection import SchemaIntrospector
+    from datafusion_engine.schema.introspection_core import SchemaIntrospector
 
     try:
         sql_options = None
@@ -2470,7 +2470,7 @@ def _function_registry_artifacts(
     *,
     session_runtime: SessionRuntime | None,
 ) -> _RegistryArtifacts:
-    from datafusion_engine.schema.introspection import SchemaIntrospector
+    from datafusion_engine.schema.introspection_core import SchemaIntrospector
 
     if not _capture_udf_metadata_for_plan(session_runtime):
         return _RegistryArtifacts(
@@ -2513,11 +2513,11 @@ def _udf_artifacts(
             domain_planner_names=session_runtime.domain_planner_names,
         )
     else:
-        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
+        from datafusion_engine.udf.extension_core import rust_udf_snapshot
 
         snapshot = rust_udf_snapshot(ctx)
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.extension_runtime import (
+    from datafusion_engine.udf.extension_core import (
         rust_udf_snapshot_hash,
         validate_rust_udf_snapshot,
     )

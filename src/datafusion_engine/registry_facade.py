@@ -16,9 +16,10 @@ from utils.uuid_factory import uuid7_str
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
-    from datafusion_engine.dataset.registration import DataFusionCachePolicy
+    from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
     from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DataFusionViewRegistry
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_session import DataFusionViewRegistry
     from datafusion_engine.udf.metadata import DataFusionUdfSpec, UdfCatalogAdapter
     from datafusion_engine.views.artifacts import DataFusionViewArtifact
     from semantics.program_manifest import ManifestDatasetResolver

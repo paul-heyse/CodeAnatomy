@@ -16,7 +16,7 @@ from tools.cq.core.cache.search_artifact_store import (
 from tools.cq.core.cache.search_artifact_store import (
     load_search_artifact_bundle as load_search_artifact_bundle_from_store,
 )
-from tools.cq.core.contract_codec import dumps_json_value
+from tools.cq.core.contract_codec import encode_json
 from tools.cq.core.diagnostics_contracts import build_diagnostics_artifact_payload
 from tools.cq.core.schema import Artifact, CqResult
 from tools.cq.core.serialization import to_builtins
@@ -51,7 +51,7 @@ def _write_json_artifact(
     target_dir.mkdir(parents=True, exist_ok=True)
     filepath = target_dir / filename
     with Path(filepath).open("w", encoding="utf-8") as handle:
-        handle.write(dumps_json_value(to_builtins(payload), indent=2))
+        handle.write(encode_json(to_builtins(payload), indent=2))
     try:
         rel_path = filepath.relative_to(result.run.root)
     except ValueError:
@@ -113,7 +113,7 @@ def save_neighborhood_overflow_artifact(
     """
     from tools.cq.core.front_door_render import coerce_front_door_insight
 
-    insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
+    insight = coerce_front_door_insight(result.summary.front_door_insight)
     if insight is None:
         return None
 

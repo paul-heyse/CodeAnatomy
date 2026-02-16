@@ -7,8 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
+from obs.otel import SCOPE_SEMANTICS, stage_span
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext

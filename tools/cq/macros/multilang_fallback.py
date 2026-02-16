@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.schema import CqResult
+from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.macros._rust_fallback import rust_fallback_search
 from tools.cq.orchestration.multilang_summary import (
     build_multilang_summary,
@@ -49,7 +50,7 @@ def apply_rust_macro_fallback(
     result.evidence.extend(rust_findings)
     result.key_findings.extend(capability_diags)
 
-    existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
+    existing_summary = result.summary.to_dict()
     existing_summary.setdefault("mode", f"macro:{macro_name}")
     existing_summary.setdefault(
         "query",
@@ -59,12 +60,14 @@ def apply_rust_macro_fallback(
         existing_summary,
         fallback_matches=fallback_matches,
     )
-    result.summary = build_multilang_summary(
-        SummaryBuildRequest(
-            common=existing_summary,
-            lang_scope="auto",
-            language_order=None,
-            languages={"python": py_stats, "rust": rust_stats},
+    result.summary = summary_from_mapping(
+        build_multilang_summary(
+            SummaryBuildRequest(
+                common=existing_summary,
+                lang_scope="auto",
+                language_order=None,
+                languages={"python": py_stats, "rust": rust_stats},
+            )
         )
     )
 

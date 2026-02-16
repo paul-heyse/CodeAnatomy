@@ -107,6 +107,7 @@ def execute_entity_q_steps(
             paths=step.scope_paths,
             scope_globs=step.scope_globs,
             argv=ctx.argv,
+            services=ctx.services,
             run_id=run_id,
             query_text=step.step.query,
             match_spans=spans,
@@ -116,14 +117,14 @@ def execute_entity_q_steps(
             result = execute_entity_query_from_records(request)
         except RUN_STEP_NON_FATAL_EXCEPTIONS as exc:
             result = error_result(step.parent_step_id, "q", exc, ctx)
-            result.summary["lang"] = step.plan.lang
-            result.summary["query_text"] = step.step.query
+            result.summary.lang = step.plan.lang
+            result.summary.query_text = step.step.query
             results.append((step.parent_step_id, result))
             if stop_on_error:
                 break
             continue
-        result.summary["lang"] = step.plan.lang
-        result.summary["query_text"] = step.step.query
+        result.summary.lang = step.plan.lang
+        result.summary.query_text = step.step.query
         results.append((step.parent_step_id, result))
     return results
 
@@ -175,6 +176,7 @@ def execute_pattern_q_steps(
             root=ctx.root,
             files=files,
             argv=ctx.argv,
+            services=ctx.services,
             run_id=run_id,
             query_text=step.step.query,
         )
@@ -182,14 +184,14 @@ def execute_pattern_q_steps(
             result = execute_pattern_query_with_files(request)
         except RUN_STEP_NON_FATAL_EXCEPTIONS as exc:
             result = error_result(step.parent_step_id, "q", exc, ctx)
-            result.summary["lang"] = step.plan.lang
-            result.summary["query_text"] = step.step.query
+            result.summary.lang = step.plan.lang
+            result.summary.query_text = step.step.query
             results.append((step.parent_step_id, result))
             if stop_on_error:
                 break
             continue
-        result.summary["lang"] = step.plan.lang
-        result.summary["query_text"] = step.step.query
+        result.summary.lang = step.plan.lang
+        result.summary.query_text = step.step.query
         results.append((step.parent_step_id, result))
     return results
 

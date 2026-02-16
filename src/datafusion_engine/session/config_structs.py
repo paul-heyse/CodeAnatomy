@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import msgspec
 
-from datafusion_engine.session.runtime import (
+from datafusion_engine.session.runtime_profile_config import (
     CatalogConfig,
     DataSourceConfig,
     DiagnosticsConfig,

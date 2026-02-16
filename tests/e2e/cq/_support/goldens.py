@@ -77,6 +77,7 @@ def _normalize_summary_block(result_dict: dict[str, Any]) -> None:
     summary.pop("cache_stats", None)
     summary.pop("cache_backend", None)
     summary.pop("step_summaries", None)
+    summary.pop("semantic_planes", None)
 
 
 def _sort_result_findings(result_dict: dict[str, Any]) -> None:
@@ -94,7 +95,9 @@ def _sort_result_findings(result_dict: dict[str, Any]) -> None:
 
 def _normalize_json_value(value: object) -> object:
     """Normalize arbitrary JSON-compatible values for stable snapshots."""
-    return _scrub_unstable(value)
+    from tools.cq.core.serialization import to_builtins
+
+    return _scrub_unstable(to_builtins(value))
 
 
 def _normalize_text_value(value: str) -> str:
@@ -160,6 +163,7 @@ def _scrub_mapping(value: dict[str, object]) -> dict[str, object]:
         summary.pop("cache_stats", None)
         summary.pop("cache_backend", None)
         summary.pop("step_summaries", None)
+        summary.pop("semantic_planes", None)
         summary.pop("timings", None)
         summary.pop("timing", None)
 

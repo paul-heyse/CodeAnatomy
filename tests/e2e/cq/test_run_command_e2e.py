@@ -8,12 +8,33 @@ from typing import cast
 
 import pytest
 from tools.cq.core.schema import CqResult
+from tools.cq.core.summary_contract import SemanticTelemetryV1
 
 from tests.e2e.cq._support.goldens import assert_json_snapshot_data, load_golden_spec
 from tests.e2e.cq._support.projections import result_snapshot_projection
 from tests.e2e.cq._support.specs import assert_result_matches_spec
 
 EXPECTED_RUN_STEPS = 2
+
+
+def _telemetry_to_dict(value: object) -> dict[str, int] | None:
+    if isinstance(value, SemanticTelemetryV1):
+        return {
+            "attempted": value.attempted,
+            "applied": value.applied,
+            "failed": value.failed,
+            "skipped": value.skipped,
+            "timed_out": value.timed_out,
+        }
+    if isinstance(value, dict):
+        return {
+            "attempted": int(value.get("attempted", 0) or 0),
+            "applied": int(value.get("applied", 0) or 0),
+            "failed": int(value.get("failed", 0) or 0),
+            "skipped": int(value.get("skipped", 0) or 0),
+            "timed_out": int(value.get("timed_out", 0) or 0),
+        }
+    return None
 
 
 @pytest.mark.e2e
@@ -122,14 +143,16 @@ def test_run_top_level_semantic_telemetry_matches_step_summaries(
         for step_summary in typed_step_summaries.values():
             if not isinstance(step_summary, dict):
                 continue
-            raw = step_summary.get(key)
-            if not isinstance(raw, dict):
+            normalized = _telemetry_to_dict(step_summary.get(key))
+            if normalized is None:
                 continue
             for field in totals:
-                value = raw.get(field)
-                if isinstance(value, int):
-                    totals[field] += value
+                totals[field] += normalized[field]
         return totals
 
-    assert summary.get("python_semantic_telemetry") == sum_telemetry("python_semantic_telemetry")
-    assert summary.get("rust_semantic_telemetry") == sum_telemetry("rust_semantic_telemetry")
+    assert _telemetry_to_dict(summary.get("python_semantic_telemetry")) == sum_telemetry(
+        "python_semantic_telemetry"
+    )
+    assert _telemetry_to_dict(summary.get("rust_semantic_telemetry")) == sum_telemetry(
+        "rust_semantic_telemetry"
+    )

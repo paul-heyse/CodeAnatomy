@@ -30,8 +30,6 @@ __all__ = [
     "TREE_SITTER_CHECK_VIEWS",
     "TREE_SITTER_FILES_SCHEMA",
     "TREE_SITTER_VIEW_NAMES",
-    "_resolve_nested_row_schema_authority",
-    "_semantic_validation_tables",
     "base_extract_schema_registry",
     "default_attrs_value",
     "extract_base_schema_for",
@@ -116,10 +114,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
         "datafusion_engine.schema.extraction_schemas",
         "TREE_SITTER_VIEW_NAMES",
     ),
-    "_resolve_nested_row_schema_authority": (
-        "datafusion_engine.schema.extraction_schemas",
-        "_resolve_nested_row_schema_authority",
-    ),
     "base_extract_schema_registry": (
         "datafusion_engine.schema.extraction_schemas",
         "base_extract_schema_registry",
@@ -194,10 +188,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
         "datafusion_engine.schema.observability_schemas",
         "PIPELINE_TASK_SUBMISSION_SCHEMA",
     ),
-    "_semantic_validation_tables": (
-        "datafusion_engine.schema.observability_schemas",
-        "_semantic_validation_tables",
-    ),
     "missing_schema_names": (
         "datafusion_engine.schema.observability_schemas",
         "missing_schema_names",
@@ -257,7 +247,6 @@ if TYPE_CHECKING:
         TREE_SITTER_CHECK_VIEWS,
         TREE_SITTER_FILES_SCHEMA,
         TREE_SITTER_VIEW_NAMES,
-        _resolve_nested_row_schema_authority,
         base_extract_schema_registry,
         default_attrs_value,
         extract_base_schema_for,
@@ -288,7 +277,6 @@ if TYPE_CHECKING:
         PIPELINE_TASK_EXPANSION_SCHEMA,
         PIPELINE_TASK_GROUPING_SCHEMA,
         PIPELINE_TASK_SUBMISSION_SCHEMA,
-        _semantic_validation_tables,
         missing_schema_names,
         registered_table_names,
         schema_contract_for_table,

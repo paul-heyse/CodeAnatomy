@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from obs.otel.run_context import get_run_id
+from obs.otel import get_run_id
 
 
 @dataclass(frozen=True)

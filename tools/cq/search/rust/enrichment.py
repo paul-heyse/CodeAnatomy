@@ -16,6 +16,7 @@ from tools.cq.search._shared.bounded_cache import BoundedCache
 from tools.cq.search._shared.core import RustEnrichmentRequest
 from tools.cq.search._shared.core import sg_node_text as _shared_sg_node_text
 from tools.cq.search._shared.core import source_hash as _shared_source_hash
+from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search.enrichment.core import (
     append_source,
     has_value,
@@ -27,6 +28,43 @@ from tools.cq.search.pipeline.classifier import get_node_index
 from tools.cq.search.rust.contracts import RustMacroExpansionRequestV1
 from tools.cq.search.rust.evidence import attach_rust_evidence
 from tools.cq.search.rust.extensions import expand_macros
+from tools.cq.search.rust.extractors_shared import (
+    RUST_TEST_ATTRS,
+)
+from tools.cq.search.rust.extractors_shared import (
+    extract_attributes as _extract_attributes_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    extract_call_target as _extract_call_target_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    extract_enum_shape as _extract_enum_shape_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    extract_function_signature as _extract_function_signature_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    extract_impl_context as _extract_impl_context_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    extract_struct_shape as _extract_struct_shape_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    extract_visibility as _extract_visibility_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    find_ancestor as _find_ancestor_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    find_scope as _find_scope_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    scope_chain as _scope_chain_shared,
+)
+from tools.cq.search.rust.extractors_shared import (
+    scope_name as _scope_name_shared,
+)
+from tools.cq.search.rust.node_access import SgRustNodeAccess
 from tools.cq.search.tree_sitter.rust_lane.runtime import (
     enrich_rust_context_by_byte_range as _ts_enrich,
 )
@@ -37,7 +75,6 @@ from tools.cq.search.tree_sitter.rust_lane.runtime import (
 if TYPE_CHECKING:
     from ast_grep_py import SgNode
 
-_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 _MAX_AST_CACHE_ENTRIES = 64
 _AST_CACHE: BoundedCache[str, tuple[SgRoot, str]] = BoundedCache(
     max_size=_MAX_AST_CACHE_ENTRIES, policy="fifo"
@@ -45,30 +82,7 @@ _AST_CACHE: BoundedCache[str, tuple[SgRoot, str]] = BoundedCache(
 
 _DEFAULT_SCOPE_DEPTH = 24
 _CROSSCHECK_ENV = "CQ_RUST_ENRICHMENT_CROSSCHECK"
-_MAX_FUNCTION_PARAMS = 12
-_MAX_ATTRIBUTES = 10
 logger = logging.getLogger(__name__)
-
-_SCOPE_KINDS: frozenset[str] = frozenset(
-    {
-        "function_item",
-        "struct_item",
-        "enum_item",
-        "trait_item",
-        "impl_item",
-        "mod_item",
-        "macro_invocation",
-    }
-)
-
-_RUST_TEST_ATTRS: frozenset[str] = frozenset(
-    {
-        "test",
-        "tokio::test",
-        "rstest",
-        "async_std::test",
-    }
-)
 
 _CROSSCHECK_METADATA_KEYS: frozenset[str] = frozenset(
     {"enrichment_status", "enrichment_sources", "degrade_reason", "language"}
@@ -107,179 +121,50 @@ def _node_text(node: SgNode | None) -> str | None:
 
 
 def _scope_name(scope_node: SgNode) -> str | None:
-    kind = scope_node.kind()
-    if kind == "impl_item":
-        return _node_text(scope_node.field("type"))
-    if kind == "macro_invocation":
-        return _node_text(scope_node.field("macro")) or _node_text(scope_node.field("name"))
-    return _node_text(scope_node.field("name"))
+    return _scope_name_shared(SgRustNodeAccess(scope_node))
 
 
 def _find_scope(node: SgNode, *, max_depth: int) -> SgNode | None:
-    current: SgNode | None = node
-    depth = 0
-    while current is not None and depth < max_depth:
-        if current.kind() in _SCOPE_KINDS:
-            return current
-        current = current.parent()
-        depth += 1
+    resolved = _find_scope_shared(SgRustNodeAccess(node), max_depth=max_depth)
+    if isinstance(resolved, SgRustNodeAccess):
+        return resolved.node
     return None
 
 
 def _find_ancestor(node: SgNode, kind: str, *, max_depth: int) -> SgNode | None:
-    current: SgNode | None = node.parent()
-    depth = 0
-    while current is not None and depth < max_depth:
-        if current.kind() == kind:
-            return current
-        current = current.parent()
-        depth += 1
+    resolved = _find_ancestor_shared(SgRustNodeAccess(node), kind, max_depth=max_depth)
+    if isinstance(resolved, SgRustNodeAccess):
+        return resolved.node
     return None
 
 
 def _scope_chain(node: SgNode, *, max_depth: int) -> list[str]:
-    chain: list[str] = []
-    current: SgNode | None = node
-    depth = 0
-    while current is not None and depth < max_depth:
-        kind = current.kind()
-        if kind in _SCOPE_KINDS:
-            name = _scope_name(current)
-            chain.append(f"{kind}:{name}" if name else kind)
-        current = current.parent()
-        depth += 1
-    return chain
+    return _scope_chain_shared(SgRustNodeAccess(node), max_depth=max_depth)
 
 
 def _extract_visibility(item: SgNode) -> str:
-    text = item.text().lstrip()
-    if text.startswith("pub(crate)"):
-        return "pub(crate)"
-    if text.startswith("pub(super)"):
-        return "pub(super)"
-    if text.startswith("pub"):
-        return "pub"
-    return "private"
+    return _extract_visibility_shared(SgRustNodeAccess(item))
 
 
 def _extract_function_signature(node: SgNode) -> dict[str, object]:
-    if node.kind() != "function_item":
-        return {}
-
-    result = _extract_function_params(node)
-    result.update(_extract_function_type_details(node))
-    signature_fields = _extract_signature_flags(node)
-    result.update(signature_fields)
-    return result
+    return _extract_function_signature_shared(SgRustNodeAccess(node))
 
 
-def _extract_function_params(node: SgNode) -> dict[str, object]:
-    params_node = node.field("parameters")
-    if params_node is None:
-        return {"params": []}
-    params: list[str] = []
-    for child in params_node.children():
-        if not child.is_named():
-            continue
-        text = child.text().strip()
-        if text:
-            params.append(text)
-        if len(params) >= _MAX_FUNCTION_PARAMS:
-            break
-    return {"params": params}
-
-
-def _extract_function_type_details(node: SgNode) -> dict[str, object]:
-    result: dict[str, object] = {}
-
-    return_type = _node_text(node.field("return_type"))
-    if return_type is not None:
-        result["return_type"] = return_type
-
-    type_params = _node_text(node.field("type_parameters"))
-    if type_params is not None:
-        result["generics"] = type_params
-    return result
-
-
-def _extract_signature_flags(node: SgNode) -> dict[str, object]:
-    sig_text = node.text()
-    body_idx = sig_text.find("{")
-    if body_idx > 0:
-        sig_text = sig_text[:body_idx].strip()
-
-    if sig_text:
-        return {
-            "signature": sig_text[:200],
-            "is_async": " async " in f" {sig_text} " or sig_text.startswith("async "),
-            "is_unsafe": " unsafe " in f" {sig_text} " or sig_text.startswith("unsafe "),
-        }
-    return {"is_async": False, "is_unsafe": False}
+def _extract_impl_context(node: SgNode) -> dict[str, object]:
+    return _extract_impl_context_shared(SgRustNodeAccess(node))
 
 
 def _extract_struct_shape(node: SgNode) -> dict[str, object]:
-    if node.kind() != "struct_item":
-        return {}
-    body = node.field("body")
-    if body is None:
-        return {}
-    fields: list[str] = []
-    field_nodes = [
-        child
-        for child in body.children()
-        if child.is_named() and child.kind() == "field_declaration"
-    ]
-    for member in field_nodes[:8]:
-        text = member.text().strip()
-        if text:
-            fields.append(text[:60])
-    remaining = len(field_nodes) - 8
-    if remaining > 0:
-        fields.append(f"... and {remaining} more")
-    return {
-        "struct_field_count": len(field_nodes),
-        "struct_fields": fields,
-    }
+    return _extract_struct_shape_shared(SgRustNodeAccess(node))
 
 
 def _extract_enum_shape(node: SgNode) -> dict[str, object]:
-    if node.kind() != "enum_item":
-        return {}
-    body = node.field("body")
-    if body is None:
-        return {}
-    variants: list[str] = []
-    variant_nodes = [
-        child for child in body.children() if child.is_named() and child.kind() == "enum_variant"
-    ]
-    for member in variant_nodes[:12]:
-        text = member.text().strip()
-        if text:
-            variants.append(text[:60])
-    remaining = len(variant_nodes) - 12
-    if remaining > 0:
-        variants.append(f"... and {remaining} more")
-    return {
-        "enum_variant_count": len(variant_nodes),
-        "enum_variants": variants,
-    }
+    return _extract_enum_shape_shared(SgRustNodeAccess(node))
 
 
 def _extract_call_target(node: SgNode) -> dict[str, object]:
     if node.kind() == "call_expression":
-        function = node.field("function")
-        if function is None:
-            return {}
-        target = function.text().strip()
-        data: dict[str, object] = {"call_target": target[:120]} if target else {}
-        if function.kind() == "field_expression":
-            receiver = _node_text(function.field("value"))
-            method = _node_text(function.field("field"))
-            if receiver:
-                data["call_receiver"] = receiver[:80]
-            if method:
-                data["call_method"] = method
-        return data
+        return _extract_call_target_shared(SgRustNodeAccess(node))
     if node.kind() == "macro_invocation":
         macro = _node_text(node.field("macro")) or _node_text(node.field("name"))
         if macro:
@@ -288,20 +173,7 @@ def _extract_call_target(node: SgNode) -> dict[str, object]:
 
 
 def _extract_attributes(node: SgNode) -> list[str]:
-    attrs: list[str] = []
-    for child in node.children():
-        if child.kind() != "attribute_item":
-            continue
-        text = child.text().strip()
-        if text.startswith("#!["):
-            continue
-        if text.startswith("#[") and text.endswith("]"):
-            text = text[2:-1].strip()
-        if text:
-            attrs.append(text[:60])
-        if len(attrs) >= _MAX_ATTRIBUTES:
-            break
-    return attrs
+    return _extract_attributes_shared(SgRustNodeAccess(node))
 
 
 def _classify_item_role(
@@ -355,7 +227,7 @@ def _classify_function_role(
     attrs: list[str],
     max_scope_depth: int,
 ) -> str:
-    if any(attr in _RUST_TEST_ATTRS for attr in attrs):
+    if any(attr in RUST_TEST_ATTRS for attr in attrs):
         return "test_function"
     impl_node = _find_ancestor(fn_target, "impl_item", max_depth=max_scope_depth)
     if impl_node is None:
@@ -506,6 +378,10 @@ def _apply_kind_extractors(
     if enum_target is not None:
         payload.update(_extract_enum_shape(enum_target))
 
+    impl_target = _resolve_shape_target(node, scope, "impl_item")
+    if impl_target is not None:
+        payload.update(_extract_impl_context(impl_target))
+
     if node.kind() in {"call_expression", "macro_invocation"}:
         payload.update(_extract_call_target(node))
 
@@ -627,7 +503,7 @@ def _safe_ast_grep_payload(
             cache_key=cache_key,
             max_scope_depth=max_scope_depth,
         )
-    except _ENRICHMENT_ERRORS as exc:
+    except ENRICHMENT_ERRORS as exc:
         logger.warning("Rust ast-grep enrichment failed: %s", type(exc).__name__)
         return None
 
@@ -652,7 +528,7 @@ def _safe_tree_sitter_payload(
                 query_budget_ms=query_budget_ms,
             )
         )
-    except _ENRICHMENT_ERRORS as exc:
+    except ENRICHMENT_ERRORS as exc:
         logger.warning("Rust tree-sitter enrichment failed: %s", type(exc).__name__)
         return {}
 

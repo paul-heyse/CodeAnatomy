@@ -16,7 +16,7 @@ from datafusion_engine.dataset.registry import (
 )
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
-from schema_spec.contracts import DeltaScanOptions
+from schema_spec.dataset_spec import DeltaScanOptions
 from semantics.incremental.cdf_core import CanonicalCdfReadRequest, read_cdf_table
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_types import CdfFilterPolicy
@@ -29,7 +29,7 @@ from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.contracts import DeltaCdfPolicy
+    from schema_spec.dataset_spec import DeltaCdfPolicy
     from semantics.incremental.runtime import IncrementalRuntime
 
 
@@ -102,13 +102,13 @@ def _resolve_cdf_inputs(
         if profile_location.storage_options:
             resolved_storage = profile_location.storage_options
         resolved_log_storage = (
-            profile_location.resolved.delta_log_storage_options or resolved_log_storage
+            profile_location.resolved_delta_log_storage_options or resolved_log_storage
         )
         resolved_scan = resolve_delta_scan_options(
             profile_location,
             scan_policy=runtime.scan_policy(),
         )
-        cdf_policy = profile_location.resolved.delta_cdf_policy
+        cdf_policy = profile_location.delta_cdf_policy
     current_version = runtime.delta_service().table_version(
         path=dataset_path,
         storage_options=resolved_storage,
@@ -239,7 +239,7 @@ def _register_cdf_dataset(
     cdf_name = f"__cdf_{uuid7_hex()}"
     overrides = None
     if state.inputs.scan_options is not None:
-        from schema_spec.contracts import DeltaPolicyBundle
+        from schema_spec.dataset_spec import DeltaPolicyBundle
 
         overrides = DatasetLocationOverrides(
             delta=DeltaPolicyBundle(scan=state.inputs.scan_options)
@@ -328,9 +328,7 @@ def read_cdf_changes(
     """
     profile = context.runtime.profile
     profile_location = _profile_dataset_location(context, dataset_name)
-    cdf_policy = (
-        profile_location.resolved.delta_cdf_policy if profile_location is not None else None
-    )
+    cdf_policy = profile_location.delta_cdf_policy if profile_location is not None else None
     inputs = _resolve_cdf_inputs(context, dataset_path=dataset_path, dataset_name=dataset_name)
     if inputs is None:
         _record_unavailable_cdf_read(

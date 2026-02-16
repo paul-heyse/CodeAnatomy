@@ -29,7 +29,7 @@ from utils.registry_protocol import MutableRegistry
 if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.contracts import (
+    from schema_spec.dataset_spec import (
         ArrowValidationOptions,
         DataFusionScanOptions,
         DatasetSpec,
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     )
 else:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
-    from schema_spec.contracts import (
+    from schema_spec.dataset_spec import (
         ArrowValidationOptions,
         DataFusionScanOptions,
         DatasetSpec,
@@ -98,6 +98,58 @@ class DatasetLocation(StructBaseStrict, frozen=True):
     def resolved(self) -> ResolvedDatasetLocation:
         """Return a cached resolved view of this dataset location."""
         return _resolve_cached_location(self)
+
+    @property
+    def delta_scan(self) -> DeltaScanOptions | None:
+        """Return effective Delta scan options."""
+        if self.dataset_spec is None:
+            delta_overrides = self.overrides.delta if self.overrides is not None else None
+            if delta_overrides is None or delta_overrides.scan is None:
+                return None
+        resolved = _resolve_cached_location(self)
+        return resolved.delta_scan
+
+    @property
+    def delta_cdf_policy(self) -> DeltaCdfPolicy | None:
+        """Return effective Delta CDF policy."""
+        resolved = _resolve_cached_location(self)
+        return resolved.delta_cdf_policy
+
+    @property
+    def resolved_delta_log_storage_options(self) -> Mapping[str, str] | None:
+        """Return effective Delta log storage options."""
+        resolved = _resolve_cached_location(self)
+        return resolved.delta_log_storage_options
+
+    @property
+    def delta_write_policy(self) -> DeltaWritePolicy | None:
+        """Return effective Delta write policy."""
+        resolved = _resolve_cached_location(self)
+        return resolved.delta_write_policy
+
+    @property
+    def delta_schema_policy(self) -> DeltaSchemaPolicy | None:
+        """Return effective Delta schema policy."""
+        resolved = _resolve_cached_location(self)
+        return resolved.delta_schema_policy
+
+    @property
+    def delta_maintenance_policy(self) -> DeltaMaintenancePolicy | None:
+        """Return effective Delta maintenance policy."""
+        resolved = _resolve_cached_location(self)
+        return resolved.delta_maintenance_policy
+
+    @property
+    def delta_feature_gate(self) -> DeltaFeatureGate | None:
+        """Return effective Delta feature gate."""
+        resolved = _resolve_cached_location(self)
+        return resolved.delta_feature_gate
+
+    @property
+    def delta_constraints(self) -> tuple[str, ...]:
+        """Return effective Delta CHECK constraints."""
+        resolved = _resolve_cached_location(self)
+        return resolved.delta_constraints
 
 
 class ResolvedDatasetLocation(StructBaseStrict, frozen=True):
@@ -326,7 +378,7 @@ def dataset_catalog_from_profile(
 
     # Deferred import to avoid circular import with session.runtime
     from datafusion_engine.dataset.semantic_catalog import build_semantic_dataset_catalog
-    from datafusion_engine.session.runtime import normalize_dataset_locations_for_profile
+    from datafusion_engine.session.runtime_dataset_io import normalize_dataset_locations_for_profile
 
     _register_locations(
         catalog,
@@ -590,7 +642,7 @@ def apply_scan_policy_overrides_to_location(
     if delta_scan is not None:
         delta_bundle = policies.delta_bundle
         if delta_bundle is None:
-            from schema_spec.contracts import DeltaPolicyBundle as _DeltaPolicyBundle
+            from schema_spec.dataset_spec import DeltaPolicyBundle as _DeltaPolicyBundle
 
             delta_bundle = _DeltaPolicyBundle(scan=delta_scan)
         else:
@@ -612,13 +664,13 @@ def _resolve_dataset_schema_internal(
     if table_spec is not None:
         return table_spec.to_arrow_schema()
     if location.dataset_spec is not None:
-        from schema_spec.contracts import dataset_spec_schema
+        from schema_spec.dataset_spec import dataset_spec_schema
 
         return dataset_spec_schema(location.dataset_spec)
     if location.format == "delta":
-        from datafusion_engine.delta.service import delta_service_for_profile
+        from storage.deltalake.delta_metadata import delta_table_schema
 
-        return delta_service_for_profile(None).table_schema(
+        return delta_table_schema(
             DeltaSchemaRequest(
                 path=str(location.path),
                 storage_options=location.storage_options or None,

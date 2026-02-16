@@ -21,7 +21,7 @@ from datafusion_engine.schema.contracts import ValidationViolation
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from obs.otel.logs import emit_diagnostics_event
 from obs.otel.metrics import record_artifact_count
-from schema_spec.contracts import ValidationPolicySpec, validation_policy_payload
+from schema_spec.dataset_spec import ValidationPolicySpec, validation_policy_payload
 from serde_artifact_specs import (
     DATAFRAME_VALIDATION_ERRORS_SPEC,
     DATAFUSION_PREPARED_STATEMENTS_SPEC,

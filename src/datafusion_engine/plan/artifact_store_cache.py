@@ -1,0 +1,92 @@
+"""Cache-focused helpers for the plan artifact store."""
+# ruff: noqa: SLF001
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from datafusion import SessionContext
+
+from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.plan import artifact_store_core as _core
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+
+def ensure_plan_artifacts_table(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+) -> DatasetLocation | None:
+    """Ensure plan-artifact cache table exists.
+
+    Returns:
+    -------
+    DatasetLocation | None
+        Resolved artifacts table location when configured.
+    """
+    location = _core._plan_artifacts_location(profile)
+    if location is None:
+        return None
+    table_path = Path(location.path)
+    existing_version = profile.delta_ops.delta_service().table_version(path=str(table_path))
+    if existing_version is None:
+        if table_path.exists():
+            _core._reset_artifacts_table_path(
+                profile,
+                table_path,
+                table_name=_core.PLAN_ARTIFACTS_TABLE_NAME,
+                reason="delta_table_version_unavailable",
+            )
+        _core._bootstrap_plan_artifacts_table(ctx, profile, table_path)
+    elif not _core._delta_schema_available(location, profile=profile):
+        _core._reset_artifacts_table_path(
+            profile,
+            table_path,
+            table_name=_core.PLAN_ARTIFACTS_TABLE_NAME,
+            reason="delta_schema_unavailable",
+        )
+        _core._bootstrap_plan_artifacts_table(ctx, profile, table_path)
+    _core._refresh_plan_artifacts_registration(ctx, profile, location)
+    return location
+
+
+def ensure_pipeline_events_table(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+) -> DatasetLocation | None:
+    """Ensure pipeline-event cache table exists.
+
+    Returns:
+    -------
+    DatasetLocation | None
+        Resolved pipeline-events table location when configured.
+    """
+    location = _core._pipeline_events_location(profile)
+    if location is None:
+        return None
+    table_path = Path(location.path)
+    existing_version = profile.delta_ops.delta_service().table_version(path=str(table_path))
+    if existing_version is None:
+        if table_path.exists():
+            _core._reset_artifacts_table_path(
+                profile,
+                table_path,
+                table_name=_core.PIPELINE_EVENTS_TABLE_NAME,
+                reason="delta_table_version_unavailable",
+            )
+        _core._bootstrap_pipeline_events_table(ctx, profile, table_path)
+    elif not _core._delta_schema_available(location, profile=profile):
+        _core._reset_artifacts_table_path(
+            profile,
+            table_path,
+            table_name=_core.PIPELINE_EVENTS_TABLE_NAME,
+            reason="delta_schema_unavailable",
+        )
+        _core._bootstrap_pipeline_events_table(ctx, profile, table_path)
+    _core._refresh_pipeline_events_registration(ctx, profile, location)
+    return location
+
+
+__all__ = [
+    "ensure_pipeline_events_table",
+    "ensure_plan_artifacts_table",
+]

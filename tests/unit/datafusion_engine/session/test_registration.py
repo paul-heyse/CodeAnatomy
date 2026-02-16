@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from datafusion import SessionContext
 
-from datafusion_engine.dataset.registration import DataFusionCachePolicy
+from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.session.registration import register_dataset_df
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile

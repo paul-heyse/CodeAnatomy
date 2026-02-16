@@ -18,7 +18,7 @@ from datafusion import SessionContext, SQLOptions
 
 from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.arrow.metadata import schema_constraints_from_metadata
-from datafusion_engine.schema.introspection import (
+from datafusion_engine.schema.introspection_core import (
     SchemaIntrospector,
     table_constraint_rows,
 )
@@ -29,9 +29,6 @@ if TYPE_CHECKING:
         DataFusionViewRegistry,
         SessionRuntime,
     )
-
-# DataFusion SQL error is just Exception (comment from original code)
-_DATAFUSION_SQL_ERROR = Exception
 
 _logger = logging.getLogger(__name__)
 

@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING, cast
 from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
 from datafusion_engine.delta.scan_config import delta_scan_config_snapshot_from_options
 from serde_msgspec import StructBaseStrict, to_builtins
-from storage.deltalake.delta import canonical_table_uri
+from storage.deltalake.delta_metadata import canonical_table_uri
 from utils.hashing import hash_msgpack_canonical
 from utils.value_coercion import coerce_int
 
 if TYPE_CHECKING:
-    from schema_spec.contracts import DeltaScanOptions
+    from schema_spec.dataset_spec import DeltaScanOptions
 
 
 class DeltaProviderBuildResult(StructBaseStrict, frozen=True):

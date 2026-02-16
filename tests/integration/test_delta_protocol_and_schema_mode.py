@@ -32,21 +32,21 @@ from deltalake import DeltaTable
 
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.protocol import DeltaProtocolSupport
-from datafusion_engine.io.write import (
+from datafusion_engine.io.write_core import (
     WriteFormat,
     WriteMode,
     WritePipeline,
     WriteRequest,
 )
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import (
     DataSourceConfig,
     DiagnosticsConfig,
     ExtractOutputConfig,
     FeatureGatesConfig,
     PolicyBundleConfig,
 )
-from schema_spec.contracts import DeltaPolicyBundle
+from schema_spec.dataset_spec import DeltaPolicyBundle
 from storage.deltalake.config import DeltaSchemaPolicy
 
 

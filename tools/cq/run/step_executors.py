@@ -5,21 +5,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
 
 import msgspec
 
-from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.run_context import RunExecutionContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
-from tools.cq.core.schema import CqResult, Finding, assign_result_finding_ids, mk_runmeta, ms
-from tools.cq.neighborhood.semantic_env import semantic_env_from_bundle
+from tools.cq.core.schema import CqResult, Finding
 from tools.cq.orchestration.request_factory import (
     RequestContextV1,
     RequestFactory,
     SearchRequestOptionsV1,
 )
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, QueryLanguage
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
 from tools.cq.run.helpers import error_result as _error_result
 from tools.cq.run.helpers import merge_in_dir as _merge_in_dir
 from tools.cq.run.spec import (
@@ -38,7 +35,6 @@ from tools.cq.run.spec import (
     step_type,
 )
 from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
-from tools.cq.utils.uuid_factory import uuid7_str
 
 RUN_STEP_NON_FATAL_EXCEPTIONS = (
     OSError,
@@ -147,7 +143,7 @@ def execute_non_q_steps_serial(
     for step in steps:
         step_id, result = execute_non_q_step_safe(step, plan, ctx, run_id=run_id)
         results.append((step_id, result))
-        if stop_on_error and result.summary.get("error"):
+        if stop_on_error and result.summary.error:
             break
     return results
 
@@ -234,8 +230,7 @@ def _execute_search_step(
         ),
     )
 
-    services = resolve_runtime_services(ctx.root)
-    return services.search.execute(request)
+    return ctx.services.search.execute(request)
 
 
 def execute_search_fallback(query: str, plan: RunPlan, ctx: RunExecutionContext) -> CqResult:
@@ -272,16 +267,14 @@ def execute_search_fallback(query: str, plan: RunPlan, ctx: RunExecutionContext)
         ),
     )
 
-    services = resolve_runtime_services(ctx.root)
-    return services.search.execute(request)
+    return ctx.services.search.execute(request)
 
 
 def _execute_calls(step: CallsStep, ctx: RunExecutionContext) -> CqResult:
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.calls(request_ctx, function_name=step.function)
 
-    services = resolve_runtime_services(ctx.root)
-    return services.calls.execute(request)
+    return ctx.services.calls.execute(request)
 
 
 def _execute_impact(step: ImpactStep, ctx: RunExecutionContext) -> CqResult:
@@ -372,70 +365,22 @@ def _execute_neighborhood_step(
     CqResult
         Neighborhood analysis result.
     """
-    from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
-    from tools.cq.core.target_specs import parse_target_spec
-    from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
-    from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
-    from tools.cq.neighborhood.target_resolution import resolve_target
+    from tools.cq.neighborhood.executor import NeighborhoodExecutionRequest, execute_neighborhood
 
-    started = ms()
-    active_run_id = run_id or uuid7_str()
-    resolved_lang: QueryLanguage = (
-        cast("QueryLanguage", step.lang) if step.lang in {"python", "rust"} else "python"
-    )
-
-    spec = parse_target_spec(step.target)
-    resolved = resolve_target(
-        spec,
-        root=ctx.root,
-        language=resolved_lang,
-        allow_symbol_fallback=True,
-    )
-
-    # Build neighborhood bundle
-    request = BundleBuildRequest(
-        target_name=resolved.target_name,
-        target_file=resolved.target_file,
-        target_line=resolved.target_line,
-        target_col=resolved.target_col,
-        target_uri=resolved.target_uri,
-        root=ctx.root,
-        language=resolved_lang,
-        symbol_hint=resolved.symbol_hint,
-        top_k=step.top_k,
-        enable_semantic_enrichment=step.semantic_enrichment,
-        artifact_dir=ctx.artifact_dir,
-        allow_symbol_fallback=True,
-        target_degrade_events=resolved.degrade_events,
-    )
-
-    bundle = build_neighborhood_bundle(request)
-
-    # Create RunMeta
-    run = mk_runmeta(
-        macro="neighborhood",
-        argv=ctx.argv,
-        root=str(ctx.root),
-        started_ms=started,
-        toolchain=ctx.toolchain.to_dict(),
-        run_id=active_run_id,
-    )
-
-    result = render_snb_result(
-        RenderSnbRequest(
-            run=run,
-            bundle=bundle,
+    return execute_neighborhood(
+        NeighborhoodExecutionRequest(
             target=step.target,
-            language=resolved_lang,
+            root=ctx.root,
+            argv=ctx.argv,
+            toolchain=ctx.toolchain,
+            lang=step.lang,
             top_k=step.top_k,
-            enable_semantic_enrichment=step.semantic_enrichment,
-            semantic_env=semantic_env_from_bundle(bundle),
+            semantic_enrichment=step.semantic_enrichment,
+            artifact_dir=ctx.artifact_dir,
+            run_id=run_id,
+            services=ctx.services,
         )
     )
-    result.summary["target_resolution_kind"] = resolved.resolution_kind
-    assign_result_finding_ids(result)
-    maybe_evict_run_cache_tag(root=ctx.root, language=resolved_lang, run_id=active_run_id)
-    return result
 
 
 def _apply_run_scope_filter(

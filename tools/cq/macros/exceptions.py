@@ -21,6 +21,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder
@@ -493,16 +494,18 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
 
     raise_types, catch_types = _summarize_exception_types(all_raises, all_catches)
 
-    result.summary = {
-        "files_scanned": files_scanned,
-        "scope_file_count": files_scanned,
-        "scope_filter_applied": scope_filter_applied(request.include, request.exclude),
-        "total_raises": len(all_raises),
-        "total_catches": len(all_catches),
-        "unique_exception_types": len(raise_types),
-        "bare_excepts": sum(1 for c in all_catches if c.is_bare_except),
-        "reraises": sum(1 for r in all_raises if r.is_reraise),
-    }
+    result.summary = summary_from_mapping(
+        {
+            "files_scanned": files_scanned,
+            "scope_file_count": files_scanned,
+            "scope_filter_applied": scope_filter_applied(request.include, request.exclude),
+            "total_raises": len(all_raises),
+            "total_catches": len(all_catches),
+            "unique_exception_types": len(raise_types),
+            "bare_excepts": sum(1 for c in all_catches if c.is_bare_except),
+            "reraises": sum(1 for r in all_raises if r.is_reraise),
+        }
+    )
 
     bare_excepts = [caught for caught in all_catches if caught.is_bare_except]
     scoring_details = macro_scoring_details(

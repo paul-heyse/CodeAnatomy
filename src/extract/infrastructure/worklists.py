@@ -12,7 +12,7 @@ from datafusion import DataFrame, SessionContext, col
 from cache.diskcache_factory import build_deque, build_index
 from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.schema.introspection import table_names_snapshot
+from datafusion_engine.schema.introspection_core import table_names_snapshot
 from extract.coordination.context import FileContext
 from extract.infrastructure.cache_utils import diskcache_profile_from_ctx, stable_cache_label
 from utils.uuid_factory import uuid7_hex

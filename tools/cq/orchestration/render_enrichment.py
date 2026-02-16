@@ -8,7 +8,8 @@ from tools.cq.core.locations import SourceSpan
 from tools.cq.core.ports import RenderEnrichmentPort
 from tools.cq.core.serialization import to_builtins
 from tools.cq.query.language import QueryLanguage
-from tools.cq.search.pipeline.smart_search import build_finding, classify_match
+from tools.cq.search.pipeline.smart_search import classify_match
+from tools.cq.search.pipeline.smart_search_sections import build_finding
 from tools.cq.search.pipeline.smart_search_types import RawMatch
 
 

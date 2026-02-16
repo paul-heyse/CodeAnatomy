@@ -17,7 +17,8 @@ from datafusion_engine.delta.observability import (
     DeltaSnapshotArtifact,
     record_delta_snapshot,
 )
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
 from tests.test_helpers.optional_deps import (
     require_datafusion_udfs,
     require_delta_extension,

@@ -20,6 +20,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder
@@ -367,18 +368,20 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
     # Categorize effects
     by_kind = _group_effects_by_kind(all_effects)
 
-    result.summary = {
-        "files_scanned": files_scanned,
-        "scope_file_count": files_scanned,
-        "scope_filter_applied": scope_filter_applied(
-            request.include,
-            request.exclude,
-        ),
-        "total_effects": len(all_effects),
-        "top_level_calls": len(by_kind.get("top_level_call", [])),
-        "global_writes": len(by_kind.get("global_write", [])),
-        "ambient_reads": len(by_kind.get("ambient_read", [])),
-    }
+    result.summary = summary_from_mapping(
+        {
+            "files_scanned": files_scanned,
+            "scope_file_count": files_scanned,
+            "scope_filter_applied": scope_filter_applied(
+                request.include,
+                request.exclude,
+            ),
+            "total_effects": len(all_effects),
+            "top_level_calls": len(by_kind.get("top_level_call", [])),
+            "global_writes": len(by_kind.get("global_write", [])),
+            "ambient_reads": len(by_kind.get("ambient_read", [])),
+        }
+    )
 
     # Compute scoring signals
     unique_files = len({e.file for e in all_effects})

@@ -644,7 +644,7 @@ class TestRecordArtifactTypedContract:
     @staticmethod
     def test_runtime_record_artifact_rejects_non_artifact_spec() -> None:
         """Runtime record_artifact rejects non-ArtifactSpec name values."""
-        from datafusion_engine.session.runtime import record_artifact
+        from datafusion_engine.session.runtime_compile import record_artifact
 
         with pytest.raises(TypeError, match="requires an ArtifactSpec instance"):
             record_artifact(

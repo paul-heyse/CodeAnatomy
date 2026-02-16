@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datafusion import SessionContext
 
-from datafusion_engine.delta.control_plane import (
+from datafusion_engine.delta.control_plane_core import (
     DeltaProviderBundle,
     DeltaProviderRequest,
     DeltaSnapshotRequest,

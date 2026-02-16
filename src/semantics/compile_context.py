@@ -70,6 +70,7 @@ def build_semantic_execution_context(
     from semantics.compile_invariants import record_compile_if_tracking
     from semantics.registry import SEMANTIC_MODEL
     from semantics.validation.policy import (
+        default_semantic_input_mapping,
         resolve_semantic_input_mapping,
         validate_semantic_inputs,
     )
@@ -77,11 +78,13 @@ def build_semantic_execution_context(
     record_compile_if_tracking()
     active_ctx = ctx or runtime_profile.session_context()
     resolved_outputs = _resolved_outputs(outputs) or ()
-    resolved_input_mapping = (
-        dict(input_mapping)
-        if input_mapping is not None
-        else resolve_semantic_input_mapping(active_ctx)
-    )
+    if input_mapping is not None:
+        resolved_input_mapping = dict(input_mapping)
+    else:
+        try:
+            resolved_input_mapping = resolve_semantic_input_mapping(active_ctx)
+        except ValueError:
+            resolved_input_mapping = default_semantic_input_mapping()
     resolved_model = SEMANTIC_MODEL if model is None else model
     semantic_ir = semantic_ir_for_outputs(outputs, model=resolved_model)
     catalog = dataset_catalog_from_profile(runtime_profile)

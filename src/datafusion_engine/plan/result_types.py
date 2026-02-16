@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
-    from datafusion_engine.io.write import WriteResult
+    from datafusion_engine.io.write_core import WriteResult
     from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile

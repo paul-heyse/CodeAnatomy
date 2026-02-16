@@ -10,7 +10,8 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.contract_codec import dumps_json_value
+from tools.cq.core.bootstrap import resolve_runtime_services
+from tools.cq.core.contract_codec import encode_json
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
 from tools.cq.macros.contracts import CallsRequest
@@ -62,6 +63,7 @@ def build_perf_smoke_report(*, workspace: Path) -> PerfSmokeReport:
         Performance smoke report with first/second run timings.
     """
     tc = Toolchain.detect()
+    services = resolve_runtime_services(workspace.resolve())
 
     search_measurement = _measure_pair(
         lambda: smart_search(
@@ -90,6 +92,7 @@ def build_perf_smoke_report(*, workspace: Path) -> PerfSmokeReport:
                 plan=query_plan,
                 query=query_obj,
                 root=str(workspace),
+                services=services,
                 argv=(),
             ),
             tc=tc,
@@ -142,7 +145,7 @@ def main() -> int:
     report = build_perf_smoke_report(workspace=workspace)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
-        dumps_json_value(msgspec.to_builtins(report), indent=2),
+        encode_json(msgspec.to_builtins(report), indent=2),
         encoding="utf-8",
     )
     sys.stdout.write(f"Wrote performance smoke report: {output}\n")

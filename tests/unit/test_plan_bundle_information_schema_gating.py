@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from datafusion_engine.plan import bundle_artifact as plan_bundle
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import FeatureGatesConfig
 
 
 def test_information_schema_snapshot_skips_udf_catalog_when_udfs_disabled(

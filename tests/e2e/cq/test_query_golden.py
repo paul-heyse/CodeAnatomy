@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
@@ -30,6 +31,7 @@ def _execute_query(
             plan=plan,
             query=query,
             root=str(root),
+            services=resolve_runtime_services(root),
             argv=(),
             query_text=query_text,
         ),

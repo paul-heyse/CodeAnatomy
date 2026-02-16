@@ -1,43 +1,32 @@
-# Design Review: tools/cq/search tree-sitter + language lanes
+# Design Review: CQ Language Lanes (tree-sitter, Python, Rust Extraction & Enrichment)
 
 **Date:** 2026-02-16
-**Scope:** `tools/cq/search/tree_sitter/` (core, python_lane, rust_lane, query, contracts, structural, schema) + `tools/cq/search/python/` + `tools/cq/search/rust/`
-**Focus:** All principles (1-24)
-**Depth:** deep
-**Files reviewed:** 72
+**Scope:** `tools/cq/search/tree_sitter/` + `tools/cq/search/python/` + `tools/cq/search/rust/` + `tools/cq/search/enrichment/`
+**Focus:** Knowledge (7-11), Boundaries (1-6), Quality (23-24)
+**Depth:** moderate
+**Files reviewed:** 20 of 77
 
 ## Executive Summary
 
-This subsystem is architecturally well-structured with strong contract boundaries (frozen msgspec Structs), a clean core/lane separation, and robust fail-open degradation discipline. The primary design debt lies in **duplicated knowledge across the ast-grep and tree-sitter extraction tiers** -- the Rust enrichment functions (`_scope_chain`, `_find_scope`, `_extract_visibility`, `_extract_function_signature`, `_extract_struct_shape`, `_extract_enum_shape`, `_extract_call_target`) are semantically duplicated between `rust/enrichment.py` (ast-grep tier) and `tree_sitter/rust_lane/enrichment_extractors.py` + `rust_lane/runtime.py` (tree-sitter tier), and the `ENRICHMENT_ERRORS` tuple is redefined in four locations. The highest-impact improvements are (1) consolidating duplicated Rust extraction logic behind a shared protocol, (2) unifying the error boundary tuple, and (3) extracting the `_try_extract`/`_merge_result` pattern into a shared combinator.
+The CQ language lane subsystem demonstrates strong architectural discipline in its Rust extraction tier, where a well-designed `RustNodeAccess` protocol successfully unifies ast-grep and tree-sitter backends behind shared extractors. However, the Python lane lacks an equivalent abstraction, leading to parallel but divergent enrichment paths. The most significant finding is the **triplication of `_find_ancestor` logic** across three modules and the **dual-implementation pattern for role classification** between the ast-grep and tree-sitter Rust lanes. The enrichment pipeline composition layer (`enrichment/core.py`) provides solid merge/budget primitives, but the gap-fill merging strategy produces payloads with weak structural contracts -- most payload shapes are `dict[str, object]` rather than typed structs. Overall alignment is good (average 2.1/3) with several medium-effort improvements that would reduce coupling and improve testability.
 
 ## Alignment Scorecard
 
 | # | Principle | Alignment | Effort | Risk | Key Finding |
 |---|-----------|-----------|--------|------|-------------|
-| 1 | Information hiding | 2 | small | low | `_SESSIONS` dict is module-global but properly lock-guarded |
-| 2 | Separation of concerns | 2 | medium | medium | `rust_lane/runtime.py` mixes enrichment orchestration + query pack execution + scope walking |
-| 3 | SRP | 2 | medium | medium | `rust_lane/runtime.py` (1097 LOC) changes for scope logic, query pack execution, and payload assembly |
-| 4 | High cohesion, low coupling | 2 | small | low | Lane payloads share canonicalization logic; core contracts are well-cohesive |
-| 5 | Dependency direction | 3 | - | - | Core contracts have no outward deps; lanes depend on core |
-| 6 | Ports & Adapters | 2 | medium | low | No explicit port protocol for tree-sitter/ast-grep parser backends |
-| 7 | DRY (knowledge) | 1 | medium | high | Rust extractors duplicated across ast-grep and tree-sitter tiers; ENRICHMENT_ERRORS x4 |
-| 8 | Design by contract | 3 | - | - | Frozen msgspec Structs with V1 versioning throughout |
-| 9 | Parse, don't validate | 2 | small | low | Payload dicts use `dict[str, object]` instead of typed Structs in enrichment return paths |
-| 10 | Illegal states | 2 | small | low | `QueryWindowV1` allows `start_byte > end_byte` by construction |
-| 11 | CQS | 2 | small | low | `record_runtime_sample` is a command; `runtime_snapshot` is a query; but `_merge_capture_map` mutates + returns via side effect |
-| 12 | DI + explicit composition | 2 | small | low | `ParseSession` takes `parser_factory` callable; `adaptive_runtime` imports `get_cq_cache_backend` directly |
-| 13 | Composition over inheritance | 3 | - | - | No inheritance hierarchies; pure composition throughout |
-| 14 | Law of Demeter | 2 | small | low | `getattr(node, "start_byte", 0)` chains are defensive but indicate missing typed access |
-| 15 | Tell, don't ask | 2 | small | low | `_apply_extractors` inspects `payload.get("attributes")` after setting it |
-| 16 | Functional core, imperative shell | 2 | medium | low | Core transforms are mostly pure; `record_runtime_sample` and `_SESSIONS` are side-effectful singletons |
-| 17 | Idempotency | 3 | - | - | Parse sessions are cache-friendly; re-parsing same source yields same tree |
-| 18 | Determinism | 3 | - | - | Query windows sorted deterministically; match fingerprints deduplicate |
-| 19 | KISS | 2 | small | low | Adaptive runtime autotuning adds complexity for marginal benefit in a dev tool context |
-| 20 | YAGNI | 2 | small | low | `QueryPointWindowV1` infrastructure exists but appears lightly used |
-| 21 | Least astonishment | 2 | small | low | `enrich_rust_context` takes (line, col) while `enrich_rust_context_by_byte_range` takes byte offsets -- inconsistent API surface |
-| 22 | Public contracts | 3 | - | - | `__all__` lists present in all modules; V1-suffixed frozen Structs |
-| 23 | Design for testability | 2 | medium | medium | `adaptive_runtime` hard-codes `get_cq_cache_backend(root=Path.cwd())`; not injectable in tests |
-| 24 | Observability | 2 | small | low | Logging present; `stage_timings_ms` tracked; but no structured span correlation across lanes |
+| 1 | Information hiding | 2 | small | low | Private helpers exported in `__all__` (enrichment_extractors.py) |
+| 2 | Separation of concerns | 2 | medium | medium | rust_lane/runtime.py mixes parse, query, enrichment, and payload assembly |
+| 3 | SRP (one reason to change) | 1 | medium | medium | rust_lane/runtime.py (1081 LOC) has 6+ responsibilities |
+| 4 | High cohesion, low coupling | 2 | medium | medium | Rust enrichment imports from 15 siblings in one file |
+| 5 | Dependency direction | 2 | small | low | enrichment/ depends on pipeline/classifier for node resolution |
+| 6 | Ports & Adapters | 3 | - | - | LanguageEnrichmentPort protocol cleanly separates adapters |
+| 7 | DRY (knowledge) | 1 | medium | high | `_find_ancestor` triplicated; role classification duplicated |
+| 8 | Design by contract | 2 | small | low | QueryWindowV1 validates invariants; most payloads lack validation |
+| 9 | Parse, don't validate | 2 | medium | medium | Enrichment payloads built as `dict[str, object]` rather than typed structs |
+| 10 | Make illegal states unrepresentable | 2 | medium | medium | EnrichmentStatus is typed; but payload shapes allow arbitrary keys |
+| 11 | CQS | 2 | small | low | `_merge_capture_map` and `_apply_extractors` mutate + return implicitly |
+| 23 | Design for testability | 2 | medium | medium | Module-level caches (lru_cache, BoundedCache) hard to reset between tests |
+| 24 | Observability | 2 | small | low | Consistent logger.warning for degradation; but no structured telemetry contract |
 
 ## Detailed Findings
 
@@ -46,13 +35,15 @@ This subsystem is architecturally well-structured with strong contract boundarie
 #### P1. Information hiding -- Alignment: 2/3
 
 **Current state:**
-Internal parse session state is properly hidden behind `get_parse_session()` and `clear_parse_session()` functions. The `_SESSIONS` module-global dict in `tools/cq/search/tree_sitter/core/parse.py:270` is guarded by `_LANGUAGE_SESSION_LOCK`.
+The module boundaries are generally clean, with `__all__` declarations in every module reviewed. However, some modules export private-prefixed symbols through `__all__`.
 
 **Findings:**
-- `tools/cq/search/tree_sitter/core/infrastructure.py:140-152` re-exports symbols from `parser_controls`, `streaming_parse`, and `node_schema` via `__all__`, acting as a proper facade. However, callers like `rust_lane/runtime.py:32` import from `core.infrastructure` while also importing from `core.lane_support` and `core.node_utils` separately, bypassing the facade.
+- `tools/cq/search/tree_sitter/rust_lane/enrichment_extractors.py:76-86`: `__all__` exports 7 names prefixed with `_` (e.g., `_extract_attributes_dict`, `_extract_call_target`). These are consumed by `runtime.py` via direct imports of private names, violating the convention that `_`-prefixed names are internal.
+- `tools/cq/search/tree_sitter/rust_lane/role_classification.py:176`: Exports `_classify_item_role` as the sole public entry but uses underscore prefix.
+- `tools/cq/search/tree_sitter/rust_lane/fact_extraction.py`: Similarly, the runtime.py file imports 6 private-prefixed functions from this module.
 
 **Suggested improvement:**
-Consolidate the infrastructure facade to include `lane_support` and `node_utils` exports so lane modules have a single import target for core utilities.
+Rename the exported functions in `enrichment_extractors.py` and `role_classification.py` to drop the underscore prefix for symbols intended as the module's public surface. For example: `_extract_function_signature` becomes `extract_function_signature`, `_classify_item_role` becomes `classify_item_role`. The current naming signals "do not use" while the module explicitly exports and depends on these symbols.
 
 **Effort:** small
 **Risk if unaddressed:** low
@@ -62,316 +53,194 @@ Consolidate the infrastructure facade to include `lane_support` and `node_utils`
 #### P2. Separation of concerns -- Alignment: 2/3
 
 **Current state:**
-The tree-sitter core layer cleanly separates parsing (`parse.py`), query execution (`runtime.py`), adaptive budgeting (`adaptive_runtime.py`), and parallel execution (`parallel.py`).
+The Python enrichment pipeline in `extractors.py` demonstrates good separation with distinct stage functions (`_run_ast_grep_stage`, `_run_python_ast_stage`, `_run_import_stage`, `_run_python_resolution_stage`, `_run_tree_sitter_stage`). However, the Rust tree-sitter runtime conflates multiple concerns.
 
 **Findings:**
-- `tools/cq/search/tree_sitter/rust_lane/runtime.py` (1097 lines) mixes three distinct concerns: (a) scope/node walking utilities (lines 237-303), (b) query pack execution orchestration (lines 620-694), and (c) enrichment payload assembly (lines 560-604, 811-859). These change for different reasons.
-- `tools/cq/search/python/extractors.py` (1443 lines) similarly mixes ast-grep extraction, Python AST extraction, import extraction, and payload budgeting in a single file.
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py`: This 1081-line file handles: (a) availability checking (lines 200-222), (b) node/scope tree traversal (lines 230-296), (c) enrichment payload building (lines 308-588), (d) query pack execution orchestration (lines 596-678), (e) query window planning (lines 681-727), (f) query collection (lines 730-759), (g) telemetry aggregation (lines 846-873), (h) payload attachment with msgspec serialization (lines 876-917), and (i) two public entry points with similar control flow (lines 924-1070).
 
 **Suggested improvement:**
-Extract scope/node walking from `rust_lane/runtime.py` into a dedicated `rust_lane/scope_utils.py`. Extract payload assembly into `rust_lane/payload_assembly.py`. The public entry points (`enrich_rust_context`, `enrich_rust_context_by_byte_range`) remain in `runtime.py` as orchestration.
+Extract the node/scope utilities (`_scope_name`, `_scope_chain`, `_find_scope`, `_find_ancestor`) into a shared module (they already exist in `extractors_shared.py` via `RustNodeAccess` -- the tree-sitter variants should use the shared versions via `TreeSitterRustNodeAccess` adapters). Extract query pack orchestration (`_collect_query_pack_captures`, `_collect_query_bundle`) into a dedicated `query_orchestration.py` module. Extract telemetry aggregation and payload attachment into a `payload_assembly.py` module.
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- difficulty grows as more Rust grammar features are added.
+**Risk if unaddressed:** medium -- adding new extractors or query packs requires understanding 1000+ lines of interleaved concerns.
 
 ---
 
-#### P3. SRP -- Alignment: 2/3
+#### P3. SRP (one reason to change) -- Alignment: 1/3
 
 **Current state:**
-Most modules have a single clear responsibility. The contracts module (`contracts/core_models.py`, 318 lines) is appropriately a "contract bucket" -- it changes only when a structural contract changes.
+`rust_lane/runtime.py` changes when: query execution semantics change, tree-sitter API evolves, enrichment field schema changes, telemetry format changes, injection processing changes, or diagnostic collection changes. This violates single-reason-to-change.
 
 **Findings:**
-- `tools/cq/search/tree_sitter/rust_lane/runtime.py` changes for: scope traversal logic, enrichment extractor dispatch, query pack execution strategy, injection plan handling, tag event building, and public API shape. Six reasons to change.
-- `tools/cq/search/python/extractors.py` changes for: ast-grep extraction, Python AST extraction, import extraction, payload budgeting, cross-source agreement, and enrichment state management.
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py`: Contains 8 internal dataclass types (`_RustPackRunResultV1`, `_RustPackAccumulatorV1`, `_RustQueryPackArtifactsV1`, `_RustQueryCollectionV1`, `_RustQueryExecutionPlanV1`, and 3 implicit via imports) plus 30+ functions. The `_attach_query_pack_payload` function alone (lines 876-917) performs msgspec serialization, tag summary computation, macro expansion request extraction, and injection runtime processing.
+- `tools/cq/search/python/extractors.py` at 601 lines is similarly large but already decomposed into stage functions and delegates to sub-modules (`extractors_analysis.py`, `extractors_classification.py`, `extractors_structure.py`), demonstrating a better pattern.
 
 **Suggested improvement:**
-Same as P2 recommendation. Additionally, extract `_PythonEnrichmentState` and its stage runners from `extractors.py` into a separate `extractors_pipeline.py`.
+Follow the Python lane decomposition pattern for Rust: split `runtime.py` into `rust_lane/enrichment_builder.py` (payload building), `rust_lane/query_orchestration.py` (pack execution and collection), and `rust_lane/payload_assembly.py` (telemetry, attachment, serialization). Keep `runtime.py` as the thin public entry point that composes these.
 
 **Effort:** medium
-**Risk if unaddressed:** medium
+**Risk if unaddressed:** medium -- maintenance burden grows linearly with new query packs or enrichment fields.
 
 ---
 
-#### P5. Dependency direction -- Alignment: 3/3
+#### P4. High cohesion, low coupling -- Alignment: 2/3
 
 **Current state:**
-The dependency graph flows correctly inward: lane modules (`python_lane/`, `rust_lane/`) depend on `core/` and `contracts/`. The `contracts/core_models.py` module has no outward dependencies beyond `tools.cq.core.structs` (the CQ contract base). The `core/` modules depend only on contracts and infrastructure, never on lanes.
-
-No action needed.
-
----
-
-#### P6. Ports & Adapters -- Alignment: 2/3
-
-**Current state:**
-Parser construction is partially abstracted via `parser_factory: Callable[[], Parser]` in `ParseSession.__init__`. The `load_tree_sitter_language()` function in `language_registry.py:223-240` dispatches to grammar bundles via if/elif branches.
+The `RustNodeAccess` protocol in `rust/node_access.py` is a strong cohesion boundary -- it concentrates node-access semantics in one place with two concrete adapters. However, the Rust runtime has excessive import fan-in.
 
 **Findings:**
-- `tools/cq/search/tree_sitter/core/language_registry.py:232-240`: Language loading is a hardcoded if/elif chain (`if normalized == "python"` / `if normalized == "rust"`). Adding a third language requires editing this function.
-- No explicit protocol for the parsing backend. Both tree-sitter and ast-grep are accessed directly rather than through a port. While this is pragmatic for two backends, the Rust enrichment tier in `rust/enrichment.py` and `tree_sitter/rust_lane/runtime.py` would benefit from a shared extraction protocol.
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py:10-87`: Imports from 18 distinct modules across 5 package subtrees. This high fan-in creates fragile dependency chains where changes in any of these modules may require runtime.py attention.
+- `tools/cq/search/enrichment/core.py`: Well-focused at 194 LOC with narrow interface (10 functions). Good cohesion example.
 
 **Suggested improvement:**
-Replace the if/elif chain in `load_tree_sitter_language` with a registry dict mapping language names to grammar loader callables. This preserves simplicity while enabling extension.
+Reduce the import footprint of `runtime.py` by extracting intermediate modules that aggregate related imports. For example, a `rust_lane/query_infrastructure.py` could re-export `compile_query`, `has_custom_predicates`, `make_query_predicate`, `QueryPackExecutionContextV1`, `execute_pack_rows_with_matches`, reducing 5 imports to 1.
+
+**Effort:** medium
+**Risk if unaddressed:** medium -- import chain breakage from tree-sitter API changes cascades widely.
+
+---
+
+#### P5. Dependency direction -- Alignment: 2/3
+
+**Current state:**
+Core extraction logic generally depends inward (shared extractors -> node access protocol). However, one concerning inward dependency exists.
+
+**Findings:**
+- `tools/cq/search/python/extractors.py:1357`: `enrich_python_context_by_byte_range` imports `from tools.cq.search.pipeline.classifier import get_node_index` -- the enrichment tier (lower-level) depends on the pipeline tier (higher-level). This creates a circular dependency potential and means the enrichment layer cannot be used without the pipeline.
+- `tools/cq/search/tree_sitter/core/lane_support.py:46`: Contains a deferred import to avoid circular dependency (`from tools.cq.search.tree_sitter.core.change_windows import ...`), suggesting the dependency graph has known pressure points.
+
+**Suggested improvement:**
+Inject the `get_node_index` dependency into `enrich_python_context_by_byte_range` rather than importing it. Pass a `node_resolver: Callable[[Path, SgRoot, str], NodeIndex]` parameter, or restructure so the caller (in pipeline) resolves the node before calling the enrichment function.
 
 **Effort:** small
-**Risk if unaddressed:** low
+**Risk if unaddressed:** low -- the deferred import works, but it prevents the enrichment module from being independently testable.
+
+---
+
+#### P6. Ports & Adapters -- Alignment: 3/3
+
+**Current state:**
+The `LanguageEnrichmentPort` protocol in `enrichment/contracts.py` is a clean port definition. The `language_registry.py` provides lazy adapter registration. `PythonEnrichmentAdapter` and `RustEnrichmentAdapter` implement the port for their respective languages.
+
+**Findings:**
+- `tools/cq/search/enrichment/contracts.py:42-60`: `LanguageEnrichmentPort` defines three methods (`payload_from_match`, `accumulate_telemetry`, `build_diagnostics`) that form a minimal, sufficient interface for cross-language enrichment integration.
+- `tools/cq/search/enrichment/language_registry.py:16-23`: `_ensure_defaults()` lazily registers Python and Rust adapters on first access -- clean deferred initialization.
+- `tools/cq/search/rust/node_access.py:13-35`: `RustNodeAccess` protocol + `SgRustNodeAccess`/`TreeSitterRustNodeAccess` adapters is a textbook Ports & Adapters implementation for unifying two AST backends.
+
+**Suggested improvement:**
+No action needed. This is the strongest design pattern in the reviewed scope.
+
+**Effort:** -
+**Risk if unaddressed:** -
 
 ---
 
 ### Category: Knowledge (7-11)
 
-#### P7. DRY (knowledge) -- Alignment: 1/3
+#### P7. DRY (knowledge, not lines) -- Alignment: 1/3
 
 **Current state:**
-This is the most significant gap in the subsystem. Multiple pieces of domain knowledge are duplicated.
+This is the most significant alignment gap in the review scope. Three categories of knowledge duplication exist.
 
 **Findings:**
 
-1. **Rust extraction functions duplicated across tiers.** The following functions exist in near-identical form in both `tools/cq/search/rust/enrichment.py` (ast-grep tier) and `tools/cq/search/tree_sitter/rust_lane/enrichment_extractors.py` + `rust_lane/runtime.py` (tree-sitter tier):
-   - `_scope_name`: `rust/enrichment.py:109` vs `rust_lane/runtime.py:237`
-   - `_scope_chain`: `rust/enrichment.py:140` vs `rust_lane/runtime.py:251`
-   - `_find_scope`: `rust/enrichment.py:118` vs `rust_lane/runtime.py:268`
-   - `_extract_visibility`: `rust/enrichment.py:154` vs `rust_lane/enrichment_extractors.py:201`
-   - `_extract_function_signature`: `rust/enrichment.py:165` vs `rust_lane/enrichment_extractors.py:157`
-   - `_extract_struct_shape`: `rust/enrichment.py:220` vs `rust_lane/enrichment_extractors.py:386`
-   - `_extract_enum_shape`: `rust/enrichment.py:245` vs `rust_lane/enrichment_extractors.py:422`
-   - `_extract_call_target`: `rust/enrichment.py:268` vs `rust_lane/enrichment_extractors.py:352`
-   These encode the same Rust semantic knowledge (what constitutes visibility, what a scope chain looks like) but with slightly different signatures (SgNode vs tree-sitter Node + source_bytes).
+**Finding 1: `_find_ancestor` triplicated.**
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py:272-296`: `_find_ancestor` for tree-sitter `Node` objects.
+- `tools/cq/search/tree_sitter/rust_lane/role_classification.py:51-75`: Identical `_find_ancestor` implementation for tree-sitter `Node` objects.
+- `tools/cq/search/rust/extractors_shared.py:96-111`: `find_ancestor` for `RustNodeAccess` protocol objects.
+All three encode the same invariant: "walk up from node, match kind, respect max_depth." The tree-sitter versions operate on raw `Node` objects instead of going through the `RustNodeAccess` adapter, bypassing the unification that `node_access.py` was designed to provide.
 
-2. **`ENRICHMENT_ERRORS` tuple defined in four locations:**
-   - `tools/cq/search/tree_sitter/core/lane_support.py:20-28`
-   - `tools/cq/search/python/extractors.py:119-126`
-   - `tools/cq/search/rust/enrichment.py:40`
-   - `tools/cq/search/pipeline/smart_search.py:165`
+**Finding 2: Role classification duplicated.**
+- `tools/cq/search/tree_sitter/rust_lane/role_classification.py:78-172`: `_classify_function_role`, `_classify_call_role`, `_classify_item_role` for tree-sitter nodes with `_ITEM_ROLE_SIMPLE` mapping.
+- `tools/cq/search/rust/enrichment.py:179-235`: `_classify_item_role`, `_classify_function_role`, `_classify_call_like_role` for ast-grep nodes with `_NON_FUNCTION_ROLE_BY_KIND` mapping.
+These encode the same semantic truth ("Rust items have roles based on their kind, attributes, and ancestor context") but diverge in details: `role_classification.py` maps `const_item -> "const_item"` and `type_item -> "type_alias"` while `enrichment.py` omits these. The `_ITEM_ROLE_SIMPLE` dict contains 7 entries while `_NON_FUNCTION_ROLE_BY_KIND` contains 3 -- drift risk is high.
 
-3. **`_SCOPE_KINDS` defined in two locations:**
-   - `tools/cq/search/tree_sitter/rust_lane/runtime.py:96-104`
-   - `tools/cq/search/rust/enrichment.py:52-62`
+**Finding 3: Scope chain construction duplicated.**
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py:244-258`: `_scope_chain` for tree-sitter `Node`.
+- `tools/cq/search/rust/extractors_shared.py:114-132`: `scope_chain` for `RustNodeAccess`.
+Same algorithm, same scope kinds, same output format, but operating on different node types.
 
 **Suggested improvement:**
-Define a `RustExtractionSpec` protocol with methods like `scope_name(node, source) -> str | None`, `visibility(node, source) -> str`, etc. Implement it twice: once wrapping SgNode (in `rust/enrichment.py`) and once wrapping tree-sitter Node (in `rust_lane/enrichment_extractors.py`). The actual extraction logic (what constitutes "pub(crate)", what scope kinds exist) lives once in the spec, with node-access adapters. For `ENRICHMENT_ERRORS`, export a single canonical tuple from `lane_support.py` and import it everywhere.
+For findings 1 and 3: All tree-sitter lane operations that need ancestor/scope traversal should use `TreeSitterRustNodeAccess` adapters and call the shared `extractors_shared` functions, eliminating the raw `Node` variants. This is the exact pattern `enrichment_extractors.py` already uses (wrapping `Node` in `TreeSitterRustNodeAccess` and delegating to `_shared` functions).
+
+For finding 2: Extract role classification into a single `classify_rust_item_role(node: RustNodeAccess, attributes: list[str], *, max_scope_depth: int) -> str` function in `extractors_shared.py`, merging the two role-mapping dictionaries. Both `enrichment.py` and `role_classification.py` should import and delegate to this single authority.
 
 **Effort:** medium
-**Risk if unaddressed:** high -- when Rust grammar semantics change (e.g., a new visibility modifier), one tier gets updated but the other drifts silently.
+**Risk if unaddressed:** high -- the role classification tables have already started to drift, and there is no test that cross-checks them.
 
 ---
 
-#### P8. Design by contract -- Alignment: 3/3
+#### P8. Design by contract -- Alignment: 2/3
 
 **Current state:**
-Excellent use of frozen `msgspec.Struct` contracts throughout. `QueryWindowV1`, `QueryExecutionSettingsV1`, `QueryExecutionTelemetryV1`, `TreeSitterInputEditV1`, and many others provide explicit structural contracts. The `V1` suffix convention enables future evolution.
+Some contracts are well-specified. `QueryWindowV1.__post_init__` validates byte ordering. `QueryExecutionSettingsV1` uses `Literal` types for `window_mode`. The `ENRICHMENT_ERRORS` tuple provides a canonical fail-open contract.
 
-No action needed.
+**Findings:**
+- `tools/cq/search/_shared/error_boundaries.py:5-14`: `ENRICHMENT_ERRORS` is a single-source-of-truth tuple of 8 exception types. Every enrichment function wraps its body in `except ENRICHMENT_ERRORS`. This is clean and consistent.
+- `tools/cq/search/tree_sitter/contracts/core_models.py:55-69`: `QueryWindowV1.__post_init__` enforces `start_byte <= end_byte`. Good.
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py:924-995`: `enrich_rust_context` accepts `line: int` (1-based) and `col: int` (0-based) but the only precondition check is `line < 1 or col < 0`. The docstring documents the convention but no runtime enforcement converts an accidentally 0-based line to an error.
+- Enrichment payloads lack post-condition validation. The `_build_enrichment_payload` function returns `dict[str, object]` with no schema assertion that required keys (`language`, `enrichment_status`, `enrichment_sources`) are present.
+
+**Suggested improvement:**
+Add a lightweight post-condition check to `_build_enrichment_payload` that asserts the required metadata keys are present before returning. This could be a simple `assert` in debug mode or a validation function called at the payload boundary.
+
+**Effort:** small
+**Risk if unaddressed:** low -- the keys are always set in practice, but silent omission during refactoring would cause downstream failures.
 
 ---
 
 #### P9. Parse, don't validate -- Alignment: 2/3
 
 **Current state:**
-Source bytes are parsed into tree-sitter `Tree` objects at the boundary. Query results are returned as typed capture maps.
+The tree-sitter contract layer (`contracts/core_models.py`) properly defines typed structs using `msgspec.Struct` (via `CqStruct`). However, the enrichment pipeline internally operates on `dict[str, object]` throughout, deferring structural parsing to the very end.
 
 **Findings:**
-- Enrichment payloads are returned as `dict[str, object]` throughout (`python_lane/runtime.py:556`, `rust_lane/runtime.py:940`, `python/extractors.py:1278`). While `canonicalize_python_lane_payload` in `contracts/lane_payloads.py:39-52` validates via `msgspec.convert`, it validates and discards the result (`_ = msgspec.convert(...)`) rather than returning the typed struct. Downstream consumers continue working with untyped dicts.
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py:573-578`: `_build_enrichment_payload` returns `dict[str, object]`. The entire enrichment building chain operates on untyped dicts, with fields added imperatively via `payload.update(...)` and `payload["key"] = value`.
+- `tools/cq/search/enrichment/python_facts.py:143-158` and `tools/cq/search/enrichment/rust_facts.py:65-73`: `PythonEnrichmentFacts` and `RustEnrichmentFacts` are well-designed typed structs that model the full enrichment schema. But `enrichment/core.py:57-82` shows that `parse_python_enrichment` and `parse_rust_enrichment` convert `dict -> typed struct` as a terminal operation, meaning most of the pipeline never benefits from the type safety.
+- `tools/cq/search/enrichment/core.py:334-360`: `normalize_python_payload` creates a `PythonEnrichmentPayload` wrapper but immediately destructures it back into a dict for output.
 
 **Suggested improvement:**
-Have the canonicalization functions return the typed `PythonTreeSitterPayloadV1`/`RustTreeSitterPayloadV1` struct alongside the dict, or convert the public API to return the struct directly.
+Push the boundary of typed representation earlier in the pipeline. Instead of building payloads as `dict[str, object]` and converting at the end, define builder types (e.g., `RustEnrichmentPayloadBuilder` with typed fields and `.build() -> RustEnrichmentPayload` method) that enforce the schema throughout the construction process. Start with the Rust lane where the payload shape is simpler.
 
-**Effort:** small
-**Risk if unaddressed:** low
+**Effort:** medium
+**Risk if unaddressed:** medium -- schema drift between producers and consumers is only caught at runtime when `msgspec.convert` fails.
 
 ---
 
 #### P10. Make illegal states unrepresentable -- Alignment: 2/3
 
 **Current state:**
-Most contracts use frozen Structs with sensible defaults. `QueryExecutionSettingsV1.window_mode` uses a `Literal` union of three valid strings.
+Good use of `Literal` types for enumerated states and frozen dataclasses for immutable query structures. Some gaps in payload modeling.
 
 **Findings:**
-- `tools/cq/search/tree_sitter/contracts/core_models.py:55-59`: `QueryWindowV1` allows construction where `start_byte > end_byte`, which is an invalid window. The normalization logic in `runtime.py:82-86` filters these out at runtime rather than preventing construction.
+- `tools/cq/search/enrichment/contracts.py:13`: `EnrichmentStatus = Literal["applied", "degraded", "skipped"]` -- prevents invalid status strings at the type level.
+- `tools/cq/search/tree_sitter/contracts/core_models.py:90-94`: `window_mode: Literal["intersection", "containment_preferred", "containment_required"]` -- clean enumeration.
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py:106-113`: `_RustPackRunResultV1` uses `query: object` and `capture_telemetry: object` -- these could be properly typed to prevent passing wrong object types.
+- `tools/cq/search/enrichment/contracts.py:28-39`: `PythonEnrichmentPayload` and `RustEnrichmentPayload` use `data: dict[str, object]` as a catch-all. The typed fact structs in `python_facts.py` and `rust_facts.py` exist but aren't used as the payload container.
 
 **Suggested improvement:**
-Add a `__post_init__` check or use `msgspec.Struct.__init_subclass__` to validate `start_byte <= end_byte` at construction time.
+Type the `object` fields in `_RustPackRunResultV1` (e.g., `capture_telemetry: QueryExecutionTelemetryV1`). Consider replacing the `data: dict[str, object]` in the payload wrappers with the corresponding facts struct union or mapping.
+
+**Effort:** medium
+**Risk if unaddressed:** medium -- weak typing allows payload corruption to propagate silently.
+
+---
+
+#### P11. CQS (Command-Query Separation) -- Alignment: 2/3
+
+**Current state:**
+Most functions follow CQS. However, several extractor-composition functions both mutate and return.
+
+**Findings:**
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py:409-416`: `_apply_extractors` mutates `payload` in place and also appends to `reasons` -- this is a command, which is fine. But `_merge_result` at line 387 both mutates `payload` via `payload.update(fields)` and mutates `reasons` via `reasons.append(reason)`. The caller pattern `_merge_result(payload, reasons, _try_extract(...))` reads like a query but performs two mutations.
+- `tools/cq/search/python/extractors.py:663-694`: `_collect_extract` mutates `payload` AND `degrade_reasons` AND returns the raw result dict. This three-way mixed operation makes reasoning about state difficult.
+- `tools/cq/search/tree_sitter/core/runtime.py:370-388`: `_merge_capture_map` mutates `merged` in place (command). Clean.
+
+**Suggested improvement:**
+For `_collect_extract`: separate the mutation from the return. Either return a structured result that the caller merges, or drop the return value since callers only use it in one place (`_enrich_ast_grep_core` checks `role_result.get("item_role")`).
 
 **Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P11. CQS -- Alignment: 2/3
-
-**Current state:**
-Most functions follow CQS. `runtime_snapshot()` is a pure query. `record_runtime_sample()` is a pure command.
-
-**Findings:**
-- `tools/cq/search/tree_sitter/core/runtime.py:363-381`: `_merge_capture_map` mutates `merged` in place (command) while also filtering nodes (query-like behavior). This is acceptable for performance but the function name suggests a command, which is correct.
-- `tools/cq/search/tree_sitter/query/registry.py:171-224`: `load_query_pack_sources` both loads sources (query) and updates `runtime_state.last_drift_reports` (command) at line 217.
-
-**Suggested improvement:**
-Separate drift report recording from query pack loading. Return the drift report as part of the result rather than mutating runtime state inside a load function.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-### Category: Composition (12-15)
-
-#### P12. DI + explicit composition -- Alignment: 2/3
-
-**Current state:**
-`ParseSession` takes an injectable `parser_factory`. The query compiler uses the language registry as a service locator pattern.
-
-**Findings:**
-- `tools/cq/search/tree_sitter/core/adaptive_runtime.py:19-23`: `_cache()` hard-codes `get_cq_cache_backend(root=Path.cwd())` as the default. While `cache_backend` is an optional parameter throughout, the default creates a hidden dependency on the filesystem.
-- `tools/cq/search/tree_sitter/core/parse.py:31-34`: `_parser_controls()` does a deferred import of `SettingsFactory` and calls a class method. This hidden dependency makes the parse module depend on the settings subsystem implicitly.
-
-**Suggested improvement:**
-Thread `cache_backend` through from the top-level call sites rather than defaulting to `Path.cwd()` resolution. For `_parser_controls()`, accept controls as a parameter to `ParseSession.parse()`.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P13. Composition over inheritance -- Alignment: 3/3
-
-**Current state:**
-No inheritance hierarchies anywhere in scope. All behavior is composed via function calls, dataclass composition, and protocol typing (`NodeLike` protocol in `core_models.py:16-51`).
-
-No action needed.
-
----
-
-#### P14. Law of Demeter -- Alignment: 2/3
-
-**Current state:**
-Most code talks to direct collaborators. The `NodeLike` protocol provides a clean interface.
-
-**Findings:**
-- `tools/cq/search/tree_sitter/core/runtime.py:169-170`: `int(getattr(node, "start_byte", 0))` patterns are pervasive throughout the runtime module. These defensive getattr chains indicate the code doesn't trust the node type contract, reaching through an untyped interface.
-- `tools/cq/search/tree_sitter/core/runtime.py:487`: `bool(getattr(state.cursor, "did_exceed_match_limit", False))` -- reaching into cursor internals defensively.
-
-**Suggested improvement:**
-Wrap `QueryCursor` in a thin typed facade that exposes `did_exceed_match_limit` as a property, and use the `NodeLike` protocol consistently to eliminate getattr patterns. The library reference confirms `QueryCursor.did_exceed_match_limit` is a stable API since 0.25.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P15. Tell, don't ask -- Alignment: 2/3
-
-**Current state:**
-The `_try_extract`/`_merge_result` pattern in `rust_lane/runtime.py:324-354` is a good "tell" pattern -- extractors are told to run and results are merged.
-
-**Findings:**
-- `tools/cq/search/tree_sitter/rust_lane/runtime.py:487-488`: After setting `payload["attributes"]` via `_enrich_visibility_and_attrs`, the code immediately inspects `payload.get("attributes")` to pass to `_classify_item_role`. This is an "ask" pattern -- the payload is treated as a data bag rather than an object that encapsulates its state.
-
-**Suggested improvement:**
-Have `_enrich_visibility_and_attrs` return the extracted attributes list alongside updating payload, so `_classify_item_role` receives attributes directly rather than re-extracting from the payload dict.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-### Category: Correctness (16-18)
-
-#### P16. Functional core, imperative shell -- Alignment: 2/3
-
-**Current state:**
-Core transforms (`_compute_input_edit`, `_byte_offset_to_point`, `build_tag_events`, `_match_fingerprint`) are pure functions. Side effects concentrate at the edges in `ParseSession`, `record_runtime_sample`, and the cache singletons.
-
-**Findings:**
-- `tools/cq/search/tree_sitter/core/parse.py:270`: `_SESSIONS: dict[str, ParseSession] = {}` is a mutable module-global singleton. While properly lock-guarded, it makes the parsing subsystem stateful.
-- `tools/cq/search/tree_sitter/core/adaptive_runtime.py:72-101`: `record_runtime_sample` mutates diskcache state as a side effect.
-
-**Suggested improvement:**
-No immediate change needed -- the singleton pattern is pragmatic for a process-local parse cache. The lock discipline is correct.
-
-**Effort:** N/A
-**Risk if unaddressed:** low
-
----
-
-#### P17. Idempotency -- Alignment: 3/3
-
-**Current state:**
-Parsing the same source bytes with the same file key yields the same tree. `_match_fingerprint` in `runtime.py:271-280` deduplicates matches deterministically. Re-running enrichment on the same input produces the same payload.
-
-No action needed.
-
----
-
-#### P18. Determinism -- Alignment: 3/3
-
-**Current state:**
-Query windows are processed in a deterministic order. Match fingerprints use sorted capture names. Tag events and evidence rows are built from ordered match sequences. The adaptive runtime uses cached averages that converge rather than random seeds.
-
-No action needed.
-
----
-
-### Category: Simplicity (19-22)
-
-#### P19. KISS -- Alignment: 2/3
-
-**Current state:**
-The bounded query execution in `core/runtime.py` is necessarily complex -- windowed execution with deduplication, budget tracking, and adaptive autotuning. The complexity is justified by the need to handle large files without timeout.
-
-**Findings:**
-- `tools/cq/search/tree_sitter/core/runtime.py:218-240`: `_split_window` adds window-splitting complexity for the autotuning path. The split target is derived from `QueryAutotunePlanV1`, adding an indirection layer. In practice, for a developer tool, a simpler fixed-window strategy would suffice.
-- The adaptive runtime (`adaptive_runtime.py`, 200 lines) uses diskcache `Averager`, `incr`, and `memoized_value` for latency tracking. This is significant infrastructure for what could be a simple in-memory moving average.
-
-**Suggested improvement:**
-Consider whether the diskcache-backed adaptive runtime is worth its complexity. An in-memory exponential moving average with a process-lifetime would be simpler and avoid filesystem dependencies. The diskcache backing is only useful if latency data needs to persist across process restarts, which is unlikely in a CLI tool context.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P20. YAGNI -- Alignment: 2/3
-
-**Current state:**
-Most abstractions have clear current use cases.
-
-**Findings:**
-- `tools/cq/search/tree_sitter/contracts/core_models.py:109-120`: `QueryWindowSourceV1` and `QueryWindowSetV1` appear to be redundant with `QueryWindowV1`. They have the same fields but different names.
-- `tools/cq/search/tree_sitter/contracts/core_models.py:62-68`: `QueryPointWindowV1` infrastructure exists in the contracts and runtime but point-window execution appears to be a niche path -- most callers use byte windows.
-
-**Suggested improvement:**
-Remove `QueryWindowSourceV1`/`QueryWindowSetV1` if they serve no distinct serialization purpose. Keep `QueryPointWindowV1` but document it as an extension point.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P21. Least astonishment -- Alignment: 2/3
-
-**Current state:**
-Most APIs are intuitive. The `enrich_*` functions return `dict[str, object] | None` consistently.
-
-**Findings:**
-- `tools/cq/search/tree_sitter/rust_lane/runtime.py:940-1011`: `enrich_rust_context` takes `(source, *, line, col, ...)` with 1-based line, 0-based col. `enrich_rust_context_by_byte_range` takes `(source, *, byte_start, byte_end, ...)`. The asymmetric parameter naming (line/col vs byte_start/byte_end) is mildly surprising but documented.
-- `tools/cq/search/tree_sitter/contracts/lane_payloads.py:51`: `_ = msgspec.convert(payload, type=PythonTreeSitterPayloadV1, strict=False)` validates and discards. A reader would expect this to be the return value.
-
-**Suggested improvement:**
-Add a brief inline comment explaining the "validate-and-discard" pattern in `canonicalize_python_lane_payload`.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P22. Public contracts -- Alignment: 3/3
-
-**Current state:**
-Every module has an explicit `__all__` list. All serialized contracts use `V1`-suffixed frozen `CqStruct`/`CqCacheStruct` types. The `NodeLike` protocol provides a stable structural interface.
-
-No action needed.
+**Risk if unaddressed:** low -- the pattern works but adds cognitive load during debugging.
 
 ---
 
@@ -380,92 +249,91 @@ No action needed.
 #### P23. Design for testability -- Alignment: 2/3
 
 **Current state:**
-`ParseSession` accepts an injectable `parser_factory`. Pure functions like `_compute_input_edit`, `build_tag_events`, and `_match_fingerprint` are trivially testable.
+The `RustNodeAccess` protocol enables clean test doubles. The `ENRICHMENT_ERRORS` boundary enables predictable fail-open testing. However, module-level caches create test isolation challenges.
 
 **Findings:**
-- `tools/cq/search/tree_sitter/core/adaptive_runtime.py:19-23`: `_cache()` defaults to `get_cq_cache_backend(root=Path.cwd())`. Testing adaptive runtime behavior requires either monkeypatching or passing `cache_backend` to every function. The parameter is available but the default is hard to override in tests.
-- `tools/cq/search/tree_sitter/core/parse.py:31-34`: `_parser_controls()` does a deferred import and calls `SettingsFactory.parser_controls()`. This makes `ParseSession.parse()` depend on settings infrastructure that cannot be easily substituted in tests.
-- `tools/cq/search/tree_sitter/python_lane/runtime.py:86-92`: `_pack_source_rows()` is decorated with `@lru_cache(maxsize=1)`, making it effectively a singleton. Tests that need different pack configurations must call `_pack_source_rows.cache_clear()`.
+- `tools/cq/search/tree_sitter/rust_lane/runtime_cache.py:29-30`: `_TREE_CACHE` is a module-level `BoundedCache` and `_TREE_CACHE_EVICTIONS` is a module-level dict. `clear_tree_sitter_rust_cache()` exists but must be called manually between tests.
+- `tools/cq/search/python/extractors.py:257-259`: `_AST_CACHE` is a module-level `BoundedCache`. `clear_python_enrichment_cache()` exists.
+- `tools/cq/search/tree_sitter/python_lane/runtime.py:95-101`: `@lru_cache(maxsize=1)` on `_python_language()`. While `clear_tree_sitter_python_cache` calls `.cache_clear()`, this requires knowledge of which caches to clear.
+- `tools/cq/search/tree_sitter/python_lane/facts.py:235-257`: `@lru_cache(maxsize=1)` on `_pack_source_rows()` -- cached query compilation results. No corresponding `clear_*` function for the facts module.
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py:200-222`: `is_tree_sitter_rust_available()` performs availability checking via module imports. Not injectable, so tests must ensure the actual library is available.
 
 **Suggested improvement:**
-Accept `parser_controls` as a parameter to `ParseSession.parse()` with a default that calls the factory. This eliminates the hidden dependency without changing callers.
+Consolidate cache management. Rather than scattering `lru_cache` and `BoundedCache` across modules with per-module clear functions, introduce a `CacheRegistry` that tracks all caches for a given language lane. Provide a single `clear_all_caches("rust")` entry point. For `is_tree_sitter_rust_available`, inject the availability check via a parameter or make it a testable property of a session object.
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- test fragility increases as the adaptive runtime and settings infrastructure evolves.
+**Risk if unaddressed:** medium -- cache leakage between tests causes flaky test failures.
 
 ---
 
 #### P24. Observability -- Alignment: 2/3
 
 **Current state:**
-`ParseSessionStatsV1` provides structured counters. `QueryExecutionTelemetryV1` tracks window counts, match limits, and degrade reasons. `stage_timings_ms` in `PythonAnalysisSession` records per-stage latency. Logger usage is consistent with `logging.getLogger(__name__)`.
+Consistent use of `logging.getLogger(__name__)` and `logger.warning(...)` for degradation events. The telemetry structs (`QueryExecutionTelemetryV1`, `ParseSessionStatsV1`) provide structured observability data.
 
 **Findings:**
-- No span correlation across lanes. When a Python enrichment triggers both ast-grep, Python AST, resolution, and tree-sitter stages, each stage logs independently with no shared correlation ID.
-- `tools/cq/search/tree_sitter/core/adaptive_runtime.py:88-101`: `record_runtime_sample` suppresses all errors from `incr`. If the cache is corrupted, the failure is completely silent.
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py:991-993`: `logger.warning("Rust context enrichment failed: %s", type(exc).__name__)` -- consistent degradation logging.
+- `tools/cq/search/python/extractors.py:1079-1083`: Stage timings recorded in `state.stage_timings_ms` -- structured performance tracking.
+- `tools/cq/search/tree_sitter/core/runtime.py:510-520`: Telemetry struct captures `windows_total`, `windows_executed`, `capture_count`, `exceeded_match_limit`, `cancelled`, `window_split_count`, `degrade_reason` -- comprehensive.
+- Gap: The Rust lane lacks the stage-timing pattern used by the Python enrichment pipeline. There is no equivalent of `stage_timings_ms` in the Rust enrichment path, making it harder to identify slow extractors.
+- Gap: Degradation reasons use free-form strings (`f"{label}: {exc}"`) rather than an enumerated set. This makes aggregation in dashboards difficult.
 
 **Suggested improvement:**
-Add a `request_id` parameter to the enrichment entry points and propagate it through stage timings and telemetry. This enables correlating stages when debugging enrichment pipeline issues.
+Add stage timings to the Rust enrichment path, mirroring the Python pattern. Define a `DegradeReasonKind` enum or `Literal` type to constrain degradation reason strings for dashboard aggregation.
 
 **Effort:** small
-**Risk if unaddressed:** low
+**Risk if unaddressed:** low -- operational debugging is harder but not blocked.
 
 ---
 
 ## Cross-Cutting Themes
 
-### Theme 1: Duplicated Rust Extraction Knowledge
+### Theme 1: Incomplete Adapter Adoption for Tree-Sitter Nodes
 
-The most significant structural issue. Eight extraction functions are semantically duplicated between the ast-grep tier (`rust/enrichment.py`) and the tree-sitter tier (`rust_lane/enrichment_extractors.py` + `rust_lane/runtime.py`). Both tiers encode the same Rust language knowledge (scope kinds, visibility modifiers, function signature structure) but operate on different node types (SgNode vs tree-sitter Node).
+**Root cause:** The `RustNodeAccess` protocol and `TreeSitterRustNodeAccess` adapter were designed to unify ast-grep and tree-sitter node access. The `enrichment_extractors.py` module adopts this pattern (wrapping tree-sitter nodes before delegating to shared extractors). However, `runtime.py` and `role_classification.py` bypass the adapter entirely and operate directly on tree-sitter `Node` objects, duplicating logic that already exists in `extractors_shared.py`.
 
-**Root cause:** The two tiers were developed independently, each building its own traversal logic for the same grammar constructs.
+**Affected principles:** P7 (DRY), P4 (coupling), P2 (separation of concerns).
 
-**Affected principles:** P7 (DRY), P3 (SRP), P2 (separation of concerns).
+**Suggested approach:** Complete the adapter adoption by having `runtime.py` and `role_classification.py` use `TreeSitterRustNodeAccess` wrappers for all scope/ancestor traversal and role classification. This eliminates the duplicated `_find_ancestor`, `_scope_chain`, and role classification code.
 
-**Suggested approach:** Define a `RustNodeAccess` protocol that abstracts node field access, text extraction, and child traversal. Implement it for both SgNode and tree-sitter Node. Write the extraction logic once against the protocol. The ast-grep `SgNode.field()` and tree-sitter `child_by_field_name()` APIs are structurally equivalent, making this protocol natural.
+### Theme 2: Python Lane Lacks Equivalent Abstraction Protocol
 
-### Theme 2: Pervasive `getattr` Defensive Access
+**Root cause:** The Rust lane has `RustNodeAccess` to unify ast-grep (`SgRustNodeAccess`) and tree-sitter (`TreeSitterRustNodeAccess`). The Python lane has no equivalent. `extractors.py` operates on `SgNode` via ast-grep, while `python_lane/facts.py` operates on tree-sitter `Node`. There is no `PythonNodeAccess` protocol to unify them, meaning the Python extractors cannot be reused across backends.
 
-Throughout `core/runtime.py` and lane modules, nodes are accessed via `getattr(node, "start_byte", 0)` and `int(getattr(...))` patterns rather than through typed protocols. This defensive coding style suggests the `NodeLike` protocol defined in `contracts/core_models.py:16-51` is not being used to its full potential.
+**Affected principles:** P7 (DRY), P6 (Ports & Adapters), P13 (composition over inheritance).
 
-**Root cause:** The `NodeLike` protocol was added after the runtime code was written. The runtime still uses `Any`-typed cursor and node references.
+**Suggested approach:** This is a future design seam rather than an immediate need. The Python lane's ast-grep and tree-sitter tiers operate at different granularities (statement-level vs. fact-list-level), so a unified protocol may not provide the same benefit as the Rust one. Monitor whether parallel extractors emerge before investing.
 
-**Affected principles:** P14 (Law of Demeter), P8 (Design by contract).
+### Theme 3: Payload Schemas Exist but Are Consumed Too Late
 
-**Suggested approach:** Type the `cursor` field in `_BoundedQueryStateV1` and the node parameters in runtime functions using `NodeLike` instead of `Any`/`object`. Remove `getattr` patterns in favor of direct property access.
+**Root cause:** The typed enrichment facts (`PythonEnrichmentFacts`, `RustEnrichmentFacts`) and wrapper structs (`PythonEnrichmentPayload`, `RustEnrichmentPayload`) are well-designed but only used as terminal converters. The entire pipeline operates on `dict[str, object]`, losing type safety until the very end.
 
-### Theme 3: Error Boundary Tuple Fragmentation
+**Affected principles:** P9 (parse, don't validate), P10 (illegal states), P8 (contracts).
 
-The "fail-open" error boundary pattern is correctly applied throughout the subsystem, but the error tuple itself is defined independently in four locations with slight variations (some include `SyntaxError`, some include `KeyError`/`IndexError`, some don't).
-
-**Root cause:** Each module defined its own error boundary during development.
-
-**Affected principles:** P7 (DRY).
-
-**Suggested approach:** Use the canonical `ENRICHMENT_ERRORS` from `core/lane_support.py` everywhere. If a module needs additional exceptions (e.g., `SyntaxError` for Python AST parsing), define it as `PYTHON_ENRICHMENT_ERRORS = (*ENRICHMENT_ERRORS, SyntaxError)`.
+**Suggested approach:** Introduce an intermediate builder pattern that constructs payloads through typed fields. Start with the simpler Rust payload (`RustEnrichmentFacts` has only 3 sub-structs). This would be a medium-effort investment that pays off in catching schema drift during development rather than at runtime.
 
 ## Quick Wins (Top 5)
 
 | Priority | Principle | Finding | Effort | Impact |
 |----------|-----------|---------|--------|--------|
-| 1 | P7 (DRY) | Unify `ENRICHMENT_ERRORS` to single source in `core/lane_support.py` | small | Prevents drift when new exception types need handling |
-| 2 | P7 (DRY) | Unify `_SCOPE_KINDS` between `rust/enrichment.py:52` and `rust_lane/runtime.py:96` | small | Single authority for Rust scope semantics |
-| 3 | P14 (LoD) | Replace `getattr(node, "start_byte", 0)` with `NodeLike` protocol usage in `core/runtime.py` | small | Typed access catches field renames at type-check time |
-| 4 | P21 (Least astonishment) | Add comment explaining validate-and-discard pattern in `lane_payloads.py:51` | small | Prevents confusion for maintainers |
-| 5 | P10 (Illegal states) | Add `start_byte <= end_byte` validation to `QueryWindowV1` construction | small | Prevents invalid windows from propagating |
+| 1 | P7 (DRY) | Eliminate `_find_ancestor` duplication in `role_classification.py` and `runtime.py` by using `TreeSitterRustNodeAccess` + `extractors_shared.find_ancestor` | small | Removes 25 lines of duplicated code and eliminates divergence risk |
+| 2 | P1 (Info hiding) | Remove underscore prefix from public exports in `enrichment_extractors.py` and `role_classification.py` | small | Aligns naming with actual usage; reduces confusion |
+| 3 | P24 (Observability) | Add stage-timing telemetry to Rust enrichment path matching Python's pattern | small | Enables performance diagnosis across both language lanes |
+| 4 | P8 (Contract) | Add post-condition assertion for required metadata keys in enrichment payload builders | small | Catches missing keys during development |
+| 5 | P7 (DRY) | Unify role classification into `extractors_shared.py` with single `_ITEM_ROLE_MAP` | medium | Eliminates the highest-risk drift surface (7 vs 3 role mappings) |
 
 ## Recommended Action Sequence
 
-1. **Unify error boundary tuples (P7).** Single `ENRICHMENT_ERRORS` in `core/lane_support.py`, with language-specific extensions. This is zero-risk and removes 4-way drift. Import the canonical tuple in `python/extractors.py`, `rust/enrichment.py`, and `pipeline/smart_search.py`.
+1. **[P7, small] Adopt `TreeSitterRustNodeAccess` in `role_classification.py`**: Replace the local `_find_ancestor` with the shared version via adapter wrapping. This is a contained change with no external API impact and eliminates the most obvious duplication. Reference: `tools/cq/search/tree_sitter/rust_lane/role_classification.py:51-75`.
 
-2. **Unify `_SCOPE_KINDS` and other Rust grammar constants (P7).** Move to a shared `rust_lane/constants.py` (or `rust/constants.py` if both tiers need it). Import from both `rust/enrichment.py` and `rust_lane/runtime.py`.
+2. **[P7, small] Adopt `TreeSitterRustNodeAccess` in `runtime.py` for scope utilities**: Replace `_find_ancestor`, `_find_scope`, `_scope_chain`, `_scope_name` in `runtime.py` with calls through the adapter to `extractors_shared`. Reference: `tools/cq/search/tree_sitter/rust_lane/runtime.py:230-296`.
 
-3. **Type runtime node access with `NodeLike` protocol (P14, P8).** Replace `getattr` chains in `core/runtime.py` with direct `NodeLike` property access. This is a mechanical change with type-checker verification.
+3. **[P7, medium] Unify role classification**: Create `classify_rust_item_role` in `extractors_shared.py` that merges the `_ITEM_ROLE_SIMPLE` (from `role_classification.py`) and `_NON_FUNCTION_ROLE_BY_KIND` (from `enrichment.py`) mappings. Both callsites delegate to this single authority. Reference: `tools/cq/search/tree_sitter/rust_lane/role_classification.py:23-31` and `tools/cq/search/rust/enrichment.py:198-202`.
 
-4. **Extract scope/node utilities from `rust_lane/runtime.py` (P2, P3).** Move `_scope_name`, `_scope_chain`, `_find_scope`, `_find_ancestor` into `rust_lane/scope_utils.py`. Reduces `runtime.py` from 1097 to ~900 lines and isolates scope-traversal changes.
+4. **[P1, small] Fix public API naming**: Remove underscore prefixes from exported symbols in `enrichment_extractors.py` and `role_classification.py`. Update imports in `runtime.py` accordingly.
 
-5. **Define `RustNodeAccess` protocol to unify extraction logic (P7).** This is the highest-effort, highest-impact change. Abstract `field()`, `text()`, `children()`, `kind()` behind a protocol. Implement for SgNode and tree-sitter Node. Rewrite extraction functions once against the protocol. Eliminates 8 duplicated functions.
+5. **[P3, medium] Decompose `runtime.py`**: Following step 2, `runtime.py` will have fewer internal utility functions. Extract query pack orchestration and payload assembly into separate modules, reducing the file from 1081 to approximately 400 lines of entry-point and enrichment-building logic.
 
-6. **Improve testability of adaptive runtime (P23).** Thread `cache_backend` through `ParseSession.parse()` instead of defaulting to `Path.cwd()` resolution. Accept `parser_controls` as a parameter.
+6. **[P9, medium] Push typed boundaries earlier**: After step 5, the payload building functions are isolated in their own module. Introduce a typed builder that constructs `RustEnrichmentFacts` directly rather than building `dict[str, object]` and converting at the end.
 
-7. **Add request-level correlation to enrichment pipeline (P24).** Thread a `request_id` through stage timings, telemetry, and logging for cross-stage debugging.
+7. **[P23, medium] Consolidate cache lifecycle**: Create a per-language `CacheRegistry` that tracks all `lru_cache` and `BoundedCache` instances, providing a single `clear_all()` entry point for test teardown. Reference: scattered caches in `runtime_cache.py`, `runtime.py`, `extractors.py`, `facts.py`.

@@ -105,7 +105,7 @@ def test_semantic_edge_v1_construction() -> None:
     assert edge.source_node_id == "node-1"
     assert edge.target_node_id == "node-2"
     assert edge.edge_kind == "calls"
-    assert edge.weight == 1.0
+    assert edge.weight == pytest.approx(1.0)
     assert not edge.evidence_source
     assert edge.metadata is None
 

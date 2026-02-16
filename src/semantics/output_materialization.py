@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
-from datafusion_engine.io.write import WritePipeline
+from datafusion_engine.io.write_core import WritePipeline
 from semantics.naming import canonical_output_name
 from semantics.output_names import RELATION_OUTPUT_NAME
 
@@ -79,8 +79,8 @@ def semantic_output_locations(
     import msgspec
 
     from datafusion_engine.dataset.registry import DatasetLocationOverrides
-    from datafusion_engine.session.runtime import semantic_output_locations_for_profile
-    from schema_spec.contracts import (
+    from datafusion_engine.session.runtime_dataset_io import semantic_output_locations_for_profile
+    from schema_spec.dataset_spec import (
         DeltaPolicyBundle,
         dataset_spec_delta_feature_gate,
         dataset_spec_delta_maintenance_policy,
@@ -147,9 +147,9 @@ def write_semantic_output(
     """
     from datafusion_engine.delta.schema_guard import enforce_schema_policy
     from datafusion_engine.delta.store_policy import apply_delta_store_policy
-    from datafusion_engine.io.write import WriteFormat, WriteMode, WriteViewRequest
+    from datafusion_engine.io.write_core import WriteFormat, WriteMode, WriteViewRequest
     from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
-    from schema_spec.contracts import (
+    from schema_spec.dataset_spec import (
         dataset_spec_delta_maintenance_policy,
         dataset_spec_delta_schema_policy,
         dataset_spec_delta_write_policy,
@@ -213,7 +213,7 @@ def materialize_semantic_outputs(
     manifest: SemanticProgramManifest,
 ) -> None:
     """Materialize semantic output views to Delta locations."""
-    from datafusion_engine.session.runtime import semantic_output_locations_for_profile
+    from datafusion_engine.session.runtime_dataset_io import semantic_output_locations_for_profile
 
     view_names = semantic_output_view_names(
         model=model,

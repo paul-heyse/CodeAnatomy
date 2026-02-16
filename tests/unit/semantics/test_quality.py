@@ -105,7 +105,7 @@ class TestFeature:
         from semantics.exprs import case_eq
 
         feature = Feature("test", case_eq("a", "b"))
-        assert feature.weight == 1.0
+        assert feature.weight == pytest.approx(1.0)
         assert feature.kind == "evidence"
 
     @staticmethod

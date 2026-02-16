@@ -7,14 +7,12 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
-    SchemaRegistryValidationResult,
-    ZeroRowBootstrapConfig,
-)
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import ZeroRowBootstrapConfig
 from datafusion_engine.session.runtime_schema_registry import (
     _schema_registry_issues as schema_registry_issues,
 )
+from datafusion_engine.session.runtime_udf import SchemaRegistryValidationResult
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_datafusion_udfs
 

@@ -8,7 +8,7 @@ from typing import Any
 import pyarrow as pa
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike
-from datafusion_engine.io.write import WriteMethod, WriteMode, WriteRequest, WriteResult
+from datafusion_engine.io.write_core import WriteMethod, WriteMode, WriteRequest, WriteResult
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from semantics.compile_context import build_semantic_execution_context
 from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest

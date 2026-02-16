@@ -46,6 +46,7 @@ from datafusion_engine.session.runtime_telemetry import (
 from storage.ipc_utils import payload_hash
 
 if TYPE_CHECKING:
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from serde_schema_registry import ArtifactSpec
 
 # Re-export for backward compat with runtime.py aliases.
@@ -54,14 +55,17 @@ _effective_ident_normalization = _telemetry_effective_ident_normalization
 
 
 class _RuntimeDiagnosticsMixin:
+    def _diagnostics_profile(self: object) -> DataFusionRuntimeProfile:
+        return cast("DataFusionRuntimeProfile", self)
+
     def record_artifact(self, name: ArtifactSpec, payload: Mapping[str, object]) -> None:
         """Record an artifact through DiagnosticsRecorder when configured."""
-        profile = cast("DataFusionRuntimeProfile", self)
+        profile = self._diagnostics_profile()
         record_artifact(profile, name, payload)
 
     def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
         """Record events through DiagnosticsRecorder when configured."""
-        profile = cast("DataFusionRuntimeProfile", self)
+        profile = self._diagnostics_profile()
         record_events(profile, name, rows)
 
     def view_registry_snapshot(self) -> list[dict[str, object]] | None:
@@ -72,7 +76,7 @@ class _RuntimeDiagnosticsMixin:
         list[dict[str, object]] | None
             Snapshot payload or ``None`` when registry tracking is disabled.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
+        profile = self._diagnostics_profile()
         if profile.view_registry is None:
             return None
         return profile.view_registry.snapshot()
@@ -85,7 +89,7 @@ class _RuntimeDiagnosticsMixin:
         dict[str, str]
             Resolved DataFusion settings payload.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
+        profile = self._diagnostics_profile()
         resolved_policy = _resolved_config_policy_for_profile(profile)
         payload: dict[str, str] = (
             dict(resolved_policy.settings) if resolved_policy is not None else {}
@@ -113,7 +117,7 @@ class _RuntimeDiagnosticsMixin:
         str
             SHA-256 hash for the settings payload.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
+        profile = self._diagnostics_profile()
         payload = {
             "version": SETTINGS_HASH_VERSION,
             "entries": _map_entries(profile.settings_payload()),
@@ -128,7 +132,7 @@ class _RuntimeDiagnosticsMixin:
         Mapping[str, object]
             Payload describing the runtime profile fingerprint inputs.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
+        profile = self._diagnostics_profile()
         return {
             "version": 2,
             "architecture_version": profile.architecture_version,
@@ -159,7 +163,7 @@ class _RuntimeDiagnosticsMixin:
         dict[str, object]
             Runtime settings serialized for telemetry/diagnostics.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
+        profile = self._diagnostics_profile()
         resolved_policy = _resolved_config_policy_for_profile(profile)
         execution = profile.execution
         catalog = profile.catalog
@@ -324,7 +328,7 @@ class _RuntimeDiagnosticsMixin:
         dict[str, object]
             Versioned runtime payload with grouped settings.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
+        profile = self._diagnostics_profile()
         settings = profile.settings_payload()
         ansi_mode = _ansi_mode(settings)
         parser_dialect = settings.get("datafusion.sql_parser.dialect")
@@ -425,7 +429,7 @@ class _RuntimeDiagnosticsMixin:
         str
             SHA-256 hash of the telemetry payload.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
+        profile = self._diagnostics_profile()
         return payload_hash(_build_telemetry_payload_row(profile), _TELEMETRY_SCHEMA)
 
 

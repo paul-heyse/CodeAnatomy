@@ -60,7 +60,7 @@ class _PresenceValidationResult:
 
 def _validate_semantic_input_presence(ctx: SessionContext) -> _PresenceValidationResult:
     from datafusion_engine.catalog.introspection import invalidate_introspection_cache
-    from datafusion_engine.schema.introspection import table_names_snapshot
+    from datafusion_engine.schema.introspection_core import table_names_snapshot
     from semantics.input_registry import SEMANTIC_INPUT_SPECS
 
     invalidate_introspection_cache(ctx)
@@ -98,6 +98,13 @@ def resolve_semantic_input_mapping(ctx: SessionContext) -> dict[str, str]:
     return dict(presence.resolved_names)
 
 
+def default_semantic_input_mapping() -> dict[str, str]:
+    """Return canonical semantic input mapping without runtime presence checks."""
+    from semantics.input_registry import SEMANTIC_INPUT_SPECS
+
+    return {spec.canonical_name: spec.extraction_source for spec in SEMANTIC_INPUT_SPECS}
+
+
 def validate_semantic_inputs(
     *,
     ctx: SessionContext,
@@ -132,6 +139,7 @@ def validate_semantic_inputs(
 __all__ = [
     "SemanticInputValidationError",
     "SemanticInputValidationPolicy",
+    "default_semantic_input_mapping",
     "resolve_semantic_input_mapping",
     "validate_semantic_inputs",
 ]

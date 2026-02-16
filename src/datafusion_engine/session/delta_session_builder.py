@@ -206,7 +206,7 @@ def build_delta_session_context(
     DeltaSessionBuildResult
         Session construction result with runtime-policy bridge diagnostics.
     """
-    from datafusion_engine.session.runtime import delta_runtime_env_options
+    from datafusion_engine.session.runtime_ops import delta_runtime_env_options
 
     resolution = resolve_delta_session_builder()
     if resolution.builder is None:

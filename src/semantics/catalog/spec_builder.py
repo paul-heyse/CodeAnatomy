@@ -21,7 +21,7 @@ from datafusion_engine.arrow.metadata import (
 )
 from datafusion_engine.arrow.semantic import SPAN_STORAGE
 from schema_spec.arrow_types import arrow_type_from_pyarrow
-from schema_spec.contracts import (
+from schema_spec.dataset_spec import (
     DatasetSpec,
     DeltaCdfPolicy,
     DeltaMaintenancePolicy,

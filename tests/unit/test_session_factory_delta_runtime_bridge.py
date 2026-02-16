@@ -13,7 +13,8 @@ from datafusion_engine.session.delta_session_builder import (
     build_runtime_policy_options,
     parse_runtime_size,
 )
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
 
 LEGACY_BRIDGE_ARG_COUNT = 3
 RUNTIME_BRIDGE_ARG_COUNT = 4

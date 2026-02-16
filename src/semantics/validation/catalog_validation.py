@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from datafusion import col, lit
@@ -31,9 +31,6 @@ class SemanticInputValidationResult:
     missing_tables: tuple[str, ...]
     missing_columns: Mapping[str, tuple[str, ...]]
     resolved_tables: Mapping[str, str]
-
-
-SEMANTIC_INPUT_COLUMN_SPECS: Final[tuple[ColumnValidationSpec, ...]] = ()
 
 
 def _information_schema_tables(ctx: SessionContext) -> set[str]:
@@ -218,7 +215,6 @@ def _required_columns_from_table_spec(
 
 
 __all__ = [
-    "SEMANTIC_INPUT_COLUMN_SPECS",
     "ColumnValidationSpec",
     "SemanticInputValidationResult",
     "validate_semantic_input_columns",

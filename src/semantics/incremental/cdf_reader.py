@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from datafusion_engine.arrow.interop import TableLike
-from datafusion_engine.delta.service import delta_service_for_profile
+from datafusion_engine.delta.service import DeltaService
 from semantics.incremental.cdf_core import (
     CanonicalCdfReadRequest,
     read_cdf_table,
@@ -113,6 +113,7 @@ class CdfReadOptions:
     cursor_store: CdfCursorStore | None = None
     dataset_name: str | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
+    delta_service: DeltaService | None = None
     storage_options: StorageOptions | None = None
     log_storage_options: StorageOptions | None = None
     columns: list[str] | None = None
@@ -284,7 +285,12 @@ def read_cdf_changes(
     opts = options or CdfReadOptions()
     _validate_cdf_options(opts)
 
-    service = delta_service_for_profile(opts.runtime_profile)
+    runtime_profile = opts.runtime_profile
+    if runtime_profile is None:
+        from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+        runtime_profile = DataFusionRuntimeProfile()
+    service = opts.delta_service or DeltaService(profile=runtime_profile)
     port = _resolve_cdf_port(opts, service_port=DeltaServiceCdfPort(service))
     arrow_to_df = opts.arrow_table_to_dataframe_fn or _arrow_table_to_dataframe
     resolved_start = _resolve_start_version(

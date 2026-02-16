@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from obs.datafusion_runs import DataFusionRun
     from semantics.program_manifest import ManifestDatasetResolver
     from serde_schema_registry import ArtifactSpec
-    from storage.deltalake.delta import IdempotentWriteOptions
+    from storage.deltalake.delta_read import IdempotentWriteOptions
 
     class _DeltaRuntimeEnvOptions(Protocol):
         max_spill_size: int | None
@@ -375,7 +375,7 @@ class RuntimeProfileCatalog:
             if delta_scan is not None:
                 delta_bundle = policies.delta_bundle
                 if delta_bundle is None:
-                    from schema_spec.contracts import DeltaPolicyBundle as _DeltaPolicyBundle
+                    from schema_spec.dataset_spec import DeltaPolicyBundle as _DeltaPolicyBundle
 
                     delta_bundle = _DeltaPolicyBundle(scan=delta_scan)
                 else:
@@ -466,9 +466,10 @@ class _RuntimeProfileDeltaFacadeMixin:
         DeltaService
             DeltaService instance bound to this profile.
         """
-        from datafusion_engine.delta.service import delta_service_for_profile
+        from datafusion_engine.delta.service import DeltaService
 
-        return delta_service_for_profile(cast("DataFusionRuntimeProfile", self))
+        profile = cast("DataFusionRuntimeProfile", self)
+        return DeltaService(profile=profile)
 
 
 def _delta_commit_spec() -> ArtifactSpec:

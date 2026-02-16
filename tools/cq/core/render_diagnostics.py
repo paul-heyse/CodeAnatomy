@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from tools.cq.core.summary_contract import CqSummary
+
 
 def summary_with_render_enrichment_metrics(
-    summary: dict[str, object],
+    summary: CqSummary,
     *,
     attempted: int,
     applied: int,
@@ -15,8 +17,8 @@ def summary_with_render_enrichment_metrics(
 
     Parameters
     ----------
-    summary : dict[str, object]
-        Original summary dict.
+    summary : CqSummary
+        Original summary payload.
     attempted : int
         Number of enrichment tasks attempted.
     applied : int
@@ -31,7 +33,7 @@ def summary_with_render_enrichment_metrics(
     dict[str, object]
         Summary dict with enrichment metrics.
     """
-    with_metrics = dict(summary)
+    with_metrics = dict(summary.items())
     with_metrics["render_enrichment_attempted"] = attempted
     with_metrics["render_enrichment_applied"] = applied
     with_metrics["render_enrichment_failed"] = failed

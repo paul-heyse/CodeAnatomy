@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.session.runtime import dataset_schema_from_context
+from datafusion_engine.session.runtime_dataset_io import dataset_schema_from_context
 from tests.test_helpers.datafusion_runtime import df_ctx
 
 

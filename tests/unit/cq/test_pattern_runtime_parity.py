@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import (
@@ -27,6 +28,7 @@ def _execute_query(tmp_path: Path, query_text: str) -> tuple[Query, ToolPlan, Cq
             plan=plan,
             query=query,
             root=str(tmp_path),
+            services=resolve_runtime_services(tmp_path),
             argv=("cq", "q", query_text),
             query_text=query_text,
         ),

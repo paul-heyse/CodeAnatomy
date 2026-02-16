@@ -11,12 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
+
 if TYPE_CHECKING:
     from tools.cq.core.front_door_builders import FrontDoorInsightV1
     from tools.cq.core.schema import CqResult
     from tools.cq.query.language import QueryLanguage
-
-_FRONT_DOOR_PREVIEW_PER_SLICE = 5
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class CallsSemanticRequest:
     target_line: int
     target_language: QueryLanguage | None
     symbol_hint: str
-    preview_per_slice: int
+    preview_per_slice: int = FRONT_DOOR_PREVIEW_PER_SLICE
     run_id: str | None = None
 
 
@@ -91,7 +91,7 @@ def _apply_calls_semantic(
                     )
                 semantic_planes = semantic_payload.get("semantic_planes")
                 if isinstance(semantic_planes, dict):
-                    result.summary["semantic_planes"] = dict(semantic_planes)
+                    result.summary.semantic_planes = dict(semantic_planes)
             else:
                 semantic_failed = 1
                 semantic_reasons.append(

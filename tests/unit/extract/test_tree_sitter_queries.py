@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from extract.coordination.context import FileContext
-from extract.extractors.tree_sitter.extract import (
+from extract.extractors.tree_sitter import compile_query_pack
+from extract.extractors.tree_sitter.builders import (
     PY_LANGUAGE,
     TreeSitterExtractOptions,
     _extract_ts_file_row,
     _parser,
 )
-from extract.extractors.tree_sitter.queries import compile_query_pack
 
 
 def test_tree_sitter_async_def_query() -> None:

@@ -69,6 +69,7 @@ def test_batch_equivalence_single_query(tmp_path: Path) -> None:
             plan=plan,
             query=parsed,
             root=str(ctx.root),
+            services=ctx.services,
             argv=tuple(ctx.argv),
         ),
         tc=ctx.toolchain,

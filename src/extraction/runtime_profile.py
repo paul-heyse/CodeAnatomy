@@ -14,14 +14,16 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from core_types import DeterminismTier
 from datafusion_engine.arrow.schema import version_field
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
 from serde_artifacts import RuntimeProfileSnapshot
 from serde_msgspec import StructBaseStrict, coalesce_unset, dumps_msgpack, to_builtins
 from storage.ipc_utils import payload_hash
+from utils.env_utils import env_bool
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
-    from datafusion_engine.udf.extension_runtime import RustUdfSnapshot
+    from datafusion_engine.udf.extension_core import RustUdfSnapshot
 
 
 PROFILE_HASH_VERSION: int = 3
@@ -33,10 +35,6 @@ _PROFILE_HASH_SCHEMA = pa.schema(
         pa.field("telemetry_hash", pa.string(), nullable=False),
     ]
 )
-
-
-_ENV_TRUE_VALUES = frozenset({"1", "true", "yes", "y"})
-_ENV_FALSE_VALUES = frozenset({"0", "false", "no", "n"})
 
 
 class RuntimeProfileSpec(StructBaseStrict, frozen=True):
@@ -145,16 +143,10 @@ def _env_patch_text(name: str) -> str | msgspec.UnsetType | None:
 
 def _env_patch_bool(name: str) -> bool | msgspec.UnsetType:
     raw = os.environ.get(name)
-    if raw is None:
+    if raw is None or raw.strip().lower() in {"", "none", "null"}:
         return msgspec.UNSET
-    value = raw.strip().lower()
-    if not value or value in {"none", "null"}:
-        return msgspec.UNSET
-    if value in _ENV_TRUE_VALUES:
-        return True
-    if value in _ENV_FALSE_VALUES:
-        return False
-    return msgspec.UNSET
+    value = env_bool(name, default=None, on_invalid="none")
+    return msgspec.UNSET if value is None else value
 
 
 def _env_patch_diagnostics_sink(name: str) -> object | msgspec.UnsetType | None:
@@ -289,12 +281,12 @@ def engine_runtime_artifact(
         except (RuntimeError, TypeError, ValueError):
             session = None
         if session is not None:
-            from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
+            from datafusion_engine.udf.extension_core import rust_udf_snapshot
 
             registry_snapshot = rust_udf_snapshot(session)
     registry_hash = None
     if registry_snapshot is not None:
-        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot_hash
+        from datafusion_engine.udf.extension_core import rust_udf_snapshot_hash
 
         registry_hash = rust_udf_snapshot_hash(registry_snapshot)
     datafusion_settings = profile.settings_payload()
@@ -446,7 +438,7 @@ def _diagnostics_sink_from_value(value: str) -> DiagnosticsSink | None:
 
         return InMemoryDiagnosticsSink()
     if normalized in {"otel", "otlp", "opentelemetry"}:
-        from obs.otel.logs import OtelDiagnosticsSink
+        from obs.otel import OtelDiagnosticsSink
 
         return OtelDiagnosticsSink()
     msg = f"Unsupported diagnostics sink: {value!r}."

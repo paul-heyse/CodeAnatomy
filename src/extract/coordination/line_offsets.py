@@ -5,6 +5,8 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 
+from extract.coordination.context import FileContext, bytes_from_file_ctx
+
 
 @dataclass(frozen=True)
 class LineOffsets:
@@ -62,4 +64,18 @@ class LineOffsets:
 NEWLINE_BYTE = 0x0A
 
 
-__all__ = ["LineOffsets"]
+def line_offsets_from_file_ctx(file_ctx: FileContext) -> LineOffsets | None:
+    """Build line offsets from a file context payload.
+
+    Returns:
+    -------
+    LineOffsets | None
+        Line offsets when the file bytes are available.
+    """
+    data = bytes_from_file_ctx(file_ctx)
+    if data is None:
+        return None
+    return LineOffsets.from_bytes(data)
+
+
+__all__ = ["LineOffsets", "line_offsets_from_file_ctx"]

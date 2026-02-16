@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from tests.test_helpers.arrow_seed import register_arrow_table
 

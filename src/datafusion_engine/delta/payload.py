@@ -11,7 +11,7 @@ from serde_msgspec import dumps_msgpack, to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.generated.delta_types import DeltaCommitOptions
-    from storage.deltalake.delta import DeltaCdfOptions
+    from storage.deltalake.delta_read import DeltaCdfOptions
 
 
 def schema_ipc_payload(schema: object | None) -> bytes | None:

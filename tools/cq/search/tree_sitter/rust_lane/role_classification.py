@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from tools.cq.search.rust.extractors_shared import RUST_TEST_ATTRS
 from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
 from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _rust_field_ids
 
@@ -29,15 +30,6 @@ _ITEM_ROLE_SIMPLE: dict[str, str] = {
     "static_item": "static_item",
 }
 
-_TEST_ATTRIBUTE_NAMES: frozenset[str] = frozenset(
-    {
-        "test",
-        "tokio::test",
-        "rstest",
-        "async_std::test",
-    }
-)
-
 
 def _is_test_function(attributes: list[str]) -> bool:
     """Return whether any attribute marks this function as a test.
@@ -53,7 +45,7 @@ def _is_test_function(attributes: list[str]) -> bool:
     bool
         True when at least one attribute matches a known test marker.
     """
-    return any(attr in _TEST_ATTRIBUTE_NAMES for attr in attributes)
+    return any(attr in RUST_TEST_ATTRS for attr in attributes)
 
 
 def _find_ancestor(node: Node, kind: str, *, max_depth: int) -> Node | None:

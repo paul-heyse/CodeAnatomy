@@ -8,6 +8,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
 
 from tools.cq.search.tree_sitter.contracts.core_models import (
+    NodeLike,
     QueryExecutionSettingsV1,
     QueryExecutionTelemetryV1,
     QueryPointWindowV1,
@@ -68,10 +69,12 @@ class _BoundedQueryRequestV1:
 
 
 def _default_window(root: Node) -> QueryWindowV1:
-    return QueryWindowV1(
-        start_byte=int(getattr(root, "start_byte", 0)),
-        end_byte=int(getattr(root, "end_byte", 0)),
-    )
+    start_byte, end_byte = _node_bounds(root)
+    return QueryWindowV1(start_byte=start_byte, end_byte=end_byte)
+
+
+def _node_bounds(node: NodeLike) -> tuple[int, int]:
+    return int(node.start_byte), int(node.end_byte)
 
 
 def _normalized_windows(
@@ -166,8 +169,7 @@ def _is_match_contained(
 ) -> bool:
     for values in capture_map.values():
         for node in values:
-            node_start = int(getattr(node, "start_byte", 0))
-            node_end = int(getattr(node, "end_byte", node_start))
+            node_start, node_end = _node_bounds(node)
             if node_start < window.start_byte or node_end > window.end_byte:
                 return False
     return True
@@ -272,10 +274,7 @@ def _match_fingerprint(pattern_idx: int, capture_map: dict[str, list[Node]]) -> 
     rows: list[tuple[str, tuple[tuple[int, int], ...]]] = []
     for capture_name in sorted(capture_map):
         nodes = capture_map[capture_name]
-        spans = tuple(
-            (int(getattr(node, "start_byte", 0)), int(getattr(node, "end_byte", 0)))
-            for node in nodes
-        )
+        spans = tuple(_node_bounds(node) for node in nodes)
         rows.append((capture_name, spans))
     return (pattern_idx, tuple(rows))
 
@@ -321,7 +320,7 @@ def _cursor_captures(
 
 
 def _include_capture_node(
-    node: Node,
+    node: object,
     *,
     has_change_context: bool,
 ) -> bool:
@@ -334,6 +333,14 @@ def _include_capture_node(
         return bool(has_changes)
     except (RuntimeError, TypeError, ValueError, AttributeError):
         return True
+
+
+def _has_byte_span(node: object) -> bool:
+    try:
+        start, end = _node_bounds(cast("NodeLike", node))
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+    return end >= start
 
 
 def _cursor_matches(
@@ -374,11 +381,11 @@ def _merge_capture_map(
         filtered = [
             node
             for node in nodes
-            if hasattr(node, "start_byte")
+            if _has_byte_span(node)
             and _include_capture_node(node, has_change_context=has_change_context)
         ]
         if filtered:
-            merged.setdefault(capture_name, []).extend(filtered)
+            merged.setdefault(capture_name, []).extend(cast("list[Node]", filtered))
 
 
 def _prepare_bounded_query_state(

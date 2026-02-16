@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from tools.cq.core.structs import CqStruct
 
 if TYPE_CHECKING:
+    from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.query.ir import Query
     from tools.cq.query.planner import ToolPlan
@@ -23,6 +24,7 @@ class QueryExecutionContext(CqStruct, frozen=True):
     argv: list[str]
     started_ms: float
     run_id: str
+    services: CqRuntimeServices
     query_text: str | None = None
     cache_backend: object | None = None
     symtable_enricher: object | None = None

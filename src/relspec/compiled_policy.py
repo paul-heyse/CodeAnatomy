@@ -8,8 +8,9 @@ execution is deterministic and audit-friendly.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Literal
+
+import msgspec
 
 from serde_msgspec import StructBaseStrict
 
@@ -19,6 +20,9 @@ from serde_msgspec import StructBaseStrict
 # lightweight contract module.
 CachePolicyValue = Literal["none", "delta_staging", "delta_output"]
 ValidationMode = Literal["off", "warn", "error"]
+type JsonScalar = str | int | float | bool | None
+type JsonValue = JsonScalar | tuple[JsonScalar, ...] | dict[str, JsonScalar]
+type JsonMapping = dict[str, JsonValue]
 
 
 class CompiledExecutionPolicy(StructBaseStrict, frozen=True):
@@ -35,10 +39,9 @@ class CompiledExecutionPolicy(StructBaseStrict, frozen=True):
         Mapping of view names to cache policy literals.  Derived from
         task-graph topology (fan-out, terminal status, output locations).
     scan_policy_overrides
-        Per-dataset scan policy override configurations derived from
-        plan signals.
+        Per-dataset typed scan policy override payloads derived from plan signals.
     maintenance_policy_by_dataset
-        Per-dataset maintenance policy configuration.
+        Per-dataset typed maintenance policy payloads.
     udf_requirements_by_view
         Per-view UDF requirement names extracted from plan expressions.
     join_strategy_by_view
@@ -59,21 +62,52 @@ class CompiledExecutionPolicy(StructBaseStrict, frozen=True):
         reproducibility and cache-key computation.
     """
 
-    cache_policy_by_view: Mapping[str, str] = {}
-    scan_policy_overrides: Mapping[str, object] = {}
-    maintenance_policy_by_dataset: Mapping[str, object] = {}
-    udf_requirements_by_view: Mapping[str, tuple[str, ...]] = {}
-    join_strategy_by_view: Mapping[str, str] = {}
-    inference_confidence_by_view: Mapping[str, object] = {}
+    cache_policy_by_view: dict[str, str] = msgspec.field(default_factory=dict)
+    scan_policy_overrides: dict[str, CompiledScanPolicyOverride] = msgspec.field(
+        default_factory=dict
+    )
+    maintenance_policy_by_dataset: dict[str, CompiledMaintenancePolicy] = msgspec.field(
+        default_factory=dict
+    )
+    udf_requirements_by_view: dict[str, tuple[str, ...]] = msgspec.field(default_factory=dict)
+    join_strategy_by_view: dict[str, str] = msgspec.field(default_factory=dict)
+    inference_confidence_by_view: dict[str, CompiledInferenceConfidence] = msgspec.field(
+        default_factory=dict
+    )
     materialization_strategy: str | None = None
-    diagnostics_flags: Mapping[str, bool] = {}
+    diagnostics_flags: dict[str, bool] = msgspec.field(default_factory=dict)
     workload_class: str | None = None
     validation_mode: str = "warn"
     policy_fingerprint: str | None = None
 
 
+class CompiledScanPolicyOverride(StructBaseStrict, frozen=True):
+    """Typed scan policy override payload for a dataset."""
+
+    policy: JsonMapping
+    reasons: tuple[str, ...]
+    inference_confidence: JsonMapping | None = None
+
+
+class CompiledMaintenancePolicy(StructBaseStrict, frozen=True):
+    """Typed maintenance policy payload for a dataset."""
+
+    payload: JsonMapping
+
+
+class CompiledInferenceConfidence(StructBaseStrict, frozen=True):
+    """Typed inference confidence payload for a semantic view."""
+
+    payload: JsonMapping
+
+
 __all__ = [
     "CachePolicyValue",
     "CompiledExecutionPolicy",
+    "CompiledInferenceConfidence",
+    "CompiledMaintenancePolicy",
+    "CompiledScanPolicyOverride",
+    "JsonMapping",
+    "JsonValue",
     "ValidationMode",
 ]

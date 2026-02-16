@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from tools.cq.cli_app.context import CliResult, FilterConfig
     from tools.cq.cli_app.types import OutputFormat
     from tools.cq.core.schema import CqResult
+    from tools.cq.core.summary_contract import CqSummary
 
 
 def _attach_insight_artifact_refs(
@@ -47,7 +48,7 @@ def _attach_insight_artifact_refs(
         to_public_front_door_insight_dict,
     )
 
-    insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
+    insight = coerce_front_door_insight(result.summary.front_door_insight)
     if insight is None:
         return
     updated = attach_artifact_refs(
@@ -58,7 +59,7 @@ def _attach_insight_artifact_refs(
     )
     if neighborhood_overflow_ref:
         updated = attach_neighborhood_overflow_ref(updated, overflow_ref=neighborhood_overflow_ref)
-    result.summary["front_door_insight"] = to_public_front_door_insight_dict(updated)
+    result.summary.front_door_insight = to_public_front_door_insight_dict(updated)
 
 
 def apply_result_filters(result: CqResult, filters: FilterConfig) -> CqResult:
@@ -334,14 +335,14 @@ def _build_search_artifact_bundle(
     )
 
 
-def _search_query(summary: dict[str, object]) -> str:
-    raw = summary.get("query")
+def _search_query(summary: CqSummary) -> str:
+    raw = summary.query
     if isinstance(raw, str) and raw:
         return raw
     return "<unknown>"
 
 
-def _search_artifact_summary(summary: dict[str, object]) -> dict[str, object]:
+def _search_artifact_summary(summary: CqSummary) -> dict[str, object]:
     keys = (
         "query",
         "mode",
@@ -355,13 +356,13 @@ def _search_artifact_summary(summary: dict[str, object]) -> dict[str, object]:
     )
     payload: dict[str, object] = {}
     for key in keys:
-        value = summary.get(key)
+        value = getattr(summary, key)
         if value is not None:
             payload[key] = value
     return payload
 
 
-def _search_artifact_diagnostics(summary: dict[str, object]) -> dict[str, object]:
+def _search_artifact_diagnostics(summary: CqSummary) -> dict[str, object]:
     keys = (
         "enrichment_telemetry",
         "python_semantic_overview",
@@ -375,7 +376,7 @@ def _search_artifact_diagnostics(summary: dict[str, object]) -> dict[str, object
     )
     payload: dict[str, object] = {}
     for key in keys:
-        value = summary.get(key)
+        value = getattr(summary, key)
         if value is not None:
             payload[key] = value
     return payload

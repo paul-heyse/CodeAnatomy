@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from tools.cq.core.front_door_builders import InsightNeighborhoodV1
     from tools.cq.core.schema import Finding, Section
     from tools.cq.core.semantic_contracts import SemanticProvider
+    from tools.cq.core.summary_contract import CqSummary
     from tools.cq.search.objects.resolve import ObjectResolutionRuntime
     from tools.cq.search.pipeline.contracts import SearchConfig
 
@@ -309,7 +310,7 @@ class _SearchAssemblyInputs:
 
     enriched_matches: list[EnrichedMatch]
     object_runtime: ObjectResolutionRuntime
-    summary: dict[str, object]
+    summary: CqSummary
     sections: list[Section]
     all_diagnostics: list[Finding]
     definition_matches: list[EnrichedMatch]

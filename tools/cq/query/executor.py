@@ -13,26 +13,19 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
-from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.cache.content_hash import file_content_hash
-from tools.cq.core.cache.contracts import (
-    QueryEntityScanCacheV1,
-)
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import decode_fragment_payload
 from tools.cq.core.cache.fragment_contracts import (
     FragmentEntryV1,
     FragmentHitV1,
+    FragmentMissV1,
     FragmentRequestV1,
     FragmentWriteV1,
 )
-from tools.cq.core.cache.fragment_engine import (
-    FragmentPersistRuntimeV1,
-    FragmentProbeRuntimeV1,
-    partition_fragment_entries,
-    persist_fragment_writes,
-)
+from tools.cq.core.cache.fragment_engine import FragmentPersistRuntimeV1, FragmentProbeRuntimeV1
+from tools.cq.core.cache.fragment_orchestrator import run_fragment_scan
 from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import build_cache_key, build_scope_hash
 from tools.cq.core.cache.namespaces import (
@@ -65,6 +58,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.summary_contract import build_semantic_telemetry, summary_from_mapping
 from tools.cq.orchestration.multilang_orchestrator import (
     execute_by_language_scope,
 )
@@ -147,6 +141,7 @@ from tools.cq.query.scan import (
 from tools.cq.query.sg_parser import list_scan_files, sg_scan
 from tools.cq.query.shared_utils import count_result_matches, extract_def_name
 from tools.cq.search._shared.types import SearchLimits
+from tools.cq.search.cache.contracts import QueryEntityScanCacheV1
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 from tools.cq.search.semantic.diagnostics import (
     build_language_capabilities,
@@ -154,11 +149,20 @@ from tools.cq.search.semantic.diagnostics import (
 from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
+    from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.toolchain import Toolchain
-from tools.cq.index.files import FileTabulationResult, build_repo_file_index, tabulate_files
+from tools.cq.index.files import (
+    FileFilterDecision,
+    FileTabulationResult,
+    build_repo_file_index,
+    tabulate_files,
+)
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.ir import Query, Scope
-from tools.cq.query.merge import merge_auto_scope_query_results
+from tools.cq.query.merge import (
+    MergeAutoScopeQueryRequestV1,
+    merge_auto_scope_query_results,
+)
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
 _ENTITY_FRAGMENT_PAYLOAD_LEN = 3
@@ -206,9 +210,21 @@ class ExecutePlanRequestV1(CqStruct, frozen=True):
     plan: ToolPlan
     query: Query
     root: str
+    services: CqRuntimeServices
     argv: tuple[str, ...] = ()
     query_text: str | None = None
     run_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _AutoScopePlanRequest:
+    query: Query
+    tc: Toolchain
+    root: Path
+    argv: tuple[str, ...]
+    query_text: str | None
+    run_id: str
+    services: CqRuntimeServices
 
 
 def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
@@ -251,20 +267,12 @@ def _summary_common_for_query(
         "query": text,
         "mode": _query_mode(query),
         "python_semantic_overview": dict[str, object](),
-        "python_semantic_telemetry": {
-            "attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-        },
-        "rust_semantic_telemetry": {
-            "attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-        },
+        "python_semantic_telemetry": build_semantic_telemetry(
+            attempted=0, applied=0, failed=0, skipped=0, timed_out=0
+        ),
+        "rust_semantic_telemetry": build_semantic_telemetry(
+            attempted=0, applied=0, failed=0, skipped=0, timed_out=0
+        ),
         "semantic_planes": dict[str, object](),
         "python_semantic_diagnostics": list[dict[str, object]](),
     }
@@ -285,19 +293,21 @@ def _finalize_single_scope_summary(ctx: QueryExecutionContext, result: CqResult)
     if ctx.query.lang_scope == "auto":
         return
     lang = ctx.query.primary_language
-    common = dict(result.summary)
+    common = result.summary.to_dict()
     partition = partition_stats_from_result_summary(
         result.summary,
         fallback_matches=count_result_matches(result),
     )
-    result.summary = build_multilang_summary(
-        SummaryBuildRequest(
-            common=common,
-            lang_scope=ctx.query.lang_scope,
-            language_order=(lang,),
-            languages={lang: partition},
-            cross_language_diagnostics=[],
-            language_capabilities=build_language_capabilities(lang_scope=ctx.query.lang_scope),
+    result.summary = summary_from_mapping(
+        build_multilang_summary(
+            SummaryBuildRequest(
+                common=common,
+                lang_scope=ctx.query.lang_scope,
+                language_order=(lang,),
+                languages={lang: partition},
+                cross_language_diagnostics=[],
+                language_capabilities=build_language_capabilities(lang_scope=ctx.query.lang_scope),
+            )
         )
     )
 
@@ -345,65 +355,77 @@ def _scan_entity_records(
         tag=fragment_ctx.tag,
         run_id=ctx.run_id,
     )
-    partition = partition_fragment_entries(
-        request,
-        entries,
-        FragmentProbeRuntimeV1(
+    scan_result = run_fragment_scan(
+        request=request,
+        entries=entries,
+        probe_runtime=FragmentProbeRuntimeV1(
             cache_get=fragment_ctx.cache.get,
             decode=_decode_entity_fragment_payload,
             cache_enabled=fragment_ctx.cache_enabled,
             record_get=record_cache_get,
             record_decode_failure=record_cache_decode_failure,
         ),
+        persist_runtime=FragmentPersistRuntimeV1(
+            cache_set=lambda key, value, *, expire=None, tag=None: fragment_ctx.cache.set(
+                key,
+                value,
+                expire=expire,
+                tag=tag,
+            ),
+            cache_set_many=lambda rows, *, expire=None, tag=None: fragment_ctx.cache.set_many(
+                rows,
+                expire=expire,
+                tag=tag,
+            ),
+            encode=contract_to_builtins,
+            cache_enabled=fragment_ctx.cache_enabled,
+            transact=fragment_ctx.cache.transact,
+            record_set=record_cache_set,
+        ),
+        scan_misses=lambda misses: _scan_entity_fragment_misses(
+            ctx=ctx,
+            fragment_ctx=fragment_ctx,
+            misses=misses,
+        ),
     )
 
-    records_by_rel = _entity_records_from_hits(partition.hits)
-    if partition.misses:
-        miss_paths = [fragment_ctx.root / miss.entry.file for miss in partition.misses]
-        scanned = sg_scan(
-            paths=miss_paths,
-            record_types=ctx.plan.sg_record_types,
-            root=fragment_ctx.root,
-            globs=None,
-            lang=ctx.plan.lang,
-        )
-        grouped = group_records_by_file(scanned)
-        writes: list[FragmentWriteV1] = []
-        for miss in partition.misses:
-            rel_path = miss.entry.file
-            fragment_records = sorted(grouped.get(rel_path, []), key=_record_sort_key)
-            records_by_rel[rel_path] = fragment_records
-            writes.append(
-                FragmentWriteV1(
-                    entry=miss.entry,
-                    payload=QueryEntityScanCacheV1(
-                        records=[_record_to_cache_record(item) for item in fragment_records]
-                    ),
-                )
-            )
-        persist_fragment_writes(
-            request,
-            writes,
-            FragmentPersistRuntimeV1(
-                cache_set=lambda key, value, *, expire=None, tag=None: fragment_ctx.cache.set(
-                    key,
-                    value,
-                    expire=expire,
-                    tag=tag,
-                ),
-                cache_set_many=lambda rows, *, expire=None, tag=None: fragment_ctx.cache.set_many(
-                    rows,
-                    expire=expire,
-                    tag=tag,
-                ),
-                encode=contract_to_builtins,
-                cache_enabled=fragment_ctx.cache_enabled,
-                transact=fragment_ctx.cache.transact,
-                record_set=record_cache_set,
-            ),
-        )
+    records_by_rel = _entity_records_from_hits(scan_result.hits)
+    if scan_result.miss_payload:
+        records_by_rel.update(scan_result.miss_payload)
 
     return _assemble_entity_records(fragment_ctx, records_by_rel)
+
+
+def _scan_entity_fragment_misses(
+    *,
+    ctx: QueryExecutionContext,
+    fragment_ctx: _EntityFragmentContext,
+    misses: list[FragmentMissV1],
+) -> tuple[dict[str, list[SgRecord]], list[FragmentWriteV1]]:
+    miss_paths = [fragment_ctx.root / miss.entry.file for miss in misses]
+    scanned = sg_scan(
+        paths=miss_paths,
+        record_types=ctx.plan.sg_record_types,
+        root=fragment_ctx.root,
+        globs=None,
+        lang=ctx.plan.lang,
+    )
+    grouped = group_records_by_file(scanned)
+    records_by_rel: dict[str, list[SgRecord]] = {}
+    writes: list[FragmentWriteV1] = []
+    for miss in misses:
+        rel_path = miss.entry.file
+        fragment_records = sorted(grouped.get(rel_path, []), key=_record_sort_key)
+        records_by_rel[rel_path] = fragment_records
+        writes.append(
+            FragmentWriteV1(
+                entry=miss.entry,
+                payload=QueryEntityScanCacheV1(
+                    records=[_record_to_cache_record(item) for item in fragment_records]
+                ),
+            )
+        )
+    return records_by_rel, writes
 
 
 def _build_entity_fragment_context(
@@ -612,6 +634,18 @@ def _tabulate_scope_files(
     )
 
 
+def _serialize_file_filter_decisions(decisions: list[FileFilterDecision]) -> list[str]:
+    return [
+        (
+            f"{decision.file} ignored={int(decision.ignored)} "
+            f"glob_excluded={int(decision.glob_excluded)} "
+            f"scope_excluded={int(decision.scope_excluded)} "
+            f"ignore_rule_index={decision.ignore_rule_index}"
+        )
+        for decision in decisions
+    ]
+
+
 def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState | CqResult:
     if not ctx.tc.has_sgpy:
         return _empty_result(ctx, "ast-grep not available")
@@ -631,7 +665,7 @@ def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState 
     if not file_result.files:
         result = _empty_result(ctx, "No files match scope after filtering")
         if ctx.plan.explain:
-            result.summary["file_filters"] = list(file_result.decisions)
+            result.summary.file_filters = _serialize_file_filter_decisions(file_result.decisions)
         return result
 
     return PatternExecutionState(
@@ -672,7 +706,7 @@ def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> 
     plan = state.ctx.plan
     if not plan.explain:
         return
-    result.summary["plan"] = {
+    result.summary.plan = {
         "sg_record_types": list(plan.sg_record_types),
         "need_symtable": plan.need_symtable,
         "need_bytecode": plan.need_bytecode,
@@ -687,7 +721,7 @@ def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> 
         lang=state.ctx.plan.lang,
         explain=True,
     )
-    result.summary["file_filters"] = list(file_result.decisions)
+    result.summary.file_filters = _serialize_file_filter_decisions(file_result.decisions)
 
 
 def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -> None:
@@ -695,7 +729,7 @@ def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -
     query = state.ctx.query
     if not plan.explain:
         return
-    result.summary["plan"] = {
+    result.summary.plan = {
         "is_pattern_query": True,
         "lang": plan.lang,
         "lang_scope": plan.lang_scope,
@@ -706,7 +740,7 @@ def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -
         "rules_count": len(plan.sg_rules),
         "metavar_filters": len(query.metavar_filters),
     }
-    result.summary["file_filters"] = list(state.file_result.decisions)
+    result.summary.file_filters = _serialize_file_filter_decisions(state.file_result.decisions)
 
 
 def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
@@ -731,6 +765,7 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
         Query results
     """
     root = Path(request.root).resolve()
+    services = request.services
     active_run_id = request.run_id or uuid7_str()
     logger.debug(
         "Executing query plan mode=%s lang=%s lang_scope=%s root=%s",
@@ -741,12 +776,15 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
     )
     if request.query.lang_scope == "auto":
         return _execute_auto_scope_plan(
-            request.query,
-            tc=tc,
-            root=root,
-            argv=list(request.argv),
-            query_text=request.query_text,
-            run_id=active_run_id,
+            _AutoScopePlanRequest(
+                query=request.query,
+                tc=tc,
+                root=root,
+                argv=tuple(request.argv),
+                query_text=request.query_text,
+                run_id=active_run_id,
+                services=services,
+            )
         )
 
     ctx = QueryExecutionContext(
@@ -757,6 +795,7 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
         argv=list(request.argv),
         started_ms=ms(),
         run_id=active_run_id,
+        services=services,
         query_text=request.query_text,
     )
     result = _execute_single_context(ctx)
@@ -774,72 +813,57 @@ def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
     return execute_entity_query(ctx)
 
 
-def _execute_auto_scope_plan(
-    query: Query,
-    *,
-    tc: Toolchain,
-    root: Path,
-    argv: list[str],
-    query_text: str | None = None,
-    run_id: str,
-) -> CqResult:
-
+def _execute_auto_scope_plan(request: _AutoScopePlanRequest) -> CqResult:
+    query = request.query
     results = execute_by_language_scope(
         query.lang_scope,
         lambda lang: _run_scoped_auto_query(
-            query=query,
+            request=request,
             lang=lang,
-            tc=tc,
-            root=root,
-            argv=argv,
-            run_id=run_id,
         ),
     )
     merged = merge_auto_scope_query_results(
-        query=query,
-        results=results,
-        root=root,
-        argv=argv,
-        tc=tc,
-        summary_common=_summary_common_for_query(query, query_text=query_text),
+        MergeAutoScopeQueryRequestV1(
+            query=query,
+            results=results,
+            root=request.root,
+            argv=request.argv,
+            tc=request.tc,
+            summary_common=_summary_common_for_query(query, query_text=request.query_text),
+            services=request.services,
+        )
     )
-    merged.summary["cache_backend"] = snapshot_backend_metrics(root=root)
+    merged.summary.cache_backend = snapshot_backend_metrics(root=request.root)
     assign_result_finding_ids(merged)
     for lang in expand_language_scope(query.lang_scope):
-        maybe_evict_run_cache_tag(root=root, language=lang, run_id=run_id)
+        maybe_evict_run_cache_tag(root=request.root, language=lang, run_id=request.run_id)
     return merged
 
 
-def _run_scoped_auto_query(
-    *,
-    query: Query,
-    lang: QueryLanguage,
-    tc: Toolchain,
-    root: Path,
-    argv: list[str],
-    run_id: str,
-) -> CqResult:
+def _run_scoped_auto_query(*, request: _AutoScopePlanRequest, lang: QueryLanguage) -> CqResult:
     from tools.cq.query.planner import compile_query
 
-    scoped_query = msgspec.structs.replace(query, lang_scope=cast("QueryLanguageScope", lang))
+    scoped_query = msgspec.structs.replace(
+        request.query, lang_scope=cast("QueryLanguageScope", lang)
+    )
     scoped_plan = compile_query(scoped_query)
     scoped_ctx = QueryExecutionContext(
         plan=scoped_plan,
         query=scoped_query,
-        tc=tc,
-        root=root,
-        argv=argv,
+        tc=request.tc,
+        root=request.root,
+        argv=list(request.argv),
         started_ms=ms(),
-        run_id=run_id,
+        run_id=request.run_id,
+        services=request.services,
     )
     return _execute_single_context(scoped_ctx)
 
 
-def _attach_entity_insight(result: CqResult, *, root: Path) -> None:
+def _attach_entity_insight(result: CqResult, *, services: CqRuntimeServices) -> None:
     """Build and attach front-door insight card to entity result."""
     from tools.cq.core.services import EntityFrontDoorRequest
 
-    services = resolve_runtime_services(root)
     services.entity.attach_front_door(
         EntityFrontDoorRequest(
             result=result,
@@ -863,11 +887,11 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     result = mk_result(_build_runmeta(ctx))
     result.summary.update(_summary_common_for_context(ctx))
     _apply_entity_handlers(state, result)
-    result.summary["files_scanned"] = len({r.file for r in state.records})
+    result.summary.files_scanned = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
-    _attach_entity_insight(result, root=ctx.root)
-    result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    _attach_entity_insight(result, services=ctx.services)
+    result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
     assign_result_finding_ids(result)
     return result
 
@@ -888,6 +912,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         argv=request.argv,
         started_ms=ms(),
         run_id=request.run_id or uuid7_str(),
+        services=request.services,
         query_text=request.query_text,
     )
     scan_ctx = _build_scan_context(request.records)
@@ -910,11 +935,11 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     result = mk_result(_build_runmeta(ctx))
     result.summary.update(_summary_common_for_context(ctx))
     _apply_entity_handlers(state, result, symtable=request.symtable)
-    result.summary["files_scanned"] = len({r.file for r in state.records})
+    result.summary.files_scanned = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
-    _attach_entity_insight(result, root=ctx.root)
-    result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    _attach_entity_insight(result, services=ctx.services)
+    result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
     assign_result_finding_ids(result)
     return result
 
@@ -956,11 +981,11 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     if state.ctx.query.limit and len(result.key_findings) > state.ctx.query.limit:
         result.key_findings = result.key_findings[: state.ctx.query.limit]
 
-    result.summary["matches"] = len(result.key_findings)
-    result.summary["files_scanned"] = len({r.file for r in records})
+    result.summary.matches = len(result.key_findings)
+    result.summary.files_scanned = len({r.file for r in records})
     _maybe_add_pattern_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
-    result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
     assign_result_finding_ids(result)
     return result
 
@@ -981,12 +1006,13 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
         argv=request.argv,
         started_ms=ms(),
         run_id=request.run_id or uuid7_str(),
+        services=request.services,
         query_text=request.query_text,
     )
     if not request.files:
         result = _empty_result(ctx, "No files match scope after filtering")
         if request.plan.explain and request.decisions is not None:
-            result.summary["file_filters"] = list(request.decisions)
+            result.summary.file_filters = _serialize_file_filter_decisions(request.decisions)
         return result
 
     state = PatternExecutionState(
@@ -1020,11 +1046,11 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     if state.ctx.query.limit and len(result.key_findings) > state.ctx.query.limit:
         result.key_findings = result.key_findings[: state.ctx.query.limit]
 
-    result.summary["matches"] = len(result.key_findings)
-    result.summary["files_scanned"] = len({r.file for r in records})
+    result.summary.matches = len(result.key_findings)
+    result.summary.files_scanned = len({r.file for r in records})
     _maybe_add_pattern_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
-    result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
     assign_result_finding_ids(result)
     return result
 
@@ -1111,8 +1137,8 @@ def _process_decorator_query(
             finding.details["decorator_count"] = count
             result.key_findings.append(finding)
 
-    result.summary["total_defs"] = len(ctx.def_records)
-    result.summary["matches"] = len(result.key_findings)
+    result.summary.total_defs = len(ctx.def_records)
+    result.summary.matches = len(result.key_findings)
 
 
 def _process_call_query(
@@ -1142,8 +1168,8 @@ def _process_call_query(
         finding = _call_to_finding(call_record, extra_details=details)
         result.key_findings.append(finding)
 
-    result.summary["total_calls"] = len(ctx.call_records)
-    result.summary["matches"] = len(result.key_findings)
+    result.summary.total_calls = len(ctx.call_records)
+    result.summary.matches = len(result.key_findings)
 
 
 def rg_files_with_matches(

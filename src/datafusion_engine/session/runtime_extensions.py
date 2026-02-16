@@ -18,7 +18,11 @@ from cache.diskcache_factory import (
 )
 from datafusion_engine.compile.options import DataFusionSqlPolicy, resolve_sql_policy
 from datafusion_engine.expr.planner import expr_planner_payloads, install_expr_planners
-from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
+from datafusion_engine.session._session_constants import (
+    DATAFUSION_SQL_ERROR,
+    create_schema_introspector,
+)
 from datafusion_engine.session.runtime_dataset_io import (
     _cache_config_payload,
     _cache_snapshot_rows,
@@ -37,7 +41,7 @@ from datafusion_engine.session.runtime_udf import (
     _rulepack_required_functions,
 )
 from datafusion_engine.sql.options import sql_options_for_profile
-from datafusion_engine.udf.extension_runtime import extension_capabilities_report
+from datafusion_engine.udf.extension_core import extension_capabilities_report
 from datafusion_engine.udf.factory import (
     function_factory_payloads,
     install_function_factory,
@@ -53,33 +57,8 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from serde_schema_registry import ArtifactSpec
 
-_DATAFUSION_SQL_ERROR = Exception
-
 logger = logging.getLogger(__name__)
-
-
-def _create_schema_introspector(
-    profile: DataFusionRuntimeProfile, ctx: SessionContext
-) -> SchemaIntrospector:
-    """Create a schema introspector for the profile and context.
-
-    Args:
-        profile: Runtime profile.
-        ctx: Session context.
-
-    Returns:
-        SchemaIntrospector instance.
-    """
-    diskcache_profile = profile.policies.diskcache_profile
-    cache = cache_for_kind(diskcache_profile, "schema") if diskcache_profile is not None else None
-    cache_ttl = diskcache_profile.ttl_for("schema") if diskcache_profile is not None else None
-    return SchemaIntrospector(
-        ctx,
-        sql_options=sql_options_for_profile(profile),
-        cache=cache,
-        cache_prefix=profile.context_cache_key(),
-        cache_ttl=cache_ttl,
-    )
+_DDL_CATALOG_WARNING_STATE: dict[str, bool] = {"emitted": False}
 
 
 def _defer_import_datafusion_udf_validation_spec() -> ArtifactSpec:
@@ -395,7 +374,7 @@ def _install_udf_platform(profile: DataFusionRuntimeProfile, ctx: SessionContext
         and platform.function_factory is not None
         and platform.function_factory.installed
     ):
-        from datafusion_engine.udf.extension_runtime import register_udfs_via_ddl
+        from datafusion_engine.udf.extension_core import register_udfs_via_ddl
 
         try:
             register_udfs_via_ddl(
@@ -403,11 +382,13 @@ def _install_udf_platform(profile: DataFusionRuntimeProfile, ctx: SessionContext
                 snapshot=platform.snapshot,
                 registries=profile.udf_extension_registries,
             )
-        except _DATAFUSION_SQL_ERROR as exc:
-            logging.getLogger(__name__).warning(
-                "Skipping UDF DDL catalog registration due to extension SQL incompatibility: %s",
-                exc,
-            )
+        except DATAFUSION_SQL_ERROR as exc:
+            if not _DDL_CATALOG_WARNING_STATE["emitted"]:
+                logger.warning(
+                    "Skipping UDF DDL catalog registration due to extension SQL incompatibility: %s",
+                    exc,
+                )
+                _DDL_CATALOG_WARNING_STATE["emitted"] = True
     if platform.snapshot is not None:
         _refresh_udf_catalog(profile, ctx)
     else:
@@ -472,7 +453,7 @@ def _refresh_udf_catalog(profile: DataFusionRuntimeProfile, ctx: SessionContext)
         raise ValueError(msg)
     cache_key = ctx
     try:
-        introspector = _create_schema_introspector(profile, ctx)
+        introspector = create_schema_introspector(profile, ctx)
         if profile.policies.udf_catalog_policy == "strict":
             catalog = get_strict_udf_catalog(
                 introspector=introspector,
@@ -516,7 +497,7 @@ def _validate_udf_specs(
     Raises:
         ValueError: If the operation cannot be completed.
     """
-    from datafusion_engine.udf.extension_runtime import (
+    from datafusion_engine.udf.extension_core import (
         rust_udf_snapshot,
         udf_names_from_snapshot,
     )
@@ -794,7 +775,7 @@ def _validate_udf_info_schema_parity(
             "routines_available": False,
             "error": "native_udf_platform unavailable",
         }
-    from datafusion_engine.udf.extension_runtime import rust_runtime_install_payload
+    from datafusion_engine.udf.extension_core import rust_runtime_install_payload
     from datafusion_engine.udf.parity import udf_info_schema_parity_report
 
     report = udf_info_schema_parity_report(ctx)

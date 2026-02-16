@@ -32,7 +32,6 @@ from semantics.diagnostics.issue_batching import (
 )
 from semantics.diagnostics.quality_metrics import (
     build_relationship_candidates_view,
-    build_relationship_decisions_view,
     build_relationship_quality_metrics,
 )
 from semantics.diagnostics.schema_anomalies import build_schema_anomalies_view
@@ -53,7 +52,7 @@ def semantic_diagnostic_view_builders() -> dict[str, Callable[[SessionContext], 
         "relationship_ambiguity_report": relationship_ambiguity_report_df_builder,
         "file_coverage_report": file_coverage_report_df_builder,
         "relationship_candidates": build_relationship_candidates_view,
-        "relationship_decisions": build_relationship_decisions_view,
+        "relationship_decisions": build_relationship_candidates_view,
         "schema_anomalies": build_schema_anomalies_view,
     }
 
@@ -68,7 +67,6 @@ __all__ = [
     "build_file_coverage_report",
     "build_quality_summary",
     "build_relationship_candidates_view",
-    "build_relationship_decisions_view",
     "build_relationship_quality_metrics",
     "build_schema_anomalies_view",
     "dataframe_row_count",

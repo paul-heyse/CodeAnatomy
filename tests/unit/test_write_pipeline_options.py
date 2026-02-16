@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datafusion_engine.io.write import WriteFormat, WriteMode, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WriteRequest
 
 
 def test_write_request_defaults() -> None:

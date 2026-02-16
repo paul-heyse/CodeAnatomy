@@ -10,8 +10,7 @@ from opentelemetry import trace
 
 from datafusion_engine.lineage.diagnostics import recorder_for_profile
 from datafusion_engine.lineage.reporting import referenced_tables_from_plan
-from obs.otel.run_context import get_run_id
-from obs.otel.tracing import set_span_attributes
+from obs.otel import get_run_id, set_span_attributes
 from serde_msgspec import StructBaseHotPath, to_builtins_mapping
 
 if TYPE_CHECKING:
@@ -261,16 +260,6 @@ def _execution_stats_payload(bundle: DataFusionPlanArtifact) -> PlanExecutionSta
         explain_analyze_duration_ms=signals.explain_analyze_duration_ms,
         explain_analyze_output_rows=signals.explain_analyze_output_rows,
     )
-
-
-def _coerce_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    return None
 
 
 def _coerce_float(value: object) -> float | None:

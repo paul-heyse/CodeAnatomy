@@ -7,7 +7,7 @@ import pytest
 from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
 from datafusion_engine.delta.cdf import register_cdf_inputs
 from datafusion_engine.session.facade import DataFusionExecutionFacade
-from datafusion_engine.session.runtime import record_dataset_readiness
+from datafusion_engine.session.runtime_dataset_io import record_dataset_readiness
 from semantics.compile_context import build_semantic_execution_context
 from semantics.resolver_identity import resolver_identity_tracking
 from tests.test_helpers.datafusion_runtime import df_profile

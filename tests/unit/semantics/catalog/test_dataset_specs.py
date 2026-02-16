@@ -6,7 +6,7 @@ from functools import cache
 
 import pytest
 
-from schema_spec.contracts import dataset_spec_name, dataset_spec_schema
+from schema_spec.dataset_spec import dataset_spec_name, dataset_spec_schema
 from semantics.catalog.dataset_rows import SemanticDatasetRow
 from semantics.catalog.dataset_specs import (
     dataset_alias,

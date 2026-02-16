@@ -17,9 +17,10 @@ from datafusion_engine.arrow.field_builders import (
 )
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.facade import DataFusionExecutionFacade
-from obs.otel.run_context import get_run_id
+from obs.otel import get_run_id
+from utils.coercion import coerce_int_or_none
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -300,24 +301,9 @@ def delta_report_file_count(report: Mapping[str, object] | None) -> int | None:
         ):
             if key not in payload:
                 continue
-            value = _coerce_int(payload.get(key))
+            value = coerce_int_or_none(payload.get(key))
             if value is not None:
                 return value
-    return None
-
-
-def _coerce_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            return int(value)
-        except ValueError:
-            return None
     return None
 
 

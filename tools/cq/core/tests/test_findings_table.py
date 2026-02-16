@@ -14,6 +14,7 @@ from tools.cq.core.findings_table import (
     rehydrate_result,
 )
 from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
+from tools.cq.core.summary_contract import summary_from_mapping
 
 _TEST_IMPACT_SCORE_HIGH = 0.75
 _TEST_CONFIDENCE_SCORE_HIGH = 0.95
@@ -353,12 +354,12 @@ class TestRehydrateResult:
     def test_rehydrate_preserves_metadata() -> None:
         """Preserve run metadata on rehydrate."""
         original = _make_result()
-        original.summary = {"test": "value"}
+        original.summary = summary_from_mapping({"query": "value"})
         df = build_frame([])
         rehydrated = rehydrate_result(original, df)
 
         assert rehydrated.run.macro == "test"
-        assert rehydrated.summary == {"test": "value"}
+        assert rehydrated.summary.query == "value"
 
     @staticmethod
     def test_rehydrate_key_findings() -> None:

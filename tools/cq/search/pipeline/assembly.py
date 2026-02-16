@@ -13,6 +13,7 @@ from tools.cq.core.cache.maintenance import maintenance_tick
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import Anchor, CqResult, Finding, Section, assign_result_finding_ids
+from tools.cq.core.summary_contract import CqSummary, summary_from_mapping
 from tools.cq.query.language import QueryLanguage
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime
 from tools.cq.search.pipeline.classifier import get_sg_root
@@ -408,7 +409,7 @@ def _build_tree_sitter_neighborhood_preview(
     *,
     ctx: SearchConfig,
     partition_results: list[LanguageSearchResult],
-    summary: dict[str, object],
+    summary: CqSummary,
     sections: list[Section],
     inputs: _NeighborhoodPreviewInputs,
 ) -> tuple[InsightNeighborhoodV1 | None, list[str]]:
@@ -421,7 +422,7 @@ def _build_tree_sitter_neighborhood_preview(
     partition_results
         Language partition results.
     summary
-        Summary dictionary to update.
+        Summary payload to update.
     sections
         Sections list to insert neighborhood findings into.
     inputs
@@ -434,7 +435,7 @@ def _build_tree_sitter_neighborhood_preview(
     """
     from tools.cq.search.pipeline.orchestration import insert_neighborhood_preview
 
-    summary["tree_sitter_neighborhood"] = {
+    summary.tree_sitter_neighborhood = {
         "enabled": bool(ctx.with_neighborhood),
         "mode": "opt_in",
     }
@@ -445,7 +446,9 @@ def _build_tree_sitter_neighborhood_preview(
         ctx=ctx,
         partition_results=partition_results,
     )
-    summary["tree_sitter_neighborhood"]["candidate_scope_files"] = str(len(scope_paths))
+    neighborhood_summary = dict(summary.tree_sitter_neighborhood)
+    neighborhood_summary["candidate_scope_files"] = str(len(scope_paths))
+    summary.tree_sitter_neighborhood = neighborhood_summary
     insight_neighborhood, neighborhood_findings, neighborhood_notes = (
         _build_structural_neighborhood_preview(
             ctx,
@@ -584,7 +587,7 @@ def _prepare_search_assembly_inputs(
         python_semantic_telemetry,
         python_semantic_diagnostics,
     ) = merge_matches_and_python_semantic(ctx, partition_results)
-    summary, all_diagnostics = build_search_summary(
+    summary_raw, all_diagnostics = build_search_summary(
         ctx,
         partition_results,
         enriched_matches,
@@ -592,6 +595,7 @@ def _prepare_search_assembly_inputs(
         python_semantic_telemetry=python_semantic_telemetry,
         python_semantic_diagnostics=python_semantic_diagnostics,
     )
+    summary = summary_from_mapping(summary_raw)
     object_runtime = build_object_resolved_view(enriched_matches, query=ctx.query)
     summary["resolved_objects"] = len(object_runtime.view.summaries)
     summary["resolved_occurrences"] = len(object_runtime.view.occurrences)
@@ -665,7 +669,7 @@ def _assemble_smart_search_result(
 
     inputs = _prepare_search_assembly_inputs(ctx, partition_results)
     insight = _assemble_search_insight(ctx, inputs)
-    inputs.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
+    inputs.summary.front_door_insight = to_public_front_door_insight_dict(insight)
 
     run_ctx = RunContext.from_parts(
         root=ctx.root,
@@ -683,9 +687,12 @@ def _assemble_smart_search_result(
         evidence=[build_finding(m, ctx.root) for m in inputs.enriched_matches[:MAX_EVIDENCE]],
     )
     register_search_object_view(run_id=run.run_id, view=inputs.object_runtime.view)
-    result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
-    result.summary["cache_maintenance"] = contract_to_builtins(
+    result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
+    cache_maintenance_payload = contract_to_builtins(
         maintenance_tick(get_cq_cache_backend(root=ctx.root))
+    )
+    result.summary.cache_maintenance = (
+        cache_maintenance_payload if isinstance(cache_maintenance_payload, dict) else {}
     )
     assign_result_finding_ids(result)
     return result

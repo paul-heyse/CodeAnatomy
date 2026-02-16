@@ -52,6 +52,7 @@ from tools.cq.search._shared.core import (
     PythonByteRangeEnrichmentRequest,
     RgRunRequest,
 )
+from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search._shared.types import SearchLimits
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
 from tools.cq.search.objects.render import (
@@ -94,11 +95,12 @@ from tools.cq.search.pipeline.contracts import (
     SearchPartitionPlanV1,
     SearchRequest,
 )
+from tools.cq.search.pipeline.enrichment_phase import run_enrichment_phase
 from tools.cq.search.pipeline.orchestration import (
     SearchPipeline,
 )
-from tools.cq.search.pipeline.partition_pipeline import run_search_partition
 from tools.cq.search.pipeline.profiles import INTERACTIVE
+from tools.cq.search.pipeline.runtime_context import build_search_runtime_context
 from tools.cq.search.pipeline.search_object_view_store import pop_search_object_view_for_run
 from tools.cq.search.pipeline.smart_search_telemetry import (
     build_enrichment_telemetry as _build_enrichment_telemetry,
@@ -126,9 +128,6 @@ from tools.cq.search.pipeline.worker_policy import (
     resolve_search_worker_count as _resolve_search_worker_count,
 )
 from tools.cq.search.python.analysis_session import get_python_analysis_session
-from tools.cq.search.python.extractors import (
-    _ENRICHMENT_ERRORS as _PYTHON_ENRICHMENT_ERRORS,
-)
 from tools.cq.search.python.extractors import enrich_python_context_by_byte_range
 from tools.cq.search.rg.collector import RgCollector
 from tools.cq.search.rg.runner import RgCountRequest, build_rg_command, run_rg_count, run_rg_json
@@ -162,7 +161,6 @@ SMART_SEARCH_LIMITS = msgspec.structs.replace(
 )
 _CASE_SENSITIVE_DEFAULT = True
 
-_RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 _TREE_SITTER_QUERY_BUDGET_FALLBACK_MS = budget_ms_per_anchor(
     timeout_seconds=SMART_SEARCH_LIMITS.timeout_seconds,
     max_anchors=SMART_SEARCH_LIMITS.max_total_matches,
@@ -787,7 +785,7 @@ def _maybe_rust_tree_sitter_enrichment(
             query_budget_ms=query_budget_ms,
         )
         return normalize_rust_payload(payload)
-    except _RUST_ENRICHMENT_ERRORS:
+    except ENRICHMENT_ERRORS:
         return None
 
 
@@ -849,7 +847,7 @@ def _maybe_python_enrichment(
             )
         )
         return normalize_python_payload(payload)
-    except _PYTHON_ENRICHMENT_ERRORS:
+    except ENRICHMENT_ERRORS:
         return None
 
 
@@ -1207,71 +1205,15 @@ def build_followups(
     return findings
 
 
-_SUMMARY_ARGS_COUNT = 5
-_SUMMARY_KWARGS_ERROR = "build_summary does not accept kwargs when using SearchSummaryInputs."
-_SUMMARY_ARITY_ERROR = "build_summary expects (query, mode, stats, matches, limits)."
-
-
-def build_summary(*args: object, **kwargs: object) -> dict[str, object]:
+def build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
     """Build summary dict for CqResult.
-
-    Accepts either a ``SearchSummaryInputs`` instance or the legacy positional
-    arguments (query, mode, stats, matches, limits) with keyword overrides.
 
     Returns:
     -------
     dict[str, object]
-        Summary dictionary.
+        Normalized summary payload for CQ result rendering.
     """
-    inputs = _coerce_summary_inputs(args, kwargs)
     return _build_summary(inputs)
-
-
-def _coerce_summary_inputs(
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
-) -> SearchSummaryInputs:
-    if len(args) == 1 and isinstance(args[0], SearchSummaryInputs):
-        if kwargs:
-            msg = _SUMMARY_KWARGS_ERROR
-            raise TypeError(msg)
-        return args[0]
-    if len(args) != _SUMMARY_ARGS_COUNT:
-        msg = _SUMMARY_ARITY_ERROR
-        raise TypeError(msg)
-    query, mode, stats, matches, limits = args
-    config = SearchConfig(
-        root=Path(),
-        query=cast("str", query),
-        mode=cast("QueryMode", mode),
-        lang_scope=cast(
-            "QueryLanguageScope",
-            kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
-        ),
-        mode_requested=cast("QueryMode", mode),
-        mode_chain=(cast("QueryMode", mode),),
-        fallback_applied=bool(kwargs.get("fallback_applied")),
-        limits=cast("SearchLimits", limits),
-        include_globs=cast("list[str] | None", kwargs.get("include")),
-        exclude_globs=cast("list[str] | None", kwargs.get("exclude")),
-        include_strings=False,
-        with_neighborhood=False,
-        argv=[],
-        tc=None,
-        started_ms=0.0,
-    )
-    languages = tuple(expand_language_scope(config.lang_scope))
-    default_stats = cast("SearchStats", stats)
-    return SearchSummaryInputs(
-        config=config,
-        stats=default_stats,
-        matches=cast("list[EnrichedMatch]", matches),
-        languages=languages,
-        language_stats=dict.fromkeys(languages, default_stats),
-        file_globs=cast("list[str] | None", kwargs.get("file_globs")),
-        limit=cast("int | None", kwargs.get("limit")),
-        pattern=cast("str | None", kwargs.get("pattern")),
-    )
 
 
 def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
@@ -1711,10 +1653,7 @@ def _run_single_partition(
         max_total_matches=ctx.limits.max_total_matches,
         run_id=ctx.run_id,
     )
-    return cast(
-        "LanguageSearchResult",
-        run_search_partition(plan, ctx=ctx, mode=mode),
-    )
+    return run_enrichment_phase(plan, config=ctx, mode=mode)
 
 
 def _merge_python_semantic_prefetch_results(
@@ -1964,6 +1903,7 @@ def smart_search(
     """
     request = _coerce_search_request(root=root, query=query, kwargs=kwargs)
     ctx = _build_search_context(request)
+    build_search_runtime_context(ctx)
     pipeline = SearchPipeline(ctx)
     partition_started = ms()
     partition_results = pipeline.run_partitions(_run_language_partitions)
@@ -1988,7 +1928,7 @@ def smart_search(
 
     assemble_started = ms()
     result = SearchPipeline(ctx).assemble(partition_results, assemble_smart_search_result)
-    result.summary["search_stage_timings_ms"] = {
+    result.summary.search_stage_timings_ms = {
         "partition": max(0.0, assemble_started - partition_started),
         "assemble": max(0.0, ms() - assemble_started),
         "total": max(0.0, ms() - ctx.started_ms),
@@ -2032,10 +1972,6 @@ __all__ = [
     "assemble_result",
     "assemble_smart_search_result",
     "build_candidate_searcher",
-    "build_finding",
-    "build_followups",
-    "build_sections",
-    "build_summary",
     "classify_match",
     "collect_candidates",
     "compute_relevance_score",

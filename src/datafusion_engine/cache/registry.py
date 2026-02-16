@@ -18,6 +18,7 @@ from datafusion_engine.cache.inventory import (
 from datafusion_engine.delta.contracts import enforce_schema_evolution
 from datafusion_engine.session.facade import DataFusionExecutionFacade
 from storage.deltalake import DeltaSchemaRequest
+from utils.coercion import coerce_int_or_none, coerce_opt_str, coerce_str_tuple
 from utils.registry_protocol import MutableRegistry, Registry, SnapshotRegistry
 
 if TYPE_CHECKING:
@@ -264,17 +265,17 @@ def _record_from_row(row: Mapping[str, object]) -> CacheInventoryRecord:
         view_name=_coerce_str(row.get("view_name")),
         cache_policy=_coerce_str(row.get("cache_policy")),
         cache_path=_coerce_str(row.get("cache_path")),
-        plan_fingerprint=_coerce_opt_str(row.get("plan_fingerprint")),
-        plan_identity_hash=_coerce_opt_str(row.get("plan_identity_hash")),
-        schema_identity_hash=_coerce_opt_str(row.get("schema_identity_hash")),
-        snapshot_version=_coerce_opt_int(row.get("snapshot_version")),
-        snapshot_timestamp=_coerce_opt_str(row.get("snapshot_timestamp")),
-        run_id=_coerce_opt_str(row.get("run_id")),
-        result=_coerce_opt_str(row.get("result")),
-        row_count=_coerce_opt_int(row.get("row_count")),
-        file_count=_coerce_opt_int(row.get("file_count")),
-        partition_by=_coerce_str_tuple(row.get("partition_by")),
-        event_time_unix_ms=_coerce_opt_int(row.get("event_time_unix_ms")),
+        plan_fingerprint=coerce_opt_str(row.get("plan_fingerprint")),
+        plan_identity_hash=coerce_opt_str(row.get("plan_identity_hash")),
+        schema_identity_hash=coerce_opt_str(row.get("schema_identity_hash")),
+        snapshot_version=coerce_int_or_none(row.get("snapshot_version")),
+        snapshot_timestamp=coerce_opt_str(row.get("snapshot_timestamp")),
+        run_id=coerce_opt_str(row.get("run_id")),
+        result=coerce_opt_str(row.get("result")),
+        row_count=coerce_int_or_none(row.get("row_count")),
+        file_count=coerce_int_or_none(row.get("file_count")),
+        partition_by=coerce_str_tuple(row.get("partition_by")),
+        event_time_unix_ms=coerce_int_or_none(row.get("event_time_unix_ms")),
     )
 
 
@@ -283,37 +284,6 @@ def _coerce_str(value: object) -> str:
         return value
     msg = "Cache inventory row missing required string field."
     raise ValueError(msg)
-
-
-def _coerce_opt_str(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str) and value:
-        return value
-    return None
-
-
-def _coerce_opt_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _coerce_str_tuple(value: object) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, (list, tuple)):
-        return tuple(str(item) for item in value if item is not None)
-    return ()
 
 
 __all__ = [

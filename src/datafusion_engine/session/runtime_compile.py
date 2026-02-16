@@ -24,6 +24,7 @@ from datafusion_engine.session.runtime_config_policies import (
     DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
     _effective_catalog_autoload_for_profile,
 )
+from utils.coercion import coerce_bool, coerce_int
 from utils.env_utils import env_bool
 
 if TYPE_CHECKING:
@@ -132,13 +133,13 @@ def _parse_compile_resolver_invariant_inputs(
             raise TypeError(message)
         return invariants
     label = _coerce_str(kwargs.get("label"), "label")
-    compile_count = _coerce_int(kwargs.get("compile_count"), "compile_count")
-    max_compiles = _coerce_int(kwargs.get("max_compiles"), "max_compiles")
-    distinct_resolver_count = _coerce_int(
+    compile_count = coerce_int(kwargs.get("compile_count"), label="compile_count")
+    max_compiles = coerce_int(kwargs.get("max_compiles"), label="max_compiles")
+    distinct_resolver_count = coerce_int(
         kwargs.get("distinct_resolver_count"),
-        "distinct_resolver_count",
+        label="distinct_resolver_count",
     )
-    strict = _coerce_bool(kwargs.get("strict"), "strict")
+    strict = coerce_bool(kwargs.get("strict"), default=False, label="strict")
     violations = _coerce_str_sequence(kwargs.get("violations"), "violations")
     return _CompileResolverInvariantInputs(
         label=label,
@@ -153,20 +154,6 @@ def _parse_compile_resolver_invariant_inputs(
 def _coerce_str(value: object, field_name: str) -> str:
     if not isinstance(value, str):
         message = f"Field {field_name!r} must be a string."
-        raise TypeError(message)
-    return value
-
-
-def _coerce_int(value: object, field_name: str) -> int:
-    if not isinstance(value, int):
-        message = f"Field {field_name!r} must be an integer."
-        raise TypeError(message)
-    return value
-
-
-def _coerce_bool(value: object, field_name: str) -> bool:
-    if not isinstance(value, bool):
-        message = f"Field {field_name!r} must be a boolean."
         raise TypeError(message)
     return value
 
@@ -318,8 +305,6 @@ __all__ = [
     "_CompileOptionResolution",
     "_CompileResolverInvariantInputs",
     "_ResolvedCompileHooks",
-    "_coerce_bool",
-    "_coerce_int",
     "_coerce_str",
     "_coerce_str_sequence",
     "_effective_ident_normalization",

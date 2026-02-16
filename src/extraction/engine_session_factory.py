@@ -7,10 +7,10 @@ from dataclasses import replace as dataclass_replace
 
 import msgspec
 
-from datafusion_engine.dataset.registration import dataset_input_plugin, input_plugin_prefixes
+from datafusion_engine.dataset.registration_core import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.dataset.registry import DatasetCatalog, registry_snapshot
 from datafusion_engine.materialize_policy import MaterializationPolicy
-from datafusion_engine.session.runtime import feature_state_snapshot
+from datafusion_engine.session.features import feature_state_snapshot
 from extraction.engine_runtime import build_engine_runtime
 from extraction.engine_session import EngineSession
 from extraction.runtime_profile import (

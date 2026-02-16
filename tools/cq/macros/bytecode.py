@@ -20,6 +20,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
@@ -361,13 +362,15 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
     )
     result = builder.result
 
-    result.summary = {
-        "target": request.target,
-        "files_analyzed": len(files),
-        "code_objects": len(all_surfaces),
-        "unique_globals": len(all_globals),
-        "unique_attrs": len(all_attrs),
-    }
+    result.summary = summary_from_mapping(
+        {
+            "target": request.target,
+            "files_analyzed": len(files),
+            "code_objects": len(all_surfaces),
+            "unique_globals": len(all_globals),
+            "unique_attrs": len(all_attrs),
+        }
+    )
 
     # Compute scoring signals - bytecode uses "bytecode" evidence kind
     unique_files = len({s.file for s in all_surfaces})

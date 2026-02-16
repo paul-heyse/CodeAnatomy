@@ -8,7 +8,8 @@ from pathlib import Path
 from tools.cq.cli_app.commands.ldmd import get as ldmd_get
 from tools.cq.cli_app.commands.ldmd import neighbors as ldmd_neighbors
 from tools.cq.cli_app.context import CliContext, CliTextResult
-from tools.cq.cli_app.types import LdmdSliceMode, OutputFormat
+from tools.cq.cli_app.types import OutputFormat
+from tools.cq.core.types import LdmdSliceMode
 
 
 def _write_ldmd(path: Path) -> None:

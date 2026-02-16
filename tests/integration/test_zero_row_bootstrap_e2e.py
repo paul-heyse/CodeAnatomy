@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from datafusion_engine.bootstrap.zero_row import ZeroRowBootstrapRequest
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import (
     DataSourceConfig,
     ExtractOutputConfig,
     PolicyBundleConfig,

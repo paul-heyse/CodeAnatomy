@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 __all__ = (
     "DeltaCdfOptions",
-    "DeltaDataCheckRequest",
     "DeltaDeleteWhereRequest",
     "DeltaFeatureMutationOptions",
     "DeltaMergeArrowRequest",
@@ -35,7 +34,6 @@ __all__ = (
     "delta_add_constraints",
     "delta_cdf_enabled",
     "delta_commit_metadata",
-    "delta_data_checker",
     "delta_delete_where",
     "delta_drop_constraints",
     "delta_history_snapshot",
@@ -73,62 +71,66 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaWritePolicy": ("storage.deltalake.config", "DeltaWritePolicy"),
     "delta_schema_configuration": ("storage.deltalake.config", "delta_schema_configuration"),
     "delta_write_configuration": ("storage.deltalake.config", "delta_write_configuration"),
-    "DeltaCdfOptions": ("storage.deltalake.delta", "DeltaCdfOptions"),
-    "DeltaDataCheckRequest": ("storage.deltalake.delta", "DeltaDataCheckRequest"),
-    "DeltaDeleteWhereRequest": ("storage.deltalake.delta", "DeltaDeleteWhereRequest"),
-    "DeltaFeatureMutationOptions": ("storage.deltalake.delta", "DeltaFeatureMutationOptions"),
-    "DeltaMergeArrowRequest": ("storage.deltalake.delta", "DeltaMergeArrowRequest"),
-    "DeltaReadRequest": ("storage.deltalake.delta", "DeltaReadRequest"),
-    "DeltaSchemaRequest": ("storage.deltalake.delta", "DeltaSchemaRequest"),
-    "SnapshotKey": ("storage.deltalake.delta", "SnapshotKey"),
-    "DeltaVacuumOptions": ("storage.deltalake.delta", "DeltaVacuumOptions"),
-    "DeltaWriteResult": ("storage.deltalake.delta", "DeltaWriteResult"),
-    "StorageOptions": ("storage.deltalake.delta", "StorageOptions"),
-    "build_commit_properties": ("storage.deltalake.delta", "build_commit_properties"),
-    "canonical_table_uri": ("storage.deltalake.delta", "canonical_table_uri"),
-    "idempotent_commit_properties": ("storage.deltalake.delta", "idempotent_commit_properties"),
-    "cleanup_delta_log": ("storage.deltalake.delta", "cleanup_delta_log"),
-    "coerce_delta_input": ("storage.deltalake.delta", "coerce_delta_input"),
-    "coerce_delta_table": ("storage.deltalake.delta", "coerce_delta_table"),
-    "create_delta_checkpoint": ("storage.deltalake.delta", "create_delta_checkpoint"),
-    "delta_cdf_enabled": ("storage.deltalake.delta", "delta_cdf_enabled"),
-    "delta_commit_metadata": ("storage.deltalake.delta", "delta_commit_metadata"),
-    "delta_data_checker": ("storage.deltalake.delta", "delta_data_checker"),
-    "delta_delete_where": ("storage.deltalake.delta", "delta_delete_where"),
-    "delta_add_constraints": ("storage.deltalake.delta", "delta_add_constraints"),
-    "delta_drop_constraints": ("storage.deltalake.delta", "delta_drop_constraints"),
-    "delta_history_snapshot": ("storage.deltalake.delta", "delta_history_snapshot"),
-    "delta_merge_arrow": ("storage.deltalake.delta", "delta_merge_arrow"),
-    "delta_protocol_snapshot": ("storage.deltalake.delta", "delta_protocol_snapshot"),
-    "delta_table_features": ("storage.deltalake.delta", "delta_table_features"),
-    "delta_table_schema": ("storage.deltalake.delta", "delta_table_schema"),
-    "delta_table_version": ("storage.deltalake.delta", "delta_table_version"),
-    "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
-    "read_delta_cdf_eager": ("storage.deltalake.delta", "read_delta_cdf_eager"),
-    "read_delta_table": ("storage.deltalake.delta", "read_delta_table"),
-    "read_delta_table_eager": ("storage.deltalake.delta", "read_delta_table_eager"),
-    "snapshot_key_for_table": ("storage.deltalake.delta", "snapshot_key_for_table"),
-    "enable_delta_features": ("storage.deltalake.delta", "enable_delta_features"),
+    "DeltaCdfOptions": ("storage.deltalake.delta_read", "DeltaCdfOptions"),
+    "DeltaDeleteWhereRequest": ("storage.deltalake.delta_read", "DeltaDeleteWhereRequest"),
+    "DeltaFeatureMutationOptions": ("storage.deltalake.delta_read", "DeltaFeatureMutationOptions"),
+    "DeltaMergeArrowRequest": ("storage.deltalake.delta_read", "DeltaMergeArrowRequest"),
+    "DeltaReadRequest": ("storage.deltalake.delta_read", "DeltaReadRequest"),
+    "DeltaSchemaRequest": ("storage.deltalake.delta_metadata", "DeltaSchemaRequest"),
+    "SnapshotKey": ("storage.deltalake.delta_metadata", "SnapshotKey"),
+    "DeltaVacuumOptions": ("storage.deltalake.delta_read", "DeltaVacuumOptions"),
+    "DeltaWriteResult": ("storage.deltalake.delta_write", "DeltaWriteResult"),
+    "StorageOptions": ("storage.deltalake.delta_read", "StorageOptions"),
+    "build_commit_properties": ("storage.deltalake.delta_write", "build_commit_properties"),
+    "canonical_table_uri": ("storage.deltalake.delta_metadata", "canonical_table_uri"),
+    "idempotent_commit_properties": (
+        "storage.deltalake.delta_write",
+        "idempotent_commit_properties",
+    ),
+    "cleanup_delta_log": ("storage.deltalake.delta_maintenance", "cleanup_delta_log"),
+    "coerce_delta_input": ("storage.deltalake.delta_read", "coerce_delta_input"),
+    "coerce_delta_table": ("storage.deltalake.delta_read", "coerce_delta_table"),
+    "create_delta_checkpoint": (
+        "storage.deltalake.delta_maintenance",
+        "create_delta_checkpoint",
+    ),
+    "delta_cdf_enabled": ("storage.deltalake.delta_read", "delta_cdf_enabled"),
+    "delta_commit_metadata": ("storage.deltalake.delta_read", "delta_commit_metadata"),
+    "delta_delete_where": ("storage.deltalake.delta_read", "delta_delete_where"),
+    "delta_add_constraints": ("storage.deltalake.delta_read", "delta_add_constraints"),
+    "delta_drop_constraints": ("storage.deltalake.delta_read", "delta_drop_constraints"),
+    "delta_history_snapshot": ("storage.deltalake.delta_read", "delta_history_snapshot"),
+    "delta_merge_arrow": ("storage.deltalake.delta_read", "delta_merge_arrow"),
+    "delta_protocol_snapshot": ("storage.deltalake.delta_read", "delta_protocol_snapshot"),
+    "delta_table_features": ("storage.deltalake.delta_read", "delta_table_features"),
+    "delta_table_schema": ("storage.deltalake.delta_metadata", "delta_table_schema"),
+    "delta_table_version": ("storage.deltalake.delta_read", "delta_table_version"),
+    "read_delta_cdf": ("storage.deltalake.delta_read", "read_delta_cdf"),
+    "read_delta_cdf_eager": ("storage.deltalake.delta_read", "read_delta_cdf_eager"),
+    "read_delta_table": ("storage.deltalake.delta_read", "read_delta_table"),
+    "read_delta_table_eager": ("storage.deltalake.delta_read", "read_delta_table_eager"),
+    "snapshot_key_for_table": ("storage.deltalake.delta_metadata", "snapshot_key_for_table"),
+    "enable_delta_features": ("storage.deltalake.delta_read", "enable_delta_features"),
     "enable_delta_change_data_feed": (
-        "storage.deltalake.delta",
+        "storage.deltalake.delta_read",
         "enable_delta_change_data_feed",
     ),
     "enable_delta_check_constraints": (
-        "storage.deltalake.delta",
+        "storage.deltalake.delta_read",
         "enable_delta_check_constraints",
     ),
-    "enable_delta_column_mapping": ("storage.deltalake.delta", "enable_delta_column_mapping"),
+    "enable_delta_column_mapping": ("storage.deltalake.delta_read", "enable_delta_column_mapping"),
     "enable_delta_deletion_vectors": (
-        "storage.deltalake.delta",
+        "storage.deltalake.delta_read",
         "enable_delta_deletion_vectors",
     ),
     "enable_delta_in_commit_timestamps": (
-        "storage.deltalake.delta",
+        "storage.deltalake.delta_read",
         "enable_delta_in_commit_timestamps",
     ),
-    "enable_delta_row_tracking": ("storage.deltalake.delta", "enable_delta_row_tracking"),
-    "enable_delta_v2_checkpoints": ("storage.deltalake.delta", "enable_delta_v2_checkpoints"),
-    "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
+    "enable_delta_row_tracking": ("storage.deltalake.delta_read", "enable_delta_row_tracking"),
+    "enable_delta_v2_checkpoints": ("storage.deltalake.delta_read", "enable_delta_v2_checkpoints"),
+    "vacuum_delta": ("storage.deltalake.delta_maintenance", "vacuum_delta"),
     "build_delta_file_index_from_add_actions": (
         "storage.deltalake.file_index",
         "build_delta_file_index_from_add_actions",
@@ -147,7 +149,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
 
 if TYPE_CHECKING:
     import storage.deltalake.config as _delta_config
-    import storage.deltalake.delta as _delta_io
+    import storage.deltalake.delta_maintenance as _delta_maintenance
+    import storage.deltalake.delta_metadata as _delta_metadata
+    import storage.deltalake.delta_read as _delta_io
+    import storage.deltalake.delta_write as _delta_write
     import storage.deltalake.file_index as _file_index
     import storage.deltalake.file_pruning as _file_pruning
 
@@ -158,25 +163,23 @@ if TYPE_CHECKING:
     delta_schema_configuration = _delta_config.delta_schema_configuration
     delta_write_configuration = _delta_config.delta_write_configuration
     DeltaCdfOptions = _delta_io.DeltaCdfOptions
-    DeltaDataCheckRequest = _delta_io.DeltaDataCheckRequest
     DeltaDeleteWhereRequest = _delta_io.DeltaDeleteWhereRequest
     DeltaFeatureMutationOptions = _delta_io.DeltaFeatureMutationOptions
     DeltaMergeArrowRequest = _delta_io.DeltaMergeArrowRequest
     DeltaReadRequest = _delta_io.DeltaReadRequest
-    DeltaSchemaRequest = _delta_io.DeltaSchemaRequest
-    SnapshotKey = _delta_io.SnapshotKey
+    DeltaSchemaRequest = _delta_metadata.DeltaSchemaRequest
+    SnapshotKey = _delta_metadata.SnapshotKey
     DeltaVacuumOptions = _delta_io.DeltaVacuumOptions
-    DeltaWriteResult = _delta_io.DeltaWriteResult
+    DeltaWriteResult = _delta_write.DeltaWriteResult
     StorageOptions = _delta_io.StorageOptions
-    build_commit_properties = _delta_io.build_commit_properties
-    canonical_table_uri = _delta_io.canonical_table_uri
-    idempotent_commit_properties = _delta_io.idempotent_commit_properties
-    cleanup_delta_log = _delta_io.cleanup_delta_log
+    build_commit_properties = _delta_write.build_commit_properties
+    canonical_table_uri = _delta_metadata.canonical_table_uri
+    idempotent_commit_properties = _delta_write.idempotent_commit_properties
+    cleanup_delta_log = _delta_maintenance.cleanup_delta_log
     coerce_delta_input = _delta_io.coerce_delta_input
     coerce_delta_table = _delta_io.coerce_delta_table
-    create_delta_checkpoint = _delta_io.create_delta_checkpoint
+    create_delta_checkpoint = _delta_maintenance.create_delta_checkpoint
     delta_commit_metadata = _delta_io.delta_commit_metadata
-    delta_data_checker = _delta_io.delta_data_checker
     delta_delete_where = _delta_io.delta_delete_where
     delta_add_constraints = _delta_io.delta_add_constraints
     delta_drop_constraints = _delta_io.delta_drop_constraints
@@ -185,7 +188,7 @@ if TYPE_CHECKING:
     delta_protocol_snapshot = _delta_io.delta_protocol_snapshot
     delta_cdf_enabled = _delta_io.delta_cdf_enabled
     delta_table_features = _delta_io.delta_table_features
-    delta_table_schema = _delta_io.delta_table_schema
+    delta_table_schema = _delta_metadata.delta_table_schema
     delta_table_version = _delta_io.delta_table_version
     enable_delta_features = _delta_io.enable_delta_features
     enable_delta_change_data_feed = _delta_io.enable_delta_change_data_feed
@@ -199,8 +202,8 @@ if TYPE_CHECKING:
     read_delta_cdf_eager = _delta_io.read_delta_cdf_eager
     read_delta_table = _delta_io.read_delta_table
     read_delta_table_eager = _delta_io.read_delta_table_eager
-    snapshot_key_for_table = _delta_io.snapshot_key_for_table
-    vacuum_delta = _delta_io.vacuum_delta
+    snapshot_key_for_table = _delta_metadata.snapshot_key_for_table
+    vacuum_delta = _delta_maintenance.vacuum_delta
     build_delta_file_index_from_add_actions = _file_index.build_delta_file_index_from_add_actions
     PartitionFilter = _file_pruning.PartitionFilter
     StatsFilter = _file_pruning.StatsFilter

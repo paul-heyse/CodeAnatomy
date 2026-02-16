@@ -20,6 +20,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.macros.calls import collect_call_sites, group_candidates, rg_find_candidates
 from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder
@@ -333,14 +334,16 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
     )
     result = builder.result
 
-    result.summary = {
-        "symbol": request.symbol,
-        "new_signature": request.to,
-        "call_sites": len(all_sites),
-        "would_break": len(buckets["would_break"]),
-        "ambiguous": len(buckets["ambiguous"]),
-        "ok": len(buckets["ok"]),
-    }
+    result.summary = summary_from_mapping(
+        {
+            "symbol": request.symbol,
+            "new_signature": request.to,
+            "call_sites": len(all_sites),
+            "would_break": len(buckets["would_break"]),
+            "ambiguous": len(buckets["ambiguous"]),
+            "ok": len(buckets["ok"]),
+        }
+    )
 
     # Compute scoring signals
     unique_files = len(

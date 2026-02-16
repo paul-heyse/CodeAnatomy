@@ -28,17 +28,17 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from extract.extractors.ast_extract import (
+    from extract.extractors.ast import (
         AstExtractOptions,
         extract_ast,
         extract_ast_tables,
     )
-    from extract.extractors.bytecode_extract import (
+    from extract.extractors.bytecode import (
         BytecodeExtractOptions,
         extract_bytecode,
         extract_bytecode_table,
     )
-    from extract.extractors.cst_extract import (
+    from extract.extractors.cst import (
         CstExtractOptions,
         extract_cst,
         extract_cst_tables,
@@ -77,7 +77,7 @@ if TYPE_CHECKING:
         extract_symtable,
         extract_symtables_table,
     )
-    from extract.extractors.tree_sitter.extract import (
+    from extract.extractors.tree_sitter import (
         TreeSitterExtractOptions,
         extract_ts,
         extract_ts_tables,
@@ -111,9 +111,9 @@ if TYPE_CHECKING:
 # Map of export names to (module_path, attribute_name) for lazy loading
 _EXPORTS: dict[str, tuple[str, str]] = {
     # Extractor options and functions
-    "AstExtractOptions": ("extract.extractors.ast_extract", "AstExtractOptions"),
-    "BytecodeExtractOptions": ("extract.extractors.bytecode_extract", "BytecodeExtractOptions"),
-    "CstExtractOptions": ("extract.extractors.cst_extract", "CstExtractOptions"),
+    "AstExtractOptions": ("extract.extractors.ast", "AstExtractOptions"),
+    "BytecodeExtractOptions": ("extract.extractors.bytecode", "BytecodeExtractOptions"),
+    "CstExtractOptions": ("extract.extractors.cst", "CstExtractOptions"),
     "ExtractResult": ("extract.infrastructure.result_types", "ExtractResult"),
     "PythonImportsExtractOptions": (
         "extract.extractors.imports_extract",
@@ -127,17 +127,17 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ScipIndexPaths": ("extract.extractors.scip.setup", "ScipIndexPaths"),
     "SymtableExtractOptions": ("extract.extractors.symtable_extract", "SymtableExtractOptions"),
     "TreeSitterExtractOptions": (
-        "extract.extractors.tree_sitter.extract",
+        "extract.extractors.tree_sitter",
         "TreeSitterExtractOptions",
     ),
     "build_scip_index_options": ("extract.extractors.scip.setup", "build_scip_index_options"),
     "ensure_scip_build_dir": ("extract.extractors.scip.setup", "ensure_scip_build_dir"),
-    "extract_ast": ("extract.extractors.ast_extract", "extract_ast"),
-    "extract_ast_tables": ("extract.extractors.ast_extract", "extract_ast_tables"),
-    "extract_bytecode": ("extract.extractors.bytecode_extract", "extract_bytecode"),
-    "extract_bytecode_table": ("extract.extractors.bytecode_extract", "extract_bytecode_table"),
-    "extract_cst": ("extract.extractors.cst_extract", "extract_cst"),
-    "extract_cst_tables": ("extract.extractors.cst_extract", "extract_cst_tables"),
+    "extract_ast": ("extract.extractors.ast", "extract_ast"),
+    "extract_ast_tables": ("extract.extractors.ast", "extract_ast_tables"),
+    "extract_bytecode": ("extract.extractors.bytecode", "extract_bytecode"),
+    "extract_bytecode_table": ("extract.extractors.bytecode", "extract_bytecode_table"),
+    "extract_cst": ("extract.extractors.cst", "extract_cst"),
+    "extract_cst_tables": ("extract.extractors.cst", "extract_cst_tables"),
     "file_line_index_query": ("extract.extractors.file_index.line_index", "file_line_index_query"),
     "extract_python_external": ("extract.extractors.external_scope", "extract_python_external"),
     "extract_python_external_tables": (
@@ -152,8 +152,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "extract_scip_tables": ("extract.extractors.scip.extract", "extract_scip_tables"),
     "extract_symtable": ("extract.extractors.symtable_extract", "extract_symtable"),
     "extract_symtables_table": ("extract.extractors.symtable_extract", "extract_symtables_table"),
-    "extract_ts": ("extract.extractors.tree_sitter.extract", "extract_ts"),
-    "extract_ts_tables": ("extract.extractors.tree_sitter.extract", "extract_ts_tables"),
+    "extract_ts": ("extract.extractors.tree_sitter", "extract_ts"),
+    "extract_ts_tables": ("extract.extractors.tree_sitter", "extract_ts_tables"),
     "scan_file_line_index": ("extract.extractors.file_index.line_index", "scan_file_line_index"),
     "scan_file_line_index_plan": (
         "extract.extractors.file_index.line_index",

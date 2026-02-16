@@ -30,9 +30,8 @@ import pyarrow as pa
 from datafusion import Expr, col, lit
 from datafusion import functions as f
 
-from datafusion_engine.schema.introspection import table_names_snapshot
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
+from datafusion_engine.schema.introspection_core import table_names_snapshot
+from obs.otel import SCOPE_SEMANTICS, stage_span
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

@@ -29,7 +29,12 @@ from datafusion_engine.arrow.metadata import (
 from datafusion_engine.arrow.metadata_codec import encode_metadata_list
 from datafusion_engine.expr.spec import ExprSpec
 from datafusion_engine.schema.policy import CastErrorPolicy, SchemaTransform
-from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_from_pyarrow
+from schema_spec.arrow_types import (
+    ArrowTypeBase,
+    ArrowTypeSpec,
+    arrow_type_from_pyarrow,
+    decode_metadata_map,
+)
 from schema_spec.field_spec import FieldSpec
 from serde_msgspec import StructBaseStrict
 
@@ -64,22 +69,6 @@ def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
     if spec.key_fields:
         meta[KEY_FIELDS_META] = encode_metadata_list(spec.key_fields)
     return meta
-
-
-def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
-    """Decode Arrow metadata into a string-keyed mapping.
-
-    Returns:
-    -------
-    dict[str, str]
-        Decoded metadata mapping with string keys and values.
-    """
-    if not metadata:
-        return {}
-    return {
-        key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
-        for key, value in metadata.items()
-    }
 
 
 def _encoding_hint_from_field(
@@ -180,7 +169,7 @@ class TableSchemaSpec(StructBaseStrict, frozen=True):
 
         fields: list[FieldSpec] = []
         for schema_field in schema:
-            meta = _decode_metadata(schema_field.metadata)
+            meta = decode_metadata_map(schema_field.metadata)
             encoding = _encoding_hint_from_field(meta, dtype=schema_field.type)
             fields.append(
                 FieldSpec(

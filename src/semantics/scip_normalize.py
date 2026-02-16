@@ -10,11 +10,10 @@ from datafusion import col
 from datafusion import functions as f
 
 from datafusion_engine.arrow.interop import empty_table_for_schema
-from datafusion_engine.schema.introspection import table_names_snapshot
+from datafusion_engine.schema.introspection_core import table_names_snapshot
 from datafusion_engine.udf.expr import udf_expr
-from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
+from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
+from obs.otel import SCOPE_SEMANTICS, stage_span
 from semantics.normalization_helpers import LineIndexJoinOptions, byte_offset_expr, line_index_join
 
 if TYPE_CHECKING:

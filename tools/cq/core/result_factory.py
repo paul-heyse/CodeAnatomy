@@ -43,7 +43,7 @@ def build_error_result(
     root = Path(root) if isinstance(root, str) else root
     run_ctx = RunContext.from_parts(root=root, argv=argv, tc=tc, started_ms=started_ms)
     result = mk_result(run_ctx.to_runmeta(macro))
-    result.summary["error"] = str(error)
+    result.summary.error = str(error)
     return result
 
 

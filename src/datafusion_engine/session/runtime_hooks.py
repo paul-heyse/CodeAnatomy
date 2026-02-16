@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import replace
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, cast
 
 from datafusion import RuntimeEnvBuilder
 
@@ -20,6 +20,7 @@ from datafusion_engine.compile.options import (
     DataFusionSubstraitFallbackEvent,
 )
 from datafusion_engine.lineage.diagnostics import DiagnosticsSink, ensure_recorder_sink
+from datafusion_engine.session._session_identity import RUNTIME_SESSION_ID
 from datafusion_engine.session.hooks import chain_optional_hooks
 from serde_artifact_specs import (
     DATAFUSION_ARROW_INGEST_SPEC,
@@ -27,7 +28,6 @@ from serde_artifact_specs import (
     DATAFUSION_SEMANTIC_DIFF_SPEC,
     DATAFUSION_SQL_INGEST_SPEC,
 )
-from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
@@ -46,8 +46,6 @@ SemanticDiffHook = Callable[[Mapping[str, object]], None]
 SqlIngestHook = Callable[[Mapping[str, object]], None]
 CacheEventHook = Callable[[DataFusionCacheEvent], None]
 SubstraitFallbackHook = Callable[[DataFusionSubstraitFallbackEvent], None]
-
-_RUNTIME_SESSION_ID: Final[str] = uuid7_str()
 
 
 def _apply_builder(
@@ -159,7 +157,7 @@ def diagnostics_substrait_fallback_hook(
     """
 
     def _hook(event: DataFusionSubstraitFallbackEvent) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
+        recorder_sink = ensure_recorder_sink(sink, session_id=RUNTIME_SESSION_ID)
         recorder_sink.record_events(
             "substrait_fallbacks_v1",
             [
@@ -191,7 +189,7 @@ def diagnostics_explain_hook(
     """
 
     def _hook(sql: str, rows: ExplainRows) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
+        recorder_sink = ensure_recorder_sink(sink, session_id=RUNTIME_SESSION_ID)
         recorder_sink.record_events(
             "datafusion_explains_v1",
             [
@@ -219,7 +217,7 @@ def diagnostics_plan_artifacts_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
+        recorder_sink = ensure_recorder_sink(sink, session_id=RUNTIME_SESSION_ID)
         normalized = dict(payload)
         if "plan_identity_hash" not in normalized:
             fingerprint_value = normalized.get("plan_fingerprint")
@@ -247,7 +245,7 @@ def diagnostics_semantic_diff_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
+        recorder_sink = ensure_recorder_sink(sink, session_id=RUNTIME_SESSION_ID)
         recorder_sink.record_artifact(
             DATAFUSION_SEMANTIC_DIFF_SPEC,
             payload,
@@ -268,7 +266,7 @@ def diagnostics_sql_ingest_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
+        recorder_sink = ensure_recorder_sink(sink, session_id=RUNTIME_SESSION_ID)
         recorder_sink.record_artifact(
             DATAFUSION_SQL_INGEST_SPEC,
             payload,
@@ -289,7 +287,7 @@ def diagnostics_arrow_ingest_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
+        recorder_sink = ensure_recorder_sink(sink, session_id=RUNTIME_SESSION_ID)
         recorder_sink.record_artifact(
             DATAFUSION_ARROW_INGEST_SPEC,
             payload,

@@ -13,6 +13,7 @@ from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
+    from tools.cq.core.summary_contract import CqSummary
 
 
 def render_ldmd_document(
@@ -185,7 +186,7 @@ _CQ_PREVIEW_LIMIT = 5
 
 def _emit_insight_card(lines: list[str], result: CqResult) -> None:
     """Emit insight card as first LDMD section if present."""
-    raw = result.summary.get("front_door_insight") if isinstance(result.summary, dict) else None
+    raw = result.summary.front_door_insight
     if raw is None:
         return
 
@@ -281,7 +282,7 @@ def _emit_summary(lines: list[str], result: CqResult) -> None:
         lines.append("")
 
 
-def _extract_insight_artifact_refs(summary: dict[str, object]) -> dict[str, str]:
+def _extract_insight_artifact_refs(summary: CqSummary) -> dict[str, str]:
     """Extract artifact refs from front_door_insight summary payload.
 
     Returns:
@@ -289,7 +290,8 @@ def _extract_insight_artifact_refs(summary: dict[str, object]) -> dict[str, str]
     """
     from tools.cq.core.front_door_render import coerce_front_door_insight
 
-    insight = coerce_front_door_insight(summary.get("front_door_insight"))
+    raw_insight = summary.front_door_insight
+    insight = coerce_front_door_insight(raw_insight)
     if insight is None:
         return {}
     refs: dict[str, str] = {}

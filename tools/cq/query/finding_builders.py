@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
+from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.core.schema import Anchor, Finding
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.query.shared_utils import extract_def_name
@@ -297,21 +298,12 @@ def find_enclosing_class(
     SgRecord | None
         Enclosing class record when found
     """
-    class_kinds = {
-        "class",
-        "class_bases",
-        "class_typeparams",
-        "class_typeparams_bases",
-        "struct",
-        "enum",
-        "trait",
-    }
     file_index = index.by_file.get(record.file)
     if file_index is None:
         return None
     candidates: list[SgRecord] = []
     for start, end, candidate in file_index.intervals:
-        if candidate.kind not in class_kinds:
+        if candidate.kind not in ENTITY_KINDS.class_kinds:
             continue
         if record_key(candidate) == record_key(record):
             continue

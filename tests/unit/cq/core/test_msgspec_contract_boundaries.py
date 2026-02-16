@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import msgspec
 import pytest
-from tools.cq.core.cache.contracts import QueryEntityScanCacheV1, SgRecordCacheV1
 from tools.cq.core.cache.policy import CqCachePolicyV1
 from tools.cq.core.runtime.execution_policy import ParallelismPolicy
 from tools.cq.core.structs import CqCacheStruct, CqOutputStruct, CqSettingsStruct
 from tools.cq.search._shared.search_contracts import CrossLanguageDiagnostic, PythonSemanticOverview
+from tools.cq.search.cache.contracts import QueryEntityScanCacheV1, SgRecordCacheV1
 
 
 def test_struct_bases_are_msgspec_contract_types() -> None:

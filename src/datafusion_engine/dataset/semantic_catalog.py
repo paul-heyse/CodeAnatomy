@@ -24,7 +24,7 @@ def _register_semantic_outputs(
     catalog: DatasetCatalog,
     semantic_output_root: str,
 ) -> None:
-    from schema_spec.contracts import (
+    from schema_spec.dataset_spec import (
         DeltaPolicyBundle,
         dataset_spec_delta_cdf_policy,
         dataset_spec_delta_constraints,
@@ -155,7 +155,7 @@ def semantic_dataset_location(
     Raises:
         KeyError: If the operation cannot be completed.
     """
-    from schema_spec.contracts import (
+    from schema_spec.dataset_spec import (
         DeltaPolicyBundle,
         dataset_spec_delta_cdf_policy,
         dataset_spec_delta_constraints,

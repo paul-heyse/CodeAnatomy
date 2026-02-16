@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from relspec.inference_confidence import (
     InferenceConfidence,
     high_confidence,
@@ -63,9 +65,9 @@ class TestInferenceConfidence:
     def test_confidence_boundary_values() -> None:
         """Construct at boundary values of 0 and 1."""
         low = InferenceConfidence(confidence_score=0.0)
-        assert low.confidence_score == 0.0
+        assert low.confidence_score == pytest.approx(0.0)
         high = InferenceConfidence(confidence_score=1.0)
-        assert high.confidence_score == 1.0
+        assert high.confidence_score == pytest.approx(1.0)
 
 
 class TestHighConfidence:
@@ -116,7 +118,7 @@ class TestHighConfidence:
             (),
             score=1.5,
         )
-        assert conf.confidence_score == 1.0
+        assert conf.confidence_score == pytest.approx(1.0)
 
 
 class TestLowConfidence:
@@ -171,4 +173,4 @@ class TestLowConfidence:
             (),
             score=-0.5,
         )
-        assert conf.confidence_score == 0.0
+        assert conf.confidence_score == pytest.approx(0.0)

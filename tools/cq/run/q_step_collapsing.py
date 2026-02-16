@@ -58,17 +58,17 @@ def collapse_parent_q_results(
 
 
 def _result_language(result: CqResult) -> QueryLanguage | None:
-    value = result.summary.get("lang")
+    value = result.summary.lang
     if value in {"python", "rust"}:
         return cast("QueryLanguage", value)
     return None
 
 
 def _result_query_mode(result: CqResult) -> str | None:
-    mode = result.summary.get("mode")
+    mode = result.summary.mode
     if isinstance(mode, str) and mode:
         return mode
-    plan_summary = result.summary.get("plan")
+    plan_summary = result.summary.plan
     if isinstance(plan_summary, dict):
         is_pattern_query = plan_summary.get("is_pattern_query")
         if isinstance(is_pattern_query, bool):
@@ -79,17 +79,17 @@ def _result_query_mode(result: CqResult) -> str | None:
 def _result_match_count(result: CqResult | None) -> int:
     if result is None:
         return 0
-    total = result.summary.get("total_matches")
+    total = result.summary.total_matches
     if isinstance(total, int):
         return total
-    matches = result.summary.get("matches")
+    matches = result.summary.matches
     if isinstance(matches, int):
         return matches
     return len(result.key_findings)
 
 
 def _result_lang_scope(result: CqResult) -> QueryLanguageScope | None:
-    value = result.summary.get("lang_scope")
+    value = result.summary.lang_scope
     if value in {"auto", "python", "rust"}:
         return cast("QueryLanguageScope", value)
     return None
@@ -138,22 +138,24 @@ def _group_results_by_step(
 
 
 def _normalize_single_group_result(result: CqResult) -> CqResult:
-    query_text = result.summary.get("query_text")
-    if isinstance(query_text, str) and query_text:
-        result.summary.setdefault("query", query_text)
+    query_text = result.summary.query_text
+    if isinstance(query_text, str) and query_text and result.summary.query is None:
+        result.summary.query = query_text
     mode = _result_query_mode(result)
-    if mode is not None:
-        result.summary.setdefault("mode", mode)
+    if mode is not None and result.summary.mode is None:
+        result.summary.mode = mode
     lang_scope = _result_lang_scope(result)
     if lang_scope is None:
         lang = _result_language(result)
         if lang is not None:
             lang_scope = lang
     if lang_scope is not None:
-        result.summary.setdefault("lang_scope", lang_scope)
-        result.summary.setdefault("language_order", list(expand_language_scope(lang_scope)))
-    result.summary.pop("lang", None)
-    result.summary.pop("query_text", None)
+        if result.summary.lang_scope is None:
+            result.summary.lang_scope = lang_scope
+        if not result.summary.language_order:
+            result.summary.language_order = list(expand_language_scope(lang_scope))
+    result.summary.lang = None
+    result.summary.query_text = None
     return result
 
 
@@ -169,7 +171,7 @@ def _collect_collapse_group_metadata(
         if lang is not None and lang not in lang_results:
             lang_results[lang] = result
         if not query_text:
-            candidate = result.summary.get("query_text")
+            candidate = result.summary.query_text
             if isinstance(candidate, str):
                 query_text = candidate
         if mode is None:

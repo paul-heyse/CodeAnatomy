@@ -162,24 +162,6 @@ class SchemaKind(StrEnum):
         return self.value
 
 
-class LdmdSliceMode(StrEnum):
-    """LDMD extraction mode token."""
-
-    full = "full"
-    preview = "preview"
-    tldr = "tldr"
-
-    def __str__(self) -> str:
-        """Return the CLI token.
-
-        Returns:
-        -------
-        str
-            String value used by the CLI.
-        """
-        return self.value
-
-
 def _iter_token_values(value: object) -> Iterable[str]:
     items = value if isinstance(value, (list, tuple)) else [value]
     for item in items:

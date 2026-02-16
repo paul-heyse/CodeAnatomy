@@ -13,7 +13,7 @@ from dataclasses import FrozenInstanceError, dataclass
 
 import pytest
 
-from datafusion_engine.session.runtime import (
+from datafusion_engine.session.runtime_profile_config import (
     DataSourceConfig,
     FeatureGatesConfig,
     SemanticOutputConfig,
@@ -49,8 +49,8 @@ def _semantic_runtime_config_default() -> object:
 
 
 def _semantic_runtime_config_custom() -> object:
-    from datafusion_engine.session.runtime import (
-        DataFusionRuntimeProfile,
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_profile_config import (
         DataSourceConfig,
         SemanticOutputConfig,
     )

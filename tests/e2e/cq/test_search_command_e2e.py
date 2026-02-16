@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 import pytest
 from tools.cq.core.schema import CqResult
+from tools.cq.core.summary_contract import SemanticTelemetryV1
 
 from tests.e2e.cq._support.goldens import assert_json_snapshot_data, load_golden_spec
 from tests.e2e.cq._support.projections import result_snapshot_projection
@@ -86,8 +87,11 @@ def test_search_rust_workspace_golden(
     assert isinstance(target, dict)
     assert target.get("kind") in _ALLOWED_INSIGHT_TARGET_KINDS
     rust_semantic_telemetry = result.summary.get("rust_semantic_telemetry")
-    assert isinstance(rust_semantic_telemetry, dict)
-    assert {"attempted", "applied", "failed", "timed_out"}.issubset(rust_semantic_telemetry.keys())
+    assert isinstance(rust_semantic_telemetry, SemanticTelemetryV1)
+    assert rust_semantic_telemetry.attempted >= 0
+    assert rust_semantic_telemetry.applied >= 0
+    assert rust_semantic_telemetry.failed >= 0
+    assert rust_semantic_telemetry.timed_out >= 0
     neighborhood = insight.get("neighborhood")
     assert isinstance(neighborhood, dict)
     for key in ("callers", "callees", "references", "hierarchy_or_scope"):
@@ -172,7 +176,7 @@ def test_search_mixed_monorepo_rust_nested_workspace_golden(
     assert isinstance(target, dict)
     assert target.get("kind") in _ALLOWED_INSIGHT_TARGET_KINDS
     rust_semantic_telemetry = result.summary.get("rust_semantic_telemetry")
-    assert isinstance(rust_semantic_telemetry, dict)
+    assert isinstance(rust_semantic_telemetry, SemanticTelemetryV1)
     assert_json_snapshot_data(
         "search_mixed_monorepo_rust_compile_target.json",
         result_snapshot_projection(result),
@@ -209,7 +213,7 @@ def test_search_mixed_monorepo_python_nested_workspace_golden(
     assert isinstance(target, dict)
     assert target.get("kind") in _ALLOWED_INSIGHT_TARGET_KINDS
     python_semantic_telemetry = result.summary.get("python_semantic_telemetry")
-    assert isinstance(python_semantic_telemetry, dict)
+    assert isinstance(python_semantic_telemetry, SemanticTelemetryV1)
     assert_json_snapshot_data(
         "search_mixed_monorepo_python_dispatch_wrapper.json",
         result_snapshot_projection(result),

@@ -12,7 +12,7 @@ from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import DeterminismTier
 from datafusion_engine.arrow.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.lineage.diagnostics import recorder_for_profile
 from datafusion_engine.materialize_policy import MaterializationPolicy
 from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
@@ -24,10 +24,8 @@ from datafusion_engine.plan.result_types import (
     execute_plan_artifact as execute_plan_artifact_helper,
 )
 from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
-    record_schema_snapshots_for_profile,
-)
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_schema_registry import record_schema_snapshots_for_profile
 from datafusion_engine.session.streaming import StreamingExecutionResult
 from datafusion_engine.tables.param import resolve_param_bindings, scalar_param_signature
 from extraction.diagnostics import EngineEventRecorder, ExtractQualityEvent, ExtractWriteEvent
@@ -39,7 +37,7 @@ from utils.value_coercion import coerce_to_recordbatch_reader
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.scheduling import ScanUnit
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.session.runtime_session import SessionRuntime
     from datafusion_engine.views.artifacts import CachePolicy as SemanticCachePolicy
     from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver

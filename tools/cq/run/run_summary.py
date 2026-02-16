@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from tools.cq.core.schema import CqResult
+from tools.cq.core.summary_contract import SemanticTelemetryV1, build_semantic_telemetry
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
@@ -31,37 +32,41 @@ def populate_run_summary_metadata(
     total_steps : int
         Total number of steps in the plan.
     """
-    if not (
-        isinstance(merged.summary.get("query"), str) and isinstance(merged.summary.get("mode"), str)
-    ):
+    if not (isinstance(merged.summary.query, str) and isinstance(merged.summary.mode, str)):
         mode, query = _derive_run_summary_metadata(executed_results, total_steps=total_steps)
-        merged.summary.setdefault("mode", mode)
-        merged.summary.setdefault("query", query)
+        if merged.summary.mode is None:
+            merged.summary.mode = mode
+        if merged.summary.query is None:
+            merged.summary.query = query
     lang_scope, language_order = _derive_run_scope_metadata(executed_results)
-    merged.summary.setdefault("lang_scope", lang_scope)
-    merged.summary.setdefault("language_order", list(language_order))
-    merged.summary.setdefault("python_semantic_overview", {})
-    step_summaries = merged.summary.get("step_summaries")
-    merged.summary["python_semantic_telemetry"] = _aggregate_run_semantic_telemetry(
+    if merged.summary.lang_scope is None:
+        merged.summary.lang_scope = lang_scope
+    if not merged.summary.language_order:
+        merged.summary.language_order = list(language_order)
+    if not merged.summary.python_semantic_overview:
+        merged.summary.python_semantic_overview = {}
+    step_summaries = merged.summary.step_summaries
+    merged.summary.python_semantic_telemetry = _aggregate_run_semantic_telemetry(
         step_summaries,
         telemetry_key="python_semantic_telemetry",
     )
-    merged.summary["rust_semantic_telemetry"] = _aggregate_run_semantic_telemetry(
+    merged.summary.rust_semantic_telemetry = _aggregate_run_semantic_telemetry(
         step_summaries,
         telemetry_key="rust_semantic_telemetry",
     )
-    merged.summary["semantic_planes"] = _select_run_semantic_planes(
+    merged.summary.semantic_planes = _select_run_semantic_planes(
         step_summaries,
-        step_order=merged.summary.get("steps"),
+        step_order=merged.summary.steps,
     )
-    merged.summary.setdefault("python_semantic_diagnostics", [])
+    if not merged.summary.python_semantic_diagnostics:
+        merged.summary.python_semantic_diagnostics = []
 
 
 def _aggregate_run_semantic_telemetry(
     step_summaries: object,
     *,
     telemetry_key: str,
-) -> dict[str, int]:
+) -> SemanticTelemetryV1:
     totals = {
         "attempted": 0,
         "applied": 0,
@@ -70,18 +75,25 @@ def _aggregate_run_semantic_telemetry(
         "timed_out": 0,
     }
     if not isinstance(step_summaries, dict):
-        return totals
+        return build_semantic_telemetry(**totals)
     for step_summary in step_summaries.values():
         if not isinstance(step_summary, dict):
             continue
         raw = step_summary.get(telemetry_key)
+        if isinstance(raw, SemanticTelemetryV1):
+            totals["attempted"] += raw.attempted
+            totals["applied"] += raw.applied
+            totals["failed"] += raw.failed
+            totals["skipped"] += raw.skipped
+            totals["timed_out"] += raw.timed_out
+            continue
         if not isinstance(raw, dict):
             continue
         for key in totals:
             value = raw.get(key)
             if isinstance(value, int):
                 totals[key] += value
-    return totals
+    return build_semantic_telemetry(**totals)
 
 
 def _semantic_plane_signal_score(payload: dict[str, object]) -> int:
@@ -135,11 +147,9 @@ def _derive_run_summary_metadata(
         return "run", "multi-step plan (0 steps)"
 
     summaries = [result.summary for _, result in executed_results]
-    modes = [
-        value for summary in summaries if isinstance((value := summary.get("mode")), str) and value
-    ]
+    modes = [value for summary in summaries if isinstance((value := summary.mode), str) and value]
     queries = [
-        value for summary in summaries if isinstance((value := summary.get("query")), str) and value
+        value for summary in summaries if isinstance((value := summary.query), str) and value
     ]
     unique_modes = list(dict.fromkeys(modes))
     unique_queries = list(dict.fromkeys(queries))
@@ -184,10 +194,10 @@ def _derive_run_scope_metadata(
     language_orders: list[tuple[QueryLanguage, ...]] = []
     for _, result in executed_results:
         summary = result.summary
-        raw_scope = summary.get("lang_scope")
+        raw_scope = summary.lang_scope
         if raw_scope in {"auto", "python", "rust"}:
             scopes.append(cast("QueryLanguageScope", raw_scope))
-        raw_order = summary.get("language_order")
+        raw_order = summary.language_order
         if isinstance(raw_order, list):
             normalized: tuple[QueryLanguage, ...] = tuple(
                 cast("QueryLanguage", item) for item in raw_order if item in {"python", "rust"}

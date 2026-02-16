@@ -6,6 +6,14 @@ import os
 
 import msgspec
 
+from tools.cq.core.cache.defaults import (
+    DEFAULT_CACHE_CULL_LIMIT,
+    DEFAULT_CACHE_EVICTION_POLICY,
+    DEFAULT_CACHE_SHARDS,
+    DEFAULT_CACHE_SIZE_LIMIT_BYTES,
+    DEFAULT_CACHE_TIMEOUT_SECONDS,
+    DEFAULT_CACHE_TTL_SECONDS,
+)
 from tools.cq.core.contracts_constraints import NonNegativeInt, PositiveFloat, PositiveInt
 from tools.cq.core.runtime.env_namespace import (
     NamespacePatternV1,
@@ -17,15 +25,11 @@ from tools.cq.core.runtime.env_namespace import (
 from tools.cq.core.structs import CqSettingsStruct
 
 _DEFAULT_SEMANTIC_TIMEOUT_MS = 2_000
-_DEFAULT_CACHE_TTL_SECONDS = 900
 _DEFAULT_IO_WORKERS = 8
 _DEFAULT_SEMANTIC_WORKERS = 4
 _DEFAULT_QUERY_PARTITION_WORKERS = 2
 _DEFAULT_CALLS_FILE_WORKERS = 4
 _DEFAULT_RUN_STEP_WORKERS = 4
-_DEFAULT_CACHE_SIZE_LIMIT_BYTES = 2_147_483_648
-_DEFAULT_CACHE_CULL_LIMIT = 16
-_DEFAULT_CACHE_EVICTION_POLICY = "least-recently-stored"
 _ENV_PREFIX = "CQ_RUNTIME_"
 
 
@@ -55,16 +59,16 @@ class CacheRuntimePolicy(CqSettingsStruct, frozen=True):
     """Cache policy for CQ runtime adapters."""
 
     enabled: bool = True
-    ttl_seconds: PositiveInt = _DEFAULT_CACHE_TTL_SECONDS
-    shards: PositiveInt = 8
-    timeout_seconds: PositiveFloat = 0.05
+    ttl_seconds: PositiveInt = DEFAULT_CACHE_TTL_SECONDS
+    shards: PositiveInt = DEFAULT_CACHE_SHARDS
+    timeout_seconds: PositiveFloat = DEFAULT_CACHE_TIMEOUT_SECONDS
     evict_run_tag_on_exit: bool = False
     namespace_ttl_seconds: dict[str, int] = msgspec.field(default_factory=dict)
     namespace_enabled: dict[str, bool] = msgspec.field(default_factory=dict)
     namespace_ephemeral: dict[str, bool] = msgspec.field(default_factory=dict)
-    size_limit_bytes: PositiveInt = _DEFAULT_CACHE_SIZE_LIMIT_BYTES
-    cull_limit: NonNegativeInt = _DEFAULT_CACHE_CULL_LIMIT
-    eviction_policy: str = _DEFAULT_CACHE_EVICTION_POLICY
+    size_limit_bytes: PositiveInt = DEFAULT_CACHE_SIZE_LIMIT_BYTES
+    cull_limit: NonNegativeInt = DEFAULT_CACHE_CULL_LIMIT
+    eviction_policy: str = DEFAULT_CACHE_EVICTION_POLICY
     statistics_enabled: bool = False
 
 
@@ -202,7 +206,7 @@ def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
             enabled=env_bool(_runtime_env("CACHE_ENABLED"), default=True),
             ttl_seconds=env_int(
                 _runtime_env("CACHE_TTL_SECONDS"),
-                default=_DEFAULT_CACHE_TTL_SECONDS,
+                default=DEFAULT_CACHE_TTL_SECONDS,
                 minimum=1,
             ),
             shards=env_int(_runtime_env("CACHE_SHARDS"), default=8, minimum=1),
@@ -216,16 +220,16 @@ def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
             namespace_ephemeral=_env_namespace_ephemeral(),
             size_limit_bytes=env_int(
                 _runtime_env("CACHE_SIZE_LIMIT_BYTES"),
-                default=_DEFAULT_CACHE_SIZE_LIMIT_BYTES,
+                default=DEFAULT_CACHE_SIZE_LIMIT_BYTES,
                 minimum=1,
             ),
             cull_limit=env_int(
                 _runtime_env("CACHE_CULL_LIMIT"),
-                default=_DEFAULT_CACHE_CULL_LIMIT,
+                default=DEFAULT_CACHE_CULL_LIMIT,
                 minimum=0,
             ),
             eviction_policy=(
-                _runtime_env("CACHE_EVICTION_POLICY") or _DEFAULT_CACHE_EVICTION_POLICY
+                _runtime_env("CACHE_EVICTION_POLICY") or DEFAULT_CACHE_EVICTION_POLICY
             ),
             statistics_enabled=(
                 env_bool(_runtime_env("CACHE_STATISTICS_ENABLED"), default=False)

@@ -18,7 +18,7 @@ from datafusion_engine.dataset.resolution import (
     resolve_dataset_provider,
 )
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
-from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from storage.deltalake import DeltaCdfOptions
 from tests.harness.profiles import conformance_profile
 from tests.test_helpers.arrow_seed import register_arrow_table

@@ -11,6 +11,7 @@ from tools.cq.core.contracts import (
     summary_contract_to_mapping,
 )
 from tools.cq.core.contracts_constraints import enforce_mapping_constraints
+from tools.cq.core.summary_contract import CqSummary
 from tools.cq.core.summary_contracts import build_summary_envelope, summary_envelope_to_mapping
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope, expand_language_scope
 from tools.cq.search._shared.search_contracts import (
@@ -114,7 +115,7 @@ def _coerce_enrichment_telemetry(
 
 
 def partition_stats_from_result_summary(
-    summary: Mapping[str, object],
+    summary: CqSummary | Mapping[str, object],
     *,
     fallback_matches: int = 0,
 ) -> dict[str, object]:
@@ -125,29 +126,31 @@ def partition_stats_from_result_summary(
     dict[str, object]
         Stable per-language stats map.
     """
-    files_scanned = _coerce_int(summary.get("files_scanned"), 0)
+    summary_map = summary.to_dict() if isinstance(summary, CqSummary) else summary
+
+    files_scanned = _coerce_int(summary_map.get("files_scanned"), 0)
     if files_scanned == 0:
-        files_scanned = _coerce_int(summary.get("scanned_files"), 0)
-    matches = _coerce_int(summary.get("matches"), fallback_matches)
+        files_scanned = _coerce_int(summary_map.get("scanned_files"), 0)
+    matches = _coerce_int(summary_map.get("matches"), fallback_matches)
     if matches == 0:
-        matches = _coerce_int(summary.get("total_matches"), fallback_matches)
+        matches = _coerce_int(summary_map.get("total_matches"), fallback_matches)
 
     payload = LanguagePartitionStats(
         matches=matches,
         files_scanned=files_scanned,
-        scanned_files=_coerce_int(summary.get("scanned_files"), files_scanned),
+        scanned_files=_coerce_int(summary_map.get("scanned_files"), files_scanned),
         scanned_files_is_estimate=_coerce_bool(
-            summary.get("scanned_files_is_estimate"),
+            summary_map.get("scanned_files_is_estimate"),
             default=False,
         ),
-        matched_files=_coerce_int(summary.get("matched_files"), 0),
-        total_matches=_coerce_int(summary.get("total_matches"), matches),
-        timed_out=_coerce_bool(summary.get("timed_out"), default=False),
-        truncated=_coerce_bool(summary.get("truncated"), default=False),
-        caps_hit=str(summary.get("caps_hit", "none")),
+        matched_files=_coerce_int(summary_map.get("matched_files"), 0),
+        total_matches=_coerce_int(summary_map.get("total_matches"), matches),
+        timed_out=_coerce_bool(summary_map.get("timed_out"), default=False),
+        truncated=_coerce_bool(summary_map.get("truncated"), default=False),
+        caps_hit=str(summary_map.get("caps_hit", "none")),
         error=(
-            str(summary.get("error"))
-            if isinstance(summary.get("error"), str) and str(summary.get("error"))
+            str(summary_map.get("error"))
+            if isinstance(summary_map.get("error"), str) and str(summary_map.get("error"))
             else None
         ),
     )

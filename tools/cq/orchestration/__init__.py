@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tools.cq.orchestration import (
+        bundles,
+        multilang_orchestrator,
+        multilang_summary,
+        request_factory,
+        schema_export,
+    )
 
 __all__ = [
     "bundles",

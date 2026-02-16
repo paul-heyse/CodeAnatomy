@@ -13,7 +13,7 @@ from datafusion_engine.dataset.registry import (
     resolve_dataset_policies,
 )
 from schema_spec.arrow_types import arrow_type_from_pyarrow
-from schema_spec.contracts import (
+from schema_spec.dataset_spec import (
     DatasetPolicies,
     DatasetSpec,
     DeltaPolicyBundle,

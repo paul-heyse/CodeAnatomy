@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
 from tools.cq.macros.contracts import CallsRequest
@@ -86,19 +87,20 @@ def test_query_entity_auto_scope_smoke() -> None:
         pytest.skip("Set CQ_ENABLE_BENCHMARK_SMOKE=1 to run benchmark smoke tests.")
     root = _golden_workspace()
     tc = Toolchain.detect()
+    services = resolve_runtime_services(root)
     query = parse_query("entity=function name=build_graph lang=auto")
     plan = compile_query(query)
 
     start = time.perf_counter()
     execute_plan(
-        ExecutePlanRequestV1(plan=plan, query=query, root=str(root), argv=()),
+        ExecutePlanRequestV1(plan=plan, query=query, root=str(root), services=services, argv=()),
         tc=tc,
     )
     first = time.perf_counter() - start
 
     start = time.perf_counter()
     execute_plan(
-        ExecutePlanRequestV1(plan=plan, query=query, root=str(root), argv=()),
+        ExecutePlanRequestV1(plan=plan, query=query, root=str(root), services=services, argv=()),
         tc=tc,
     )
     second = time.perf_counter() - start

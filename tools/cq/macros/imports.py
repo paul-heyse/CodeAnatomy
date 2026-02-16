@@ -21,6 +21,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.index.graph_utils import find_sccs
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
@@ -498,11 +499,13 @@ def _build_imports_result(
         found_cycles = _find_import_cycles(ctx.deps, internal_prefix)
         max_cycle_len = max((len(cycle) for cycle in found_cycles), default=0)
 
-    result.summary = _build_imports_summary(
-        ctx,
-        external_deps=external_deps,
-        internal_deps=internal_deps,
-        cycles_found=len(found_cycles),
+    result.summary = summary_from_mapping(
+        _build_imports_summary(
+            ctx,
+            external_deps=external_deps,
+            internal_deps=internal_deps,
+            cycles_found=len(found_cycles),
+        )
     )
 
     scoring_details = macro_scoring_details(

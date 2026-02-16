@@ -96,7 +96,7 @@ class ArrowFieldSpec(StructBaseStrict, frozen=True):
             name=field.name,
             dtype=arrow_type_from_pyarrow(field.type),
             nullable=field.nullable,
-            metadata=_decode_metadata(field.metadata),
+            metadata=decode_metadata_map(field.metadata),
         )
 
     def to_pyarrow(self) -> pa.Field:
@@ -205,7 +205,14 @@ _PRIMITIVE_BUILDERS: dict[ArrowPrimitiveName, pa.DataType] = {
 }
 
 
-def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
+def decode_metadata_map(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
+    """Decode Arrow metadata bytes mapping into UTF-8 string pairs.
+
+    Returns:
+    -------
+    dict[str, str]
+        Decoded metadata mapping with string keys and values.
+    """
     if not metadata:
         return {}
     return {
@@ -263,4 +270,5 @@ __all__ = [
     "ArrowTypeSpec",
     "arrow_type_from_pyarrow",
     "arrow_type_to_pyarrow",
+    "decode_metadata_map",
 ]

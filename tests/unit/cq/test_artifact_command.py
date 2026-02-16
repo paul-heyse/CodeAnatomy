@@ -11,6 +11,7 @@ from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.artifacts import save_search_artifact_bundle_cache
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 from tools.cq.core.schema import CqResult, RunMeta
+from tools.cq.core.summary_contract import summary_from_mapping
 
 
 def _seed_search_artifact(tmp_path: Path) -> None:
@@ -23,7 +24,7 @@ def _seed_search_artifact(tmp_path: Path) -> None:
         toolchain={},
         run_id="run-artifact",
     )
-    result = CqResult(run=run, summary={"query": "stable_id"})
+    result = CqResult(run=run, summary=summary_from_mapping({"query": "stable_id"}))
     bundle = SearchArtifactBundleV1(
         run_id="run-artifact",
         query="stable_id",

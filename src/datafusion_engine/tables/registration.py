@@ -16,23 +16,23 @@ from datafusion_engine.catalog.provider_registry import ProviderRegistry
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.io.adapter import DataFusionIOAdapter, ListingTableRegistration
-from datafusion_engine.session.runtime import (
+from datafusion_engine.session.runtime_config_policies import (
     DATAFUSION_MAJOR_VERSION,
     DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
-    record_runtime_setting_override,
 )
+from datafusion_engine.session.runtime_session import record_runtime_setting_override
 from datafusion_engine.sql import options as _sql_options
 from datafusion_engine.tables.spec import table_spec_from_location
 
 if TYPE_CHECKING:
     from datafusion import SQLOptions
 
-    from datafusion_engine.dataset.registration import (
+    from datafusion_engine.dataset.registration_core import (
         DataFusionCachePolicy,
         DataFusionRegistryOptions,
     )
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.contracts import DataFusionScanOptions
+    from schema_spec.dataset_spec import DataFusionScanOptions
 
 
 class ListingRegistrationContext(Protocol):
@@ -93,7 +93,7 @@ def register_table(
         msg = "Runtime profile is required for table registration."
         raise ValueError(msg)
     if request.location.format != "delta":
-        from datafusion_engine.session.runtime import effective_catalog_autoload
+        from datafusion_engine.session.runtime_compile import effective_catalog_autoload
 
         catalog_location, catalog_format = effective_catalog_autoload(request.runtime_profile)
         if catalog_location is not None and catalog_format is not None:

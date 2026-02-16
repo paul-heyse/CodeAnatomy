@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from datafusion import SessionContext
 
-from datafusion_engine.udf import extension_runtime as runtime
+from datafusion_engine.udf import extension_core as runtime
 from datafusion_engine.udf import factory
 
 

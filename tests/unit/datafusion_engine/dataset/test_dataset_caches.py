@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datafusion import SessionContext
 
-from datafusion_engine.dataset.registration import DatasetCaches, cached_dataset_names
+from datafusion_engine.dataset.registration_core import DatasetCaches, cached_dataset_names
 
 
 def test_cached_dataset_names_uses_injected_caches() -> None:

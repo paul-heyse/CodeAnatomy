@@ -8,8 +8,8 @@ from pathlib import Path
 
 from datafusion_engine.delta.capabilities import resolve_delta_extension_module
 from datafusion_engine.extensions.plugin_manifest import resolve_plugin_manifest
-from datafusion_engine.session.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_profile_config import (
     FeatureGatesConfig,
     PolicyBundleConfig,
 )

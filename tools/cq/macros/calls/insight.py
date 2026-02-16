@@ -18,6 +18,8 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
+from tools.cq.core.summary_contract import CqSummary, coerce_semantic_telemetry
+from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 
@@ -31,7 +33,6 @@ if TYPE_CHECKING:
     from tools.cq.query.language import QueryLanguage
 
 _FRONT_DOOR_TOP_CANDIDATES = 3
-_FRONT_DOOR_PREVIEW_PER_SLICE = 5
 
 
 @dataclass(frozen=True)
@@ -339,7 +340,7 @@ def _build_calls_front_door_insight(
             confidence=confidence,
             budget=InsightBudgetV1(
                 top_candidates=_FRONT_DOOR_TOP_CANDIDATES,
-                preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+                preview_per_slice=FRONT_DOOR_PREVIEW_PER_SLICE,
                 semantic_targets=1,
             ),
             degradation=InsightDegradationV1(
@@ -360,7 +361,7 @@ def _build_calls_front_door_insight(
 def _finalize_calls_semantic_state(
     *,
     insight: FrontDoorInsightV1,
-    summary: dict[str, object],
+    summary: CqSummary,
     target_language: QueryLanguage | None,
     top_level_attempted: int,
     top_level_applied: int,
@@ -377,16 +378,16 @@ def _finalize_calls_semantic_state(
     telemetry_key = (
         "python_semantic_telemetry" if target_language == "python" else "rust_semantic_telemetry"
     )
-    telemetry = summary.get(telemetry_key)
+    telemetry = coerce_semantic_telemetry(getattr(summary, telemetry_key))
     attempted = 0
     applied = 0
     failed = 0
     timed_out = 0
-    if isinstance(telemetry, dict):
-        attempted = int(telemetry.get("attempted", 0) or 0)
-        applied = int(telemetry.get("applied", 0) or 0)
-        failed = int(telemetry.get("failed", 0) or 0)
-        timed_out = int(telemetry.get("timed_out", 0) or 0)
+    if telemetry is not None:
+        attempted = telemetry.attempted
+        applied = telemetry.applied
+        failed = telemetry.failed
+        timed_out = telemetry.timed_out
 
     provider = provider_for_language(target_language) if target_language else "none"
     state_reasons = list(reasons)

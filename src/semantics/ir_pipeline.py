@@ -1126,7 +1126,7 @@ def _build_view_inference_confidence(
     strategy_score = _STRATEGY_CONFIDENCE.get(strategy, 0.0) if strategy else 0.0
     cache_score = _CACHE_POLICY_CONFIDENCE.get(cache_hint, 0.0) if cache_hint else 0.0
 
-    if strategy_score == 0.0 and cache_score == 0.0:
+    if strategy_score <= 0.0 and cache_score <= 0.0:
         return None
 
     # Pick the stronger signal.

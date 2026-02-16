@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING, Final, Literal
 
 from semantics.naming import canonical_output_name
@@ -14,6 +15,7 @@ from semantics.quality_specs import (
     REL_NAME_SYMBOL,
 )
 from semantics.specs import SemanticTableSpec
+from semantics.view_kinds import ViewKindStr
 from utils.registry_protocol import MappingRegistryAdapter
 
 if TYPE_CHECKING:
@@ -249,6 +251,45 @@ class SemanticOutputSpec:
 
 
 @dataclass(frozen=True)
+class SemanticSpecIndex:
+    """Index entry for spec-driven semantic pipeline generation."""
+
+    name: str
+    kind: ViewKindStr
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    output_policy: Literal["raw", "v1"] = "v1"
+
+
+def _build_semantic_spec_index() -> tuple[SemanticSpecIndex, ...]:
+    """Build semantic spec index from the compiled semantic IR.
+
+    Returns:
+    -------
+    tuple[SemanticSpecIndex, ...]
+        Semantic spec entries derived from compiled views.
+    """
+    from semantics.compile_context import semantic_ir_for_outputs
+
+    ir = semantic_ir_for_outputs()
+    return tuple(
+        SemanticSpecIndex(
+            name=view.name,
+            kind=view.kind,
+            inputs=view.inputs,
+            outputs=view.outputs,
+        )
+        for view in ir.views
+    )
+
+
+@lru_cache(maxsize=1)
+def semantic_spec_index() -> tuple[SemanticSpecIndex, ...]:
+    """Return semantic spec index entries."""
+    return _build_semantic_spec_index()
+
+
+@dataclass(frozen=True)
 class SemanticModel:
     """Single source of truth for semantic normalization and relationships."""
 
@@ -386,6 +427,7 @@ __all__ = [
     "SemanticNormalizationSpec",
     "SemanticOutputKind",
     "SemanticOutputSpec",
+    "SemanticSpecIndex",
     "build_semantic_model",
     "normalization_output_name",
     "normalization_output_names",
@@ -394,6 +436,7 @@ __all__ = [
     "relationship_names",
     "semantic_normalization_registry",
     "semantic_relationship_registry",
+    "semantic_spec_index",
     "semantic_table_registry",
     "spec_for_relationship",
     "spec_for_table",

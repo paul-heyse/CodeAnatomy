@@ -6,6 +6,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
@@ -38,6 +39,7 @@ def test_import_query_does_not_duplicate_from_import_multi(tmp_path: Path) -> No
             plan=plan,
             query=query,
             root=str(repo),
+            services=resolve_runtime_services(repo),
             argv=("cq", "q", "entity=import"),
         ),
         tc=tc,
@@ -77,6 +79,7 @@ def test_import_query_ignores_commas_in_inline_comments(tmp_path: Path) -> None:
             plan=plan,
             query=query,
             root=str(repo),
+            services=resolve_runtime_services(repo),
             argv=("cq", "q", "entity=import"),
         ),
         tc=tc,

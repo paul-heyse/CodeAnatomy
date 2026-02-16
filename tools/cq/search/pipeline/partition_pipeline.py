@@ -6,12 +6,11 @@ import multiprocessing
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 
 from tools.cq.core.cache.content_hash import file_content_hash
-from tools.cq.core.cache.contracts import SearchCandidatesCacheV1, SearchEnrichmentAnchorCacheV1
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import (
     decode_fragment_payload,
@@ -35,6 +34,7 @@ from tools.cq.core.contracts import contract_to_builtins, require_mapping
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.query.language import QueryLanguage, constrain_include_globs_for_language
 from tools.cq.search._shared.types import QueryMode
+from tools.cq.search.cache.contracts import SearchCandidatesCacheV1, SearchEnrichmentAnchorCacheV1
 from tools.cq.search.pipeline.contracts import SearchPartitionPlanV1
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
@@ -75,16 +75,16 @@ class _EnrichmentCacheContext:
 class _EnrichmentMissTask:
     root: str
     lang: QueryLanguage
-    items: list[tuple[int, Any, str, str]]
+    items: list[tuple[int, RawMatch, str, str]]
 
 
 @dataclass(frozen=True, slots=True)
 class _EnrichmentMissResult:
     idx: int
-    raw: Any
+    raw: RawMatch
     cache_key: str
     file_hash: str
-    enriched_match: Any
+    enriched_match: EnrichedMatch
 
 
 def run_search_partition(
@@ -267,7 +267,7 @@ def _candidate_payload_from_cache(
             return raw_matches, stats, payload.pattern, True
     elif is_fragment_cache_payload(cached):
         record_cache_decode_failure(namespace="search_candidates")
-    from tools.cq.search.pipeline.smart_search import run_candidate_phase
+    from tools.cq.search.pipeline.candidate_phase import run_candidate_phase
 
     raw_matches, stats, pattern = run_candidate_phase(ctx, lang=lang, mode=mode)
     return raw_matches, stats, pattern, False
@@ -277,7 +277,7 @@ def _maybe_submit_prefetch(
     *,
     ctx: SearchConfig,
     lang: QueryLanguage,
-    raw_matches: list[Any],
+    raw_matches: list[RawMatch],
 ) -> Future[object] | None:
     if lang != "python" or not raw_matches:
         return None
@@ -297,7 +297,7 @@ def _enrichment_phase(
     *,
     ctx: SearchConfig,
     lang: QueryLanguage,
-    raw_matches: list[Any],
+    raw_matches: list[RawMatch],
     scope: _PartitionScopeContext,
 ) -> list[EnrichedMatch]:
     namespace = "search_enrichment"
@@ -336,11 +336,11 @@ def _enrichment_phase(
 
 def _probe_enrichment_cache(
     *,
-    raw_matches: list[Any],
+    raw_matches: list[RawMatch],
     context: _EnrichmentCacheContext,
-) -> tuple[list[Any | None], list[tuple[int, Any, str, str]]]:
-    enriched_results: list[Any | None] = [None] * len(raw_matches)
-    misses: list[tuple[int, Any, str, str]] = []
+) -> tuple[list[EnrichedMatch | None], list[tuple[int, RawMatch, str, str]]]:
+    enriched_results: list[EnrichedMatch | None] = [None] * len(raw_matches)
+    misses: list[tuple[int, RawMatch, str, str]] = []
     for idx, raw in enumerate(raw_matches):
         file_hash = file_content_hash(context.root / raw.file).digest
         cache_key = build_cache_key(
@@ -372,7 +372,7 @@ def _probe_enrichment_cache(
     return enriched_results, misses
 
 
-def _decode_enrichment_cached(*, cached: object) -> Any | None:
+def _decode_enrichment_cached(*, cached: object) -> EnrichedMatch | None:
     payload = decode_fragment_payload(cached, type_=SearchEnrichmentAnchorCacheV1)
     if payload is None:
         if is_fragment_cache_payload(cached):
@@ -388,8 +388,8 @@ def _decode_enrichment_cached(*, cached: object) -> Any | None:
 def _compute_and_persist_enrichment_misses(
     *,
     ctx: SearchConfig,
-    misses: list[tuple[int, Any, str, str]],
-    enriched_results: list[Any | None],
+    misses: list[tuple[int, RawMatch, str, str]],
+    enriched_results: list[EnrichedMatch | None],
     context: _EnrichmentCacheContext,
 ) -> None:
     miss_results = _classify_enrichment_misses(
@@ -426,7 +426,7 @@ def _compute_and_persist_enrichment_misses(
 def _classify_enrichment_misses(
     *,
     ctx: SearchConfig,
-    misses: list[tuple[int, Any, str, str]],
+    misses: list[tuple[int, RawMatch, str, str]],
     context: _EnrichmentCacheContext,
 ) -> list[_EnrichmentMissResult]:
     if len(misses) <= 1:
@@ -438,7 +438,7 @@ def _classify_enrichment_misses(
             )
         )
 
-    partitioned: dict[str, list[tuple[int, Any, str, str]]] = {}
+    partitioned: dict[str, list[tuple[int, RawMatch, str, str]]] = {}
     for item in misses:
         partitioned.setdefault(str(item[1].file), []).append(item)
     batches = list(partitioned.values())

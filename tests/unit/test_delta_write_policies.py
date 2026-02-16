@@ -20,7 +20,7 @@ def _stub_enabled() -> bool:
 if _stub_enabled():
     sys.modules.setdefault("datafusion_ext", datafusion_ext_stub)
 
-from datafusion_engine.io.write import _delta_schema_mode, _writer_properties_from_policy
+from datafusion_engine.io.write_core import _delta_schema_mode, _writer_properties_from_policy
 from storage.deltalake.config import DeltaSchemaPolicy, ParquetWriterPolicy
 
 

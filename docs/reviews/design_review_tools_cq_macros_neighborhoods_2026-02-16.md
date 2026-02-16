@@ -1,213 +1,211 @@
-# Design Review: tools/cq/macros + tools/cq/neighborhood
+# Design Review: tools/cq/macros + tools/cq/neighborhood + tools/cq/index + tools/cq/introspection
 
 **Date:** 2026-02-16
-**Scope:** `tools/cq/macros/` (24 files, ~12,600 LOC) + `tools/cq/neighborhood/` (9 files, ~2,032 LOC)
-**Focus:** All principles (1-24)
+**Scope:** `tools/cq/macros/`, `tools/cq/neighborhood/`, `tools/cq/index/`, `tools/cq/introspection/`
+**Focus:** Knowledge (7-11), Composition (12-15), Correctness (16-18)
 **Depth:** deep
-**Files reviewed:** 33
+**Files reviewed:** 48
 
 ## Executive Summary
 
-The macros and neighborhood modules demonstrate strong compositional design with well-defined request/result contracts, a consistent Rust fallback policy, and clean separation between scanning, analysis, and result construction phases. The primary systemic weaknesses are: (1) duplicated constants and knowledge across the `calls/` subpackage (four files independently define `_FRONT_DOOR_PREVIEW_PER_SLICE = 5`), (2) inconsistent use of struct systems (mixed `dataclass`, `msgspec.Struct`, and `CqStruct` for semantically equivalent roles), and (3) result-mutating functions that violate CQS by both populating `CqResult` state and returning computed values. The neighborhood module is notably cleaner, with well-separated collection, layout, and rendering concerns.
+These four modules form the analysis backbone of the CQ tool -- macros provide high-level code analysis commands, neighborhood assembles semantic context, index provides repo-wide symbol resolution, and introspection offers bytecode/symtable/CFG primitives. Overall alignment is strong: contracts are explicit via msgspec.Struct and frozen dataclasses, the macro pipeline pattern (Request -> Scan -> Analyze -> Build Result) is consistent, and determinism is well maintained through sha256-based stable identifiers and deterministic section ordering. The primary gaps are: (1) CQS violations in `attach_target_metadata` and `_analyze_function` where functions both mutate state and return information, (2) mutable containers inside frozen `_AnalyzeContext`/`TaintState` that undermine the "make illegal states unrepresentable" principle, (3) `DefIndex.build()` as a static factory that hinders dependency injection and testability, and (4) duplicated comprehension taint-handler logic across four near-identical functions.
 
 ## Alignment Scorecard
 
 | # | Principle | Alignment | Effort | Risk | Key Finding |
 |---|-----------|-----------|--------|------|-------------|
-| 1 | Information hiding | 2 | small | low | Private helpers exported in `__init__.py` via underscore-prefixed names in `calls/entry.py` imports |
-| 2 | Separation of concerns | 2 | medium | medium | `calls/entry.py` mixes orchestration, result construction, and telemetry in one flow |
-| 3 | SRP | 2 | medium | medium | `calls_target.py` handles resolution, scanning, caching orchestration, and result mutation |
-| 4 | High cohesion, low coupling | 2 | small | low | `calls/` subpackage is highly cohesive; cross-macro coupling is appropriately low |
-| 5 | Dependency direction | 2 | small | low | Macros depend on core schemas and search infrastructure; direction is correct |
-| 6 | Ports & Adapters | 2 | medium | low | Rust fallback policy is a good adapter pattern; direct file IO scattered in analysis |
-| 7 | DRY (knowledge) | 1 | small | medium | `_FRONT_DOOR_PREVIEW_PER_SLICE = 5` defined in 4 files; scoring boilerplate repeated |
-| 8 | Design by contract | 2 | small | low | Request structs enforce preconditions; postconditions are implicit |
-| 9 | Parse, don't validate | 2 | small | low | Target resolution parses once at boundary; some re-parsing in `_parse_call_expr` |
-| 10 | Make illegal states unrepresentable | 2 | medium | medium | `CallSite` is mutable `msgspec.Struct` with many optional fields that can be inconsistent |
-| 11 | CQS | 1 | medium | medium | `_populate_summary`, `_populate_findings` mutate result AND are called for their side effects |
-| 12 | DI + explicit composition | 2 | small | low | `MacroResultBuilder` centralizes construction; some hidden creation via deferred imports |
-| 13 | Composition over inheritance | 3 | - | - | Single-level inheritance only (`ScopedMacroRequestBase` extends `MacroRequestBase`) |
-| 14 | Law of Demeter | 2 | small | low | `result.run.run_id`, `result.summary["key"]` chains are acceptable for data containers |
-| 15 | Tell, don't ask | 1 | medium | medium | External functions interrogate `CqResult` internals to populate sections |
-| 16 | Functional core, imperative shell | 2 | medium | low | Analysis functions are largely pure; result assembly is imperative mutation |
-| 17 | Idempotency | 3 | - | - | Macro commands are read-only analysis; cache writes are idempotent by design |
-| 18 | Determinism | 2 | small | low | Bundle IDs are deterministic; `_merge_slices` sorts output; `Counter.most_common` is stable |
-| 19 | KISS | 2 | small | low | Generally straightforward; `calls/entry.py` orchestration has accidental complexity |
-| 20 | YAGNI | 2 | small | low | `MacroExecutionRequestV1` and `MacroTargetResolutionV1` appear unused within scope |
-| 21 | Least astonishment | 2 | small | low | Public/private API boundary is unclear: `_analyze_sites` exported but underscore-prefixed |
-| 22 | Declare public contracts | 2 | small | low | `__all__` is consistently declared; version suffixes (V1) on contracts |
-| 23 | Design for testability | 2 | medium | medium | Pure analysis functions are testable; result mutation functions require full `CqResult` setup |
-| 24 | Observability | 2 | small | low | Logger in `calls/entry.py`; most macros lack structured logging |
+| 7 | DRY (knowledge) | 2 | small | low | Comprehension taint handlers duplicate iteration logic; Rust def regex appears twice |
+| 8 | Design by contract | 3 | - | - | Contracts well-expressed via typed Structs and explicit request envelopes |
+| 9 | Parse, don't validate | 2 | medium | low | `result.summary` mutated via setattr/dict update bypasses structured parsing |
+| 10 | Illegal states | 1 | medium | medium | Mutable containers inside frozen structs; `CallSite` mutable struct allows post-construction mutation |
+| 11 | CQS | 1 | medium | medium | `attach_target_metadata` and `_analyze_function` mix mutation and return; `_populate_*` helpers mutate passed result |
+| 12 | DI + explicit composition | 2 | medium | low | `DefIndex.build()` static factory; `INTERACTIVE` profile imported as concrete dependency |
+| 13 | Composition over inheritance | 3 | - | - | Shallow inheritance; composition-first design throughout |
+| 14 | Law of Demeter | 2 | small | low | `result.summary.target_file`, `bundle.subject.file_path` chains |
+| 15 | Tell, don't ask | 2 | small | low | External code mutates `result.key_findings`, `result.sections` directly |
+| 16 | Functional core, imperative shell | 2 | medium | low | Pure analysis logic mostly separated; taint analysis mixes IO reads with transforms |
+| 17 | Idempotency | 3 | - | - | Index builds and analysis pipelines are idempotent by construction |
+| 18 | Determinism | 3 | - | - | sha256 stable IDs; deterministic section ordering via SECTION_ORDER |
 
 ## Detailed Findings
 
-### Category: Boundaries (1-6)
-
-#### P1. Information hiding -- Alignment: 2/3
-
-**Current state:**
-Modules generally hide internal decisions behind well-named functions. The `__all__` export lists are consistently maintained.
-
-**Findings:**
-- `tools/cq/macros/calls/entry.py:26-49` imports underscore-prefixed private functions (`_analyze_sites`, `_collect_call_sites_from_records`, `_add_context_section`, `_build_calls_confidence`, etc.) from sibling modules. These are implementation details exposed across module boundaries within the `calls/` package.
-- `tools/cq/macros/calls/__init__.py:9-13` re-exports `cmd_calls`, `CallSite`, `collect_call_sites`, etc. but the internal structure (which sub-module owns what) leaks through import paths.
-
-**Suggested improvement:**
-Convert cross-module private function usage within `calls/` to explicit public interfaces. For example, `analysis.py` should export `analyze_sites()` (without underscore) if `entry.py` needs it. This makes the internal contract explicit rather than relying on convention violations.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P2. Separation of concerns -- Alignment: 2/3
-
-**Current state:**
-Most macros follow a clean pattern: collect data, analyze, build result. The `calls` macro is the exception.
-
-**Findings:**
-- `tools/cq/macros/calls/entry.py:420-462` (`_build_calls_result`) chains together scanning, analysis, front-door state construction, semantic enrichment, telemetry attachment, and insight finalization in a single linear flow. This function is the "orchestrator" but it mixes policy decisions (when to apply semantic enrichment) with plumbing (attaching telemetry counters to summary dicts).
-- `tools/cq/macros/calls/entry.py:394-417` (`_attach_calls_semantic_summary`) manually constructs Python and Rust telemetry dicts with duplicated conditional logic (`if target_language == "python" else 0`).
-
-**Suggested improvement:**
-Extract a `CallsTelemetryBuilder` or equivalent that encapsulates telemetry dict construction, separating "what telemetry to collect" from "how to attach it to a result." This would also consolidate the duplicated Python/Rust conditional patterns.
-
-**Effort:** medium
-**Risk if unaddressed:** medium -- telemetry logic is fragile and easy to get wrong when adding new languages.
-
----
-
-#### P3. SRP -- Alignment: 2/3
-
-**Current state:**
-Most macros have a single responsibility. `calls_target.py` is the exception.
-
-**Findings:**
-- `tools/cq/macros/calls_target.py` (529 LOC) handles four distinct responsibilities: (a) target definition resolution (lines 36-188), (b) callee scanning (lines 254-416), (c) result section construction (lines 419-444), and (d) cache-aware metadata attachment orchestration (lines 447-519). Changes to cache strategy, target resolution heuristics, or callee scanning would all modify this file.
-- `tools/cq/macros/calls_target_cache.py` correctly separates cache orchestration, but `calls_target.py` still orchestrates the cache context lifecycle alongside resolution logic.
-
-**Suggested improvement:**
-Extract target definition resolution (`resolve_target_definition`, `_resolve_python_target_definition`, `_resolve_rust_target_definition`) into a dedicated `calls_target_resolution.py`. Keep `calls_target.py` as the composition point that wires resolution + scanning + caching.
-
-**Effort:** medium
-**Risk if unaddressed:** medium
-
----
-
-#### P5. Dependency direction -- Alignment: 2/3
-
-**Current state:**
-Macros correctly depend inward on core schemas (`CqResult`, `Finding`, `Section`) and search infrastructure. No reverse dependencies detected.
-
-**Findings:**
-- `tools/cq/macros/calls/entry.py:61` uses a deferred import `from tools.cq.core.front_door_schema import FrontDoorInsightV1` under `TYPE_CHECKING`. This is the correct pattern, but `calls/insight.py:307-317` performs heavy runtime imports from `tools.cq.core.front_door_builders` inside `_build_calls_front_door_insight`. These deferred imports add latency on every call.
-
-**Suggested improvement:**
-Move `front_door_builders` imports to module level under `TYPE_CHECKING` for type annotations and keep runtime imports only for actual construction calls. Alternatively, consolidate the deferred imports into a single lazy-import helper.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P6. Ports & Adapters -- Alignment: 2/3
-
-**Current state:**
-The `RustFallbackPolicyV1` pattern is an excellent adapter-like design -- macros declare what they need and `apply_rust_fallback_policy` handles the implementation.
-
-**Findings:**
-- Every macro independently calls `apply_rust_fallback_policy` at the end of its `cmd_*` function with a `RustFallbackPolicyV1` constant. This is clean but the Rust search itself (`_rust_fallback.py:39-43`) uses `suppress(OSError, TimeoutError, RuntimeError, ValueError)` to silently swallow all search errors.
-
-**Suggested improvement:**
-The broad `suppress` in `_rust_fallback.py:39` is acceptable for graceful degradation but should emit a degrade diagnostic (similar to the neighborhood collector's `DegradeEventV1` pattern) so callers know the fallback search failed silently.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
 ### Category: Knowledge (7-11)
 
-#### P7. DRY (knowledge) -- Alignment: 1/3
+#### P7. DRY (knowledge, not lines) -- Alignment: 2/3
 
 **Current state:**
-The most significant DRY violation is the constant `_FRONT_DOOR_PREVIEW_PER_SLICE = 5` defined independently in four files.
+Constants are well-centralized in `tools/cq/macros/constants.py` (2 constants, imported consistently). The `INTERACTIVE` search profile is imported from `tools/cq/search/pipeline/profiles` in multiple macros (`impact.py`, `calls_target.py`, `shared.py`) -- this is acceptable as it references a single authoritative source.
 
 **Findings:**
-- `tools/cq/macros/calls/entry.py:70`, `tools/cq/macros/calls/insight.py:34`, `tools/cq/macros/calls/neighborhood.py:22`, `tools/cq/macros/calls/semantic.py:19` all define `_FRONT_DOOR_PREVIEW_PER_SLICE = 5`. If this value needs to change, four files must be updated in sync.
-- The scoring boilerplate pattern (`macro_scoring_details(...) -> ScoringDetailsV1 -> msgspec.structs.asdict(scoring_details) -> build_detail_payload(scoring=scoring_dict)`) is repeated in every macro with minor variations. Six macros follow identical `scoring_dict = msgspec.structs.asdict(scoring_details)` + `build_detail_payload(scoring=scoring_dict)` chains.
-- `tools/cq/macros/calls/entry.py:69` and `tools/cq/macros/calls_target.py:29` both define `_CALLS_TARGET_CALLEE_PREVIEW = 10`.
+- Four comprehension taint handlers (`_tainted_listcomp`, `_tainted_setcomp`, `_tainted_generator`, `_tainted_dictcomp`) at `tools/cq/macros/impact.py:355-394` share identical iteration-over-generators logic. The `listcomp`, `setcomp`, and `generator` variants are byte-for-byte identical except for the parameter type annotation. This is semantic duplication of the invariant "a comprehension is tainted if any of its generator iterables or its element expression is tainted."
+- The Rust function definition regex `_RUST_DEF_RE` at `tools/cq/macros/calls_target.py:30-33` duplicates the inline pattern at `calls_target.py:130-132` (inside `_resolve_rust_target_definition`). Both encode the same grammar rule for Rust `fn` declarations.
+- `_collect_call_sites_for_file` at `tools/cq/macros/calls/analysis.py:475-510` and `_build_call_site_from_record` at `analysis.py:665-715` duplicate the pattern of parsing a file, building a call index, computing context windows, and extracting snippets. The `CallSiteBuildContext` dataclass exists to share context but is only used in the record-based path.
 
 **Suggested improvement:**
-(1) Define `_FRONT_DOOR_PREVIEW_PER_SLICE` once in `tools/cq/macros/contracts.py` or a new `tools/cq/macros/constants.py` and import it. (2) Consider adding a `build_detail_payload_from_scoring(details: ScoringDetailsV1, data=None)` helper that eliminates the repeated `asdict` + `build_detail_payload` two-step.
+Extract a single `_tainted_comprehension` handler parameterized by the element accessor (`.elt` vs `.key`/`.value`) and register it for all four comprehension types. For the Rust regex, extract a module-level compiled pattern used by both callsites. For call site construction, refactor both paths to share `CallSiteBuildContext` construction.
 
 **Effort:** small
-**Risk if unaddressed:** medium -- constant drift causes subtle behavioral inconsistencies.
+**Risk if unaddressed:** low -- The comprehension handlers are unlikely to diverge independently, but if taint semantics for comprehensions change, all four copies must be updated in lockstep.
 
 ---
 
-#### P10. Make illegal states unrepresentable -- Alignment: 2/3
+#### P8. Design by contract -- Alignment: 3/3
 
 **Current state:**
-Request types are well-structured with frozen `msgspec.Struct` or `CqStruct`. Domain models are less constrained.
+Contracts are explicit and well-structured throughout these modules:
+- `MacroRequestBase`, `ScopedMacroRequestBase`, `CallsRequest`, `ImpactRequest` at `tools/cq/macros/contracts.py:18-44` define typed request envelopes with frozen msgspec.Struct semantics.
+- `ScoringDetailsV1` at `contracts.py:66-74` captures scoring invariants with explicit bucket levels.
+- `NeighborhoodExecutionRequest` at `tools/cq/neighborhood/executor.py:24-36` uses `CqStruct` for the execution envelope.
+- `RenderSnbRequest` at `tools/cq/neighborhood/snb_renderer.py:21-30` encapsulates all render inputs.
+- `SymbolIndex` Protocol at `tools/cq/index/protocol.py:13-145` defines the DI contract for symbol resolution.
+- `InstructionFact`, `ExceptionEntry` at `tools/cq/introspection/bytecode_index.py:17-55,220-242` are frozen dataclasses with explicit fields.
+- `BundleBuildRequest` and `TreeSitterNeighborhoodCollectRequest` define explicit input contracts for neighborhood assembly.
 
-**Findings:**
-- `tools/cq/macros/calls/analysis.py:49-121`: `CallSite` is a **mutable** `msgspec.Struct` (no `frozen=True`). It has 22 fields, many with default values that can represent inconsistent states. For example, `resolution_confidence="unresolved"` paired with `binding="ok"` is semantically invalid but structurally allowed. The `context_window` field is `dict[str, int] | None` rather than a typed struct.
-- `tools/cq/macros/impact.py:72-87`: `TaintState` uses mutable `set` and `list` fields, which is appropriate for its accumulator role but means it cannot be shared safely across threads.
+Postconditions are enforced by typed return values (`CqResult`, `DefIndex`, `BytecodeIndex`, `CFG`). Preconditions are implicit but reasonable (file existence checks, syntax error handling).
 
-**Suggested improvement:**
-Make `CallSite` frozen (it is already replaced via `msgspec.structs.replace` at `analysis.py:504`). Replace `context_window: dict[str, int] | None` with a typed `ContextWindow(start_line: int, end_line: int)` struct to prevent key-name typos.
+**Suggested improvement:** None required. Contract coverage is strong.
 
-**Effort:** medium
-**Risk if unaddressed:** medium -- mutable struct fields invite accidental mutation bugs.
+**Effort:** -
+**Risk if unaddressed:** -
 
 ---
 
-#### P11. CQS -- Alignment: 1/3
+#### P9. Parse, don't validate -- Alignment: 2/3
 
 **Current state:**
-Many functions both mutate the `CqResult` object and return computed values or are called purely for side effects.
+Good boundary parsing exists in several places:
+- `parse_target_spec()` called at `tools/cq/neighborhood/executor.py:51` converts raw target strings to structured `TargetSpec` once.
+- `_parse_signature()` in `tools/cq/macros/sig_impact.py` converts string signatures to `SigParam` lists via AST.
+- `_parse_call_expr()` at `tools/cq/macros/calls/analysis.py:253-260` parses call text into `ast.Call` once.
 
 **Findings:**
-- `tools/cq/neighborhood/snb_renderer.py:55-78` (`_populate_summary`): Takes `result` by reference, mutates `result.summary` dict in place, returns `None`. This is a command, which is fine in isolation.
-- `tools/cq/macros/calls/entry.py:265-297` (`_analyze_calls_sites`): Mutates `result.key_findings` AND returns `(CallAnalysisSummary, ScoreDetails | None)`. The caller depends on both the mutation and the return value, making the function hard to reason about.
-- `tools/cq/macros/calls/entry.py:300-350` (`_build_calls_front_door_state`): Mutates `result` via `_attach_calls_neighborhood_section(result, ...)` inside its body AND returns a `CallsFrontDoorState`. Side effects are hidden in the middle of what looks like a builder function.
-- `tools/cq/macros/calls_target.py:458-519` (`attach_target_metadata`): Mutates `result.summary` and appends sections, AND returns a 3-tuple. Callers must track both the mutations and the return values.
+- `result.summary` is populated via untyped `setattr` at `tools/cq/neighborhood/snb_renderer.py:78` (`setattr(result.summary, key, value)`) and via dict-like `.update()` at `tools/cq/macros/result_builder.py:58` (`self.result.summary.update(kwargs)`). These bypass compile-time type safety; the summary acts as an open dict rather than a parsed, validated structure. Fields like `target_file`, `total_slices`, `semantic_health` are set ad hoc on an opaque summary object.
+- `_build_impact_summary` at `tools/cq/macros/impact.py:766-780` returns a raw `dict[str, object]` rather than a typed struct, which is then assigned via `summary_from_mapping()`. The mapping is validated by convention, not by type.
+- `context_window` fields (`start_line`, `end_line`) are passed as `dict[str, int]` at `tools/cq/macros/calls/analysis.py:496-497,679` rather than a typed struct, requiring downstream code to access string keys.
 
 **Suggested improvement:**
-Separate computation from result mutation. For example, `_analyze_calls_sites` should return `(CallAnalysisSummary, ScoreDetails, list[Finding])` and let the caller append findings. This makes the data flow explicit and the function testable without constructing a full `CqResult`.
+Define a `ContextWindow` frozen struct with `start_line: int, end_line: int` fields, replacing the `dict[str, int]` usage. Consider a `MacroSummary` typed struct (or a union of per-macro summary types) to replace the open-dict summary pattern. This would shift field name errors from runtime to type-check time.
 
 **Effort:** medium
-**Risk if unaddressed:** medium -- hidden mutations make refactoring and testing unreliable.
+**Risk if unaddressed:** low -- The current dict-based summaries work but make field-name typos invisible until runtime.
+
+---
+
+#### P10. Make illegal states unrepresentable -- Alignment: 1/3
+
+**Current state:**
+Good use of `Literal` types for constrained domains:
+- `TaintSiteKind = Literal["source", "call", "return", "assign"]` at `tools/cq/macros/impact.py:18`
+- `CallBinding = Literal["ok", "ambiguous", "would_break", "unresolved"]` at `tools/cq/macros/calls/analysis.py:26`
+- `CfgEdgeType = Literal["fallthrough", "jump", "exception"]` at `tools/cq/introspection/cfg_builder.py:15`
+- `BucketLevel = Literal["low", "med", "high"]` at `tools/cq/macros/contracts.py:15`
+
+**Findings:**
+- `TaintState` at `tools/cq/macros/impact.py:73-88` is a `msgspec.Struct` (not frozen) containing mutable `set[str]` and `list[TaintedSite]`. It is then embedded inside `_AnalyzeContext` at `impact.py:467-471` which IS `frozen=True`. This creates the illusion of immutability while the inner `TaintState` is freely mutated via `context.state.visited.add(key)` at `impact.py:487` and `context.state.tainted_sites.extend(...)` at `impact.py:507`. A frozen outer container with mutable inner state is a representation that can mislead readers about mutation safety.
+- `CallSite` at `tools/cq/macros/calls/analysis.py:49-121` is a non-frozen `msgspec.Struct` with 22 fields, many of which (`symtable_info`, `bytecode_info`, `context_window`, `context_snippet`) are populated post-construction via `msgspec.structs.replace()` at `analysis.py:503-509`. The non-frozen struct allows any field to be mutated at any point, when in practice fields are set once during construction.
+- `ScopeGraph` at `tools/cq/introspection/symtable_extract.py:109-128` is a mutable dataclass whose `scopes`, `scope_by_name`, and `root_scope` are populated incrementally during `_walk_table`. Once construction completes, the graph is treated as immutable. The construction-time mutability could be isolated to a builder.
+- `ParamInfo` at `tools/cq/index/def_index.py:22-36` is a non-frozen dataclass with a mutable `kind` field that is set after construction at `def_index.py:205-206` (`param.kind = "POSITIONAL_ONLY"`). This could be a frozen dataclass with `kind` set in the constructor.
+
+**Suggested improvement:**
+(1) Make `CallSite` frozen and construct all fields at creation time (pass `context_window` and `context_snippet` to the constructor rather than using post-construction replace). (2) Isolate `TaintState` mutation into an explicit mutable accumulator that is NOT embedded in a frozen struct -- use a separate parameter or return-value pattern. (3) Make `ParamInfo` frozen by passing `kind` to `_extract_param_info()` as a parameter. (4) Consider a `ScopeGraphBuilder` that produces a frozen `ScopeGraph` upon completion.
+
+**Effort:** medium
+**Risk if unaddressed:** medium -- Mutable containers inside frozen structs create subtle bugs when code assumes frozen means deeply immutable.
+
+---
+
+#### P11. Command-Query Separation (CQS) -- Alignment: 1/3
+
+**Current state:**
+The macro pipeline generally follows a command pattern: scan -> analyze -> build result. However, several key functions violate CQS by both mutating state and returning information.
+
+**Findings:**
+- `attach_target_metadata` at `tools/cq/macros/calls_target.py:458-519` is the most significant CQS violation. It (a) mutates `result.summary.target_file` and `result.summary.target_line` at lines 511-512, (b) appends sections to `result.sections` via `add_target_callees_section` at line 513, (c) writes to the cache backend via `persist_target_metadata_cache` at line 500, and (d) returns a 3-tuple `(target_location, target_callees, resolved_language)`. Callers rely on both the mutation and the return value.
+- `_analyze_function` at `tools/cq/macros/impact.py:474-530` mutates `context.state.visited` (line 487) and `context.state.tainted_sites` (line 507) as side effects while being called recursively. The function returns `None` but communicates results entirely through state mutation. This makes the recursion hard to reason about.
+- `_populate_summary`, `_populate_findings`, `_populate_artifacts` at `tools/cq/neighborhood/snb_renderer.py:55-147` all mutate the passed `result` object. While they return `None` (pure commands), they are called in a sequence where the caller must understand the cumulative mutation order. The render pipeline would be clearer as a functional accumulation.
+- `_append_depth_findings`, `_append_kind_sections`, `_append_callers_section`, `_append_evidence` at `tools/cq/macros/impact.py:578-677` all take a `CqResult` and mutate it by appending findings/sections. These are commands (no return value), but the pattern of passing a result and mutating it in 4+ separate functions distributes the result construction logic widely.
+
+**Suggested improvement:**
+(1) Split `attach_target_metadata` into a pure query `resolve_target_metadata(request) -> TargetMetadata` that returns the resolved data, and a separate command `apply_target_metadata(result, metadata)` that performs the mutation. (2) Refactor `_analyze_function` to return a `TaintState` (or a list of `TaintedSite`) rather than mutating via side-effect. The recursive accumulation can use return-value merging. (3) Consider a builder pattern for the neighborhood renderer where `_populate_*` functions return data that the builder incorporates.
+
+**Effort:** medium
+**Risk if unaddressed:** medium -- The `attach_target_metadata` function is a critical path in the calls macro; its mixed responsibilities make it hard to test the query logic (resolve + cache lookup) independently from the mutation logic (result enrichment).
 
 ---
 
 ### Category: Composition (12-15)
 
-#### P13. Composition over inheritance -- Alignment: 3/3
+#### P12. Dependency inversion + explicit composition -- Alignment: 2/3
 
 **Current state:**
-Inheritance is minimal and shallow. `ScopedMacroRequestBase` extends `MacroRequestBase` to add include/exclude filters. All behavior is built through composition of request structs, analysis functions, and result builders.
+The `SymbolIndex` Protocol at `tools/cq/index/protocol.py:13` provides a clean abstraction for symbol lookup, enabling DI for testing. `MacroResultBuilder` at `tools/cq/macros/result_builder.py:24` accepts `Toolchain | None` as a parameter, enabling injection. The neighborhood pipeline composes cleanly: `executor.py` orchestrates `resolve_target -> build_neighborhood_bundle -> render_snb_result`.
 
-No action needed.
+**Findings:**
+- `DefIndex.build()` at `tools/cq/index/def_index.py:424-483` is a static factory that performs filesystem IO (reads all Python files in the repo) and returns a fully-populated index. Callers like `cmd_impact` at `tools/cq/macros/impact.py:846` call `DefIndex.build(request.root)` directly, creating a hidden dependency on the filesystem. The `SymbolIndex` Protocol exists but `DefIndex.build()` does not accept or return through it -- callers create `DefIndex` concretely.
+- The `INTERACTIVE` profile at `tools/cq/search/pipeline/profiles` is imported as a concrete module-level constant in `tools/cq/macros/impact.py:38`, `tools/cq/macros/calls_target.py:27`, and `tools/cq/macros/shared.py:19`. While this is a stable value, it creates a coupling to the search pipeline's profile system. If the profile needs to be configurable per-invocation, the current pattern does not allow injection.
+- `_enrich_call_site` at `tools/cq/macros/calls/analysis.py:290-344` performs a lazy import of `analyze_bytecode` and `analyze_symtable` from `tools.cq.query.enrichment` at line 311. This creates a hidden runtime dependency on the query enrichment module.
+- `BytecodeIndex.from_code()` at `tools/cq/introspection/bytecode_index.py:126-141` and `build_cfg()` at `tools/cq/introspection/cfg_builder.py:394-419` are well-designed factory methods that take explicit `CodeType` inputs with no hidden dependencies.
+
+**Suggested improvement:**
+Add a `symbol_index` parameter to macro entry points (e.g., `cmd_impact(request, *, index: SymbolIndex | None = None)`) defaulting to `DefIndex.build(request.root)` when not provided. This enables test injection without changing the default call path. For `INTERACTIVE`, consider adding a `limits` parameter to macro request structs with `INTERACTIVE` as the default.
+
+**Effort:** medium
+**Risk if unaddressed:** low -- The current pattern works but requires filesystem access for all testing of macro logic.
 
 ---
 
-#### P15. Tell, don't ask -- Alignment: 1/3
+#### P13. Prefer composition over inheritance -- Alignment: 3/3
 
 **Current state:**
-The `CqResult` object is treated as a mutable data bag that external functions interrogate and populate.
+Inheritance is minimal and shallow throughout:
+- `MacroRequestBase` -> `ScopedMacroRequestBase` at `tools/cq/macros/contracts.py:18-30` is one level of inheritance for adding include/exclude fields.
+- `MacroRequestBase` -> `CallsRequest`, `ImpactRequest` at `contracts.py:33-37` and `impact.py:91-96` add domain-specific fields.
+- No deep hierarchies exist in any of the four modules.
+- Behavior composition is the dominant pattern: `MacroResultBuilder` composes `RunContext`, `CqResult`, `RustFallbackPolicyV1`. The neighborhood pipeline composes `resolve_target + build_neighborhood_bundle + render_snb_result`. `CFG` composes `BasicBlock` and `CFGEdge`.
+
+**Suggested improvement:** None required. The shallow inheritance is justified for shared request fields, and composition is used correctly everywhere else.
+
+**Effort:** -
+**Risk if unaddressed:** -
+
+---
+
+#### P14. Law of Demeter -- Alignment: 2/3
+
+**Current state:**
+Most function signatures pass direct collaborators. However, there are several chain-access patterns.
 
 **Findings:**
-- Throughout all macros, the pattern is: create empty `CqResult`, pass it to multiple `_append_*` functions that each interrogate existing state and add to `result.sections`, `result.key_findings`, `result.evidence`, and `result.summary`. This is "ask then tell" -- functions ask what is already in the result to decide what to add.
-- `tools/cq/macros/calls/entry.py:261`: `result.summary = _build_calls_summary(...)` directly replaces the summary dict.
-- `tools/cq/macros/multilang_fallback.py:52-53`: `existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}` -- the code must defensively check the type of `result.summary` because it is `dict[str, object]` with no schema.
+- `tools/cq/neighborhood/snb_renderer.py:61-73`: Seven lines of `result.summary.X = ...` access, reaching two levels deep. Examples: `result.summary.target = request.target`, `result.summary.total_slices = len(bundle.slices)`, `result.summary.bundle_id = bundle.bundle_id`.
+- `tools/cq/neighborhood/snb_renderer.py:68-73`: `bundle.subject.file_path`, `bundle.subject.name`, `bundle.graph.node_count`, `bundle.graph.edge_count` -- three-level access chains through the bundle's nested objects.
+- `tools/cq/macros/calls_target.py:511-512`: `result.summary.target_file = target_location[0]` reaches into the result's summary to set individual fields.
+- `tools/cq/macros/impact.py:487`: `context.state.visited.add(key)` is a three-level chain (`context` -> `state` -> `visited` -> `add`).
+- `tools/cq/macros/calls/entry.py` (from earlier reading): `result.run.run_id` type of chains for accessing metadata.
 
 **Suggested improvement:**
-The `CqResult` schema is a shared contract and changing it is out of scope. However, macro-specific builders could construct complete section lists and finding lists internally, then assign them to the result at the end. This concentrates the "ask" into a single final assembly step.
+For the `_populate_summary` function, consider having `RenderSnbRequest` provide a method like `to_summary_fields() -> dict[str, object]` that the caller applies in one step, rather than the renderer reaching into multiple levels of the request and bundle. For `_AnalyzeContext`, expose a `record_visit(key)` method on TaintState rather than allowing callers to access the internal visited set.
 
-**Effort:** medium
-**Risk if unaddressed:** medium
+**Effort:** small
+**Risk if unaddressed:** low -- These are read-only chains in most cases and unlikely to cause cascading breakage, but they do couple the renderer to the internal structure of `SemanticNeighborhoodBundleV1`.
+
+---
+
+#### P15. Tell, don't ask -- Alignment: 2/3
+
+**Current state:**
+The `MacroResultBuilder` at `tools/cq/macros/result_builder.py:24-114` is a good example of "tell" -- callers tell the builder to add findings, set summary fields, and apply policies through its API. However, several patterns across the codebase expose raw data structures for external mutation.
+
+**Findings:**
+- `_append_depth_findings(result, summary)` at `tools/cq/macros/impact.py:578-603` takes a `CqResult` and appends findings directly to `result.key_findings`. The result object does not encapsulate the "add a depth finding" rule -- external code decides what to append. Similarly for `_append_kind_sections` (line 613), `_append_callers_section` (line 635), `_append_evidence` (line 657).
+- `_populate_findings` at `tools/cq/neighborhood/snb_renderer.py:81-136` directly appends to `result.key_findings`, `result.sections`, and `result.evidence`. The `CqResult` is treated as a passive data bag.
+- `collect_call_sites` at `tools/cq/macros/calls/analysis.py:407-417` is a thin wrapper over `_collect_call_sites` that adds no behavior -- the public API merely delegates without encapsulation.
+- `add_target_callees_section(result, ...)` at `tools/cq/macros/calls_target.py:419-444` asks for the result and externally decides how to build and append the section. The result does not "know" about callee sections.
+
+**Suggested improvement:**
+The `MacroResultBuilder` pattern is the right direction. Extend its usage so that `_build_impact_result` uses builder methods (`builder.add_findings(...)`, `builder.add_section(...)`) instead of directly mutating `result.key_findings` and `result.sections`. The impact macro already partially uses `MacroResultBuilder` (line 792) but then bypasses it to mutate the result directly (lines 801-828).
+
+**Effort:** small
+**Risk if unaddressed:** low -- Scattered mutation of result internals increases the risk of inconsistent result states, but the current code is deterministic in practice.
 
 ---
 
@@ -216,174 +214,120 @@ The `CqResult` schema is a shared contract and changing it is out of scope. Howe
 #### P16. Functional core, imperative shell -- Alignment: 2/3
 
 **Current state:**
-Analysis functions (`_analyze_call`, `_detect_hazards`, `_classify_call`, `_collect_scopes`) are effectively pure. The imperative shell is the `cmd_*` entry points that read files and mutate results.
+The analysis modules have a clear separation in many places:
+- `_analyze_call()` at `tools/cq/macros/calls/analysis.py:176-218` is a pure function: `ast.Call -> CallAnalysis`.
+- `_detect_hazards()` at `analysis.py:263-287` is pure: `(ast.Call, CallAnalysis) -> list[str]`.
+- `extract_instruction_facts()` at `tools/cq/introspection/bytecode_index.py:57-110` is pure: `CodeType -> list[InstructionFact]`.
+- `build_cfg()` at `tools/cq/introspection/cfg_builder.py:394-419` is pure: `CodeType -> CFG`.
+- `_generate_bundle_id()` in `tools/cq/neighborhood/bundle_builder.py` is pure: inputs -> deterministic sha256 hash.
 
 **Findings:**
-- `tools/cq/macros/calls/analysis.py:290-344` (`_enrich_call_site`): Reads files, compiles source code, and calls `analyze_symtable`/`analyze_bytecode` -- IO mixed into what looks like an analysis function.
-- `tools/cq/neighborhood/bundle_builder.py:188-233` (`_store_artifacts_with_preview`): Performs filesystem writes (creating directories, writing JSON files) inside what is otherwise a pure assembly pipeline.
+- `_analyze_function` at `tools/cq/macros/impact.py:474-530` mixes filesystem IO (reading source files at lines 490-497) with analysis logic (taint visitor at lines 505-507) and recursive propagation (lines 510-530). The "imperative shell" (file reading) is interleaved with the "functional core" (taint analysis) at each recursion level.
+- `_collect_call_sites_for_file` at `tools/cq/macros/calls/analysis.py:475-510` reads the file (IO), parses it (transform), finds calls (pure analysis), computes context windows (pure), and extracts snippets (pure) all in one function. The IO is at the top but not separated from the analysis pipeline.
+- `resolve_target_definition` at `tools/cq/macros/calls_target.py:36-57` coordinates filesystem search, AST parsing, and result selection. The search (IO) and parsing (transform) are interleaved.
+- `build_neighborhood_bundle` in `tools/cq/neighborhood/bundle_builder.py` performs tree-sitter parsing (IO/transform boundary) and neighborhood collection (pure transform) within the same pipeline.
 
 **Suggested improvement:**
-For `_store_artifacts_with_preview`, return the artifact content as data and let the caller decide whether to persist. The pure computation (content generation, digest computation) can be separated from the IO (file write).
+For `_analyze_function`, separate file reading into a "source provider" function that can be injected or pre-loaded, then pass the source text to a pure `analyze_taint(source, fn, tainted_params, index) -> list[TaintedSite]` function. This would allow the taint analysis logic to be tested without filesystem access. For call site collection, pre-load source texts at the pipeline entry point and pass them through.
 
 **Effort:** medium
-**Risk if unaddressed:** low
+**Risk if unaddressed:** low -- The current pattern works correctly but requires real files for testing the analysis logic.
 
 ---
 
 #### P17. Idempotency -- Alignment: 3/3
 
-Macro commands are read-only analyses that produce deterministic results for the same inputs. Cache writes use content-addressed keys with snapshot fingerprinting (`calls_target_cache.py:61-83`), making re-runs safe.
+**Current state:**
+Operations across all four modules are idempotent by construction:
+- `DefIndex.build(root)` at `tools/cq/index/def_index.py:424-483` produces the same index given the same filesystem state. Re-running produces identical results.
+- `extract_instruction_facts(code)` at `tools/cq/introspection/bytecode_index.py:57-110` is deterministic for a given code object.
+- `build_cfg(code)` at `tools/cq/introspection/cfg_builder.py:394-419` produces identical CFGs for identical code objects.
+- `extract_scope_graph(source, filename)` at `tools/cq/introspection/symtable_extract.py:131-164` is deterministic.
+- `_stable_callsite_id` at `tools/cq/macros/calls/analysis.py:347-356` generates deterministic IDs via sha256.
+- Cache write/read in `calls_target_cache.py` uses snapshot-based invalidation (`target_scope_snapshot_digest` at line 61-83), ensuring stale cache entries are refreshed correctly.
+- `execute_neighborhood` at `tools/cq/neighborhood/executor.py:39-100` produces deterministic results via sha256 bundle IDs and deterministic section ordering.
 
-No action needed.
+**Suggested improvement:** None required. Idempotency is well maintained.
+
+**Effort:** -
+**Risk if unaddressed:** -
 
 ---
 
-### Category: Simplicity (19-22)
-
-#### P19. KISS -- Alignment: 2/3
+#### P18. Determinism / reproducibility -- Alignment: 3/3
 
 **Current state:**
-Individual macros are straightforward. The `calls` macro has accumulated significant complexity.
+Determinism is explicitly maintained across the pipeline:
+- `_stable_callsite_id` at `tools/cq/macros/calls/analysis.py:347-356` uses `sha256(f"{file}:{line}:{col}:{callee}:{context}")` for reproducible call site identifiers.
+- `_generate_bundle_id` in `tools/cq/neighborhood/bundle_builder.py` uses sha256 over bundle content for deterministic IDs.
+- `SECTION_ORDER` at `tools/cq/neighborhood/section_layout.py` (17-slot tuple) ensures deterministic section ordering regardless of assembly order.
+- `assign_result_finding_ids(result)` at `tools/cq/neighborhood/executor.py:98` and `tools/cq/macros/result_builder.py:113` ensures stable finding identifiers.
+- File iteration in `_iter_source_files` at `tools/cq/index/def_index.py:268-285` uses sorted glob patterns.
+- `tabulate_files` at `tools/cq/index/files.py:144-146` returns files sorted by path: `sorted(filtered, key=lambda path: path.as_posix())`.
+- `uuid7_str()` at `tools/cq/neighborhood/executor.py:46` uses monotonic UUID7 for run IDs, providing ordered but unique identifiers.
+- The `_EXPR_TAINT_HANDLERS` dispatch table at `tools/cq/macros/impact.py:399-417` is static and deterministic.
 
-**Findings:**
-- `tools/cq/macros/calls/entry.py` is 515 LOC with 14 imports from sibling modules, 7 from core, and 5 from other CQ packages. The `_build_calls_result` function (lines 420-462) chains 8 distinct phases. This is the most complex orchestration in the scope.
-- `tools/cq/macros/impact.py:396-416`: The `_EXPR_TAINT_HANDLERS` dispatch table uses 16 `cast("TaintHandler", ...)` calls. This is a clean dispatch pattern but the cast noise obscures readability.
+**Suggested improvement:** None required. Determinism guarantees are strong.
 
-**Suggested improvement:**
-For `_EXPR_TAINT_HANDLERS`, define the handler type as `Callable[[TaintVisitor, Any], bool]` (since handlers accept specific `ast.*` subtypes) and remove the casts. Alternatively, use `type: ignore[dict-item]` on the dict literal.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P20. YAGNI -- Alignment: 2/3
-
-**Current state:**
-Most code serves a clear purpose.
-
-**Findings:**
-- `tools/cq/macros/contracts.py:39-53`: `MacroExecutionRequestV1` and `MacroTargetResolutionV1` appear to be unused within the macros scope. No file in the reviewed scope constructs or consumes these types.
-- `tools/cq/neighborhood/contracts.py:65-92`: `plan_feasible_slices` is exported from `__init__.py` and `bundle_builder.py` but never called in the neighborhood assembly pipeline. It appears to be speculative infrastructure for future capability gating.
-
-**Suggested improvement:**
-Verify whether `MacroExecutionRequestV1`, `MacroTargetResolutionV1`, and `plan_feasible_slices` are used elsewhere in the codebase. If not, remove them to reduce surface area.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-#### P21. Least astonishment -- Alignment: 2/3
-
-**Current state:**
-APIs are generally predictable.
-
-**Findings:**
-- `tools/cq/macros/calls/scanning.py` exports both `rg_find_candidates` (public) and `_rg_find_candidates` (private, with additional `lang_scope` parameter). The public wrapper simply delegates. `calls/entry.py:49` imports the private `_rg_find_candidates` directly, bypassing the public API. This is confusing -- which is the "real" API?
-- `tools/cq/macros/calls/analysis.py:407-417`: `collect_call_sites` is a public function that simply delegates to `_collect_call_sites`. The wrapper adds no value.
-
-**Suggested improvement:**
-Remove the public/private duality. Make `rg_find_candidates` the single function with an optional `lang_scope` parameter. Remove the trivial `collect_call_sites` wrapper and export `_collect_call_sites` as `collect_call_sites` directly.
-
-**Effort:** small
-**Risk if unaddressed:** low
-
----
-
-### Category: Quality (23-24)
-
-#### P23. Design for testability -- Alignment: 2/3
-
-**Current state:**
-Pure analysis functions (hazard detection, signature parsing, taint visitors) are highly testable. Result assembly functions are harder to test.
-
-**Findings:**
-- `tools/cq/macros/calls/entry.py:265-297`: `_analyze_calls_sites` requires constructing a full `CqResult` object to test because it mutates the result as a side effect. The interesting return value (analysis summary) could be tested independently if separated.
-- `tools/cq/macros/impact.py:473-529`: `_analyze_function` takes an `_AnalyzeContext` with a `DefIndex` that requires building from the filesystem. Testing requires either real files or monkeypatching the index.
-- `tools/cq/neighborhood/tree_sitter_collector.py:596-663`: `collect_tree_sitter_neighborhood` performs filesystem reads. The parsing step could accept `bytes` directly instead of resolving files internally, enabling testing without real files.
-
-**Suggested improvement:**
-Add an overload or internal variant of `collect_tree_sitter_neighborhood` that accepts pre-loaded `source_bytes` and a `language` string, allowing unit tests to bypass filesystem access.
-
-**Effort:** medium
-**Risk if unaddressed:** medium
-
----
-
-#### P24. Observability -- Alignment: 2/3
-
-**Current state:**
-`calls/entry.py` has a module-level logger with debug/warning messages. Other macros have no logging.
-
-**Findings:**
-- `tools/cq/macros/calls/entry.py:71,485,488,504`: Logger used for debug start/completion and warning on fallback. Good pattern.
-- `tools/cq/macros/impact.py`, `sig_impact.py`, `imports.py`, `scopes.py`, `bytecode.py`, `side_effects.py`, `exceptions.py`: None of these macros have any logging. Failures in file parsing are silently swallowed via bare `continue` in except blocks.
-- `tools/cq/neighborhood/tree_sitter_collector.py:545-546`: Parse errors are captured into `DegradeEventV1` diagnostics, which is excellent structured observability. This pattern is not used in macros.
-
-**Suggested improvement:**
-Add a module-level logger to each macro with `debug` messages for start/completion and `warning` messages for fallback paths. The neighborhood module's `DegradeEventV1` pattern should be adopted by macros for structured error reporting.
-
-**Effort:** small
-**Risk if unaddressed:** low
+**Effort:** -
+**Risk if unaddressed:** -
 
 ---
 
 ## Cross-Cutting Themes
 
-### Theme 1: Mixed struct systems create cognitive overhead
+### Theme 1: CqResult as a Mutable Bag Pattern
 
-Three struct systems coexist: `dataclass(frozen=True)`, `msgspec.Struct`, and `CqStruct` (which extends `msgspec.Struct`). The choice between them appears inconsistent:
-- Cross-module contracts use `CqStruct` (correct per CLAUDE.md)
-- Domain models use `msgspec.Struct` (reasonable for hot paths)
-- Internal context objects use `@dataclass(frozen=True)` (13 occurrences)
+**Description:** Throughout macros and neighborhood rendering, `CqResult` is treated as an open mutable container. Functions receive it as a parameter and directly append to `.key_findings`, `.sections`, `.evidence`, and set attributes on `.summary`. This pattern appears in `impact.py` (4 `_append_*` functions), `snb_renderer.py` (3 `_populate_*` functions), `calls_target.py` (`attach_target_metadata`), and `calls/insight.py` (5 `_add_*_section` functions).
 
-The `@dataclass` usage introduces a third system with no clear benefit over `msgspec.Struct(frozen=True)`. This forces developers to remember which system each type uses when calling `msgspec.structs.replace` (works only on msgspec types) vs `dataclasses.replace`.
+**Root cause:** `CqResult` is designed as a general-purpose result container with mutable lists. There is no builder-only construction phase that locks the result after assembly.
 
-**Root cause:** Organic growth without a clear decision policy for when to use which system.
-**Affected principles:** P10 (illegal states), P19 (KISS), P21 (least astonishment).
-**Suggested approach:** Migrate `@dataclass(frozen=True)` internal types to `msgspec.Struct(frozen=True)` for consistency. Reserve `CqStruct` for cross-module contracts and `msgspec.Struct` for internal models.
+**Affected principles:** P10 (illegal states), P11 (CQS), P14 (Demeter), P15 (tell don't ask).
 
-### Theme 2: Result assembly via side-effectful mutation
+**Suggested approach:** The `MacroResultBuilder` already exists and provides a cleaner API. Extend its adoption: have all macro pipelines construct results exclusively through the builder, then call `.build()` to produce a sealed result. The builder's `add_findings`, `add_section`, `set_summary` methods already encapsulate the mutation; the gap is that many callsites bypass the builder after initial construction.
 
-Every macro follows the same pattern: create empty `CqResult`, pass it to 5-10 helper functions that mutate it in place, return the result. This makes the data flow hard to follow because each helper both reads and writes the result object. The neighborhood module partially addresses this with `BundleViewV1` as an intermediate pure data structure, but the final `render_snb_result` still mutates `CqResult` in place.
+### Theme 2: Frozen Container With Mutable Interior
 
-**Root cause:** `CqResult` is a mutable data bag by design (from `core/schema.py`).
-**Affected principles:** P11 (CQS), P15 (tell don't ask), P23 (testability).
-**Suggested approach:** Adopt a two-phase pattern: (1) Pure computation returns immutable intermediate structures. (2) A single assembly step converts intermediates to `CqResult`. The neighborhood module's `BundleViewV1` -> `render_snb_result` is the right direction.
+**Description:** Several frozen structs contain mutable interior data: `_AnalyzeContext` (frozen) wrapping `TaintState` (mutable sets/lists), `CallSiteBuildContext` (frozen) wrapping mutable `dict[tuple, ast.Call]`. This pattern appears in the taint analysis pipeline and the call site construction pipeline.
 
-### Theme 3: Calls macro accumulated complexity
+**Root cause:** Recursive/accumulative algorithms need mutable state, but the surrounding context is frozen to prevent accidental field reassignment.
 
-The `calls/` subpackage (7 files, ~2,488 LOC) is the largest and most complex macro. It has accumulated semantic enrichment, front-door insight building, neighborhood integration, and cache-aware target resolution. These are all valuable features, but the orchestration in `entry.py` has become a 515-LOC pipeline with deep coupling to 7+ external modules.
+**Affected principles:** P10 (illegal states), P16 (functional core).
 
-**Root cause:** Incremental feature additions without periodic extraction.
-**Affected principles:** P2 (separation of concerns), P3 (SRP), P19 (KISS).
-**Suggested approach:** Extract front-door insight construction into a separate module (`calls/front_door.py`). The current `entry.py` would delegate to: (1) scanning, (2) analysis, (3) front-door assembly, (4) semantic enrichment, (5) result finalization. Each phase would be a single function call.
+**Suggested approach:** Use explicit accumulator patterns. Instead of embedding mutable state in frozen containers, pass the accumulator as a separate parameter or use return-value accumulation. For taint analysis, `_analyze_function` could return `list[TaintedSite]` and the caller merges results. For `_AnalyzeContext`, drop the `state` field and pass it explicitly.
+
+### Theme 3: IO Interleaved With Analysis
+
+**Description:** Several analysis functions read files from disk in the middle of their logic: `_analyze_function` reads source at each recursion level, `_collect_call_sites_for_file` reads and parses per-file, `resolve_target_definition` searches and parses files. This interleaving makes unit testing require real filesystems.
+
+**Root cause:** The analysis APIs were designed for convenience -- pass a root path and the function does everything. Separating IO from analysis would require pre-loading source texts.
+
+**Affected principles:** P12 (DI), P16 (functional core), P23 (testability).
+
+**Suggested approach:** Introduce a `SourceProvider` protocol (or simple callable `Path -> str | None`) that can be injected. Default implementation reads from disk; test implementation returns pre-loaded strings. This is a common pattern in the CQ codebase (the search pipeline already uses similar abstractions).
 
 ## Quick Wins (Top 5)
 
 | Priority | Principle | Finding | Effort | Impact |
 |----------|-----------|---------|--------|--------|
-| 1 | P7 (DRY) | Consolidate `_FRONT_DOOR_PREVIEW_PER_SLICE` and `_CALLS_TARGET_CALLEE_PREVIEW` into single definitions | small | Eliminates 4-file constant drift risk |
-| 2 | P21 (Least astonishment) | Remove public/private wrapper dualities in `scanning.py` and `analysis.py` | small | Clearer API surface |
-| 3 | P24 (Observability) | Add module-level loggers to macros that lack them (6 files) | small | Enables debugging of silent failures |
-| 4 | P20 (YAGNI) | Audit and remove unused contract types (`MacroExecutionRequestV1`, `MacroTargetResolutionV1`) | small | Reduces maintenance surface |
-| 5 | P1 (Info hiding) | Rename underscore-prefixed functions imported across `calls/` modules to be properly public | small | Explicit internal contract within subpackage |
+| 1 | P10 | Make `CallSite` frozen; pass all fields at construction time | small | Prevents post-construction mutation surprises |
+| 2 | P7 | Extract shared comprehension taint handler in `impact.py` | small | Eliminates 4 near-identical functions |
+| 3 | P14 | Add `TaintState.record_visit(key)` method to hide internal set | small | Reduces chain access, encapsulates mutation |
+| 4 | P11 | Split `attach_target_metadata` into query + command | medium | Enables isolated testing of resolution logic |
+| 5 | P10 | Make `ParamInfo` frozen with `kind` passed to constructor | small | Eliminates post-construction field mutation |
 
 ## Recommended Action Sequence
 
-1. **Consolidate duplicated constants (P7).** Move `_FRONT_DOOR_PREVIEW_PER_SLICE` and `_CALLS_TARGET_CALLEE_PREVIEW` into `tools/cq/macros/contracts.py`. Update 6 import sites. Zero risk, immediate benefit.
+1. **Make `CallSite` frozen** (P10): Change to `frozen=True` and ensure all fields are passed at construction. Update `_collect_call_sites_for_file` and `_build_call_site_from_record` to provide all fields upfront rather than using `msgspec.structs.replace()`. This is a low-risk change since `replace` already returns a new instance.
 
-2. **Clean up public/private API dualities (P21).** Remove trivial wrappers in `scanning.py:20-31` and `analysis.py:407-417`. Make the parameterized versions the sole exported functions. Update `calls/__init__.py` accordingly.
+2. **Extract shared comprehension taint handler** (P7): Create `_tainted_comprehension(visitor, expr, *, element_accessor)` in `impact.py` and register for `ListComp`, `SetComp`, `GeneratorExp`. Create a separate `_tainted_dictcomp` variant that checks both key and value. Removes 3 of 4 duplicate functions.
 
-3. **Add structured logging to all macros (P24).** Add `logger = logging.getLogger(__name__)` and `debug`/`warning` calls following the `calls/entry.py` pattern to `impact.py`, `sig_impact.py`, `imports.py`, `scopes.py`, `bytecode.py`, `side_effects.py`, and `exceptions.py`.
+3. **Encapsulate TaintState mutation** (P10, P14): Add `record_visit(key)`, `add_sites(sites)`, and `mark_tainted(var)` methods to `TaintState`. Update `_analyze_function` and `TaintVisitor` to use these methods instead of direct set/list access.
 
-4. **Separate computation from mutation in `_analyze_calls_sites` (P11, P23).** Return findings as a list rather than appending to `result.key_findings` inside the function. Let `_build_calls_result` handle all result mutation.
+4. **Split `attach_target_metadata`** (P11): Extract `resolve_target_metadata(request) -> TargetMetadataResult` as a pure query function that performs resolution and caching. Keep `apply_target_metadata(result, metadata)` as the mutation command. Update `calls/entry.py` to call both in sequence.
 
-5. **Extract target resolution from `calls_target.py` (P3).** Create `calls_target_resolution.py` with `resolve_target_definition`, `_resolve_python_target_definition`, `_resolve_rust_target_definition`, and related helpers. Keep `calls_target.py` as the composition layer.
+5. **Add `index` parameter to macro entry points** (P12): Add `index: SymbolIndex | None = None` parameter to `cmd_impact` and similar macros, defaulting to `DefIndex.build(request.root)`. This enables test injection without changing the default path.
 
-6. **Migrate `@dataclass` internal types to `msgspec.Struct` (Theme 1).** Convert 13 `@dataclass(frozen=True)` types to `msgspec.Struct(frozen=True)` for consistency. This enables uniform use of `msgspec.structs.replace` and `msgspec.structs.asdict` across the codebase.
+6. **Define typed `ContextWindow` struct** (P9): Replace `dict[str, int]` context window pattern with a frozen `ContextWindow(start_line: int, end_line: int)` struct. Update `_compute_context_window` and all consumers.
 
-7. **Make `CallSite` frozen and type its `context_window` field (P10).** Add `frozen=True` to `CallSite`, define a `ContextWindowV1(start_line: int, end_line: int)` struct, and replace `dict[str, int] | None`.
-
-8. **Extract front-door assembly from `calls/entry.py` (Theme 3).** Create `calls/front_door.py` containing `_build_calls_front_door_state`, `_build_calls_front_door_insight`, and `_apply_calls_semantic_with_telemetry`. Reduces `entry.py` from 515 LOC to approximately 250 LOC.
+7. **Consolidate Rust def regex** (P7): Extract the duplicated Rust function definition regex in `calls_target.py` into a single module-level constant used by both `_RUST_DEF_RE` and the inline pattern in `_resolve_rust_target_definition`.

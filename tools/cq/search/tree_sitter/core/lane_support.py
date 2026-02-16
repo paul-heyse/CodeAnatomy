@@ -9,23 +9,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
+
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Parser, Tree
 
     from tools.cq.search.tree_sitter.contracts.core_models import QueryWindowV1
-
-# Shared error tuple for enrichment operations
-# Combined from both python_lane and rust_lane - includes all exceptions
-# that should be caught and degraded gracefully
-ENRICHMENT_ERRORS: tuple[type[Exception], ...] = (
-    RuntimeError,
-    TypeError,
-    ValueError,
-    AttributeError,
-    UnicodeError,
-    KeyError,
-    IndexError,
-)
 
 
 def build_query_windows(

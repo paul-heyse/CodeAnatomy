@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
-from tools.cq.core.cache.contracts import SgRecordCacheV1
 from tools.cq.core.schema import Finding
+from tools.cq.search.cache.contracts import SgRecordCacheV1
 
 
 def record_to_cache_record(record: SgRecord) -> SgRecordCacheV1:

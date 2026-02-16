@@ -7,7 +7,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tools.cq.core.cache import close_cq_cache_backend
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
 from tools.cq.core.schema import CqResult, RunMeta
 from tools.cq.macros.calls_target import AttachTargetMetadataRequestV1, attach_target_metadata
 

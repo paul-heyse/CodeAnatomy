@@ -16,8 +16,10 @@ except ImportError:  # pragma: no cover - optional dependency
     Averager = None
 
 
-def _cache() -> object | None:
-    backend = get_cq_cache_backend(root=Path.cwd())
+def _cache(cache_backend: object | None = None) -> object | None:
+    if cache_backend is None:
+        cache_backend = get_cq_cache_backend(root=Path.cwd())
+    backend = cache_backend
     return getattr(backend, "cache", None)
 
 
@@ -25,8 +27,8 @@ def _sample_count_key(language: str) -> str:
     return f"tree_sitter:runtime_samples:{language}:count"
 
 
-def _averager(language: str) -> object | None:
-    cache = _cache()
+def _averager(language: str, *, cache_backend: object | None = None) -> object | None:
+    cache = _cache(cache_backend)
     if cache is None or Averager is None:
         return None
     try:
@@ -45,13 +47,14 @@ def memoized_value[T](
     key: str,
     compute: Callable[[], T],
     ttl_seconds: int = 300,
+    cache_backend: object | None = None,
 ) -> T:
     """Resolve cached value using diskcache memoize/get-set fallback.
 
     Returns:
         T: Cached or computed value.
     """
-    cache = _cache()
+    cache = _cache(cache_backend)
     if cache is None:
         return compute()
     get_fn = getattr(cache, "get", None)
@@ -66,19 +69,24 @@ def memoized_value[T](
     return compute()
 
 
-def record_runtime_sample(language: str, elapsed_ms: float) -> None:
+def record_runtime_sample(
+    language: str,
+    elapsed_ms: float,
+    *,
+    cache_backend: object | None = None,
+) -> None:
     """Record per-language latency sample for adaptive budgeting."""
     if elapsed_ms <= 0:
         return
     sample = float(elapsed_ms)
-    avg = _averager(language)
+    avg = _averager(language, cache_backend=cache_backend)
     if avg is None:
         return
     add_fn = getattr(avg, "add", None)
     if callable(add_fn):
         with suppress(RuntimeError, TypeError, ValueError):
             add_fn(sample)
-    cache = _cache()
+    cache = _cache(cache_backend)
     if cache is None:
         return
     incr_fn = getattr(cache, "incr", None)
@@ -93,8 +101,8 @@ def record_runtime_sample(language: str, elapsed_ms: float) -> None:
         pass
 
 
-def _cached_average_ms(language: str) -> float | None:
-    avg = _averager(language)
+def _cached_average_ms(language: str, *, cache_backend: object | None = None) -> float | None:
+    avg = _averager(language, cache_backend=cache_backend)
     if avg is None:
         return None
     get_fn = getattr(avg, "get", None)
@@ -109,8 +117,8 @@ def _cached_average_ms(language: str) -> float | None:
     return None
 
 
-def _cached_sample_count(language: str) -> int | None:
-    cache = _cache()
+def _cached_sample_count(language: str, *, cache_backend: object | None = None) -> int | None:
+    cache = _cache(cache_backend)
     if cache is None:
         return None
     get_fn = getattr(cache, "get", None)
@@ -125,24 +133,38 @@ def _cached_sample_count(language: str) -> int | None:
     return None
 
 
-def adaptive_query_budget_ms(*, language: str, fallback_budget_ms: int) -> int:
+def adaptive_query_budget_ms(
+    *,
+    language: str,
+    fallback_budget_ms: int,
+    cache_backend: object | None = None,
+) -> int:
     """Return adaptive query budget derived from recent runtime latency."""
-    cached_average = _cached_average_ms(language)
+    cached_average = _cached_average_ms(language, cache_backend=cache_backend)
     if cached_average is not None:
         bounded_budget = max(25.0, min(2_500.0, cached_average * 4.0))
         return int(bounded_budget)
     return fallback_budget_ms
 
 
-def runtime_snapshot(language: str, *, fallback_budget_ms: int) -> AdaptiveRuntimeSnapshotV1:
+def runtime_snapshot(
+    language: str,
+    *,
+    fallback_budget_ms: int,
+    cache_backend: object | None = None,
+) -> AdaptiveRuntimeSnapshotV1:
     """Return current adaptive runtime snapshot for one language lane."""
-    cached_average = _cached_average_ms(language)
-    cached_count = _cached_sample_count(language)
+    cached_average = _cached_average_ms(language, cache_backend=cache_backend)
+    cached_count = _cached_sample_count(language, cache_backend=cache_backend)
     if cached_average is None:
         cached_average = 0.0
     if cached_count is None:
         cached_count = 0
-    recommended = adaptive_query_budget_ms(language=language, fallback_budget_ms=fallback_budget_ms)
+    recommended = adaptive_query_budget_ms(
+        language=language,
+        fallback_budget_ms=fallback_budget_ms,
+        cache_backend=cache_backend,
+    )
     return AdaptiveRuntimeSnapshotV1(
         language=language,
         average_latency_ms=float(cached_average),

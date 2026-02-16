@@ -13,6 +13,7 @@ import msgspec
 from tools.cq.core.contract_codec import dumps_json_value
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
+from tools.cq.macros.contracts import CallsRequest
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -73,10 +74,12 @@ def build_perf_smoke_report(*, workspace: Path) -> PerfSmokeReport:
     )
     calls_measurement = _measure_pair(
         lambda: cmd_calls(
-            tc=tc,
-            root=workspace,
-            argv=[],
-            function_name="build_graph",
+            CallsRequest(
+                tc=tc,
+                root=workspace,
+                argv=[],
+                function_name="build_graph",
+            )
         )
     )
     query_obj = parse_query("entity=function name=build_graph lang=auto")

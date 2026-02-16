@@ -10,7 +10,11 @@ from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.cli_app.protocol_output import emit_payload
 from tools.cq.cli_app.types import SchemaKind
-from tools.cq.core.schema_export import cq_result_schema, cq_schema_components, query_schema
+from tools.cq.orchestration.schema_export import (
+    cq_result_schema,
+    cq_schema_components,
+    query_schema,
+)
 
 
 def index(

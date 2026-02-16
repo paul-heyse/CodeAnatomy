@@ -7,30 +7,28 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
-from tools.cq.core.cache import (
-    get_cq_cache_backend,
-    maintenance_tick,
-    snapshot_backend_metrics,
-)
+from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
+from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.maintenance import maintenance_tick
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import Anchor, CqResult, Finding, Section, assign_result_finding_ids
 from tools.cq.query.language import QueryLanguage
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime
 from tools.cq.search.pipeline.classifier import get_sg_root
-from tools.cq.search.pipeline.contracts import SmartSearchContext
+from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.python_semantic import merge_matches_and_python_semantic
 from tools.cq.search.pipeline.search_object_view_store import register_search_object_view
 from tools.cq.search.pipeline.search_semantic import apply_search_semantic_insight
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
-    _LanguageSearchResult,
+    LanguageSearchResult,
     _NeighborhoodPreviewInputs,
     _SearchAssemblyInputs,
 )
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_insight import (
+    from tools.cq.core.front_door_builders import (
         FrontDoorInsightV1,
         InsightNeighborhoodV1,
         InsightRiskV1,
@@ -151,7 +149,7 @@ def _build_object_candidate_finding(
 
 
 def _collect_definition_candidates(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     object_runtime: ObjectResolutionRuntime,
 ) -> tuple[list[EnrichedMatch], list[Finding]]:
     """Collect definition candidates for target candidates section.
@@ -283,8 +281,8 @@ def _ast_grep_prefilter_scope_paths(
 
 def _candidate_scope_paths_for_neighborhood(
     *,
-    ctx: SmartSearchContext,
-    partition_results: list[_LanguageSearchResult],
+    ctx: SearchConfig,
+    partition_results: list[LanguageSearchResult],
 ) -> tuple[Path, ...]:
     """Collect candidate scope paths from partition results.
 
@@ -313,7 +311,7 @@ def _candidate_scope_paths_for_neighborhood(
 
 
 def _build_structural_neighborhood_preview(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     *,
     primary_target_finding: Finding | None,
     definition_matches: list[EnrichedMatch],
@@ -334,7 +332,7 @@ def _build_structural_neighborhood_preview(
     tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]
         Neighborhood, findings, and degradation notes.
     """
-    from tools.cq.core.front_door_insight import build_neighborhood_from_slices
+    from tools.cq.core.front_door_builders import build_neighborhood_from_slices
     from tools.cq.core.schema import DetailPayload
     from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectRequest
     from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
@@ -408,8 +406,8 @@ def _build_structural_neighborhood_preview(
 
 def _build_tree_sitter_neighborhood_preview(
     *,
-    ctx: SmartSearchContext,
-    partition_results: list[_LanguageSearchResult],
+    ctx: SearchConfig,
+    partition_results: list[LanguageSearchResult],
     summary: dict[str, object],
     sections: list[Section],
     inputs: _NeighborhoodPreviewInputs,
@@ -498,7 +496,7 @@ def _build_search_risk(
     InsightRiskV1 | None
         Risk assessment or None if no neighborhood available.
     """
-    from tools.cq.core.front_door_insight import InsightRiskCountersV1, risk_from_counters
+    from tools.cq.core.front_door_builders import InsightRiskCountersV1, risk_from_counters
 
     if neighborhood is None:
         return None
@@ -511,7 +509,7 @@ def _build_search_risk(
 
 
 def _assemble_search_insight(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     inputs: _SearchAssemblyInputs,
 ) -> FrontDoorInsightV1:
     """Assemble front-door insight from search assembly inputs.
@@ -528,7 +526,7 @@ def _assemble_search_insight(
     FrontDoorInsightV1
         Assembled insight card with semantic enrichment.
     """
-    from tools.cq.core.front_door_insight import SearchInsightBuildRequestV1, build_search_insight
+    from tools.cq.core.front_door_builders import SearchInsightBuildRequestV1, build_search_insight
 
     insight = build_search_insight(
         SearchInsightBuildRequestV1(
@@ -559,8 +557,8 @@ def _assemble_search_insight(
 
 
 def _prepare_search_assembly_inputs(
-    ctx: SmartSearchContext,
-    partition_results: list[_LanguageSearchResult],
+    ctx: SearchConfig,
+    partition_results: list[LanguageSearchResult],
 ) -> _SearchAssemblyInputs:
     """Prepare all assembly inputs from partition results.
 
@@ -577,7 +575,8 @@ def _prepare_search_assembly_inputs(
         Complete assembly inputs for result construction.
     """
     from tools.cq.search.objects.resolve import build_object_resolved_view
-    from tools.cq.search.pipeline.smart_search import _build_search_summary, build_sections
+    from tools.cq.search.pipeline.smart_search_sections import build_sections
+    from tools.cq.search.pipeline.smart_search_summary import build_search_summary
 
     (
         enriched_matches,
@@ -585,7 +584,7 @@ def _prepare_search_assembly_inputs(
         python_semantic_telemetry,
         python_semantic_diagnostics,
     ) = merge_matches_and_python_semantic(ctx, partition_results)
-    summary, all_diagnostics = _build_search_summary(
+    summary, all_diagnostics = build_search_summary(
         ctx,
         partition_results,
         enriched_matches,
@@ -644,8 +643,8 @@ def _prepare_search_assembly_inputs(
 
 
 def _assemble_smart_search_result(
-    ctx: SmartSearchContext,
-    partition_results: list[_LanguageSearchResult],
+    ctx: SearchConfig,
+    partition_results: list[LanguageSearchResult],
 ) -> CqResult:
     """Assemble final CqResult from search context and partition results.
 
@@ -661,8 +660,8 @@ def _assemble_smart_search_result(
     CqResult
         Complete assembled search result.
     """
-    from tools.cq.core.front_door_insight import to_public_front_door_insight_dict
-    from tools.cq.search.pipeline.smart_search import build_finding
+    from tools.cq.core.front_door_render import to_public_front_door_insight_dict
+    from tools.cq.search.pipeline.smart_search_sections import build_finding
 
     inputs = _prepare_search_assembly_inputs(ctx, partition_results)
     insight = _assemble_search_insight(ctx, inputs)
@@ -688,12 +687,13 @@ def _assemble_smart_search_result(
     result.summary["cache_maintenance"] = contract_to_builtins(
         maintenance_tick(get_cq_cache_backend(root=ctx.root))
     )
-    return assign_result_finding_ids(result)
+    assign_result_finding_ids(result)
+    return result
 
 
 def assemble_smart_search_result(
-    ctx: SmartSearchContext,
-    partition_results: list[_LanguageSearchResult],
+    ctx: SearchConfig,
+    partition_results: list[LanguageSearchResult],
 ) -> CqResult:
     """Assemble Smart Search result from context and partition results.
 

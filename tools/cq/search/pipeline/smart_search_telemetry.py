@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from tools.cq.search.enrichment.language_registry import get_language_adapter
+
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
@@ -302,41 +304,21 @@ def build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, object
 
     telemetry: dict[str, object] = empty_enrichment_telemetry()
     for match in matches:
+        adapter = get_language_adapter(match.language)
+        if adapter is None:
+            continue
         lang_bucket = telemetry.get(match.language)
         if not isinstance(lang_bucket, dict):
             continue
-        payload = match.python_enrichment if match.language == "python" else match.rust_tree_sitter
+        payload = adapter.payload_from_match(match)
         status = status_from_enrichment(payload)
         lang_bucket[status] = cast("int", lang_bucket.get(status, 0)) + 1
-        if not isinstance(payload, dict):
+        if payload is None:
             continue
-        if match.language == "python":
-            accumulate_python_enrichment(lang_bucket, payload)
-        elif match.language == "rust":
-            accumulate_rust_enrichment(lang_bucket, payload)
+        adapter.accumulate_telemetry(lang_bucket, payload)
 
     attach_enrichment_cache_stats(telemetry)
     return telemetry
-
-
-def _resolve_search_worker_count(partition_count: int) -> int:
-    """Resolve worker count for search classification parallelism.
-
-    Parameters
-    ----------
-    partition_count
-        Number of partitions to classify.
-
-    Returns:
-    -------
-    int
-        Number of workers to use.
-    """
-    from tools.cq.search.pipeline.smart_search import MAX_SEARCH_CLASSIFY_WORKERS
-
-    if partition_count <= 1:
-        return 1
-    return min(partition_count, MAX_SEARCH_CLASSIFY_WORKERS)
 
 
 def new_python_semantic_telemetry() -> dict[str, int]:

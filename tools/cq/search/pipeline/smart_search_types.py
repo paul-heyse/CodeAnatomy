@@ -17,11 +17,11 @@ from tools.cq.search.pipeline.classifier import MatchCategory, SymtableEnrichmen
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
 
-    from tools.cq.core.front_door_insight import InsightNeighborhoodV1
+    from tools.cq.core.front_door_builders import InsightNeighborhoodV1
     from tools.cq.core.schema import Finding, Section
     from tools.cq.core.semantic_contracts import SemanticProvider
     from tools.cq.search.objects.resolve import ObjectResolutionRuntime
-    from tools.cq.search.pipeline.contracts import SearchConfig, SmartSearchContext
+    from tools.cq.search.pipeline.contracts import SearchConfig
 
 # Type aliases
 _PythonSemanticAnchorKey = tuple[str, int, int, str]
@@ -252,7 +252,7 @@ class ClassificationBatchResult(CqStruct, frozen=True):
 
 
 @dataclass(frozen=True, slots=True)
-class _LanguageSearchResult:
+class LanguageSearchResult:
     """Search result for a single language partition."""
 
     lang: QueryLanguage
@@ -333,12 +333,10 @@ class _NeighborhoodPreviewInputs:
 class SearchResultAssembly:
     """Assembly inputs for compatibility with package-level orchestrators."""
 
-    context: SmartSearchContext
+    context: SearchConfig
     partition_results: list[object]
 
 
-# Public aliases
-LanguageSearchResult = _LanguageSearchResult
 PythonSemanticPrefetchResult = _PythonSemanticPrefetchResult
 
 

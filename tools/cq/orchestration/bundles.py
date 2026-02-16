@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.merge import merge_step_results
-from tools.cq.core.request_factory import RequestContextV1, RequestFactory
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms
 from tools.cq.core.target_specs import BundleTargetKind, TargetSpecV1
@@ -21,6 +20,7 @@ from tools.cq.macros.imports import cmd_imports
 from tools.cq.macros.scopes import cmd_scopes
 from tools.cq.macros.side_effects import cmd_side_effects
 from tools.cq.macros.sig_impact import cmd_sig_impact
+from tools.cq.orchestration.request_factory import RequestContextV1, RequestFactory
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.ir import Scope
 from tools.cq.query.parser import parse_query

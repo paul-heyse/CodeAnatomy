@@ -15,6 +15,7 @@ from tools.cq.core.services import (
     SearchServiceRequest,
 )
 from tools.cq.core.toolchain import Toolchain
+from tools.cq.macros.contracts import CallsRequest
 
 
 def test_runtime_services_are_workspace_scoped(tmp_path: Path) -> None:
@@ -39,10 +40,12 @@ def test_service_request_contracts_are_constructible(tmp_path: Path) -> None:
     toolchain = Toolchain.detect()
     search = SearchServiceRequest(root=tmp_path, query="foo")
     calls = CallsServiceRequest(
-        root=tmp_path,
-        function_name="foo",
-        tc=toolchain,
-        argv=[],
+        request=CallsRequest(
+            root=tmp_path,
+            function_name="foo",
+            tc=toolchain,
+            argv=[],
+        ),
     )
     run = RunMeta(
         macro="q",
@@ -55,5 +58,5 @@ def test_service_request_contracts_are_constructible(tmp_path: Path) -> None:
     entity = EntityFrontDoorRequest(result=mk_result(run))
 
     assert search.query == "foo"
-    assert calls.function_name == "foo"
+    assert calls.request.function_name == "foo"
     assert entity.result is not None

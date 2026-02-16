@@ -7,12 +7,9 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tools.cq.core.cache import (
-    build_scope_snapshot_fingerprint,
-    close_cq_cache_backend,
-    reset_cache_telemetry,
-    snapshot_cache_telemetry,
-)
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
+from tools.cq.core.cache.snapshot_fingerprint import build_scope_snapshot_fingerprint
+from tools.cq.core.cache.telemetry import reset_cache_telemetry, snapshot_cache_telemetry
 
 
 @pytest.fixture(autouse=True)

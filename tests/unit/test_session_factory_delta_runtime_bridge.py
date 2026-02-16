@@ -56,7 +56,7 @@ class _LegacyBridgeModule(ModuleType):
 
 def _import_override(module: ModuleType) -> object:
     def _load(name: str) -> ModuleType:
-        if name == "datafusion_ext":
+        if name in {"datafusion_ext", "datafusion_engine.extensions.datafusion_ext"}:
             return module
         msg = f"no module named {name}"
         raise ImportError(msg)

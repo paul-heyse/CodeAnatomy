@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from tools.cq.core.render_utils import clean_scalar as _clean_scalar
+from tools.cq.core.render_utils import extract_symbol_hint as _extract_symbol_hint
+from tools.cq.core.render_utils import iter_result_findings as _iter_result_findings
+from tools.cq.core.render_utils import na as _na
+
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding
 
@@ -12,38 +17,6 @@ MAX_CODE_OVERVIEW_ITEMS = 5
 _TOP_SYMBOL_SKIP_CATEGORIES: frozenset[str] = frozenset(
     {"count", "hot_file", "occurrence", "non_code_occurrence"}
 )
-
-
-def _na(reason: str) -> str:
-    return f"N/A — {reason.replace('_', ' ')}"
-
-
-def _clean_scalar(value: object) -> str | None:
-    if isinstance(value, str):
-        text = value.strip()
-        return text or None
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return None
-
-
-def _extract_symbol_hint(finding: Finding) -> str | None:
-    for key in ("name", "symbol", "match_text", "callee", "text"):
-        value = finding.details.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip().split("\n", maxsplit=1)[0]
-    message = finding.message.strip()
-    if not message:
-        return None
-    if ":" in message:
-        candidate = message.rsplit(":", maxsplit=1)[1].strip()
-        if candidate:
-            return candidate
-    if "(" in message:
-        return message.split("(", maxsplit=1)[0].strip() or None
-    return message
 
 
 def _collect_top_symbols(findings: list[Finding]) -> str:
@@ -237,27 +210,6 @@ def _format_language_scope(summary: dict[str, object]) -> str:
         if inferred_scope is not None:
             return f"`{inferred_scope}`"
     return _na("language_scope_missing")
-
-
-def _iter_result_findings(result: CqResult) -> list[Finding]:
-    """Collect all findings from result.
-
-    Parameters
-    ----------
-    result : CqResult
-        Analysis result.
-
-    Returns:
-    -------
-    list[Finding]
-        All findings.
-    """
-    findings: list[Finding] = []
-    findings.extend(result.key_findings)
-    for section in result.sections:
-        findings.extend(section.findings)
-    findings.extend(result.evidence)
-    return findings
 
 
 def render_code_overview(result: CqResult) -> list[str]:

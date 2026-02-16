@@ -12,18 +12,17 @@ from typing import Literal
 import msgspec
 
 from tools.cq.core.python_ast_utils import safe_unparse
-from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
     Finding,
     Section,
-    mk_result,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
+from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
 
@@ -356,14 +355,14 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
         exclude=request.exclude,
     )
 
-    run_ctx = RunContext.from_parts(
+    builder = MacroResultBuilder(
+        "side-effects",
         root=request.root,
         argv=request.argv,
         tc=request.tc,
         started_ms=started,
     )
-    run = run_ctx.to_runmeta("side-effects")
-    result = mk_result(run)
+    result = builder.result
 
     # Categorize effects
     by_kind = _group_effects_by_kind(all_effects)

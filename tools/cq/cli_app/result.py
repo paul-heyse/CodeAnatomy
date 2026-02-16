@@ -24,7 +24,7 @@ from tools.cq.core.renderers import (
     render_mermaid_class_diagram,
     render_mermaid_flowchart,
 )
-from tools.cq.core.report import render_markdown, render_summary
+from tools.cq.core.report import render_markdown, render_summary_compact
 from tools.cq.core.serialization import dumps_json
 
 if TYPE_CHECKING:
@@ -40,7 +40,7 @@ def _attach_insight_artifact_refs(
     telemetry_ref: str | None = None,
     neighborhood_overflow_ref: str | None = None,
 ) -> None:
-    from tools.cq.core.front_door_insight import (
+    from tools.cq.core.front_door_builders import (
         attach_artifact_refs,
         attach_neighborhood_overflow_ref,
         coerce_front_door_insight,
@@ -124,7 +124,7 @@ def render_result(
     renderers: dict[str, Callable[[CqResult], str]] = {
         "json": lambda payload: dumps_json(payload, indent=2),
         "md": render_markdown,
-        "summary": render_summary,
+        "summary": render_summary_compact,
         "mermaid": render_mermaid_flowchart,
         "mermaid-class": render_mermaid_class_diagram,
         "dot": render_dot,
@@ -322,8 +322,8 @@ def _build_search_artifact_bundle(
         query=_search_query(result.summary),
         macro=result.run.macro,
         summary=_search_artifact_summary(result.summary),
-        object_summaries=list(resolved_view.summaries),
-        occurrences=list(resolved_view.occurrences),
+        object_summaries=[msgspec.to_builtins(item) for item in resolved_view.summaries],
+        occurrences=[msgspec.to_builtins(item) for item in resolved_view.occurrences],
         diagnostics=_search_artifact_diagnostics(result.summary),
         snippets=dict(resolved_view.snippets),
         created_ms=(

@@ -7,14 +7,13 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from tools.cq.core.cache import (
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
+from tools.cq.core.cache.key_builder import (
     build_cache_key,
     build_cache_tag,
     build_run_cache_tag,
     build_scope_hash,
     canonicalize_cache_payload,
-    close_cq_cache_backend,
-    get_cq_cache_backend,
 )
 
 INCREMENTED_COUNTER_VALUE = 3

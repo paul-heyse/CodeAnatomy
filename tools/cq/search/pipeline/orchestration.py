@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from tools.cq.core.schema import CqResult, Finding, Section
-from tools.cq.search.pipeline.contracts import SmartSearchContext
+from tools.cq.search.pipeline.contracts import SearchConfig
 
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.smart_search_types import SearchResultAssembly
@@ -27,7 +27,7 @@ def assemble_result(assembly: SearchResultAssembly) -> CqResult:
 
     pipeline = SearchPipeline(assembly.context)
     assembler = cast(
-        "Callable[[SmartSearchContext, list[object]], CqResult]",
+        "Callable[[SearchConfig, list[object]], CqResult]",
         assemble_smart_search_result,
     )
     return pipeline.assemble(assembly.partition_results, assembler)
@@ -67,11 +67,11 @@ def insert_neighborhood_preview(
 class SearchPipeline:
     """Pipeline facade for search orchestration steps."""
 
-    context: SmartSearchContext
+    context: SearchConfig
 
     def run_partitions(
         self,
-        partition_runner: Callable[[SmartSearchContext], TPartition],
+        partition_runner: Callable[[SearchConfig], TPartition],
     ) -> TPartition:
         """Run discovery/classification/enrichment partition stage.
 
@@ -83,7 +83,7 @@ class SearchPipeline:
     def assemble(
         self,
         partition_results: TPartition,
-        assembler: Callable[[SmartSearchContext, TPartition], CqResult],
+        assembler: Callable[[SearchConfig, TPartition], CqResult],
     ) -> CqResult:
         """Run final section/summary assembly stage.
 
@@ -94,8 +94,8 @@ class SearchPipeline:
 
     def execute(
         self,
-        partition_runner: Callable[[SmartSearchContext], TPartition],
-        assembler: Callable[[SmartSearchContext, TPartition], CqResult],
+        partition_runner: Callable[[SearchConfig], TPartition],
+        assembler: Callable[[SearchConfig, TPartition], CqResult],
     ) -> CqResult:
         """Execute candidate partitioning and result assembly.
 

@@ -103,7 +103,7 @@ def lift_anchor(node: Node, *, parent_types: frozenset[str]) -> Node:
     return node
 
 
-def make_parser(language: Language) -> Parser:
+def make_parser_from_language(language: Language) -> Parser:
     """Create a tree-sitter Parser for the given language.
 
     Parameters
@@ -146,7 +146,7 @@ def parse_tree(source_bytes: bytes, *, language: Language) -> Tree:
     Raises:
         RuntimeError: When parser bindings are unavailable or parse returns no tree.
     """
-    parser = make_parser(language)
+    parser = make_parser_from_language(language)
     tree = parser.parse(source_bytes)
     if tree is None:
         msg = "tree-sitter parser returned no tree"
@@ -158,6 +158,6 @@ __all__ = [
     "ENRICHMENT_ERRORS",
     "build_query_windows",
     "lift_anchor",
-    "make_parser",
+    "make_parser_from_language",
     "parse_tree",
 ]

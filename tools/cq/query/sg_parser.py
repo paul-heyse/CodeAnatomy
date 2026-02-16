@@ -17,26 +17,24 @@ from tools.cq.astgrep.sgpy_scanner import (
     group_records_by_file,
     scan_files,
 )
-from tools.cq.core.cache import (
-    CqCacheBackend,
-    CqCachePolicyV1,
-    ScopePlanV1,
-    ScopeResolutionV1,
-    build_cache_key,
-    build_namespace_cache_tag,
-    default_cache_policy,
-    get_cq_cache_backend,
-    is_namespace_cache_enabled,
-    record_cache_decode_failure,
-    record_cache_get,
-    record_cache_set,
-    resolve_namespace_ttl_seconds,
-    resolve_scope,
-)
+from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import (
     decode_fragment_payload,
     encode_fragment_payload,
     is_fragment_cache_payload,
+)
+from tools.cq.core.cache.interface import CqCacheBackend
+from tools.cq.core.cache.key_builder import build_cache_key, build_namespace_cache_tag
+from tools.cq.core.cache.namespaces import (
+    is_namespace_cache_enabled,
+    resolve_namespace_ttl_seconds,
+)
+from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
+from tools.cq.core.cache.scope_services import ScopePlanV1, ScopeResolutionV1, resolve_scope
+from tools.cq.core.cache.telemetry import (
+    record_cache_decode_failure,
+    record_cache_get,
+    record_cache_set,
 )
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.structs import CqStruct
@@ -46,6 +44,7 @@ from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE,
     QueryLanguage,
     file_extensions_for_language,
+    is_rust_language,
 )
 from tools.cq.query.parser import QueryParseError
 
@@ -303,7 +302,7 @@ def _list_files_for_inventory(
     globs: list[str] | None,
     lang: str,
 ) -> list[Path]:
-    query_lang: QueryLanguage = "rust" if lang == "rust" else "python"
+    query_lang: QueryLanguage = "rust" if is_rust_language(lang) else "python"
     repo_context = resolve_repo_context(root)
     repo_index = build_repo_file_index(repo_context)
     result = tabulate_files(

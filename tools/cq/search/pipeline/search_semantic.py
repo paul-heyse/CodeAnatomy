@@ -15,7 +15,13 @@ from tools.cq.core.semantic_contracts import (
     derive_semantic_contract_state,
 )
 from tools.cq.query.language import QueryLanguage
-from tools.cq.search.pipeline.contracts import SmartSearchContext
+from tools.cq.search.pipeline._semantic_helpers import (
+    count_mapping_rows as _count_mapping_rows,
+)
+from tools.cq.search.pipeline._semantic_helpers import (
+    normalize_python_semantic_degradation_reason as _normalize_python_semantic_degradation_reason,
+)
+from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch, _SearchSemanticOutcome
 from tools.cq.search.semantic.models import (
     LanguageSemanticEnrichmentRequest,
@@ -26,25 +32,7 @@ from tools.cq.search.semantic.models import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_insight import FrontDoorInsightV1
-
-
-def _count_mapping_rows(value: object) -> int:
-    """Count dictionary rows in a list.
-
-    Parameters
-    ----------
-    value
-        Value to count rows in.
-
-    Returns:
-    -------
-    int
-        Number of dictionary rows.
-    """
-    if not isinstance(value, list):
-        return 0
-    return sum(1 for row in value if isinstance(row, dict))
+    from tools.cq.core.front_door_builders import FrontDoorInsightV1
 
 
 def _payload_coverage_status(payload: dict[str, object]) -> tuple[str | None, str | None]:
@@ -146,7 +134,7 @@ def _rust_payload_reason(payload: dict[str, object]) -> str | None:
 
 def _resolve_search_semantic_target(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     primary_target_finding: Finding | None,
     primary_target_match: EnrichedMatch | None,
 ) -> tuple[Path, QueryLanguage, Anchor, str] | None:
@@ -192,59 +180,6 @@ def _resolve_search_semantic_target(
     if not symbol_hint:
         symbol_hint = ctx.query
     return target_file_path, target_language, anchor, symbol_hint
-
-
-def _normalize_python_semantic_degradation_reason(
-    *,
-    reasons: tuple[str, ...],
-    coverage_reason: str | None,
-) -> str:
-    """Normalize degradation reason from multiple sources.
-
-    Parameters
-    ----------
-    reasons
-        Collection of degradation reasons.
-    coverage_reason
-        Optional coverage-specific reason.
-
-    Returns:
-    -------
-    str
-        Normalized reason string.
-    """
-    explicit_reasons = {
-        "unsupported_capability",
-        "capability_probe_unavailable",
-        "request_interface_unavailable",
-        "request_failed",
-        "request_timeout",
-        "session_unavailable",
-        "timeout",
-        "no_signal",
-    }
-    normalized_coverage_reason = coverage_reason
-    if normalized_coverage_reason and normalized_coverage_reason.startswith(
-        "no_python_semantic_signal:"
-    ):
-        normalized_coverage_reason = normalized_coverage_reason.removeprefix(
-            "no_python_semantic_signal:"
-        )
-    if normalized_coverage_reason == "timeout":
-        normalized_coverage_reason = "request_timeout"
-    if (
-        isinstance(normalized_coverage_reason, str)
-        and normalized_coverage_reason in explicit_reasons
-    ):
-        return normalized_coverage_reason
-    if coverage_reason:
-        return "no_signal"
-
-    for reason in reasons:
-        normalized_reason = "request_timeout" if reason == "timeout" else reason
-        if normalized_reason in explicit_reasons and normalized_reason != "no_signal":
-            return normalized_reason
-    return "no_signal"
 
 
 def _apply_prefetched_search_semantic_outcome(
@@ -368,7 +303,7 @@ def _apply_search_semantic_payload_outcome(
 
 def collect_search_semantic_outcome(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     primary_target_finding: Finding | None,
     primary_target_match: EnrichedMatch | None,
 ) -> _SearchSemanticOutcome:
@@ -594,7 +529,7 @@ def derive_search_semantic_state(
 
 def apply_search_semantic_insight(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     insight: FrontDoorInsightV1,
     summary: dict[str, object],
     primary_target_finding: Finding | None,
@@ -620,7 +555,7 @@ def apply_search_semantic_insight(
     FrontDoorInsightV1
         Augmented insight with semantic contract state.
     """
-    from tools.cq.core.front_door_insight import augment_insight_with_semantic
+    from tools.cq.core.front_door_builders import augment_insight_with_semantic
 
     outcome = collect_search_semantic_outcome(
         ctx=ctx,

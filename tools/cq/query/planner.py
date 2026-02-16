@@ -24,6 +24,7 @@ from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
     QueryLanguageScope,
+    is_rust_language,
 )
 
 if TYPE_CHECKING:
@@ -330,8 +331,13 @@ def _compile_pattern_query(query: Query) -> ToolPlan:
     -------
     ToolPlan
         Execution plan for the pattern query.
+
+    Raises:
+        ValueError: If ``query.pattern_spec`` is missing.
     """
-    assert query.pattern_spec is not None
+    if query.pattern_spec is None:
+        msg = "pattern_spec is required for pattern queries"
+        raise ValueError(msg)
 
     # Build ast-grep rule from pattern spec
     rule = AstGrepRule(
@@ -369,10 +375,15 @@ def _entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
     -------
     tuple[AstGrepRule, ...]
         One or more ast-grep rules representing the entity query.
-    """
-    assert query.entity is not None
 
-    if query.primary_language == "rust":
+    Raises:
+        ValueError: If ``query.entity`` is missing.
+    """
+    if query.entity is None:
+        msg = "entity is required for entity ast-grep rule compilation"
+        raise ValueError(msg)
+
+    if is_rust_language(query.primary_language):
         return _rust_entity_to_ast_grep_rules(query)
 
     # Python defaults
@@ -414,8 +425,13 @@ def _rust_entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
     -------
     tuple[AstGrepRule, ...]
         One or more ast-grep rules representing the Rust entity query.
+
+    Raises:
+        ValueError: If ``query.entity`` is missing.
     """
-    assert query.entity is not None
+    if query.entity is None:
+        msg = "entity is required for rust entity ast-grep rule compilation"
+        raise ValueError(msg)
     entity = query.entity
     if entity == "decorator":
         return ()

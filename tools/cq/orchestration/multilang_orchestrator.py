@@ -7,14 +7,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from tools.cq.core.contracts import MergeResultsRequest, SummaryBuildRequest
-from tools.cq.core.multilang_summary import (
-    build_multilang_summary,
-    partition_stats_from_result_summary,
-)
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, DetailPayload, Finding, Section, mk_result
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
+from tools.cq.orchestration.multilang_summary import (
+    build_multilang_summary,
+    partition_stats_from_result_summary,
+)
 from tools.cq.query.language import (
     QueryLanguage,
     QueryLanguageScope,
@@ -22,7 +22,7 @@ from tools.cq.query.language import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_insight import FrontDoorInsightV1
+    from tools.cq.core.front_door_builders import FrontDoorInsightV1
     from tools.cq.core.schema import RunMeta
     from tools.cq.core.toolchain import Toolchain
 
@@ -245,7 +245,7 @@ def _select_front_door_insight(
     scope: QueryLanguageScope,
     results: Mapping[QueryLanguage, CqResult],
 ) -> FrontDoorInsightV1 | None:
-    from tools.cq.core.front_door_insight import (
+    from tools.cq.core.front_door_builders import (
         coerce_front_door_insight,
         mark_partial_for_missing_languages,
     )
@@ -448,7 +448,7 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
     )
     merged_insight = _select_front_door_insight(request.scope, request.results)
     if merged_insight is not None:
-        from tools.cq.core.front_door_insight import to_public_front_door_insight_dict
+        from tools.cq.core.front_door_render import to_public_front_door_insight_dict
 
         merged.summary["front_door_insight"] = to_public_front_door_insight_dict(merged_insight)
     if diag_findings:

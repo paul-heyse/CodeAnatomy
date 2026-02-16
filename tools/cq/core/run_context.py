@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from tools.cq.core.schema import RunMeta, mk_runmeta
 from tools.cq.core.structs import CqStruct
@@ -71,6 +71,31 @@ class RunContext(CqStruct, frozen=True):
         )
 
 
+class RunExecutionContext(Protocol):
+    """CLI-independent execution context protocol for run engine flows."""
+
+    @property
+    def root(self) -> Path:
+        """Workspace root."""
+        ...
+
+    @property
+    def argv(self) -> list[str]:
+        """Command argv."""
+        ...
+
+    @property
+    def toolchain(self) -> Toolchain:
+        """Detected toolchain capabilities."""
+        ...
+
+    @property
+    def artifact_dir(self) -> Path | None:
+        """Optional artifact directory."""
+        ...
+
+
 __all__ = [
     "RunContext",
+    "RunExecutionContext",
 ]

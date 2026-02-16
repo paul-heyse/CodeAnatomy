@@ -86,13 +86,9 @@ class CandidateSearchRequest(CqSettingsStruct, frozen=True):
     exclude_globs: list[str] | None = None
 
 
-SmartSearchContext = SearchConfig
-
-
 __all__ = [
     "CandidateSearchRequest",
     "SearchConfig",
     "SearchPartitionPlanV1",
     "SearchRequest",
-    "SmartSearchContext",
 ]

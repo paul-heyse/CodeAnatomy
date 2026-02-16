@@ -151,7 +151,7 @@ def get(
             content,
             idx,
             section_id=resolved_id,
-            mode=str(mode),
+            mode=mode,
             depth=depth,
             limit_bytes=limit_bytes,
         )

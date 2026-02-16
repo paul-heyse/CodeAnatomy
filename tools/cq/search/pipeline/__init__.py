@@ -30,9 +30,9 @@ def __getattr__(name: str) -> Any:
 
         return SearchPipeline
     if name == "SearchContext":
-        from tools.cq.search.pipeline.contracts import SmartSearchContext
+        from tools.cq.search.pipeline.contracts import SearchConfig
 
-        return SmartSearchContext
+        return SearchConfig
     if name == "run_smart_search_pipeline":
         from tools.cq.search.pipeline.smart_search import run_smart_search_pipeline
 

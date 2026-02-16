@@ -19,7 +19,6 @@ from tools.cq.core.cache.base_contracts import (
 )
 from tools.cq.core.contracts_constraints import NonNegativeInt
 from tools.cq.core.structs import CqCacheStruct
-from tools.cq.search.objects.render import SearchObjectSummaryV1, SearchOccurrenceV1
 from tools.cq.search.tree_sitter.contracts.core_models import TreeSitterArtifactBundleV1
 
 
@@ -114,8 +113,8 @@ class SearchArtifactBundleV1(CqCacheStruct, frozen=True):
     query: str
     macro: str = "search"
     summary: dict[str, object] = msgspec.field(default_factory=dict)
-    object_summaries: list[SearchObjectSummaryV1] = msgspec.field(default_factory=list)
-    occurrences: list[SearchOccurrenceV1] = msgspec.field(default_factory=list)
+    object_summaries: list[dict[str, object]] = msgspec.field(default_factory=list)
+    occurrences: list[dict[str, object]] = msgspec.field(default_factory=list)
     diagnostics: dict[str, object] = msgspec.field(default_factory=dict)
     snippets: dict[str, str] = msgspec.field(default_factory=dict)
     created_ms: float = 0.0

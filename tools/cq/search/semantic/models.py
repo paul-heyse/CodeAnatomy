@@ -14,6 +14,8 @@ from pathspec import PathSpec
 from tools.cq.core.semantic_contracts import SemanticProvider
 from tools.cq.core.structs import CqOutputStruct, CqStruct
 from tools.cq.query.language import QueryLanguage
+from tools.cq.search.enrichment.core import string_or_none as _string
+from tools.cq.search.enrichment.language_registry import get_language_adapter
 
 _SEMANTIC_PLANES_VERSION = "cq.semantic_planes.v2"
 _SEMANTIC_DISABLED_VALUES = {"0", "false", "no", "off"}
@@ -23,6 +25,29 @@ _SEMANTIC_LOCK_RETRY_SLEEP_SECONDS = 0.05
 _FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, ValueError, TypeError)
 _PYTHON_ROOT_MARKERS = ("pyproject.toml", "setup.cfg", "setup.py")
 _RUST_ROOT_MARKERS = ("Cargo.toml",)
+_ROOT_MARKERS_BY_LANGUAGE: dict[QueryLanguage, tuple[str, ...]] = {
+    "python": _PYTHON_ROOT_MARKERS,
+    "rust": _RUST_ROOT_MARKERS,
+}
+_PROVIDER_BY_LANGUAGE: dict[QueryLanguage, SemanticProvider] = {
+    "python": "python_static",
+    "rust": "rust_static",
+}
+
+
+def _rust_injections_preview(row: Mapping[str, object]) -> list[dict[str, object]]:
+    macro_name = _string(row.get("macro_name"))
+    if macro_name is None:
+        return []
+    return [{"kind": "macro_invocation", "name": macro_name}]
+
+
+_INJECTION_PREVIEW_BY_LANGUAGE: dict[
+    QueryLanguage,
+    Callable[[Mapping[str, object]], list[dict[str, object]]],
+] = {
+    "rust": _rust_injections_preview,
+}
 
 
 class SemanticOutcomeV1(CqOutputStruct, frozen=True):
@@ -86,13 +111,6 @@ def compile_globs(globs: list[str]) -> PathSpec:
 def match_path(spec: PathSpec, path: str | Path) -> bool:
     """Return whether a path matches a compiled spec."""
     return spec.match_file(str(path))
-
-
-def _string(value: object) -> str | None:
-    if isinstance(value, str):
-        text = value.strip()
-        return text if text else None
-    return None
 
 
 def _string_list(value: object, *, limit: int = 16) -> list[str]:
@@ -181,20 +199,26 @@ def _locals_preview(payload: Mapping[str, object]) -> list[dict[str, object]]:
     ]
     qualified = payload.get("qualified_name_candidates")
     if isinstance(qualified, list):
-        rows.extend(
-            {"kind": "qualified_name", "name": name}
-            for item in qualified[:8]
-            if isinstance(item, Mapping) and (name := _string(item.get("name"))) is not None
+        qualified_names = sorted(
+            {
+                name
+                for item in qualified
+                if isinstance(item, Mapping) and (name := _string(item.get("name"))) is not None
+            }
         )
+        rows.extend({"kind": "qualified_name", "name": name} for name in qualified_names[:8])
     locals_payload = payload.get("locals")
     if isinstance(locals_payload, Mapping):
         index_rows = locals_payload.get("index")
         if isinstance(index_rows, list):
-            rows.extend(
-                {"kind": "local_definition", "name": name}
-                for item in index_rows[:8]
-                if isinstance(item, Mapping) and (name := _string(item.get("name"))) is not None
+            local_names = sorted(
+                {
+                    name
+                    for item in index_rows
+                    if isinstance(item, Mapping) and (name := _string(item.get("name"))) is not None
+                }
             )
+            rows.extend({"kind": "local_definition", "name": name} for name in local_names[:8])
     return rows[:12]
 
 
@@ -202,11 +226,11 @@ def _injections_preview(
     language: QueryLanguage,
     payload: Mapping[str, object],
 ) -> list[dict[str, object]]:
-    if language == "rust":
-        macro_name = _string(payload.get("macro_name"))
-        if macro_name is not None:
-            return [{"kind": "macro_invocation", "name": macro_name}]
-    return []
+    preview_fn = _INJECTION_PREVIEW_BY_LANGUAGE.get(language)
+    if preview_fn is not None:
+        return preview_fn(payload)
+    empty: list[dict[str, object]] = []
+    return empty
 
 
 def build_static_semantic_planes(
@@ -231,8 +255,9 @@ def build_static_semantic_planes(
 
     tokens_preview = _semantic_tokens_preview(payload)
     locals_preview = _locals_preview(payload)
-    diagnostics_preview = (
-        _python_diagnostics(payload) if language == "python" else _rust_diagnostics(payload)
+    adapter = get_language_adapter(language)
+    diagnostics_preview: list[dict[str, object]] = (
+        adapter.build_diagnostics(payload) if adapter is not None else list[dict[str, object]]()
     )
     injections_preview = _injections_preview(language, payload)
 
@@ -364,7 +389,7 @@ def resolve_language_provider_root(
     """
     normalized_command_root = command_root.resolve()
     target_path = _normalize_target_path(normalized_command_root, file_path)
-    markers = _PYTHON_ROOT_MARKERS if language == "python" else _RUST_ROOT_MARKERS
+    markers = _ROOT_MARKERS_BY_LANGUAGE[language]
     workspace_root = _nearest_workspace_root(
         command_root=normalized_command_root,
         target_path=target_path,
@@ -400,10 +425,10 @@ def provider_for_language(language: QueryLanguage | str) -> SemanticProvider:
     Returns:
         SemanticProvider: Function return value.
     """
-    if language == "python":
-        return "python_static"
-    if language == "rust":
-        return "rust_static"
+    if isinstance(language, str):
+        normalized = language.strip().lower()
+        if normalized in _PROVIDER_BY_LANGUAGE:
+            return _PROVIDER_BY_LANGUAGE[cast("QueryLanguage", normalized)]
     return "none"
 
 

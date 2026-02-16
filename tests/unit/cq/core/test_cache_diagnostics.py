@@ -6,8 +6,8 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tools.cq.core.cache import close_cq_cache_backend
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
 from tools.cq.core.cache.telemetry import (
     record_cache_abort,
     record_cache_get,

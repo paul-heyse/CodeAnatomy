@@ -150,15 +150,10 @@ def build_macro_expansion_evidence(
     return build_macro_evidence(payload)
 
 
-def attach_macro_expansion_evidence(payload: dict[str, object]) -> dict[str, object]:
-    """Attach serialized macro expansion evidence to a payload in-place.
-
-    Returns:
-        dict[str, object]: Function return value.
-    """
+def attach_macro_expansion_evidence(payload: dict[str, object]) -> None:
+    """Attach serialized macro expansion evidence to a payload in-place."""
     evidence = build_macro_expansion_evidence(payload)
     payload["macro_expansions"] = [msgspec.to_builtins(row) for row in evidence]
-    return payload
 
 
 def _fallback_module_rows(
@@ -225,24 +220,16 @@ def build_rust_module_graph(payload: Mapping[str, object]) -> RustModuleGraphV1:
     return convert_lax(built, type_=RustModuleGraphV1)
 
 
-def attach_rust_module_graph(payload: dict[str, object]) -> dict[str, object]:
-    """Attach serialized module graph rows to enrichment payload.
-
-    Returns:
-        dict[str, object]: Function return value.
-    """
+def attach_rust_module_graph(payload: dict[str, object]) -> None:
+    """Attach serialized module graph rows to enrichment payload."""
     graph = build_rust_module_graph(payload)
     payload["rust_module_graph"] = msgspec.to_builtins(graph)
-    return payload
 
 
-def attach_rust_evidence(payload: dict[str, object]) -> dict[str, object]:
-    """Attach macro and module-graph evidence payloads in-place.
-
-    Returns:
-        dict[str, object]: Function return value.
-    """
-    return attach_rust_module_graph(attach_macro_expansion_evidence(payload))
+def attach_rust_evidence(payload: dict[str, object]) -> None:
+    """Attach macro and module-graph evidence payloads in-place."""
+    attach_macro_expansion_evidence(payload)
+    attach_rust_module_graph(payload)
 
 
 __all__ = [

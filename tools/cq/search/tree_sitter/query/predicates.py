@@ -83,10 +83,9 @@ def _extract_node_text(
     end = getattr(node, "end_byte", None)
     text = ""
     if _has_valid_source_slice(start=start, end=end, source_bytes=source_bytes):
-        if source_bytes is None:
-            return ""
-        assert isinstance(start, int)
-        assert isinstance(end, int)
+        if source_bytes is None or not isinstance(start, int) or not isinstance(end, int):
+            msg = "Invalid source slice for capture node"
+            raise ValueError(msg)
         text = source_bytes[start:end].decode("utf-8", errors="replace")
     else:
         raw_text = getattr(node, "text", None)

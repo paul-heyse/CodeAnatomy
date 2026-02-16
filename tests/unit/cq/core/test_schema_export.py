@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from tools.cq.core.schema_export import cq_result_schema, cq_schema_components, query_schema
+from tools.cq.orchestration.schema_export import (
+    cq_result_schema,
+    cq_schema_components,
+    query_schema,
+)
 
 MIN_SCHEMA_DOCS = 2
 

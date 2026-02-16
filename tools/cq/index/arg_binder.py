@@ -8,7 +8,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 
-from tools.cq.index.def_index import _SELF_CLS, FnDecl, ParamInfo
+from tools.cq.index.def_index import SELF_CLS_NAMES, FnDecl, ParamInfo
 
 
 @dataclass
@@ -113,7 +113,7 @@ def _categorize_params(
             positional_params.append(param)
     param_offset = (
         1
-        if (callee.is_method and positional_params and positional_params[0].name in _SELF_CLS)
+        if (callee.is_method and positional_params and positional_params[0].name in SELF_CLS_NAMES)
         else 0
     )
     return (

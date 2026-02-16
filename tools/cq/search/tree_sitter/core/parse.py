@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 _LANGUAGE_SESSION_LOCK = threading.Lock()
 _LF: int = 0x0A
+logger = logging.getLogger(__name__)
 
 
 def _parser_controls() -> ParserControlSettingsV1:
@@ -260,6 +262,7 @@ class ParseSession:
         except (RuntimeError, TypeError, ValueError):
             with self._lock:
                 self._edit_failures += 1
+            logger.warning("Failed to apply incremental tree-sitter edit; falling back to reparse")
             return False
         return True
 
@@ -284,14 +287,25 @@ def get_parse_session(*, language: str, parser_factory: Callable[[], Parser]) ->
 
 def clear_parse_session(*, language: str | None = None) -> None:
     """Clear one language parse session or all sessions."""
+    session_rows: list[tuple[str | None, ParseSession]]
     with _LANGUAGE_SESSION_LOCK:
         if language is None:
-            sessions = list(_SESSIONS.values())
+            session_rows = list(_SESSIONS.items())
             _SESSIONS.clear()
         else:
             one = _SESSIONS.pop(language, None)
-            sessions: list[ParseSession] = [one] if one is not None else []
-    for session in sessions:
+            session_rows = [(language, one)] if one is not None else []
+    for lang_name, session in session_rows:
+        stats = session.stats()
+        logger.debug(
+            "Clearing parse session language=%s entries=%d hits=%d misses=%d reparses=%d edit_failures=%d",
+            lang_name,
+            stats.entries,
+            stats.cache_hits,
+            stats.cache_misses,
+            stats.reparse_count,
+            stats.edit_failures,
+        )
         session.clear()
 
 

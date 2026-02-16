@@ -6,17 +6,16 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tools.cq.core.cache import (
-    CacheWriteTagRequestV1,
-    default_cache_policy,
+from tools.cq.core.cache.contracts import SearchArtifactBundleV1, SearchArtifactIndexEntryV1
+from tools.cq.core.cache.policy import default_cache_policy
+from tools.cq.core.cache.run_lifecycle import CacheWriteTagRequestV1, resolve_write_cache_tag
+from tools.cq.core.cache.search_artifact_store import (
     list_search_artifact_entries,
     persist_search_artifact_bundle,
-    resolve_write_cache_tag,
 )
-from tools.cq.core.cache import (
+from tools.cq.core.cache.search_artifact_store import (
     load_search_artifact_bundle as load_search_artifact_bundle_from_store,
 )
-from tools.cq.core.cache.contracts import SearchArtifactBundleV1, SearchArtifactIndexEntryV1
 from tools.cq.core.contract_codec import dumps_json_value
 from tools.cq.core.diagnostics_contracts import build_diagnostics_artifact_payload
 from tools.cq.core.schema import Artifact, CqResult
@@ -112,7 +111,7 @@ def save_neighborhood_overflow_artifact(
     Returns:
         Artifact | None: Artifact descriptor when overflow exists, else ``None``.
     """
-    from tools.cq.core.front_door_insight import coerce_front_door_insight
+    from tools.cq.core.front_door_render import coerce_front_door_insight
 
     insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
     if insight is None:

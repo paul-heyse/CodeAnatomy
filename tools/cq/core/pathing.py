@@ -6,8 +6,9 @@ query parsing, batch selection, and index file discovery.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 from pathspec import PathSpec
 
@@ -145,4 +146,6 @@ def compile_gitwildmatch(patterns: Sequence[str]) -> PathSpec:
     False
     """
     compiled_patterns = tuple(str(pattern) for pattern in patterns if pattern)
-    return PathSpec.from_lines("gitwildmatch", compiled_patterns)  # type: ignore[arg-type]
+    pathspec_patterns = list(compiled_patterns)
+    from_lines = cast("Callable[[str, object], PathSpec]", PathSpec.from_lines)
+    return from_lines("gitwildmatch", pathspec_patterns)

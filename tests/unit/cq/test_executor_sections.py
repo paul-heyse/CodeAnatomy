@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import msgspec
-from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightTargetV1
+from tools.cq.core.front_door_builders import FrontDoorInsightV1, InsightTargetV1
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import (
     ExecutePlanRequestV1,

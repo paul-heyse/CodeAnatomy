@@ -297,8 +297,8 @@ def test_render_hides_unresolved_facts_by_default() -> None:
         ),
     )
     output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
-    assert "N/A — not resolved" not in output
-    assert "N/A — not applicable" not in output
+    assert "N/A - not resolved" not in output
+    assert "N/A - not applicable" not in output
     assert "Identity" in output
 
 
@@ -325,8 +325,8 @@ def test_render_can_show_unresolved_facts_with_env(
         ),
     )
     output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
-    assert "N/A — not resolved" in output
-    assert "N/A — not applicable" not in output
+    assert "N/A - not resolved" in output
+    assert "N/A - not applicable" not in output
 
 
 def test_render_falls_back_to_top_level_enrichment_when_nested_language_payload_empty() -> None:
@@ -378,7 +378,7 @@ def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None
     output = render_markdown(result)
     assert "Code Facts:" in output
     assert "Symbol Role:" in output
-    assert "Symbol Role: N/A — enrichment unavailable" not in output
+    assert "Symbol Role: N/A - enrichment unavailable" not in output
 
 
 def test_render_query_finding_attaches_enrichment_without_context_by_default(

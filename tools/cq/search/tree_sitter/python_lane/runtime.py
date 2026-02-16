@@ -6,6 +6,7 @@ payload that never alters ranking, counts, or category classification.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, cast
@@ -19,18 +20,30 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
 )
 from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_python_lane_payload
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
-from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids, child_by_field
+from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
 from tools.cq.search.tree_sitter.core.lane_support import (
     ENRICHMENT_ERRORS,
     build_query_windows,
     lift_anchor,
-    make_parser,
+    make_parser_from_language,
 )
 from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
 from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
 from tools.cq.search.tree_sitter.diagnostics import collect_tree_sitter_diagnostics
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    DEFAULT_MATCH_LIMIT as _DEFAULT_MATCH_LIMIT,
+)
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    MAX_CAPTURE_ITEMS as _MAX_CAPTURE_ITEMS,
+)
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    PYTHON_LIFT_ANCHOR_TYPES as _PYTHON_LIFT_ANCHOR_TYPES,
+)
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    get_python_field_ids,
+)
 from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
 from tools.cq.search.tree_sitter.query.predicates import (
@@ -52,16 +65,8 @@ except ImportError:  # pragma: no cover - optional dependency
     _TreeSitterQueryCursor = None
 
 _MAX_SOURCE_BYTES = 5 * 1024 * 1024
-_MAX_CAPTURE_ITEMS = 8
 _MAX_CAPTURE_TEXT_LEN = 120
-_DEFAULT_MATCH_LIMIT = 4_096
-_STOP_CONTEXT_KINDS: frozenset[str] = frozenset({"module", "source_file"})
-
-
-@lru_cache(maxsize=1)
-def get_python_field_ids() -> dict[str, int]:
-    """Return cached Python grammar field ID mapping."""
-    return cached_field_ids("python")
+logger = logging.getLogger(__name__)
 
 
 from tools.cq.search.tree_sitter.python_lane.fallback_support import (
@@ -105,7 +110,7 @@ def _parse_with_session(
     if not is_tree_sitter_python_available():
         return None, source_bytes, ()
     session = get_parse_session(
-        language="python", parser_factory=lambda: make_parser(_python_language())
+        language="python", parser_factory=lambda: make_parser_from_language(_python_language())
     )
     tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
     return tree, source_bytes, tuple(changed_ranges) if changed_ranges is not None else ()
@@ -126,7 +131,7 @@ def parse_python_tree_with_ranges(
     if not is_tree_sitter_python_available():
         return None, ()
     session = get_parse_session(
-        language="python", parser_factory=lambda: make_parser(_python_language())
+        language="python", parser_factory=lambda: make_parser_from_language(_python_language())
     )
     tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
     return tree, changed_ranges
@@ -150,6 +155,7 @@ def parse_python_tree(source: str, *, cache_key: str | None = None) -> Tree | No
 
 def clear_tree_sitter_python_cache() -> None:
     """Clear parser/query caches and reset observability counters."""
+    logger.debug("Clearing tree-sitter Python cache state")
     clear_parse_session(language="python")
     _python_language.cache_clear()
     compile_query.cache_clear()
@@ -159,7 +165,7 @@ def clear_tree_sitter_python_cache() -> None:
 def get_tree_sitter_python_cache_stats() -> dict[str, int]:
     """Return tree-sitter Python cache counters."""
     session = get_parse_session(
-        language="python", parser_factory=lambda: make_parser(_python_language())
+        language="python", parser_factory=lambda: make_parser_from_language(_python_language())
     )
     stats = session.stats()
     return {
@@ -454,19 +460,6 @@ def _capture_call_target(captures: dict[str, list[Node]], source_bytes: bytes) -
     return text[:_MAX_CAPTURE_TEXT_LEN] if text else None
 
 
-_PYTHON_LIFT_ANCHOR_TYPES: frozenset[str] = frozenset(
-    {
-        "call",
-        "attribute",
-        "assignment",
-        "import_statement",
-        "import_from_statement",
-        "function_definition",
-        "class_definition",
-    }
-)
-
-
 def _effective_capture_window(root: Node, *, byte_start: int, byte_end: int) -> tuple[int, int]:
     anchor = root.named_descendant_for_byte_range(byte_start, byte_end)
     if anchor is None:
@@ -488,6 +481,7 @@ def _base_enrichment_payload() -> dict[str, object]:
 
 
 def _mark_degraded(payload: dict[str, object], *, reason: str) -> dict[str, object]:
+    logger.warning("Python tree-sitter enrichment degraded: %s", reason)
     payload["enrichment_status"] = "degraded"
     payload["degrade_reason"] = reason
     payload["parse_quality"] = _default_parse_quality()
@@ -547,8 +541,8 @@ def _apply_capture_fields(
             )
         )
     except ENRICHMENT_ERRORS as exc:
-        payload["enrichment_status"] = "degraded"
-        payload["degrade_reason"] = type(exc).__name__
+        logger.warning("Python capture-field extraction failed: %s", type(exc).__name__)
+        _mark_degraded(payload, reason=type(exc).__name__)
 
 
 def enrich_python_context_by_byte_range(
@@ -577,6 +571,10 @@ def enrich_python_context_by_byte_range(
     payload = _base_enrichment_payload()
 
     if len(source_bytes) > _MAX_SOURCE_BYTES:
+        logger.warning(
+            "Skipping Python tree-sitter enrichment for oversized source (%d bytes)",
+            len(source_bytes),
+        )
         payload["enrichment_status"] = "skipped"
         payload["degrade_reason"] = "source_too_large"
         payload["parse_quality"] = _default_parse_quality()

@@ -411,6 +411,26 @@ class _BackendState:
 _BACKEND_STATE = _BackendState()
 
 
+def _close_backends(backends: list[CqCacheBackend]) -> None:
+    """Close backend resources best-effort."""
+    for backend in backends:
+        backend.close()
+
+
+def _collect_stale_backends_locked() -> list[CqCacheBackend]:
+    """Collect and remove workspace backends whose roots no longer exist.
+
+    Returns:
+        list[CqCacheBackend]: Stale backends that should be closed after unlock.
+    """
+    stale: list[CqCacheBackend] = []
+    for workspace, backend in list(_BACKEND_STATE.backends.items()):
+        if not Path(workspace).exists():
+            stale.append(backend)
+            _BACKEND_STATE.backends.pop(workspace, None)
+    return stale
+
+
 def _build_diskcache_backend(policy: CqCachePolicyV1) -> CqCacheBackend:
     directory = Path(policy.directory).expanduser()
 
@@ -449,17 +469,31 @@ def _build_diskcache_backend(policy: CqCachePolicyV1) -> CqCacheBackend:
 def get_cq_cache_backend(*, root: Path) -> CqCacheBackend:
     """Return workspace-keyed CQ cache backend."""
     workspace = str(root.resolve())
+    stale: list[CqCacheBackend]
     with _BACKEND_LOCK:
+        stale = _collect_stale_backends_locked()
         existing = _BACKEND_STATE.backends.get(workspace)
         if existing is not None:
-            return existing
-        policy = default_cache_policy(root=root)
-        if not policy.enabled:
-            backend: CqCacheBackend = NoopCacheBackend()
+            backend: CqCacheBackend = existing
         else:
-            backend = _build_diskcache_backend(policy)
+            policy = default_cache_policy(root=root)
+            backend = NoopCacheBackend() if not policy.enabled else _build_diskcache_backend(policy)
+            _BACKEND_STATE.backends[workspace] = backend
+    _close_backends(stale)
+    return backend
+
+
+def set_cq_cache_backend(*, root: Path, backend: CqCacheBackend) -> None:
+    """Inject a workspace-scoped cache backend (primarily for tests)."""
+    workspace = str(root.resolve())
+    stale: list[CqCacheBackend]
+    with _BACKEND_LOCK:
+        stale = _collect_stale_backends_locked()
+        existing = _BACKEND_STATE.backends.get(workspace)
+        if existing is not None and existing is not backend:
+            stale.append(existing)
         _BACKEND_STATE.backends[workspace] = backend
-        return backend
+    _close_backends(stale)
 
 
 def close_cq_cache_backend(*, root: Path | None = None) -> None:
@@ -484,4 +518,5 @@ __all__ = [
     "DiskcacheBackend",
     "close_cq_cache_backend",
     "get_cq_cache_backend",
+    "set_cq_cache_backend",
 ]

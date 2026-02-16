@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol
 
 from tools.cq.core.schema import CqResult
@@ -10,6 +11,7 @@ from tools.cq.core.services import (
     EntityFrontDoorRequest,
     SearchServiceRequest,
 )
+from tools.cq.query.language import QueryLanguage
 
 
 class SearchServicePort(Protocol):
@@ -55,9 +57,27 @@ class CachePort(Protocol):
         ...
 
 
+class RenderEnrichmentPort(Protocol):
+    """Port for render-time enrichment of findings from anchor context."""
+
+    def enrich_anchor(
+        self,
+        *,
+        root: Path,
+        file: str,
+        line: int,
+        col: int,
+        language: QueryLanguage,
+        candidates: list[str],
+    ) -> dict[str, object]:
+        """Build enrichment payload for one anchor."""
+        ...
+
+
 __all__ = [
     "CachePort",
     "CallsServicePort",
     "EntityServicePort",
+    "RenderEnrichmentPort",
     "SearchServicePort",
 ]

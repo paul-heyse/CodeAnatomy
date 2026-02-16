@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.schema import CqResult
 from tools.cq.core.structs import CqStruct
+from tools.cq.macros.contracts import CallsRequest
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -26,10 +27,7 @@ class EntityFrontDoorRequest(CqStruct, frozen=True):
 class CallsServiceRequest(CqStruct, frozen=True):
     """Typed request contract for calls macro service execution."""
 
-    root: Path
-    function_name: str
-    tc: Toolchain
-    argv: list[str]
+    request: CallsRequest
 
 
 class SearchServiceRequest(CqStruct, frozen=True):
@@ -75,12 +73,7 @@ class CallsService:
         """
         from tools.cq.macros.calls import cmd_calls
 
-        return cmd_calls(
-            tc=request.tc,
-            root=request.root,
-            argv=request.argv,
-            function_name=request.function_name,
-        )
+        return cmd_calls(request.request)
 
 
 class SearchService:

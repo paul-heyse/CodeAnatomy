@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
 from pathlib import Path
 
 from tools.cq.core.schema import ms
@@ -13,7 +12,6 @@ from tools.cq.core.snb_schema import (
     BundleMetaV1,
     DegradeEventV1,
     NeighborhoodGraphSummaryV1,
-    NeighborhoodSliceKind,
     NeighborhoodSliceV1,
     SemanticNeighborhoodBundleV1,
     SemanticNodeRefV1,
@@ -21,6 +19,7 @@ from tools.cq.core.snb_schema import (
 from tools.cq.core.structs import CqStruct
 from tools.cq.neighborhood.contracts import (
     TreeSitterNeighborhoodCollectRequest,
+    plan_feasible_slices,
 )
 from tools.cq.neighborhood.tree_sitter_collector import (
     collect_tree_sitter_neighborhood,
@@ -43,50 +42,6 @@ class BundleBuildRequest(CqStruct, frozen=True):
     target_uri: str | None = None
     allow_symbol_fallback: bool = True
     target_degrade_events: tuple[DegradeEventV1, ...] = ()
-
-
-def plan_feasible_slices(
-    requested_slices: tuple[NeighborhoodSliceKind, ...],
-    capabilities: Mapping[str, object] | object | None,
-    *,
-    stage: str = "semantic.planning",
-) -> tuple[tuple[NeighborhoodSliceKind, ...], tuple[DegradeEventV1, ...]]:
-    """Plan capability-feasible semantic slices.
-
-    Static semantics in this cut does not depend on negotiated server capabilities,
-    so only explicitly enabled capability flags in the provided mapping are honored.
-
-    Returns:
-        tuple[tuple[NeighborhoodSliceKind, ...], tuple[DegradeEventV1, ...]]:
-        Feasible slice kinds and resulting degradation events.
-    """
-    if not isinstance(capabilities, Mapping) or not capabilities:
-        return (), tuple(
-            DegradeEventV1(
-                stage=stage,
-                severity="info",
-                category="unavailable",
-                message=f"Slice '{kind}' unavailable for static capability snapshot",
-            )
-            for kind in requested_slices
-        )
-
-    feasible: list[NeighborhoodSliceKind] = []
-    degrades: list[DegradeEventV1] = []
-    for kind in requested_slices:
-        enabled = bool(capabilities.get(kind))
-        if enabled:
-            feasible.append(kind)
-            continue
-        degrades.append(
-            DegradeEventV1(
-                stage=stage,
-                severity="info",
-                category="unavailable",
-                message=f"Slice '{kind}' unavailable for static capability snapshot",
-            )
-        )
-    return tuple(feasible), tuple(degrades)
 
 
 def build_neighborhood_bundle(

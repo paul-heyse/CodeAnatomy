@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tools.cq.core.cache import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.search_artifact_store import (
     list_search_artifact_entries,
     load_search_artifact_bundle,

@@ -29,6 +29,6 @@ def test_attach_rust_evidence_sets_payload_fields() -> None:
             "imports": ["crate::m::dep"],
         }
     }
-    enriched = attach_rust_evidence(payload)
-    assert "macro_expansions" in enriched
-    assert "rust_module_graph" in enriched
+    attach_rust_evidence(payload)
+    assert "macro_expansions" in payload
+    assert "rust_module_graph" in payload

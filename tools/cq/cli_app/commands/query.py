@@ -5,7 +5,6 @@ This module contains the 'q' query command.
 
 from __future__ import annotations
 
-import re
 from typing import Annotated
 
 import msgspec
@@ -16,22 +15,12 @@ from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.cli_app.options import QueryOptions, options_from_params
 from tools.cq.cli_app.params import QueryParams
-from tools.cq.core.request_factory import (
+from tools.cq.core.result_factory import build_error_result
+from tools.cq.orchestration.request_factory import (
     RequestContextV1,
     RequestFactory,
     SearchRequestOptionsV1,
 )
-from tools.cq.core.result_factory import build_error_result
-
-
-def _has_query_tokens(query_string: str) -> bool:
-    """Check whether a query string contains any key=value tokens.
-
-    Returns:
-        bool: True if any tokenized query parts are present.
-    """
-    token_pattern = r"([\w.]+|\$+\w+)=(?:'([^']+)'|\"([^\"]+)\"|([^\s]+))"
-    return bool(list(re.finditer(token_pattern, query_string)))
 
 
 def q(
@@ -54,14 +43,14 @@ def q(
     from tools.cq.core.bootstrap import resolve_runtime_services
     from tools.cq.core.schema import ms
     from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
-    from tools.cq.query.parser import QueryParseError, parse_query
+    from tools.cq.query.parser import QueryParseError, has_query_tokens, parse_query
     from tools.cq.query.planner import compile_query
 
     ctx = require_context(ctx)
     if opts is None:
         opts = QueryParams()
     options = options_from_params(opts, type_=QueryOptions)
-    has_tokens = _has_query_tokens(query_string)
+    has_tokens = has_query_tokens(query_string)
 
     # Parse the query string first; fallback only for plain searches.
     try:

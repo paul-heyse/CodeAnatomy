@@ -31,7 +31,10 @@ from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
-    from datafusion_engine.session.runtime import AdapterExecutionPolicy, ExecutionLabel
+    from datafusion_engine.session.runtime_profile_config import (
+        AdapterExecutionPolicy,
+        ExecutionLabel,
+    )
 
     ExplainRows = TableLike | RecordBatchReaderLike
 else:
@@ -62,34 +65,31 @@ def _apply_builder(
 def _chain_explain_hooks(
     *hooks: Callable[[str, ExplainRows], None] | None,
 ) -> Callable[[str, ExplainRows], None] | None:
-    return cast("Callable[[str, ExplainRows], None] | None", chain_optional_hooks(*hooks))
+    return chain_optional_hooks(*hooks)
 
 
 def _chain_plan_artifacts_hooks(
     *hooks: Callable[[Mapping[str, object]], None] | None,
 ) -> Callable[[Mapping[str, object]], None] | None:
-    return cast("Callable[[Mapping[str, object]], None] | None", chain_optional_hooks(*hooks))
+    return chain_optional_hooks(*hooks)
 
 
 def _chain_sql_ingest_hooks(
     *hooks: Callable[[Mapping[str, object]], None] | None,
 ) -> Callable[[Mapping[str, object]], None] | None:
-    return cast("Callable[[Mapping[str, object]], None] | None", chain_optional_hooks(*hooks))
+    return chain_optional_hooks(*hooks)
 
 
 def _chain_cache_hooks(
     *hooks: Callable[[DataFusionCacheEvent], None] | None,
 ) -> Callable[[DataFusionCacheEvent], None] | None:
-    return cast("Callable[[DataFusionCacheEvent], None] | None", chain_optional_hooks(*hooks))
+    return chain_optional_hooks(*hooks)
 
 
 def _chain_substrait_fallback_hooks(
     *hooks: Callable[[DataFusionSubstraitFallbackEvent], None] | None,
 ) -> Callable[[DataFusionSubstraitFallbackEvent], None] | None:
-    return cast(
-        "Callable[[DataFusionSubstraitFallbackEvent], None] | None",
-        chain_optional_hooks(*hooks),
-    )
+    return chain_optional_hooks(*hooks)
 
 
 def labeled_explain_hook(

@@ -8,11 +8,8 @@ from pathlib import Path
 
 import msgspec
 import pytest
-from tools.cq.core.cache import (
-    close_cq_cache_backend,
-    reset_cache_telemetry,
-    snapshot_cache_telemetry,
-)
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
+from tools.cq.core.cache.telemetry import reset_cache_telemetry, snapshot_cache_telemetry
 from tools.cq.search.pipeline.smart_search import smart_search
 
 
@@ -22,11 +19,15 @@ def _cache_env(tmp_path: Path) -> Generator[None]:
     reset_cache_telemetry()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
+    os.environ["CQ_CACHE_STATISTICS_ENABLED"] = "0"
+    os.environ["CQ_CACHE_STATS_ENABLED"] = "0"
     os.environ["CQ_ENABLE_SEMANTIC_ENRICHMENT"] = "0"
     yield
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_ENABLED", None)
     os.environ.pop("CQ_CACHE_DIR", None)
+    os.environ.pop("CQ_CACHE_STATISTICS_ENABLED", None)
+    os.environ.pop("CQ_CACHE_STATS_ENABLED", None)
     os.environ.pop("CQ_ENABLE_SEMANTIC_ENRICHMENT", None)
 
 
@@ -41,7 +42,14 @@ def _normalize_result_payload(result: object) -> dict[str, object]:
     summary = payload.get("summary")
     if isinstance(summary, dict):
         summary.pop("cache_backend", None)
+        summary.pop("cache_maintenance", None)
         summary.pop("search_stage_timings_ms", None)
+        summary.pop("query_pack_lint", None)
+        summary.pop("cross_language_diagnostics", None)
+        summary.pop("enrichment_telemetry", None)
+        summary.pop("python_semantic_telemetry", None)
+        summary.pop("rust_semantic_telemetry", None)
+        summary.pop("python_semantic_diagnostics", None)
     return payload
 
 

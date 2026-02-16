@@ -2,40 +2,32 @@
 
 from __future__ import annotations
 
-import re
-from collections.abc import Callable, Iterable
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import msgspec
 
-from tools.cq.cli_app.context import CliContext
-from tools.cq.core.cache import maybe_evict_run_cache_tag
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
+from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.merge import merge_step_results
-from tools.cq.core.result_factory import build_error_result
-from tools.cq.core.run_context import RunContext
-from tools.cq.core.schema import CqResult, Finding, assign_result_finding_ids, mk_result, ms
-from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
-from tools.cq.query.batch_spans import collect_span_filters
-from tools.cq.query.execution_requests import (
-    EntityQueryRequest,
-    PatternQueryRequest,
-)
-from tools.cq.query.executor import (
-    execute_entity_query_from_records,
-    execute_pattern_query_with_files,
-)
-from tools.cq.query.ir import Query, Scope
-from tools.cq.query.language import (
-    QueryLanguage,
-    expand_language_scope,
-)
-from tools.cq.query.parser import QueryParseError, parse_query
+from tools.cq.core.run_context import RunContext, RunExecutionContext
+from tools.cq.core.schema import CqResult, assign_result_finding_ids, mk_result, ms
+from tools.cq.query.ir import Query
+from tools.cq.query.language import QueryLanguage, expand_language_scope
+from tools.cq.query.parser import QueryParseError, has_query_tokens, parse_query
 from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
-from tools.cq.query.sg_parser import list_scan_files
+from tools.cq.run.helpers import error_result as _error_result
+from tools.cq.run.q_execution import (
+    execute_entity_q_steps as _execute_entity_q_steps,
+)
+from tools.cq.run.q_execution import (
+    execute_pattern_q_steps as _execute_pattern_q_steps,
+)
 from tools.cq.run.q_step_collapsing import collapse_parent_q_results
 from tools.cq.run.run_summary import populate_run_summary_metadata
+from tools.cq.run.scope import apply_run_scope as _apply_run_scope
 from tools.cq.run.spec import (
     QStep,
     RunPlan,
@@ -43,7 +35,6 @@ from tools.cq.run.spec import (
     normalize_step_ids,
 )
 from tools.cq.run.step_executors import (
-    RUN_STEP_NON_FATAL_EXCEPTIONS,
     execute_non_q_steps_parallel,
     execute_non_q_steps_serial,
     execute_search_fallback,
@@ -62,7 +53,12 @@ class ParsedQStep:
     scope_globs: list[str] | None
 
 
-def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = False) -> CqResult:
+logger = logging.getLogger(__name__)
+
+
+def execute_run_plan(
+    plan: RunPlan, ctx: RunExecutionContext, *, stop_on_error: bool = False
+) -> CqResult:
     """Execute a RunPlan and return the merged CQ result.
 
     Returns:
@@ -77,6 +73,12 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = Fa
         started_ms=ms(),
     )
     run_id = run_ctx.run_id or uuid7_str()
+    logger.debug(
+        "Executing run plan steps=%d stop_on_error=%s root=%s",
+        len(plan.steps),
+        stop_on_error,
+        ctx.root,
+    )
     merged = mk_result(run_ctx.to_runmeta("run"))
     merged.summary["plan_version"] = plan.version
 
@@ -120,13 +122,14 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = Fa
     assign_result_finding_ids(merged)
     maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=run_id)
     maybe_evict_run_cache_tag(root=ctx.root, language="rust", run_id=run_id)
+    logger.debug("Run plan completed steps=%d run_id=%s", len(steps), run_id)
     return merged
 
 
 def _execute_q_steps(
     steps: list[QStep],
     plan: RunPlan,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
     *,
     stop_on_error: bool,
     run_id: str,
@@ -173,7 +176,7 @@ def _partition_q_steps(
     *,
     steps: list[QStep],
     plan: RunPlan,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
     stop_on_error: bool,
     immediate_results: list[tuple[str, CqResult]],
 ) -> tuple[dict[QueryLanguage, list[ParsedQStep]], dict[QueryLanguage, list[ParsedQStep]]]:
@@ -198,7 +201,7 @@ def _run_grouped_q_batches(
     *,
     grouped_steps: dict[QueryLanguage, list[ParsedQStep]],
     runner: Callable[..., list[tuple[str, CqResult]]],
-    ctx: CliContext,
+    ctx: RunExecutionContext,
     stop_on_error: bool,
     results: list[tuple[str, CqResult]],
     run_id: str,
@@ -218,7 +221,7 @@ def _results_have_error(results: list[tuple[str, CqResult]]) -> bool:
 def _prepare_q_step(
     step: QStep,
     plan: RunPlan,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
 ) -> tuple[str, ParsedQStep | CqResult, bool]:
     step_id = step.id or "q"
     try:
@@ -226,7 +229,7 @@ def _prepare_q_step(
     except QueryParseError as exc:
         return _handle_query_parse_error(step, step_id, plan, ctx, exc)
 
-    query = _apply_run_scope(query, plan)
+    query = _apply_run_scope(query, plan.in_dir, plan.exclude)
     tool_plan = compile_query(query)
     scope_paths = scope_to_paths(tool_plan.scope, ctx.root)
     if not scope_paths:
@@ -245,7 +248,7 @@ def _prepare_q_step(
     return step_id, parsed_step, False
 
 
-def _expand_q_step_by_scope(step: ParsedQStep, ctx: CliContext) -> list[ParsedQStep]:
+def _expand_q_step_by_scope(step: ParsedQStep, ctx: RunExecutionContext) -> list[ParsedQStep]:
     if step.query.lang_scope != "auto":
         return [step]
 
@@ -272,243 +275,12 @@ def _handle_query_parse_error(
     step: QStep,
     step_id: str,
     plan: RunPlan,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
     exc: QueryParseError,
 ) -> tuple[str, CqResult, bool]:
-    if not _has_query_tokens(step.query):
+    if not has_query_tokens(step.query):
         return step_id, execute_search_fallback(step.query, plan, ctx), False
     return step_id, _error_result(step_id, "q", exc, ctx), True
-
-
-def _execute_entity_q_steps(
-    steps: list[ParsedQStep],
-    ctx: CliContext,
-    *,
-    stop_on_error: bool,
-    run_id: str,
-) -> list[tuple[str, CqResult]]:
-    if not ctx.toolchain.has_sgpy:
-        return [
-            (
-                step.parent_step_id,
-                _error_result(
-                    step.parent_step_id,
-                    "q",
-                    RuntimeError("ast-grep not available"),
-                    ctx,
-                ),
-            )
-            for step in steps
-        ]
-
-    union_paths = _unique_paths([path for step in steps for path in step.scope_paths])
-    record_types = _union_record_types(steps)
-    lang = steps[0].plan.lang if steps else "python"
-    session = build_batch_session(
-        root=ctx.root,
-        tc=ctx.toolchain,
-        paths=union_paths,
-        record_types=record_types,
-        lang=lang,
-    )
-
-    allowed_files = [
-        filter_files_for_scope(session.files, ctx.root, step.plan.scope) for step in steps
-    ]
-    span_files_rel = _union_span_files(steps, allowed_files)
-    span_files = select_files_by_rel(session.files_by_rel, span_files_rel)
-    match_spans = collect_span_filters(
-        root=ctx.root,
-        files=span_files,
-        queries=[step.query for step in steps],
-        plans=[step.plan for step in steps],
-    )
-
-    results: list[tuple[str, CqResult]] = []
-    for step, allowed, spans in zip(steps, allowed_files, match_spans, strict=True):
-        records = [record for record in session.records if record.file in allowed]
-        request = EntityQueryRequest(
-            plan=step.plan,
-            query=step.query,
-            tc=ctx.toolchain,
-            root=ctx.root,
-            records=records,
-            paths=step.scope_paths,
-            scope_globs=step.scope_globs,
-            argv=ctx.argv,
-            run_id=run_id,
-            query_text=step.step.query,
-            match_spans=spans,
-            symtable=session.symtable,
-        )
-        try:
-            result = execute_entity_query_from_records(request)
-        except RUN_STEP_NON_FATAL_EXCEPTIONS as exc:
-            result = _error_result(step.parent_step_id, "q", exc, ctx)
-            result.summary["lang"] = step.plan.lang
-            result.summary["query_text"] = step.step.query
-            results.append((step.parent_step_id, result))
-            if stop_on_error:
-                break
-            continue
-        result.summary["lang"] = step.plan.lang
-        result.summary["query_text"] = step.step.query
-        results.append((step.parent_step_id, result))
-    return results
-
-
-def _execute_pattern_q_steps(
-    steps: list[ParsedQStep],
-    ctx: CliContext,
-    *,
-    stop_on_error: bool,
-    run_id: str,
-) -> list[tuple[str, CqResult]]:
-    if not ctx.toolchain.has_sgpy:
-        return [
-            (
-                step.parent_step_id,
-                _error_result(
-                    step.parent_step_id,
-                    "q",
-                    RuntimeError("ast-grep not available"),
-                    ctx,
-                ),
-            )
-            for step in steps
-        ]
-    union_paths = _unique_paths([path for step in steps for path in step.scope_paths])
-    lang = steps[0].plan.lang if steps else "python"
-    pattern_files = _tabulate_files(ctx.root, union_paths, lang=lang)
-    files_by_rel: dict[str, Path] = {}
-    for path in pattern_files:
-        try:
-            rel = path.relative_to(ctx.root).as_posix()
-        except ValueError:
-            rel = path.as_posix()
-        files_by_rel[rel] = path
-
-    results: list[tuple[str, CqResult]] = []
-    for step in steps:
-        allowed_rel = filter_files_for_scope(pattern_files, ctx.root, step.plan.scope)
-        files = select_files_by_rel(files_by_rel, allowed_rel)
-        request = PatternQueryRequest(
-            plan=step.plan,
-            query=step.query,
-            tc=ctx.toolchain,
-            root=ctx.root,
-            files=files,
-            argv=ctx.argv,
-            run_id=run_id,
-            query_text=step.step.query,
-        )
-        try:
-            result = execute_pattern_query_with_files(request)
-        except RUN_STEP_NON_FATAL_EXCEPTIONS as exc:
-            result = _error_result(step.parent_step_id, "q", exc, ctx)
-            result.summary["lang"] = step.plan.lang
-            result.summary["query_text"] = step.step.query
-            results.append((step.parent_step_id, result))
-            if stop_on_error:
-                break
-            continue
-        result.summary["lang"] = step.plan.lang
-        result.summary["query_text"] = step.step.query
-        results.append((step.parent_step_id, result))
-    return results
-
-
-def _apply_run_scope(query: Query, plan: RunPlan) -> Query:
-    if not plan.in_dir and not plan.exclude:
-        return query
-    scope = query.scope
-    merged = Scope(
-        in_dir=_merge_in_dir(plan.in_dir, scope.in_dir),
-        exclude=tuple(_merge_excludes(plan.exclude, scope.exclude)),
-        globs=scope.globs,
-    )
-    return query.with_scope(merged)
-
-
-def _merge_in_dir(run_in_dir: str | None, step_in_dir: str | None) -> str | None:
-    if run_in_dir and step_in_dir:
-        return str(Path(run_in_dir) / step_in_dir)
-    return step_in_dir or run_in_dir
-
-
-def _merge_excludes(
-    run_exclude: Iterable[str],
-    step_exclude: Iterable[str],
-) -> list[str]:
-    seen: set[str] = set()
-    merged: list[str] = []
-    for item in list(run_exclude) + list(step_exclude):
-        if item in seen:
-            continue
-        seen.add(item)
-        merged.append(item)
-    return merged
-
-
-def _union_record_types(steps: list[ParsedQStep]) -> set[str]:
-    record_types: set[str] = set()
-    for step in steps:
-        record_types |= set(step.plan.sg_record_types)
-    return record_types
-
-
-def _union_span_files(steps: list[ParsedQStep], allowed: list[set[str]]) -> set[str]:
-    rel_paths: set[str] = set()
-    for step, allowed_files in zip(steps, allowed, strict=True):
-        if not step.plan.sg_rules:
-            continue
-        rel_paths.update(allowed_files)
-    return rel_paths
-
-
-def _unique_paths(paths: Iterable[Path]) -> list[Path]:
-    unique: list[Path] = []
-    seen: set[Path] = set()
-    for path in paths:
-        if path in seen:
-            continue
-        seen.add(path)
-        unique.append(path)
-    return unique
-
-
-def _tabulate_files(
-    root: Path,
-    paths: list[Path],
-    *,
-    lang: QueryLanguage,
-) -> list[Path]:
-    return list_scan_files(
-        paths=paths,
-        root=root,
-        globs=None,
-        lang=lang,
-    )
-
-
-def _has_query_tokens(query_string: str) -> bool:
-    token_pattern = r"([\\w.]+|\\$+\\w+)=(?:'([^']+)'|\\\"([^\\\"]+)\\\"|([^\\s]+))"
-    return bool(list(re.finditer(token_pattern, query_string)))
-
-
-def _error_result(step_id: str, macro: str, exc: Exception, ctx: CliContext) -> CqResult:
-    result = build_error_result(
-        macro=macro,
-        root=ctx.root,
-        argv=ctx.argv,
-        tc=ctx.toolchain,
-        started_ms=ms(),
-        error=exc,
-    )
-    result.key_findings.append(
-        Finding(category="error", message=f"{step_id}: {exc}", severity="error")
-    )
-    return assign_result_finding_ids(result)
 
 
 __all__ = [

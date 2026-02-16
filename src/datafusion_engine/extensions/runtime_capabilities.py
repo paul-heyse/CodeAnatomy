@@ -194,7 +194,7 @@ def collect_runtime_execution_metrics(
     module_candidates = (
         (module_name,)
         if module_name is not None
-        else ("datafusion_engine.extensions.datafusion_ext",)
+        else ("datafusion._internal", "datafusion_engine.extensions.datafusion_ext")
     )
     errors: list[str] = []
     for candidate in module_candidates:

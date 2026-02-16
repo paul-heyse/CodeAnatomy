@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Literal
 
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.snb_schema import DegradeEventV1
@@ -11,6 +12,8 @@ from tools.cq.core.structs import CqStruct
 from tools.cq.core.target_specs import TargetSpecV1
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import find_symbol_candidates
+
+ResolutionKind = Literal["anchor", "file_symbol", "symbol_fallback", "unresolved"]
 
 
 class ResolvedTarget(CqStruct, frozen=True):
@@ -22,7 +25,7 @@ class ResolvedTarget(CqStruct, frozen=True):
     target_col: int | None = None
     target_uri: str | None = None
     symbol_hint: str | None = None
-    resolution_kind: str = "unresolved"
+    resolution_kind: ResolutionKind = "unresolved"
     degrade_events: tuple[DegradeEventV1, ...] = ()
 
 
@@ -181,6 +184,7 @@ def _to_uri(root: Path, relative_path: str) -> str | None:
 
 
 __all__ = [
+    "ResolutionKind",
     "ResolvedTarget",
     "resolve_target",
 ]

@@ -13,6 +13,7 @@ They may affect: containing_scope display (used only for grouping in output).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -105,6 +106,7 @@ _SCOPE_KINDS: tuple[str, ...] = (
 _DEFAULT_SCOPE_DEPTH = 24
 _MAX_SCOPE_NODES = 256
 MAX_SOURCE_BYTES = 5 * 1024 * 1024  # 5 MB
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,6 +348,7 @@ def _try_extract(
     try:
         result = extractor(target, source_bytes)
     except ENRICHMENT_ERRORS as exc:
+        logger.warning("Rust extractor degraded (%s): %s", label, type(exc).__name__)
         return {}, f"{label}: {exc}"
     else:
         return result, None
@@ -488,9 +491,11 @@ def _apply_extractors(
             node, scope, attr_list, max_scope_depth=max_scope_depth
         )
     except ENRICHMENT_ERRORS as exc:
+        logger.warning("Rust item_role classification degraded: %s", type(exc).__name__)
         reasons.append(f"item_role: {exc}")
 
     if reasons:
+        logger.warning("Rust tree-sitter enrichment degraded: %s", "; ".join(reasons))
         payload["enrichment_status"] = "degraded"
         payload["degrade_reason"] = "; ".join(reasons)
 
@@ -642,6 +647,7 @@ def _run_query_pack(
             context=context,
         )
     except ENRICHMENT_ERRORS:
+        logger.warning("Rust query pack execution failed: %s", pack_name)
         return None
     return _RustPackRunResultV1(
         pack_name=pack_name,
@@ -961,6 +967,11 @@ def enrich_rust_context(
         Best-effort context payload, or ``None`` when unavailable.
     """
     if not is_tree_sitter_rust_available() or line < 1 or col < 0 or len(source) > MAX_SOURCE_BYTES:
+        if len(source) > MAX_SOURCE_BYTES:
+            logger.warning(
+                "Skipping Rust tree-sitter enrichment for oversized source (%d chars)",
+                len(source),
+            )
         return None
 
     try:
@@ -993,7 +1004,8 @@ def enrich_rust_context(
                 file_key=cache_key,
             )
         )
-    except ENRICHMENT_ERRORS:
+    except ENRICHMENT_ERRORS as exc:
+        logger.warning("Rust context enrichment failed: %s", type(exc).__name__)
         return None
     else:
         return canonicalize_rust_lane_payload(payload)
@@ -1036,6 +1048,11 @@ def enrich_rust_context_by_byte_range(
 
     source_byte_len = len(source.encode("utf-8", errors="replace"))
     if source_byte_len > MAX_SOURCE_BYTES or byte_end > source_byte_len:
+        if source_byte_len > MAX_SOURCE_BYTES:
+            logger.warning(
+                "Skipping Rust byte-range enrichment for oversized source (%d bytes)",
+                source_byte_len,
+            )
         return None
 
     try:
@@ -1062,7 +1079,8 @@ def enrich_rust_context_by_byte_range(
                 file_key=cache_key,
             )
         )
-    except ENRICHMENT_ERRORS:
+    except ENRICHMENT_ERRORS as exc:
+        logger.warning("Rust byte-range enrichment failed: %s", type(exc).__name__)
         return None
     else:
         return canonicalize_rust_lane_payload(payload)

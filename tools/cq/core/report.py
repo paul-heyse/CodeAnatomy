@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import cast
 
+from tools.cq.core.ports import RenderEnrichmentPort
 from tools.cq.core.render_diagnostics import (
     summary_with_render_enrichment_metrics as _summary_with_render_enrichment_metrics,
 )
@@ -30,11 +31,14 @@ from tools.cq.core.render_summary import (
 from tools.cq.core.render_summary import (
     render_summary as _render_summary,
 )
+from tools.cq.core.render_utils import clean_scalar as _clean_scalar
+from tools.cq.core.render_utils import format_location as _format_location
+from tools.cq.core.render_utils import iter_result_findings as _iter_result_findings
+from tools.cq.core.render_utils import safe_int as _safe_int
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
-from tools.cq.core.serialization import to_builtins
 from tools.cq.core.structs import CqStruct
-from tools.cq.core.type_coercion import coerce_float
+from tools.cq.core.type_coercion import coerce_float_optional
 from tools.cq.query.language import QueryLanguage
 
 # Maximum evidence items to show before truncating
@@ -44,6 +48,7 @@ MAX_RENDER_ENRICH_FILES = 9  # original anchor file + next 8 files
 MAX_RENDER_ENRICH_WORKERS = 4
 SHOW_CONTEXT_SNIPPETS_ENV = "CQ_RENDER_CONTEXT_SNIPPETS"
 MAX_OBJECT_OCCURRENCE_LINES = 200
+_RENDER_ENRICHMENT_PORT_STATE: dict[str, RenderEnrichmentPort | None] = {"port": None}
 
 # Section ordering per front-door command
 _SECTION_ORDER_MAP: dict[str, tuple[str, ...]] = {
@@ -89,6 +94,11 @@ class RenderEnrichmentResult(CqStruct, frozen=True):
     col: int
     language: QueryLanguage
     payload: dict[str, object]
+
+
+def set_render_enrichment_port(port: RenderEnrichmentPort | None) -> None:
+    """Set render enrichment provider for anchor-based payload generation."""
+    _RENDER_ENRICHMENT_PORT_STATE["port"] = port
 
 
 def _severity_icon(severity: str) -> str:
@@ -188,57 +198,6 @@ def _format_context_block(finding: Finding, *, enabled: bool = True) -> list[str
     lang = language if isinstance(language, str) else "python"
     indented_snippet = "\n".join(f"  {line}" for line in context_snippet.split("\n"))
     return [header, f"  ```{lang}", indented_snippet, "  ```"]
-
-
-def _na(reason: str) -> str:
-    return f"N/A — {reason.replace('_', ' ')}"
-
-
-def _clean_scalar(value: object) -> str | None:
-    if isinstance(value, str):
-        text = value.strip()
-        return text or None
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return None
-
-
-def _safe_int(value: object) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
-
-
-def _format_location(
-    file_value: str | None, line_value: int | None, col_value: int | None
-) -> str | None:
-    if not file_value and line_value is None:
-        return None
-    base = file_value or "<unknown>"
-    if line_value is not None and line_value > 0:
-        base = f"{base}:{line_value}"
-        if col_value is not None and col_value >= 0:
-            base = f"{base}:{col_value}"
-    return base
-
-
-def _extract_symbol_hint(finding: Finding) -> str | None:
-    for key in ("name", "symbol", "match_text", "callee", "text"):
-        value = finding.details.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip().split("\n", maxsplit=1)[0]
-    message = finding.message.strip()
-    if not message:
-        return None
-    if ":" in message:
-        candidate = message.rsplit(":", maxsplit=1)[1].strip()
-        if candidate:
-            return candidate
-    if "(" in message:
-        return message.split("(", maxsplit=1)[0].strip() or None
-    return message
 
 
 def _format_resolved_object_occurrences(finding: Finding) -> list[str]:
@@ -367,68 +326,22 @@ def _compute_render_enrichment_payload_from_anchor(
     language: QueryLanguage,
     candidates: list[str],
 ) -> dict[str, object]:
-    line_text = _read_line_text(root, file, line)
-    if line_text is None:
+    port = _RENDER_ENRICHMENT_PORT_STATE["port"]
+    if port is None:
         return {}
-
-    from tools.cq.core.locations import SourceSpan
-    from tools.cq.search.pipeline.smart_search import build_finding, classify_match
-    from tools.cq.search.pipeline.smart_search_types import RawMatch
-
-    match_start, match_end, match_text = _compute_match_columns(
-        line_text,
-        col,
-        candidates,
+    return port.enrich_anchor(
+        root=root,
+        file=file,
+        line=line,
+        col=col,
+        language=language,
+        candidates=candidates,
     )
-    byte_start = _line_relative_byte_offset(line_text, match_start)
-    byte_end = max(byte_start + 1, _line_relative_byte_offset(line_text, match_end))
-    raw = RawMatch(
-        span=SourceSpan(
-            file=file,
-            start_line=line,
-            start_col=match_start,
-            end_line=line,
-            end_col=match_end,
-        ),
-        text=line_text,
-        match_text=match_text,
-        match_start=match_start,
-        match_end=match_end,
-        match_byte_start=byte_start,
-        match_byte_end=byte_end,
-    )
-    try:
-        enriched = classify_match(
-            raw,
-            root,
-            lang=language,
-            force_semantic_enrichment=True,
-            enable_python_semantic=True,
-        )
-        enriched_finding = build_finding(enriched, root)
-        payload = to_builtins(enriched_finding.details.data)
-    except (OSError, RuntimeError, TypeError, ValueError):
-        return {}
-    if isinstance(payload, dict):
-        return payload
-    return {}
-
-
-def _iter_result_findings(result: CqResult) -> list[Finding]:
-    findings: list[Finding] = []
-    findings.extend(result.key_findings)
-    for section in result.sections:
-        findings.extend(section.findings)
-    findings.extend(result.evidence)
-    return findings
 
 
 def _finding_priority_key(finding: Finding) -> tuple[float, float, str, int, int, str]:
     score = finding.details.get("score")
-    try:
-        numeric_score = coerce_float(score)
-    except TypeError:
-        numeric_score = 0.0
+    numeric_score = coerce_float_optional(score) or 0.0
     category_weight = {
         "definition": 6.0,
         "callsite": 5.0,
@@ -1001,7 +914,7 @@ def render_markdown(result: CqResult) -> str:
 
 
 # Public API re-exports
-render_summary = render_summary_condensed
+render_summary_compact = render_summary_condensed
 
 from tools.cq.core.render_summary import ARTIFACT_ONLY_KEYS
 
@@ -1009,5 +922,5 @@ __all__ = [
     "ARTIFACT_ONLY_KEYS",
     "compact_summary_for_rendering",
     "render_markdown",
-    "render_summary",
+    "render_summary_compact",
 ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import msgspec
 
@@ -11,6 +11,8 @@ from tools.cq.core.structs import CqStruct
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
+
+BucketLevel = Literal["low", "med", "high"]
 
 
 class MacroRequestBase(CqStruct, frozen=True):
@@ -26,6 +28,12 @@ class ScopedMacroRequestBase(MacroRequestBase, frozen=True):
 
     include: list[str] = msgspec.field(default_factory=list)
     exclude: list[str] = msgspec.field(default_factory=list)
+
+
+class CallsRequest(MacroRequestBase, frozen=True):
+    """Request struct for calls macro execution."""
+
+    function_name: str
 
 
 class MacroExecutionRequestV1(CqStruct, frozen=True):
@@ -50,8 +58,8 @@ class MacroScorePayloadV1(CqStruct, frozen=True):
 
     impact: float = 0.0
     confidence: float = 0.0
-    impact_bucket: str = "low"
-    confidence_bucket: str = "low"
+    impact_bucket: BucketLevel = "low"
+    confidence_bucket: BucketLevel = "low"
     details: dict[str, object] = msgspec.field(default_factory=dict)
 
 
@@ -59,13 +67,15 @@ class ScoringDetailsV1(CqStruct, frozen=True):
     """Normalized scoring details for macro findings."""
 
     impact_score: float
-    impact_bucket: str
+    impact_bucket: BucketLevel
     confidence_score: float
-    confidence_bucket: str
+    confidence_bucket: BucketLevel
     evidence_kind: str
 
 
 __all__ = [
+    "BucketLevel",
+    "CallsRequest",
     "MacroExecutionRequestV1",
     "MacroRequestBase",
     "MacroScorePayloadV1",

@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tools.cq.core.request_factory import (
+from tools.cq.core.toolchain import Toolchain
+from tools.cq.orchestration.request_factory import (
     RequestContextV1,
     RequestFactory,
     SearchRequestOptionsV1,
 )
-from tools.cq.core.toolchain import Toolchain
 
 IMPACT_MAX_DEPTH = 10
 DEFAULT_MAX_FILES = 1000
@@ -94,10 +94,10 @@ def test_calls_request(request_context: RequestContextV1) -> None:
 
     request = RequestFactory.calls(request_context, function_name="test_function")
     assert isinstance(request, CallsServiceRequest)
-    assert request.root == request_context.root
-    assert request.function_name == "test_function"
-    assert request.tc == request_context.tc
-    assert request.argv == request_context.argv
+    assert request.request.root == request_context.root
+    assert request.request.function_name == "test_function"
+    assert request.request.tc == request_context.tc
+    assert request.request.argv == request_context.argv
 
 
 def test_search_request(request_context: RequestContextV1) -> None:

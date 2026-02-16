@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
+
+from tools.cq.cli_app.types import LdmdSliceMode
 
 
 class LdmdParseError(Exception):
@@ -19,6 +22,7 @@ _BEGIN_RE = re.compile(
     r"\s*-->$"
 )
 _END_RE = re.compile(r'^<!--LDMD:END\s+id="([^"]+)"\s*-->$')
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -108,6 +112,7 @@ def build_index(content: bytes) -> LdmdIndex:
             sid = begin_match.group(1)
             if sid in seen_ids:
                 msg = f"Duplicate section ID: {sid}"
+                logger.warning("LDMD parse failure: %s", msg)
                 raise LdmdParseError(msg)
             seen_ids.add(sid)
             open_stack.append(sid)
@@ -125,6 +130,7 @@ def build_index(content: bytes) -> LdmdIndex:
             if not open_stack or open_stack[-1] != sid:
                 expected = open_stack[-1] if open_stack else "none"
                 msg = f"Mismatched END: expected '{expected}', got '{sid}'"
+                logger.warning("LDMD parse failure: %s", msg)
                 raise LdmdParseError(msg)
             open_stack.pop()
             section_meta = open_sections.pop(sid)
@@ -143,6 +149,7 @@ def build_index(content: bytes) -> LdmdIndex:
 
     if open_stack:
         msg = f"Unclosed sections: {open_stack}"
+        logger.warning("LDMD parse failure: %s", msg)
         raise LdmdParseError(msg)
 
     return LdmdIndex(
@@ -197,7 +204,7 @@ def get_slice(
     index: LdmdIndex,
     *,
     section_id: str,
-    mode: str = "full",
+    mode: LdmdSliceMode = LdmdSliceMode.full,
     depth: int = 0,
     limit_bytes: int = 0,
 ) -> bytes:
@@ -209,19 +216,22 @@ def get_slice(
     Raises:
         LdmdParseError: If `section_id` is not found or mode is unsupported.
     """
-    if mode not in {"full", "preview", "tldr"}:
-        msg = f"Unsupported mode: {mode}"
+    mode_value = str(mode)
+    if mode_value not in {"full", "preview", "tldr"}:
+        msg = f"Unsupported mode: {mode_value}"
+        logger.warning("LDMD slice failure: %s", msg)
         raise LdmdParseError(msg)
 
     resolved_id = _resolve_section_id(index, section_id)
     section = next((s for s in index.sections if s.id == resolved_id), None)
     if section is None:
         msg = f"Section not found: {resolved_id}"
+        logger.warning("LDMD slice failure: %s", msg)
         raise LdmdParseError(msg)
 
     slice_data = content[section.start_offset : section.end_offset]
 
-    if mode == "tldr":
+    if mode_value == "tldr":
         tldr_id = f"{resolved_id}_tldr"
         try:
             local_index = build_index(slice_data)
@@ -230,11 +240,14 @@ def get_slice(
                 slice_data = slice_data[tldr_section.start_offset : tldr_section.end_offset]
                 depth = 0
             else:
-                mode = "preview"
+                mode_value = "preview"
         except LdmdParseError:
-            mode = "preview"
+            logger.warning(
+                "LDMD TLDR parse failed for section '%s'; falling back to preview", resolved_id
+            )
+            mode_value = "preview"
 
-    if mode == "preview":
+    if mode_value == "preview":
         depth = max(0, min(depth if depth > 0 else 1, 1))
         if limit_bytes <= 0:
             limit_bytes = 4096

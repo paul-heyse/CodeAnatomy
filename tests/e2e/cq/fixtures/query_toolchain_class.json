@@ -340,11 +340,11 @@
           },
           {
             "kind": "local_definition",
-            "name": "rg_available"
+            "name": "Toolchain"
           },
           {
             "kind": "local_definition",
-            "name": "rg_version"
+            "name": "detect"
           },
           {
             "kind": "local_definition",
@@ -352,19 +352,19 @@
           },
           {
             "kind": "local_definition",
+            "name": "diskcache_version"
+          },
+          {
+            "kind": "local_definition",
+            "name": "has_rg"
+          },
+          {
+            "kind": "local_definition",
+            "name": "has_sgpy"
+          },
+          {
+            "kind": "local_definition",
             "name": "msg"
-          },
-          {
-            "kind": "local_definition",
-            "name": "Toolchain"
-          },
-          {
-            "kind": "local_definition",
-            "name": "require_sgpy"
-          },
-          {
-            "kind": "local_definition",
-            "name": "sgpy_available"
           },
           {
             "kind": "local_definition",

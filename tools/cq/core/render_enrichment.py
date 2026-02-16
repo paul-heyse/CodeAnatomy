@@ -15,9 +15,12 @@ from tools.cq.core.enrichment_facts import (
     resolve_fact_context,
     resolve_primary_language_payload,
 )
+from tools.cq.core.render_utils import clean_scalar as _clean_scalar
+from tools.cq.core.render_utils import format_location as _format_location
+from tools.cq.core.render_utils import na as _na
+from tools.cq.core.render_utils import safe_int as _safe_int
 from tools.cq.core.schema import Finding
 from tools.cq.core.serialization import to_builtins
-from tools.cq.search.objects.render import is_applicability_not_applicable
 
 MAX_FACT_VALUE_ITEMS = 8
 MAX_FACT_MAPPING_SCALAR_PAIRS = 4
@@ -35,6 +38,12 @@ DETAILS_SUPPRESS_KEYS: frozenset[str] = frozenset(
 
 # Callback type for render-time enrichment computation
 EnrichmentCallback = Callable[[Finding, Path], dict[str, object]]
+
+
+def _is_not_applicable_reason(reason: str | None) -> bool:
+    if not isinstance(reason, str):
+        return False
+    return reason.startswith("not_applicable")
 
 
 def extract_enrichment_payload(finding: Finding) -> dict[str, object] | None:
@@ -106,45 +115,11 @@ def merge_enrichment_details(finding: Finding, payload: dict[str, object]) -> No
         finding.details[key] = value
 
 
-def _na(reason: str) -> str:
-    return f"N/A — {reason.replace('_', ' ')}"
-
-
 def _show_unresolved_facts() -> bool:
     import os
 
     value = os.environ.get(SHOW_UNRESOLVED_FACTS_ENV, "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _clean_scalar(value: object) -> str | None:
-    if isinstance(value, str):
-        text = value.strip()
-        return text or None
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return None
-
-
-def _safe_int(value: object) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
-
-
-def _format_location(
-    file_value: str | None, line_value: int | None, col_value: int | None
-) -> str | None:
-    if not file_value and line_value is None:
-        return None
-    base = file_value or "<unknown>"
-    if line_value is not None and line_value > 0:
-        base = f"{base}:{line_value}"
-        if col_value is not None and col_value >= 0:
-            base = f"{base}:{col_value}"
-    return base
 
 
 def _format_target_mapping(value: dict[str, object]) -> str | None:
@@ -282,9 +257,7 @@ def format_enrichment_facts(payload: dict[str, object]) -> list[str]:
     lines = ["  Code Facts:"]
     show_unresolved = _show_unresolved_facts()
     for cluster in clusters:
-        candidate_rows = [
-            row for row in cluster.rows if not is_applicability_not_applicable(row.reason)
-        ]
+        candidate_rows = [row for row in cluster.rows if not _is_not_applicable_reason(row.reason)]
         rows = (
             candidate_rows
             if show_unresolved

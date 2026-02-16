@@ -22,7 +22,7 @@ from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_insight import (
+    from tools.cq.core.front_door_builders import (
         FrontDoorInsightV1,
         InsightConfidenceV1,
         InsightNeighborhoodV1,
@@ -286,7 +286,7 @@ def _add_sites_section(
 
 
 def _build_calls_confidence(score: ScoreDetails | None) -> InsightConfidenceV1:
-    from tools.cq.core.front_door_insight import InsightConfidenceV1
+    from tools.cq.core.front_door_builders import InsightConfidenceV1
 
     return InsightConfidenceV1(
         evidence_kind=(score.evidence_kind if score and score.evidence_kind else "resolved_ast"),
@@ -304,7 +304,7 @@ def _build_calls_front_door_insight(
     state: CallsFrontDoorState,
     used_fallback: bool,
 ) -> FrontDoorInsightV1:
-    from tools.cq.core.front_door_insight import (
+    from tools.cq.core.front_door_builders import (
         CallsInsightBuildRequestV1,
         InsightBudgetV1,
         InsightDegradationV1,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from tools.cq.search.rg.contracts import RgProcessResultV1, RgRunSettingsV1
 
 _LOOKAROUND_RE = re.compile(r"\(\?(?:[=!]|<[=!])")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +74,7 @@ def detect_rg_version() -> tuple[bool, str | None]:
         text=True,
     )
     if proc.returncode != 0:
+        logger.warning("ripgrep version probe failed with code %d", proc.returncode)
         return False, None
     first_line = proc.stdout.splitlines()[0].strip() if proc.stdout else ""
     return True, first_line or None
@@ -86,6 +89,7 @@ def detect_rg_types() -> set[str]:
         text=True,
     )
     if proc.returncode != 0:
+        logger.warning("ripgrep type probe failed with code %d", proc.returncode)
         return set()
     types: set[str] = set()
     for line in proc.stdout.splitlines():
@@ -225,6 +229,12 @@ def run_rg_json(request: RgRunRequest, *, pcre2_available: bool = False) -> RgPr
         RgProcessResult: Function return value.
     """
     command = build_rg_command(request, pcre2_available=pcre2_available)
+    logger.debug(
+        "Running rg operation=%s mode=%s root=%s",
+        request.operation,
+        request.mode.value,
+        request.root,
+    )
     process = subprocess.Popen(
         command,
         cwd=request.root,
@@ -239,6 +249,7 @@ def run_rg_json(request: RgRunRequest, *, pcre2_available: bool = False) -> RgPr
         stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
+        logger.warning("ripgrep timed out after %ss: %s", timeout, " ".join(command))
         process.kill()
         stdout_bytes, stderr_bytes = process.communicate()
 
@@ -252,7 +263,7 @@ def run_rg_json(request: RgRunRequest, *, pcre2_available: bool = False) -> RgPr
     else:
         stdout_lines = _decode_stdout_lines(stdout_bytes)
 
-    return RgProcessResult(
+    result = RgProcessResult(
         command=command,
         events=events,
         timed_out=timed_out,
@@ -260,6 +271,9 @@ def run_rg_json(request: RgRunRequest, *, pcre2_available: bool = False) -> RgPr
         stderr=stderr_bytes.decode("utf-8", errors="replace"),
         stdout_lines=stdout_lines,
     )
+    if result.returncode not in {0, 1}:
+        logger.warning("ripgrep failed with code %d: %s", result.returncode, result.stderr.strip())
+    return result
 
 
 def run_rg_json_contract(request: RgRunRequest) -> RgProcessResultV1:

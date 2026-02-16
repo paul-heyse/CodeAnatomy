@@ -14,7 +14,7 @@ from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.cli_app.options import SearchOptions, options_from_params
 from tools.cq.cli_app.params import SearchParams
-from tools.cq.core.request_factory import (
+from tools.cq.orchestration.request_factory import (
     RequestContextV1,
     RequestFactory,
     SearchRequestOptionsV1,

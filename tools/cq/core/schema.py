@@ -13,6 +13,7 @@ import msgspec
 from tools.cq import SCHEMA_VERSION
 from tools.cq.core.id import stable_digest24
 from tools.cq.core.locations import SourceSpan
+from tools.cq.core.type_coercion import coerce_float_optional
 
 # Schema evolution notes:
 # - New fields must have defaults to preserve backward compatibility.
@@ -25,26 +26,6 @@ _SCORE_FIELDS: tuple[str, ...] = (
     "confidence_bucket",
     "evidence_kind",
 )
-
-
-def coerce_float(value: object) -> float | None:
-    """Coerce value to float or None.
-
-    Parameters
-    ----------
-    value : object
-        Value to coerce.
-
-    Returns:
-    -------
-    float | None
-        Float value or None if value cannot be coerced.
-    """
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
 
 
 def coerce_str(value: object) -> str | None:
@@ -108,9 +89,9 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
         score = None
         if score_values:
             score = ScoreDetails(
-                impact_score=coerce_float(score_values.get("impact_score")),
+                impact_score=coerce_float_optional(score_values.get("impact_score")),
                 impact_bucket=coerce_str(score_values.get("impact_bucket")),
-                confidence_score=coerce_float(score_values.get("confidence_score")),
+                confidence_score=coerce_float_optional(score_values.get("confidence_score")),
                 confidence_bucket=coerce_str(score_values.get("confidence_bucket")),
                 evidence_kind=coerce_str(score_values.get("evidence_kind")),
             )
@@ -463,12 +444,8 @@ def _stable_finding_id(finding: Finding) -> str:
     return stable_digest24(payload)
 
 
-def assign_result_finding_ids(result: CqResult) -> CqResult:
-    """Assign stable and execution-scoped IDs for all findings in a result.
-
-    Returns:
-        CqResult: Result with updated finding IDs.
-    """
+def assign_result_finding_ids(result: CqResult) -> None:
+    """Assign stable and execution-scoped IDs for all findings in a result."""
     run_id = result.run.run_id or ""
 
     def _assign(finding: Finding) -> None:
@@ -486,7 +463,6 @@ def assign_result_finding_ids(result: CqResult) -> CqResult:
     for section in result.sections:
         for finding in section.findings:
             _assign(finding)
-    return result
 
 
 def ms() -> float:
@@ -512,7 +488,6 @@ __all__ = [
     "ScoreDetails",
     "Section",
     "assign_result_finding_ids",
-    "coerce_float",
     "coerce_str",
     "mk_result",
     "mk_runmeta",

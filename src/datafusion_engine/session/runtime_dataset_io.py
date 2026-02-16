@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import msgspec
 import pyarrow as pa
-from datafusion import SessionContext, col, lit
+from datafusion import DataFrame, SessionContext, SQLOptions, col, lit
 from datafusion.expr import Expr
 
 from datafusion_engine.arrow.coercion import to_arrow_table
@@ -421,7 +421,7 @@ def _datafusion_type_name(dtype: pa.DataType) -> str:
     return value
 
 
-def _sql_with_options(ctx: SessionContext, sql: str) -> object:
+def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
     """Execute SQL with read-only options.
 
     Returns:
@@ -819,7 +819,7 @@ def _apply_readiness_status(
 def _introspection_cache_for_ctx(
     ctx: SessionContext,
     *,
-    sql_options: object | None,
+    sql_options: SQLOptions | None,
 ) -> IntrospectionCache:
     from datafusion_engine.catalog.introspection import introspection_cache_for_ctx
 

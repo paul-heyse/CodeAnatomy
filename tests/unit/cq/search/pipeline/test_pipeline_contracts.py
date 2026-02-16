@@ -10,7 +10,6 @@ from tools.cq.search.pipeline.contracts import (
     SearchConfig,
     SearchPartitionPlanV1,
     SearchRequest,
-    SmartSearchContext,
 )
 
 
@@ -28,8 +27,8 @@ def test_search_partition_plan_v1_round_trips() -> None:
 
 
 def test_search_config_alias() -> None:
-    """Verify SmartSearchContext is an alias for SearchConfig."""
-    assert SmartSearchContext is SearchConfig
+    """Verify `SearchConfig` contract is exposed from pipeline contracts."""
+    assert SearchConfig.__name__ == "SearchConfig"
 
 
 def test_search_request_defaults() -> None:

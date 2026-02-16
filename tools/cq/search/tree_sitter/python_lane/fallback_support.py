@@ -4,23 +4,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids, child_by_field
+from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
 from tools.cq.search.tree_sitter.core.node_utils import node_text
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    MAX_CAPTURE_ITEMS as _MAX_CAPTURE_ITEMS,
+)
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    get_python_field_ids,
+)
 
 if TYPE_CHECKING:
     from tree_sitter import Node
 
-_MAX_CAPTURE_ITEMS = 8
 _MAX_CAPTURE_TEXT_LEN = 120
-
-
-def get_python_field_ids() -> dict[str, int]:
-    """Return cached Python tree-sitter field IDs.
-
-    Returns:
-        dict[str, int]: Field-name to field-id mapping for Python grammar nodes.
-    """
-    return cached_field_ids("python")
 
 
 def _capture_named_definition(

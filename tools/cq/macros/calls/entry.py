@@ -6,20 +6,19 @@ for the calls macro command.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.core.cache import maybe_evict_run_cache_tag
-from tools.cq.core.run_context import RunContext
+from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.schema import (
     CqResult,
     Finding,
     ScoreDetails,
     Section,
     assign_result_finding_ids,
-    mk_result,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
@@ -54,19 +53,22 @@ from tools.cq.macros.calls_target import (
     attach_target_metadata,
     infer_target_language,
 )
+from tools.cq.macros.contracts import CallsRequest
+from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.query.sg_parser import SgRecord, list_scan_files, sg_scan
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_insight import FrontDoorInsightV1
+    from tools.cq.core.front_door_schema import FrontDoorInsightV1
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.macros.calls.analysis import CallSite
     from tools.cq.query.language import QueryLanguage
 
 _CALLS_TARGET_CALLEE_PREVIEW = 10
 _FRONT_DOOR_PREVIEW_PER_SLICE = 5
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -129,7 +131,8 @@ def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
                 root=root_path,
                 lang=target_language,
             )
-        except (OSError, RuntimeError, ValueError):
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.warning("Calls ast-grep scan failed for '%s': %s", function_name, exc)
             used_fallback = True
     else:
         used_fallback = True
@@ -247,14 +250,14 @@ def _init_calls_result(
     *,
     started_ms: float,
 ) -> CqResult:
-    run_ctx = RunContext.from_parts(
+    builder = MacroResultBuilder(
+        "calls",
         root=ctx.root,
         argv=ctx.argv,
         tc=ctx.tc,
         started_ms=started_ms,
     )
-    run = run_ctx.to_runmeta("calls")
-    result = mk_result(run)
+    result = builder.result
     result.summary = _build_calls_summary(ctx.function_name, scan_result)
     return result
 
@@ -301,7 +304,7 @@ def _build_calls_front_door_state(
     analysis: CallAnalysisSummary,
     score: ScoreDetails | None,
 ) -> CallsFrontDoorState:
-    from tools.cq.core.front_door_insight import InsightNeighborhoodV1
+    from tools.cq.core.front_door_schema import InsightNeighborhoodV1
     from tools.cq.search.semantic.models import infer_language_for_path
 
     resolved_target_language = infer_target_language(ctx.root, ctx.function_name)
@@ -420,7 +423,7 @@ def _build_calls_result(
     *,
     started_ms: float,
 ) -> CqResult:
-    from tools.cq.core.front_door_insight import to_public_front_door_insight_dict
+    from tools.cq.core.front_door_render import to_public_front_door_insight_dict
 
     result = _init_calls_result(ctx, scan_result, started_ms=started_ms)
     analysis, score = _analyze_calls_sites(result, ctx=ctx, scan_result=scan_result)
@@ -459,24 +462,13 @@ def _build_calls_result(
     return result
 
 
-def cmd_calls(
-    tc: Toolchain,
-    root: Path,
-    argv: list[str],
-    function_name: str,
-) -> CqResult:
+def cmd_calls(request: CallsRequest) -> CqResult:
     """Census all call sites for a function.
 
     Parameters
     ----------
-    tc : Toolchain
-        Available tools.
-    root : Path
-        Repository root.
-    argv : list[str]
-        Original command arguments.
-    function_name : str
-        Function to find calls for.
+    request : CallsRequest
+        Request contract for calls execution.
 
     Returns:
     -------
@@ -485,12 +477,15 @@ def cmd_calls(
     """
     started = ms()
     ctx = CallsContext(
-        tc=tc,
-        root=Path(root),
-        argv=argv,
-        function_name=function_name,
+        tc=request.tc,
+        root=Path(request.root),
+        argv=request.argv,
+        function_name=request.function_name,
     )
+    logger.debug("Running calls macro function=%s root=%s", ctx.function_name, ctx.root)
     scan_result = _scan_call_sites(ctx.root, ctx.function_name)
+    if scan_result.used_fallback:
+        logger.warning("Calls macro used ripgrep fallback for function=%s", ctx.function_name)
     result = _build_calls_result(ctx, scan_result, started_ms=started)
     result = apply_rust_fallback_policy(
         result,
@@ -506,6 +501,11 @@ def cmd_calls(
     if result.run.run_id:
         maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=result.run.run_id)
         maybe_evict_run_cache_tag(root=ctx.root, language="rust", run_id=result.run.run_id)
+    logger.debug(
+        "Calls macro completed function=%s total_sites=%d",
+        ctx.function_name,
+        len(scan_result.all_sites),
+    )
     return result
 
 

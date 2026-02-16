@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tools.cq.core.cache import close_cq_cache_backend
 from tools.cq.core.cache.base_contracts import TreeSitterCacheEnvelopeV1
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
 from tools.cq.core.cache.tree_sitter_cache_store import (
     build_tree_sitter_cache_key,
     load_tree_sitter_payload,

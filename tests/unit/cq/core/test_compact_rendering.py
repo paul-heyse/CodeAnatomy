@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import msgspec
-from tools.cq.core.front_door_insight import (
+from tools.cq.core.front_door_builders import (
     FrontDoorInsightV1,
     InsightArtifactRefsV1,
     InsightTargetV1,

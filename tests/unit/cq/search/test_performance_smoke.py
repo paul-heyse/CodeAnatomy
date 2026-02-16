@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
+from tools.cq.macros.contracts import CallsRequest
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -69,11 +70,11 @@ def test_calls_cache_smoke() -> None:
     tc = Toolchain.detect()
 
     start = time.perf_counter()
-    cmd_calls(tc=tc, root=root, argv=[], function_name="build_graph")
+    cmd_calls(CallsRequest(tc=tc, root=root, argv=[], function_name="build_graph"))
     first = time.perf_counter() - start
 
     start = time.perf_counter()
-    cmd_calls(tc=tc, root=root, argv=[], function_name="build_graph")
+    cmd_calls(CallsRequest(tc=tc, root=root, argv=[], function_name="build_graph"))
     second = time.perf_counter() - start
     assert second <= first * 1.5
 

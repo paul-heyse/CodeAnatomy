@@ -56,6 +56,7 @@ _MISSING_ENTITY_MESSAGE = (
 _MISSING_PATTERN_MESSAGE = "Pattern query must specify 'pattern'"
 _INVALID_COMPOSITE_MESSAGE = "'not' operator requires exactly one pattern"
 _COMPOSITE_OPS: tuple[CompositeOp, ...] = ("all", "any", "not")
+_QUERY_TOKEN_PATTERN = re.compile(r"([\w.]+|\$+\w+)=(?:'([^']+)'|\"([^\"]+)\"|([^\s]+))")
 
 
 def _invalid_entity_message(entity_str: str, valid: tuple[str, ...]) -> str:
@@ -267,6 +268,11 @@ def _has_top_level_composite(tokens: dict[str, str]) -> bool:
     return any(op in tokens for op in _COMPOSITE_OPS)
 
 
+def has_query_tokens(query_string: str) -> bool:
+    """Return whether query text contains key=value query tokens."""
+    return any(_QUERY_TOKEN_PATTERN.finditer(query_string))
+
+
 def _tokenize(query_string: str) -> dict[str, str]:
     """Tokenize query string into key-value pairs.
 
@@ -288,10 +294,7 @@ def _tokenize(query_string: str) -> dict[str, str]:
     # - Metavar filter keys: $NAME, $$NAME, $$$NAME
     # - Quoted strings (single or double)
     # - Unquoted values
-    # Pattern order matters: try single quotes, then double quotes, then unquoted
-    pattern = r"([\w.]+|\$+\w+)=(?:'([^']+)'|\"([^\"]+)\"|([^\s]+))"
-
-    for match in re.finditer(pattern, query_string):
+    for match in _QUERY_TOKEN_PATTERN.finditer(query_string):
         key = match.group(1)
         # Use first non-None value from capture groups
         value = match.group(2) or match.group(3) or match.group(4) or ""

@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+_STRIP_ENTRY_PART_COUNT = 3
+
 
 def test_no_private_cross_module_imports() -> None:
     """Verify no private cross-module imports exist except for allowlist.
@@ -43,10 +45,26 @@ def test_no_private_cross_module_imports() -> None:
         "tools/cq/macros/calls/analysis.py:22:from tools.cq.macros.calls.neighborhood import _compute_context_window",
         # Report decomposition (S31) - intra-module re-exports
         "tools/cq/core/report.py:22:from tools.cq.core.render_overview import render_code_overview as _render_code_overview",
+        "tools/cq/core/report.py:34:from tools.cq.core.render_utils import clean_scalar as _clean_scalar",
+        "tools/cq/core/report.py:35:from tools.cq.core.render_utils import format_location as _format_location",
+        "tools/cq/core/report.py:36:from tools.cq.core.render_utils import iter_result_findings as _iter_result_findings",
+        "tools/cq/core/report.py:37:from tools.cq.core.render_utils import safe_int as _safe_int",
+        "tools/cq/core/render_overview.py:7:from tools.cq.core.render_utils import clean_scalar as _clean_scalar",
+        "tools/cq/core/render_overview.py:8:from tools.cq.core.render_utils import extract_symbol_hint as _extract_symbol_hint",
+        "tools/cq/core/render_overview.py:9:from tools.cq.core.render_utils import iter_result_findings as _iter_result_findings",
+        "tools/cq/core/render_overview.py:10:from tools.cq.core.render_utils import na as _na",
+        "tools/cq/core/render_summary.py:11:from tools.cq.core.render_utils import na as _na",
+        "tools/cq/core/render_enrichment.py:18:from tools.cq.core.render_utils import clean_scalar as _clean_scalar",
+        "tools/cq/core/render_enrichment.py:19:from tools.cq.core.render_utils import format_location as _format_location",
+        "tools/cq/core/render_enrichment.py:20:from tools.cq.core.render_utils import na as _na",
+        "tools/cq/core/render_enrichment.py:21:from tools.cq.core.render_utils import safe_int as _safe_int",
         # Search pipeline decomposition (S26) - intra-subsystem imports
         "tools/cq/search/pipeline/partition_pipeline.py:50:    from tools.cq.search.pipeline.smart_search_types import _PythonSemanticPrefetchResult",
         "tools/cq/search/pipeline/assembly.py:580:    from tools.cq.search.pipeline.smart_search import _build_search_summary, build_sections",
         "tools/cq/search/pipeline/search_semantic.py:19:from tools.cq.search.pipeline.smart_search_types import EnrichedMatch, _SearchSemanticOutcome",
+        "tools/cq/search/pipeline/smart_search_sections.py:27:    from tools.cq.search.pipeline.smart_search import build_sections as _build_sections",
+        "tools/cq/search/pipeline/smart_search_sections.py:45:    from tools.cq.search.pipeline.smart_search import build_finding as _build_finding",
+        "tools/cq/search/pipeline/smart_search_summary.py:24:    from tools.cq.search.pipeline.smart_search import _build_search_summary",
         # Python extractor decomposition (S29) - intra-subsystem imports
         "tools/cq/search/python/extractors.py:58:from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function",
         "tools/cq/search/python/extractors_structure.py:15:from tools.cq.search.python.extractors_classification import _unwrap_decorated",
@@ -60,7 +78,27 @@ def test_no_private_cross_module_imports() -> None:
         "tools/cq/search/tree_sitter/rust_lane/runtime.py:76:from tools.cq.search.tree_sitter.rust_lane.role_classification import _classify_item_role",
         "tools/cq/search/tree_sitter/rust_lane/enrichment_extractors.py:11:from tools.cq.search._shared.core import truncate as _shared_truncate",
         "tools/cq/search/tree_sitter/rust_lane/enrichment_extractors.py:14:from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _rust_field_ids",
+        # Query/run decomposition - intra-subsystem call delegation helpers
+        "tools/cq/query/symbol_resolver.py:11:from tools.cq.query.finding_builders import extract_call_target as _extract_call_target",
+        "tools/cq/query/executor_dispatch.py:15:    from tools.cq.query.executor import _execute_entity_query",
+        "tools/cq/query/executor_dispatch.py:26:    from tools.cq.query.executor import _execute_pattern_query",
+        "tools/cq/run/runner.py:21:from tools.cq.run.helpers import error_result as _error_result",
+        "tools/cq/run/runner.py:30:from tools.cq.run.scope import apply_run_scope as _apply_run_scope",
+        "tools/cq/run/step_executors.py:23:from tools.cq.run.helpers import error_result as _error_result",
+        "tools/cq/run/step_executors.py:24:from tools.cq.run.helpers import merge_in_dir as _merge_in_dir",
+        # Shared/enrichment adapters
+        "tools/cq/search/_shared/core.py:122:    from tools.cq.search.tree_sitter.core.node_utils import node_text as _node_text",
+        "tools/cq/search/rust/extensions.py:11:from tools.cq.search.enrichment.core import string_or_none as _string",
+        "tools/cq/search/semantic/models.py:17:from tools.cq.search.enrichment.core import string_or_none as _string",
     }
+
+    def _strip_line_number(entry: str) -> str:
+        parts = entry.split(":", 2)
+        if len(parts) == _STRIP_ENTRY_PART_COUNT and parts[1].isdigit():
+            return f"{parts[0]}:{parts[2]}"
+        return entry
+
+    normalized_allowlist = {_strip_line_number(entry) for entry in allowlist}
 
     repo_root = Path(__file__).parent.parent.parent.parent.parent
     cq_dir = repo_root / "tools" / "cq"
@@ -96,7 +134,7 @@ def test_no_private_cross_module_imports() -> None:
         normalized = match
         if str(repo_root) in match:
             normalized = match.replace(str(repo_root) + "/", "")
-        if normalized not in allowlist:
+        if _strip_line_number(normalized) not in normalized_allowlist:
             violations.append(normalized)
 
     if violations:

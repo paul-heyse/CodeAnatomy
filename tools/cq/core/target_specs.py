@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 from tools.cq.core.structs import CqStruct
 
@@ -70,11 +70,12 @@ def parse_target_spec(raw: str) -> TargetSpecV1:
         kind_part = parts[0].strip().lower()
         value_part = parts[1].strip()
         if kind_part in {"function", "class", "method", "module", "path"} and value_part:
+            bundle_kind = cast("BundleTargetKind", kind_part)
             return TargetSpecV1(
                 raw=raw,
-                bundle_kind=kind_part,  # type: ignore[arg-type]
+                bundle_kind=bundle_kind,
                 bundle_value=value_part,
-                target_name=value_part if kind_part != "path" else None,
+                target_name=value_part if bundle_kind != "path" else None,
             )
 
     return TargetSpecV1(raw=raw, target_name=text)

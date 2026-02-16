@@ -7,13 +7,15 @@ tracking import aliases for accurate call resolution.
 from __future__ import annotations
 
 import ast
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from tools.cq.core.python_ast_utils import safe_unparse
 
-_SELF_CLS: set[str] = {"self", "cls"}
+SELF_CLS_NAMES: set[str] = {"self", "cls"}
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -325,7 +327,7 @@ class DefIndexVisitor(ast.NodeVisitor):
         decorators = _extract_decorator_names(node.decorator_list)
 
         # Check if this is a method
-        is_method = bool(params) and params[0].name in _SELF_CLS
+        is_method = bool(params) and params[0].name in SELF_CLS_NAMES
 
         fn = FnDecl(
             name=node.name,
@@ -368,7 +370,7 @@ class DefIndexVisitor(ast.NodeVisitor):
                 params = _extract_params(child)
                 decorators = _extract_decorator_names(child.decorator_list)
                 is_async = isinstance(child, ast.AsyncFunctionDef)
-                is_method = bool(params) and params[0].name in _SELF_CLS
+                is_method = bool(params) and params[0].name in SELF_CLS_NAMES
 
                 fn = FnDecl(
                     name=child.name,
@@ -469,7 +471,10 @@ class DefIndex:
             try:
                 source = filepath.read_text(encoding="utf-8")
                 tree = ast.parse(source, filename=str(filepath))
-            except (SyntaxError, OSError, UnicodeDecodeError):
+            except (SyntaxError, OSError, UnicodeDecodeError) as exc:
+                logger.warning(
+                    "Skipping file while building def index: %s (%s)", rel_path, type(exc).__name__
+                )
                 continue
             visitor = DefIndexVisitor(rel_path)
             visitor.visit(tree)
@@ -631,3 +636,13 @@ class DefIndex:
             return (from_mod, sym)
 
         return (None, None)
+
+
+__all__ = [
+    "SELF_CLS_NAMES",
+    "ClassDecl",
+    "DefIndex",
+    "FnDecl",
+    "ModuleInfo",
+    "ParamInfo",
+]

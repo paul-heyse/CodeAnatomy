@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import msgspec
 
-from tools.cq.cli_app.context import CliContext
 from tools.cq.core.bootstrap import resolve_runtime_services
-from tools.cq.core.request_factory import RequestContextV1, RequestFactory, SearchRequestOptionsV1
-from tools.cq.core.result_factory import build_error_result
+from tools.cq.core.run_context import RunExecutionContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding, assign_result_finding_ids, mk_runmeta, ms
+from tools.cq.neighborhood.semantic_env import semantic_env_from_bundle
+from tools.cq.orchestration.request_factory import (
+    RequestContextV1,
+    RequestFactory,
+    SearchRequestOptionsV1,
+)
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, QueryLanguage
+from tools.cq.run.helpers import error_result as _error_result
+from tools.cq.run.helpers import merge_in_dir as _merge_in_dir
 from tools.cq.run.spec import (
     BytecodeSurfaceStep,
     CallsStep,
@@ -40,9 +47,12 @@ RUN_STEP_NON_FATAL_EXCEPTIONS = (
     ValueError,
     TypeError,
 )
+logger = logging.getLogger(__name__)
 
 
-def execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext, *, run_id: str) -> CqResult:
+def execute_non_q_step(
+    step: RunStep, plan: RunPlan, ctx: RunExecutionContext, *, run_id: str
+) -> CqResult:
     """Execute a non-Q step.
 
     Parameters:
@@ -57,6 +67,7 @@ def execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext, *, run_id:
     Raises:
         TypeError: When the step type has no registered executor.
     """
+    logger.debug("Executing non-q step type=%s run_id=%s", step_type(step), run_id)
     if isinstance(step, SearchStep):
         return _execute_search_step(step, plan, ctx, run_id=run_id)
     if isinstance(step, NeighborhoodStep):
@@ -74,7 +85,7 @@ def execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext, *, run_id:
 def execute_non_q_step_safe(
     step: RunStep,
     plan: RunPlan,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
     *,
     run_id: str,
 ) -> tuple[str, CqResult]:
@@ -100,13 +111,14 @@ def execute_non_q_step_safe(
     try:
         return step_id, execute_non_q_step(step, plan, ctx, run_id=run_id)
     except RUN_STEP_NON_FATAL_EXCEPTIONS as exc:
+        logger.warning("Non-q step failed step_id=%s type=%s: %s", step_id, step_type(step), exc)
         return step_id, _error_result(step_id, step_type(step), exc, ctx)
 
 
 def execute_non_q_steps_serial(
     steps: list[RunStep],
     plan: RunPlan,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
     *,
     run_id: str,
     stop_on_error: bool,
@@ -143,7 +155,7 @@ def execute_non_q_steps_serial(
 def execute_non_q_steps_parallel(
     steps: list[RunStep],
     plan: RunPlan,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
     *,
     run_id: str,
 ) -> list[tuple[str, CqResult]]:
@@ -179,6 +191,10 @@ def execute_non_q_steps_parallel(
         timeout_seconds=max(1.0, float(len(steps)) * 60.0),
     )
     if batch.timed_out > 0:
+        logger.warning(
+            "Parallel non-q execution timed out for %d steps; falling back to serial",
+            len(steps),
+        )
         return execute_non_q_steps_serial(steps, plan, ctx, run_id=run_id, stop_on_error=False)
     return batch.done
 
@@ -186,20 +202,16 @@ def execute_non_q_steps_parallel(
 def _execute_search_step(
     step: SearchStep,
     plan: RunPlan,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
     *,
     run_id: str,
 ) -> CqResult:
-    if step.regex and step.literal:
-        msg = "search step cannot set both regex and literal"
-        raise RuntimeError(msg)
-
     mode = None
-    if step.regex:
+    if step.mode == "regex":
         from tools.cq.search._shared.types import QueryMode
 
         mode = QueryMode.REGEX
-    elif step.literal:
+    elif step.mode == "literal":
         from tools.cq.search._shared.types import QueryMode
 
         mode = QueryMode.LITERAL
@@ -226,7 +238,7 @@ def _execute_search_step(
     return services.search.execute(request)
 
 
-def execute_search_fallback(query: str, plan: RunPlan, ctx: CliContext) -> CqResult:
+def execute_search_fallback(query: str, plan: RunPlan, ctx: RunExecutionContext) -> CqResult:
     """Execute search step as fallback for unparseable Q queries.
 
     Parameters
@@ -264,7 +276,7 @@ def execute_search_fallback(query: str, plan: RunPlan, ctx: CliContext) -> CqRes
     return services.search.execute(request)
 
 
-def _execute_calls(step: CallsStep, ctx: CliContext) -> CqResult:
+def _execute_calls(step: CallsStep, ctx: RunExecutionContext) -> CqResult:
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.calls(request_ctx, function_name=step.function)
 
@@ -272,7 +284,7 @@ def _execute_calls(step: CallsStep, ctx: CliContext) -> CqResult:
     return services.calls.execute(request)
 
 
-def _execute_impact(step: ImpactStep, ctx: CliContext) -> CqResult:
+def _execute_impact(step: ImpactStep, ctx: RunExecutionContext) -> CqResult:
     from tools.cq.macros.impact import cmd_impact
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
@@ -285,7 +297,7 @@ def _execute_impact(step: ImpactStep, ctx: CliContext) -> CqResult:
     return cmd_impact(request)
 
 
-def _execute_imports(step: ImportsStep, ctx: CliContext) -> CqResult:
+def _execute_imports(step: ImportsStep, ctx: RunExecutionContext) -> CqResult:
     from tools.cq.macros.imports import cmd_imports
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
@@ -293,7 +305,7 @@ def _execute_imports(step: ImportsStep, ctx: CliContext) -> CqResult:
     return cmd_imports(request)
 
 
-def _execute_exceptions(step: ExceptionsStep, ctx: CliContext) -> CqResult:
+def _execute_exceptions(step: ExceptionsStep, ctx: RunExecutionContext) -> CqResult:
     from tools.cq.macros.exceptions import cmd_exceptions
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
@@ -301,7 +313,7 @@ def _execute_exceptions(step: ExceptionsStep, ctx: CliContext) -> CqResult:
     return cmd_exceptions(request)
 
 
-def _execute_sig_impact(step: SigImpactStep, ctx: CliContext) -> CqResult:
+def _execute_sig_impact(step: SigImpactStep, ctx: RunExecutionContext) -> CqResult:
     from tools.cq.macros.sig_impact import cmd_sig_impact
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
@@ -309,7 +321,7 @@ def _execute_sig_impact(step: SigImpactStep, ctx: CliContext) -> CqResult:
     return cmd_sig_impact(request)
 
 
-def _execute_side_effects(step: SideEffectsStep, ctx: CliContext) -> CqResult:
+def _execute_side_effects(step: SideEffectsStep, ctx: RunExecutionContext) -> CqResult:
     from tools.cq.macros.side_effects import cmd_side_effects
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
@@ -317,7 +329,7 @@ def _execute_side_effects(step: SideEffectsStep, ctx: CliContext) -> CqResult:
     return cmd_side_effects(request)
 
 
-def _execute_scopes(step: ScopesStep, ctx: CliContext) -> CqResult:
+def _execute_scopes(step: ScopesStep, ctx: RunExecutionContext) -> CqResult:
     from tools.cq.macros.scopes import cmd_scopes
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
@@ -325,7 +337,7 @@ def _execute_scopes(step: ScopesStep, ctx: CliContext) -> CqResult:
     return cmd_scopes(request)
 
 
-def _execute_bytecode_surface(step: BytecodeSurfaceStep, ctx: CliContext) -> CqResult:
+def _execute_bytecode_surface(step: BytecodeSurfaceStep, ctx: RunExecutionContext) -> CqResult:
     from tools.cq.macros.bytecode import cmd_bytecode_surface
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
@@ -340,7 +352,7 @@ def _execute_bytecode_surface(step: BytecodeSurfaceStep, ctx: CliContext) -> CqR
 
 def _execute_neighborhood_step(
     step: NeighborhoodStep,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
     *,
     run_id: str | None = None,
 ) -> CqResult:
@@ -360,7 +372,7 @@ def _execute_neighborhood_step(
     CqResult
         Neighborhood analysis result.
     """
-    from tools.cq.core.cache import maybe_evict_run_cache_tag
+    from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
     from tools.cq.core.target_specs import parse_target_spec
     from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
     from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
@@ -417,34 +429,13 @@ def _execute_neighborhood_step(
             language=resolved_lang,
             top_k=step.top_k,
             enable_semantic_enrichment=step.semantic_enrichment,
-            semantic_env=_semantic_env_from_bundle(bundle),
+            semantic_env=semantic_env_from_bundle(bundle),
         )
     )
     result.summary["target_resolution_kind"] = resolved.resolution_kind
     assign_result_finding_ids(result)
     maybe_evict_run_cache_tag(root=ctx.root, language=resolved_lang, run_id=active_run_id)
     return result
-
-
-def _semantic_env_from_bundle(bundle: object) -> dict[str, object]:
-    from tools.cq.core.snb_schema import SemanticNeighborhoodBundleV1
-
-    if not isinstance(bundle, SemanticNeighborhoodBundleV1):
-        return {}
-    if bundle.meta is None or not bundle.meta.semantic_sources:
-        return {}
-
-    first = bundle.meta.semantic_sources[0]
-    env: dict[str, object] = {}
-    for in_key, out_key in (
-        ("workspace_health", "semantic_health"),
-        ("quiescent", "semantic_quiescent"),
-        ("position_encoding", "semantic_position_encoding"),
-    ):
-        value = first.get(in_key)
-        if value is not None:
-            env[out_key] = value
-    return env
 
 
 def _apply_run_scope_filter(
@@ -496,27 +487,6 @@ def _build_search_includes(run_in_dir: str | None, step_in_dir: str | None) -> l
     if not combined:
         return None
     return [f"{combined}/**"]
-
-
-def _merge_in_dir(run_in_dir: str | None, step_in_dir: str | None) -> str | None:
-    if run_in_dir and step_in_dir:
-        return str(Path(run_in_dir) / step_in_dir)
-    return step_in_dir or run_in_dir
-
-
-def _error_result(step_id: str, macro: str, exc: Exception, ctx: CliContext) -> CqResult:
-    result = build_error_result(
-        macro=macro,
-        root=ctx.root,
-        argv=ctx.argv,
-        tc=ctx.toolchain,
-        started_ms=ms(),
-        error=exc,
-    )
-    result.key_findings.append(
-        Finding(category="error", message=f"{step_id}: {exc}", severity="error")
-    )
-    return assign_result_finding_ids(result)
 
 
 # Dispatch table for non-q, non-search step types.

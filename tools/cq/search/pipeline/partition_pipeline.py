@@ -10,27 +10,26 @@ from typing import TYPE_CHECKING, Any, cast
 
 import msgspec
 
-from tools.cq.core.cache import (
-    CacheWriteTagRequestV1,
-    CqCacheBackend,
-    CqCachePolicyV1,
-    build_cache_key,
-    build_scope_hash,
-    default_cache_policy,
-    file_content_hash,
-    get_cq_cache_backend,
-    is_namespace_cache_enabled,
-    record_cache_decode_failure,
-    record_cache_get,
-    record_cache_set,
-    resolve_namespace_ttl_seconds,
-    resolve_write_cache_tag,
-)
+from tools.cq.core.cache.content_hash import file_content_hash
 from tools.cq.core.cache.contracts import SearchCandidatesCacheV1, SearchEnrichmentAnchorCacheV1
+from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import (
     decode_fragment_payload,
     encode_fragment_payload,
     is_fragment_cache_payload,
+)
+from tools.cq.core.cache.interface import CqCacheBackend
+from tools.cq.core.cache.key_builder import build_cache_key, build_scope_hash
+from tools.cq.core.cache.namespaces import (
+    is_namespace_cache_enabled,
+    resolve_namespace_ttl_seconds,
+)
+from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
+from tools.cq.core.cache.run_lifecycle import CacheWriteTagRequestV1, resolve_write_cache_tag
+from tools.cq.core.cache.telemetry import (
+    record_cache_decode_failure,
+    record_cache_get,
+    record_cache_set,
 )
 from tools.cq.core.contracts import contract_to_builtins, require_mapping
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
@@ -43,10 +42,11 @@ from tools.cq.search.pipeline.smart_search_types import (
     RawMatch,
     SearchStats,
 )
+from tools.cq.search.pipeline.worker_policy import resolve_search_worker_count
 from tools.cq.search.tree_sitter.core.infrastructure import run_file_lanes_parallel
 
 if TYPE_CHECKING:
-    from tools.cq.search.pipeline.contracts import SmartSearchContext
+    from tools.cq.search.pipeline.contracts import SearchConfig
     from tools.cq.search.pipeline.smart_search_types import _PythonSemanticPrefetchResult
 
 
@@ -90,7 +90,7 @@ class _EnrichmentMissResult:
 def run_search_partition(
     plan: SearchPartitionPlanV1,
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     mode: QueryMode,
 ) -> object:
     """Run one language partition search flow with phased cache orchestration.
@@ -130,7 +130,7 @@ def run_search_partition(
 
 
 def _scope_context(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     lang: QueryLanguage,
     mode: QueryMode,
 ) -> _PartitionScopeContext:
@@ -185,7 +185,7 @@ def _scope_context(
 
 def _candidate_phase(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     lang: QueryLanguage,
     mode: QueryMode,
     scope: _PartitionScopeContext,
@@ -252,7 +252,7 @@ def _candidate_phase(
 def _candidate_payload_from_cache(
     *,
     cached: object,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     lang: QueryLanguage,
     mode: QueryMode,
 ) -> tuple[list[RawMatch], SearchStats, str, bool]:
@@ -275,7 +275,7 @@ def _candidate_payload_from_cache(
 
 def _maybe_submit_prefetch(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     lang: QueryLanguage,
     raw_matches: list[Any],
 ) -> Future[object] | None:
@@ -295,7 +295,7 @@ def _maybe_submit_prefetch(
 
 def _enrichment_phase(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     lang: QueryLanguage,
     raw_matches: list[Any],
     scope: _PartitionScopeContext,
@@ -387,7 +387,7 @@ def _decode_enrichment_cached(*, cached: object) -> Any | None:
 
 def _compute_and_persist_enrichment_misses(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     misses: list[tuple[int, Any, str, str]],
     enriched_results: list[Any | None],
     context: _EnrichmentCacheContext,
@@ -425,7 +425,7 @@ def _compute_and_persist_enrichment_misses(
 
 def _classify_enrichment_misses(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     misses: list[tuple[int, Any, str, str]],
     context: _EnrichmentCacheContext,
 ) -> list[_EnrichmentMissResult]:
@@ -442,9 +442,7 @@ def _classify_enrichment_misses(
     for item in misses:
         partitioned.setdefault(str(item[1].file), []).append(item)
     batches = list(partitioned.values())
-    from tools.cq.search.pipeline.smart_search import MAX_SEARCH_CLASSIFY_WORKERS
-
-    workers = min(len(batches), max(1, int(MAX_SEARCH_CLASSIFY_WORKERS)))
+    workers = resolve_search_worker_count(len(batches))
     if workers <= 1:
         return _classify_enrichment_miss_batch(
             _EnrichmentMissTask(

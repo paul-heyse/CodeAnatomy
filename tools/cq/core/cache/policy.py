@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Annotated
 
 import msgspec
 
+from tools.cq.core.contracts_constraints import NonNegativeInt, PositiveFloat, PositiveInt
 from tools.cq.core.runtime.env_namespace import (
     NamespacePatternV1,
+    env_bool,
+    env_int,
     parse_namespace_bool_overrides,
     parse_namespace_int_overrides,
 )
@@ -17,13 +19,6 @@ from tools.cq.core.runtime.execution_policy import default_runtime_execution_pol
 from tools.cq.core.structs import CqSettingsStruct
 
 _DEFAULT_DIR = ".cq_cache"
-
-PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
-NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
-PositiveFloat = Annotated[float, msgspec.Meta(gt=0.0)]
-
-_TRUE_VALUES = {"1", "true", "yes", "on"}
-_FALSE_VALUES = {"0", "false", "no", "off"}
 
 
 class CqCachePolicyV1(CqSettingsStruct, frozen=True):
@@ -65,27 +60,6 @@ class _ResolvedCacheScalarSettings(CqSettingsStruct, frozen=True):
     transaction_batch_size: int
 
 
-def _env_bool(raw: str | None, *, default: bool) -> bool:
-    if raw is None:
-        return default
-    value = raw.strip().lower()
-    if value in _TRUE_VALUES:
-        return True
-    if value in _FALSE_VALUES:
-        return False
-    return default
-
-
-def _env_int(raw: str | None, *, default: int, minimum: int = 1) -> int:
-    if raw is None:
-        return default
-    try:
-        parsed = int(raw)
-    except ValueError:
-        return default
-    return max(minimum, parsed)
-
-
 def _resolve_namespace_ttl_from_env(
     *,
     defaults: dict[str, int],
@@ -101,7 +75,7 @@ def _resolve_namespace_ttl_from_env(
     )
     for namespace, value in parsed.values.items():
         if isinstance(value, int):
-            resolved[str(namespace)] = _env_int(
+            resolved[str(namespace)] = env_int(
                 str(value),
                 default=resolved.get(str(namespace), 900),
                 minimum=1,
@@ -123,7 +97,7 @@ def _resolve_namespace_enabled_from_env(
     )
     for namespace, value in parsed.values.items():
         if isinstance(value, bool):
-            resolved[str(namespace)] = _env_bool(
+            resolved[str(namespace)] = env_bool(
                 "1" if value else "0",
                 default=resolved.get(str(namespace), True),
             )
@@ -141,7 +115,7 @@ def _resolve_namespace_ephemeral_from_env(
     )
     for namespace, value in parsed.values.items():
         if isinstance(value, bool):
-            resolved[str(namespace)] = _env_bool(
+            resolved[str(namespace)] = env_bool(
                 "1" if value else "0",
                 default=resolved.get(str(namespace), False),
             )
@@ -155,23 +129,23 @@ def _resolve_cache_scalar_settings(
 ) -> _ResolvedCacheScalarSettings:
     directory_value = os.getenv("CQ_CACHE_DIR")
     directory = directory_value.strip() if directory_value else str(root / _DEFAULT_DIR)
-    statistics_enabled = _env_bool(
+    statistics_enabled = env_bool(
         os.getenv("CQ_CACHE_STATISTICS_ENABLED"),
         default=bool(getattr(runtime, "statistics_enabled", False)),
     )
     if not statistics_enabled:
-        statistics_enabled = _env_bool(
+        statistics_enabled = env_bool(
             os.getenv("CQ_CACHE_STATS_ENABLED"),
             default=bool(getattr(runtime, "statistics_enabled", False)),
         )
     return _ResolvedCacheScalarSettings(
         directory=directory,
-        ttl_seconds=_env_int(
+        ttl_seconds=env_int(
             os.getenv("CQ_CACHE_TTL_SECONDS"),
             default=int(getattr(runtime, "ttl_seconds", 900)),
             minimum=1,
         ),
-        shards=_env_int(
+        shards=env_int(
             os.getenv("CQ_CACHE_SHARDS"),
             default=int(getattr(runtime, "shards", 8)),
             minimum=1,
@@ -182,12 +156,12 @@ def _resolve_cache_scalar_settings(
                 os.getenv("CQ_CACHE_TIMEOUT_SECONDS") or getattr(runtime, "timeout_seconds", 0.05)
             ),
         ),
-        size_limit_bytes=_env_int(
+        size_limit_bytes=env_int(
             os.getenv("CQ_CACHE_SIZE_LIMIT_BYTES"),
             default=int(getattr(runtime, "size_limit_bytes", 2_147_483_648)),
             minimum=1,
         ),
-        cull_limit=_env_int(
+        cull_limit=env_int(
             os.getenv("CQ_CACHE_CULL_LIMIT"),
             default=int(getattr(runtime, "cull_limit", 16)),
             minimum=0,
@@ -198,27 +172,27 @@ def _resolve_cache_scalar_settings(
         ).strip()
         or str(getattr(runtime, "eviction_policy", "least-recently-stored")),
         statistics_enabled=statistics_enabled,
-        max_tree_sitter_lanes=_env_int(
+        max_tree_sitter_lanes=env_int(
             os.getenv("CQ_CACHE_MAX_TREE_SITTER_LANES"),
             default=int(getattr(runtime, "max_tree_sitter_lanes", 4)),
             minimum=1,
         ),
-        lane_lock_ttl_seconds=_env_int(
+        lane_lock_ttl_seconds=env_int(
             os.getenv("CQ_CACHE_LANE_LOCK_TTL_SECONDS"),
             default=int(getattr(runtime, "lane_lock_ttl_seconds", 15)),
             minimum=1,
         ),
-        sqlite_mmap_size=_env_int(
+        sqlite_mmap_size=env_int(
             os.getenv("CQ_CACHE_SQLITE_MMAP_SIZE"),
             default=int(getattr(runtime, "sqlite_mmap_size", 0)),
             minimum=0,
         ),
-        sqlite_cache_size=_env_int(
+        sqlite_cache_size=env_int(
             os.getenv("CQ_CACHE_SQLITE_CACHE_SIZE"),
             default=int(getattr(runtime, "sqlite_cache_size", 0)),
             minimum=0,
         ),
-        transaction_batch_size=_env_int(
+        transaction_batch_size=env_int(
             os.getenv("CQ_CACHE_TRANSACTION_BATCH_SIZE"),
             default=int(getattr(runtime, "transaction_batch_size", 128)),
             minimum=1,
@@ -233,7 +207,7 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
         Cache policy resolved from runtime defaults and environment.
     """
     runtime = default_runtime_execution_policy().cache
-    enabled = _env_bool(os.getenv("CQ_CACHE_ENABLED"), default=runtime.enabled)
+    enabled = env_bool(os.getenv("CQ_CACHE_ENABLED"), default=runtime.enabled)
     settings = _resolve_cache_scalar_settings(root=root, runtime=runtime)
 
     return CqCachePolicyV1(
@@ -242,7 +216,7 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
         shards=settings.shards,
         timeout_seconds=settings.timeout_seconds,
         ttl_seconds=settings.ttl_seconds,
-        evict_run_tag_on_exit=_env_bool(
+        evict_run_tag_on_exit=env_bool(
             os.getenv("CQ_CACHE_EVICT_RUN_TAG_ON_EXIT"),
             default=runtime.evict_run_tag_on_exit,
         ),

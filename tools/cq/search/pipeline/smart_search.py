@@ -9,20 +9,10 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
-from tools.cq.core.cache import (
-    maybe_evict_run_cache_tag,
-)
+from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.locations import (
     line_relative_byte_range_to_absolute,
-)
-from tools.cq.core.multilang_orchestrator import (
-    execute_by_language_scope,
-    merge_partitioned_items,
-)
-from tools.cq.core.multilang_summary import (
-    assert_multilang_summary,
-    build_multilang_summary,
 )
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import (
@@ -34,6 +24,14 @@ from tools.cq.core.schema import (
     Section,
     ms,
 )
+from tools.cq.orchestration.multilang_orchestrator import (
+    execute_by_language_scope,
+    merge_partitioned_items,
+)
+from tools.cq.orchestration.multilang_summary import (
+    assert_multilang_summary,
+    build_multilang_summary,
+)
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE,
     DEFAULT_QUERY_LANGUAGE_SCOPE,
@@ -43,6 +41,8 @@ from tools.cq.query.language import (
     expand_language_scope,
     file_globs_for_scope,
     is_path_in_lang_scope,
+    is_python_language,
+    is_rust_language,
     language_extension_exclude_globs,
     ripgrep_type_for_language,
     ripgrep_types_for_scope,
@@ -93,7 +93,6 @@ from tools.cq.search.pipeline.contracts import (
     SearchConfig,
     SearchPartitionPlanV1,
     SearchRequest,
-    SmartSearchContext,
 )
 from tools.cq.search.pipeline.orchestration import (
     SearchPipeline,
@@ -112,6 +111,7 @@ from tools.cq.search.pipeline.smart_search_types import (
     ClassificationBatchTask,
     ClassificationResult,
     EnrichedMatch,
+    LanguageSearchResult,
     MatchClassifyOptions,
     MatchEnrichment,
     RawMatch,
@@ -119,9 +119,11 @@ from tools.cq.search.pipeline.smart_search_types import (
     SearchResultAssembly,
     SearchStats,
     SearchSummaryInputs,
-    _LanguageSearchResult,
     _PythonSemanticAnchorKey,
     _PythonSemanticPrefetchResult,
+)
+from tools.cq.search.pipeline.worker_policy import (
+    resolve_search_worker_count as _resolve_search_worker_count,
 )
 from tools.cq.search.python.analysis_session import get_python_analysis_session
 from tools.cq.search.python.extractors import (
@@ -161,7 +163,6 @@ SMART_SEARCH_LIMITS = msgspec.structs.replace(
 _CASE_SENSITIVE_DEFAULT = True
 
 _RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
-MAX_SEARCH_CLASSIFY_WORKERS = 4
 _TREE_SITTER_QUERY_BUDGET_FALLBACK_MS = budget_ms_per_anchor(
     timeout_seconds=SMART_SEARCH_LIMITS.timeout_seconds,
     max_anchors=SMART_SEARCH_LIMITS.max_total_matches,
@@ -446,7 +447,9 @@ def classify_match(
         )
 
     file_path = root / raw.file
-    resolved_python = _resolve_python_node_context(file_path, raw) if lang == "python" else None
+    resolved_python = (
+        _resolve_python_node_context(file_path, raw) if is_python_language(lang) else None
+    )
     classification = _resolve_match_classification(
         raw,
         file_path,
@@ -548,7 +551,7 @@ def _resolve_match_classification(
     lang: QueryLanguage,
     resolved_python: ResolvedNodeContext | None = None,
 ) -> ClassificationResult:
-    lang_suffixes = {".py", ".pyi"} if lang == "python" else {".rs"}
+    lang_suffixes = {".py", ".pyi"} if is_python_language(lang) else {".rs"}
     if file_path.suffix not in lang_suffixes:
         return _classification_from_heuristic(
             heuristic, default_confidence=0.4, evidence_kind="rg_only"
@@ -576,7 +579,7 @@ def _classify_from_node(
     lang: QueryLanguage,
     resolved_python: ResolvedNodeContext | None = None,
 ) -> NodeClassification | None:
-    if lang == "python" and resolved_python is not None:
+    if is_python_language(lang) and resolved_python is not None:
         return classify_from_resolved_node(resolved_python.node)
     sg_root = get_sg_root(file_path, lang=lang)
     if sg_root is None:
@@ -629,7 +632,7 @@ def _maybe_symtable_enrichment(
     lang: QueryLanguage,
     enable_symtable: bool,
 ) -> SymtableEnrichment | None:
-    if lang != "python":
+    if not is_python_language(lang):
         return None
     if not enable_symtable:
         return None
@@ -765,7 +768,7 @@ def _maybe_rust_tree_sitter_enrichment(
     lang: QueryLanguage,
     query_budget_ms: int | None = None,
 ) -> dict[str, object] | None:
-    if lang != "rust":
+    if not is_rust_language(lang):
         return None
     source = get_cached_source(file_path)
     if source is None:
@@ -812,7 +815,7 @@ def _maybe_python_enrichment(
     dict[str, object] | None
         Enrichment payload, or None if not applicable.
     """
-    if lang != "python":
+    if not is_python_language(lang):
         return None
     sg_root = (
         resolved_python.sg_root
@@ -858,7 +861,7 @@ def _maybe_python_semantic_enrichment(
     lang: QueryLanguage,
     enable_python_semantic: bool,
 ) -> dict[str, object] | None:
-    if not enable_python_semantic or lang != "python":
+    if not enable_python_semantic or not is_python_language(lang):
         return None
     if file_path.suffix not in {".py", ".pyi"}:
         return None
@@ -1088,7 +1091,7 @@ def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) ->
     python_payload: dict[str, object] | None = None
     if match.python_enrichment:
         python_payload = dict(match.python_enrichment)
-    elif match.language == "python":
+    elif is_python_language(match.language):
         # Keep a stable python payload container for Python findings even when
         # only secondary enrichment sources are available.
         python_payload = {}
@@ -1458,7 +1461,7 @@ def _build_followups_section(
     return Section(title="Suggested Follow-ups", findings=followup_findings)
 
 
-def _build_search_context(request: SearchRequest) -> SmartSearchContext:
+def _build_search_context(request: SearchRequest) -> SearchConfig:
     started = request.started_ms
     if started is None:
         started = ms()
@@ -1551,7 +1554,7 @@ def _coerce_run_id(run_id_value: object) -> str | None:
 
 
 def _run_candidate_phase(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     *,
     lang: QueryLanguage,
     mode: QueryMode,
@@ -1588,7 +1591,7 @@ def _run_candidate_phase(
 
 
 def run_candidate_phase(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     *,
     lang: QueryLanguage,
     mode: QueryMode,
@@ -1603,7 +1606,7 @@ def run_candidate_phase(
 
 
 def _run_classification_phase(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     *,
     lang: QueryLanguage,
     raw_matches: list[RawMatch],
@@ -1657,7 +1660,7 @@ def _run_classification_phase(
 
 
 def run_classification_phase(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     *,
     lang: QueryLanguage,
     raw_matches: list[RawMatch],
@@ -1668,12 +1671,6 @@ def run_classification_phase(
         list[EnrichedMatch]: Enriched matches after classification.
     """
     return _run_classification_phase(ctx, lang=lang, raw_matches=raw_matches)
-
-
-def _resolve_search_worker_count(partition_count: int) -> int:
-    if partition_count <= 1:
-        return 1
-    return min(partition_count, MAX_SEARCH_CLASSIFY_WORKERS)
 
 
 def _classify_partition_batch(
@@ -1689,7 +1686,7 @@ def _classify_partition_batch(
     ]
 
 
-def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchResult]:
+def _run_language_partitions(ctx: SearchConfig) -> list[LanguageSearchResult]:
     by_lang = execute_by_language_scope(
         ctx.lang_scope,
         lambda lang: _run_single_partition(ctx, lang, mode=ctx.mode),
@@ -1698,11 +1695,11 @@ def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchRes
 
 
 def _run_single_partition(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     lang: QueryLanguage,
     *,
     mode: QueryMode,
-) -> _LanguageSearchResult:
+) -> LanguageSearchResult:
     plan = SearchPartitionPlanV1(
         root=str(ctx.root.resolve()),
         language=lang,
@@ -1715,13 +1712,13 @@ def _run_single_partition(
         run_id=ctx.run_id,
     )
     return cast(
-        "_LanguageSearchResult",
+        "LanguageSearchResult",
         run_search_partition(plan, ctx=ctx, mode=mode),
     )
 
 
 def _merge_python_semantic_prefetch_results(
-    partition_results: list[_LanguageSearchResult],
+    partition_results: list[LanguageSearchResult],
 ) -> _PythonSemanticPrefetchResult | None:
     payloads: dict[_PythonSemanticAnchorKey, dict[str, object]] = {}
     attempted_keys: set[_PythonSemanticAnchorKey] = set()
@@ -1751,7 +1748,7 @@ def _merge_python_semantic_prefetch_results(
     )
 
 
-def _partition_total_matches(partition_results: list[_LanguageSearchResult]) -> int:
+def _partition_total_matches(partition_results: list[LanguageSearchResult]) -> int:
     return sum(result.stats.total_matches for result in partition_results)
 
 
@@ -1759,7 +1756,7 @@ def _should_fallback_to_literal(
     *,
     request: SearchRequest,
     initial_mode: QueryMode,
-    partition_results: list[_LanguageSearchResult],
+    partition_results: list[LanguageSearchResult],
 ) -> bool:
     if request.mode is not None:
         return False
@@ -1770,7 +1767,7 @@ def _should_fallback_to_literal(
 
 def _merge_language_matches(
     *,
-    partition_results: list[_LanguageSearchResult],
+    partition_results: list[LanguageSearchResult],
     lang_scope: QueryLanguageScope,
 ) -> list[EnrichedMatch]:
     partitions: dict[QueryLanguage, list[EnrichedMatch]] = {}
@@ -1858,8 +1855,8 @@ def _build_tree_sitter_runtime_diagnostics(
 
 
 def _build_search_summary(
-    ctx: SmartSearchContext,
-    partition_results: list[_LanguageSearchResult],
+    ctx: SearchConfig,
+    partition_results: list[LanguageSearchResult],
     enriched_matches: list[EnrichedMatch],
     *,
     python_semantic_overview: dict[str, object],
@@ -1898,8 +1895,8 @@ def _build_search_summary(
         for result in partition_results
         if result.dropped_by_scope > 0
     }
-    python_matches = sum(1 for match in enriched_matches if match.language == "python")
-    rust_matches = sum(1 for match in enriched_matches if match.language == "rust")
+    python_matches = sum(1 for match in enriched_matches if is_python_language(match.language))
+    rust_matches = sum(1 for match in enriched_matches if is_rust_language(match.language))
     diagnostics = _build_cross_language_diagnostics_for_search(
         query=ctx.query,
         lang_scope=ctx.lang_scope,
@@ -2009,12 +2006,12 @@ def assemble_result(assembly: SearchResultAssembly) -> CqResult:
         CqResult: Function return value.
     """
     return SearchPipeline(assembly.context).assemble(
-        cast("list[_LanguageSearchResult]", assembly.partition_results),
+        cast("list[LanguageSearchResult]", assembly.partition_results),
         assemble_smart_search_result,
     )
 
 
-def run_smart_search_pipeline(context: SmartSearchContext) -> CqResult:
+def run_smart_search_pipeline(context: SearchConfig) -> CqResult:
     """Run partition and assembly phases for an existing search context.
 
     Returns:
@@ -2029,9 +2026,9 @@ __all__ = [
     "SMART_SEARCH_LIMITS",
     "EnrichedMatch",
     "RawMatch",
+    "SearchConfig",
     "SearchResultAssembly",
     "SearchStats",
-    "SmartSearchContext",
     "assemble_result",
     "assemble_smart_search_result",
     "build_candidate_searcher",

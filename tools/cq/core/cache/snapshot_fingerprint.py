@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated
 
 import msgspec
 
@@ -31,9 +30,8 @@ from tools.cq.core.cache.telemetry import (
     record_cache_set,
 )
 from tools.cq.core.contracts import contract_to_builtins
+from tools.cq.core.contracts_constraints import NonNegativeInt
 from tools.cq.core.structs import CqCacheStruct
-
-NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
 
 _INVENTORY_TOKEN_TUPLE_LENGTH = 2
 

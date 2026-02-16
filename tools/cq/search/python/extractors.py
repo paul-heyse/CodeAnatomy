@@ -18,6 +18,7 @@ Two enrichment tiers:
 from __future__ import annotations
 
 import ast
+import logging
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -109,6 +110,7 @@ _PYTHON_ENRICHMENT_CROSSCHECK_ENV = "CQ_PY_ENRICHMENT_CROSSCHECK"
 # ---------------------------------------------------------------------------
 
 _MAX_PARENT_DEPTH = 20
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Error tuple (fail-open boundary)
@@ -254,6 +256,7 @@ def _try_extract(
     try:
         result = extractor(*args)
     except _ENRICHMENT_ERRORS as exc:
+        logger.warning("Python extractor degraded (%s): %s", label, type(exc).__name__)
         return {}, f"{label}: {type(exc).__name__}"
     else:
         return result, None
@@ -746,6 +749,7 @@ def _enrich_ast_grep_core(
         except _ENRICHMENT_ERRORS as exc:
             result: dict[str, object] = {}
             reason = f"{label}: {type(exc).__name__}"
+            logger.warning("Python extractor degraded (%s): %s", label, type(exc).__name__)
             degrade_reasons.append(reason)
         else:
             payload.update(result)
@@ -1170,6 +1174,7 @@ def _run_python_resolution_stage(
             session=session,
         )
     except _ENRICHMENT_ERRORS as exc:
+        logger.warning("Python resolution enrichment failed: %s", type(exc).__name__)
         state.python_resolution_fields = {}
         resolution_reasons.append(f"python_resolution: {type(exc).__name__}")
     state.stage_timings_ms["python_resolution"] = (perf_counter() - resolution_started) * 1000.0
@@ -1226,6 +1231,7 @@ def _run_tree_sitter_stage(
         else:
             state.stage_status["tree_sitter"] = "skipped"
     except _ENRICHMENT_ERRORS as exc:
+        logger.warning("Python tree-sitter enrichment stage failed: %s", type(exc).__name__)
         state.stage_status["tree_sitter"] = "degraded"
         tree_sitter_reasons.append(f"tree_sitter: {type(exc).__name__}")
     state.stage_timings_ms["tree_sitter"] = (perf_counter() - ts_started) * 1000.0

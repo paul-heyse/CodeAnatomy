@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tools.cq.core.cache import close_cq_cache_backend
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
 from tools.cq.core.cache.tree_sitter_blob_store import (
     decode_blob_pointer,
     drop_tag_index,

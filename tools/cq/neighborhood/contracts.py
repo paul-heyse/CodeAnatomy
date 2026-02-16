@@ -96,4 +96,5 @@ __all__ = [
     "TreeSitterNeighborhoodCollectRequest",
     "TreeSitterNeighborhoodCollectResult",
     "normalize_capability_snapshot",
+    "plan_feasible_slices",
 ]

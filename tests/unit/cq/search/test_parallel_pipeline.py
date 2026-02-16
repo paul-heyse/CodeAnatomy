@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 
 import pytest
-from tools.cq.core.multilang_orchestrator import execute_by_language_scope
 from tools.cq.core.runtime.worker_scheduler import close_worker_scheduler
+from tools.cq.orchestration.multilang_orchestrator import execute_by_language_scope
 
 
 def test_execute_by_language_scope_parallel_preserves_language_order(

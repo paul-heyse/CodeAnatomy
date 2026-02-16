@@ -12,17 +12,16 @@ from types import CodeType
 
 import msgspec
 
-from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
     Finding,
     Section,
-    mk_result,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
+from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import macro_scoring_details, resolve_target_files
 
@@ -353,13 +352,14 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
     all_surfaces = _collect_surfaces(request.root, files)
     all_globals, all_attrs, total_opcodes = _aggregate_surfaces(all_surfaces)
 
-    run = RunContext.from_parts(
+    builder = MacroResultBuilder(
+        "bytecode-surface",
         root=request.root,
         argv=request.argv,
         tc=request.tc,
         started_ms=started,
-    ).to_runmeta("bytecode-surface")
-    result = mk_result(run)
+    )
+    result = builder.result
 
     result.summary = {
         "target": request.target,

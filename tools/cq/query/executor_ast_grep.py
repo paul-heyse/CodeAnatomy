@@ -6,6 +6,7 @@ This module contains ast-grep match execution logic using ast-grep-py.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,30 +16,32 @@ import msgspec
 from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
-from tools.cq.core.cache import (
-    CacheWriteTagRequestV1,
-    CqCacheBackend,
+from tools.cq.core.cache.content_hash import file_content_hash
+from tools.cq.core.cache.contracts import PatternFragmentCacheV1
+from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.fragment_codecs import decode_fragment_payload
+from tools.cq.core.cache.fragment_contracts import (
     FragmentEntryV1,
     FragmentHitV1,
     FragmentMissV1,
-    FragmentPersistRuntimeV1,
-    FragmentProbeRuntimeV1,
     FragmentRequestV1,
     FragmentWriteV1,
-    build_cache_key,
-    build_scope_hash,
-    build_scope_snapshot_fingerprint,
-    decode_fragment_payload,
-    default_cache_policy,
-    file_content_hash,
-    get_cq_cache_backend,
-    is_namespace_cache_enabled,
+)
+from tools.cq.core.cache.fragment_engine import (
+    FragmentPersistRuntimeV1,
+    FragmentProbeRuntimeV1,
     partition_fragment_entries,
     persist_fragment_writes,
-    resolve_namespace_ttl_seconds,
-    resolve_write_cache_tag,
 )
-from tools.cq.core.cache.contracts import PatternFragmentCacheV1, SgRecordCacheV1
+from tools.cq.core.cache.interface import CqCacheBackend
+from tools.cq.core.cache.key_builder import build_cache_key, build_scope_hash
+from tools.cq.core.cache.namespaces import (
+    is_namespace_cache_enabled,
+    resolve_namespace_ttl_seconds,
+)
+from tools.cq.core.cache.policy import default_cache_policy
+from tools.cq.core.cache.run_lifecycle import CacheWriteTagRequestV1, resolve_write_cache_tag
+from tools.cq.core.cache.snapshot_fingerprint import build_scope_snapshot_fingerprint
 from tools.cq.core.cache.telemetry import (
     record_cache_decode_failure,
     record_cache_get,
@@ -49,7 +52,17 @@ from tools.cq.core.locations import SourceSpan
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.schema import Anchor, Finding
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
+from tools.cq.query.cache_converters import (
+    cache_record_to_record,
+    record_to_cache_record,
+)
+from tools.cq.query.cache_converters import (
+    finding_sort_key_lightweight as finding_sort_key,
+)
+from tools.cq.query.cache_converters import (
+    record_sort_key_lightweight as record_sort_key,
+)
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage, is_rust_language
 from tools.cq.query.metavar import (
     apply_metavar_filters,
     extract_rule_metavars,
@@ -70,6 +83,7 @@ from tools.cq.query.language import file_extensions_for_scope
 
 _ENTITY_FRAGMENT_PAYLOAD_LEN = 3
 _MIN_PREFILTER_LITERAL_LEN = 3
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -173,6 +187,7 @@ def execute_ast_grep_rules(
     """
     if not rules or not paths:
         return [], [], []
+    logger.debug("Executing ast-grep rules count=%d files=%d", len(rules), len(paths))
 
     fragment_ctx = build_pattern_fragment_context(
         root=root,
@@ -513,7 +528,7 @@ def maybe_prefilter_pattern_paths(
         root,
         files=files,
         literals=literals,
-        lang_scope="rust" if lang == "rust" else "python",
+        lang_scope="rust" if is_rust_language(lang) else "python",
     )
 
 
@@ -538,6 +553,7 @@ def process_ast_grep_file(
     try:
         src = file_path.read_text(encoding="utf-8")
     except OSError:
+        logger.warning("Skipping unreadable file for ast-grep: %s", file_path)
         return
 
     sg_root = SgRoot(src, ctx.lang)
@@ -982,6 +998,7 @@ def collect_ast_grep_match_spans(
         try:
             src = file_path.read_text(encoding="utf-8")
         except OSError:
+            logger.warning("Skipping unreadable file for ast-grep span collection: %s", file_path)
             continue
         sg_root = SgRoot(src, lang)
         node = sg_root.root()
@@ -1015,56 +1032,6 @@ def collect_ast_grep_match_spans(
                     )
                 )
     return matches
-
-
-def record_to_cache_record(record: SgRecord) -> SgRecordCacheV1:
-    """Convert ``SgRecord`` to cache record format.
-
-    Returns:
-        SgRecordCacheV1: Cache-serializable representation of the source record.
-    """
-    return SgRecordCacheV1(
-        record=record.record,
-        kind=record.kind,
-        file=record.file,
-        start_line=record.start_line,
-        start_col=record.start_col,
-        end_line=record.end_line,
-        end_col=record.end_col,
-        text=record.text,
-        rule_id=record.rule_id,
-    )
-
-
-def cache_record_to_record(cache_record: SgRecordCacheV1) -> SgRecord:
-    """Convert cache record to ``SgRecord``.
-
-    Returns:
-        SgRecord: Runtime record reconstructed from cache payload fields.
-    """
-    return SgRecord(
-        record=cache_record.record,
-        kind=cache_record.kind,
-        file=cache_record.file,
-        start_line=cache_record.start_line,
-        start_col=cache_record.start_col,
-        end_line=cache_record.end_line,
-        end_col=cache_record.end_col,
-        text=cache_record.text,
-        rule_id=cache_record.rule_id,
-    )
-
-
-def finding_sort_key(finding: Finding) -> tuple[str, int, int]:
-    """Return sort key for Finding."""
-    if finding.anchor is None:
-        return ("", 0, 0)
-    return (finding.anchor.file, finding.anchor.line, finding.anchor.col or 0)
-
-
-def record_sort_key(record: SgRecord) -> tuple[str, int, int]:
-    """Return sort key for SgRecord."""
-    return (record.file, record.start_line, record.start_col)
 
 
 def raw_match_sort_key(match: dict[str, object]) -> tuple[str, int, int]:

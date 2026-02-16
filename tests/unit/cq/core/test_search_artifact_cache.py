@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import msgspec
 from tools.cq.core.artifacts import (
     list_search_artifact_index_entries,
     load_search_artifact_bundle,
@@ -31,17 +32,19 @@ def test_save_and_load_search_artifact_bundle(tmp_path: Path) -> None:
         query="build_graph",
         summary={"query": "build_graph"},
         object_summaries=[
-            SearchObjectSummaryV1(
-                object_ref=ResolvedObjectRef(
-                    object_id="obj_1",
-                    language="python",
-                    symbol="build_graph",
-                    kind="function",
-                    canonical_file="src/module.py",
-                    canonical_line=1,
-                ),
-                occurrence_count=1,
-                files=["src/module.py"],
+            msgspec.to_builtins(
+                SearchObjectSummaryV1(
+                    object_ref=ResolvedObjectRef(
+                        object_id="obj_1",
+                        language="python",
+                        symbol="build_graph",
+                        kind="function",
+                        canonical_file="src/module.py",
+                        canonical_line=1,
+                    ),
+                    occurrence_count=1,
+                    files=["src/module.py"],
+                )
             )
         ],
         occurrences=[],

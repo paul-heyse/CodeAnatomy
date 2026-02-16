@@ -6,6 +6,8 @@ planes have realistic material when enabled.
 
 from __future__ import annotations
 
+from typing import cast
+
 
 def expects_int(value: int) -> int:
     """Return ``value + 1`` for integer input.
@@ -23,4 +25,4 @@ def diagnostics_sample() -> int:
         int: Function result used to surface static-analysis diagnostics.
     """
     maybe_number: str = "not-an-int"
-    return expects_int(maybe_number)
+    return expects_int(cast("int", maybe_number))

@@ -7,6 +7,7 @@ from typing import Annotated
 
 from cyclopts import Parameter
 
+from tools.cq.cli_app.app import app
 from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.run.chain import compile_chain_segments
@@ -41,6 +42,6 @@ def chain(
         msg = "No chain segments provided"
         raise RuntimeError(msg)
 
-    plan = compile_chain_segments(groups)
+    plan = compile_chain_segments(groups, cli_app=app)
     result = execute_run_plan(plan, ctx)
     return CliResult(result=result, context=ctx)

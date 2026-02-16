@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 import msgspec
 
@@ -13,7 +13,7 @@ from tools.cq.core.structs import CqOutputStruct
 class PythonTreeSitterPayloadV1(CqOutputStruct, frozen=True):
     """Canonical Python lane payload contract subset."""
 
-    language: str = "python"
+    language: Literal["python"] = "python"
     enrichment_status: str = "applied"
     cst_diagnostics: list[dict[str, Any]] = msgspec.field(default_factory=list)
     cst_query_hits: list[dict[str, Any]] = msgspec.field(default_factory=list)
@@ -23,7 +23,7 @@ class PythonTreeSitterPayloadV1(CqOutputStruct, frozen=True):
 class RustTreeSitterPayloadV1(CqOutputStruct, frozen=True):
     """Canonical Rust lane payload contract subset."""
 
-    language: str = "rust"
+    language: Literal["rust"] = "rust"
     enrichment_status: str = "applied"
     cst_diagnostics: list[dict[str, Any]] = msgspec.field(default_factory=list)
     cst_query_hits: list[dict[str, Any]] = msgspec.field(default_factory=list)

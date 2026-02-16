@@ -17,7 +17,7 @@ from tools.cq.core.schema import Finding, ScoreDetails
 from tools.cq.core.scoring import build_detail_payload
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_insight import InsightNeighborhoodV1
+    from tools.cq.core.front_door_builders import InsightNeighborhoodV1
 
 _FRONT_DOOR_PREVIEW_PER_SLICE = 5
 
@@ -108,7 +108,7 @@ def _compute_context_window(
 def _build_calls_neighborhood(
     request: CallsNeighborhoodRequest,
 ) -> tuple[InsightNeighborhoodV1, list[Finding], list[str]]:
-    from tools.cq.core.front_door_insight import (
+    from tools.cq.core.front_door_builders import (
         InsightNeighborhoodV1,
         InsightSliceV1,
         build_neighborhood_from_slices,

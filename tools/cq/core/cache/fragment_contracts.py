@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Annotated
-
-import msgspec
-
+from tools.cq.core.contracts_constraints import NonNegativeInt
 from tools.cq.core.structs import CqStruct
-
-NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
 
 
 class FragmentRequestV1(CqStruct, frozen=True):

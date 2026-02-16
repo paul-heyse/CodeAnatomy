@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tools.cq.core.cache import close_cq_cache_backend
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
 from tools.cq.search.tree_sitter.core.adaptive_runtime import (
     adaptive_query_budget_ms,
     record_runtime_sample,

@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated
 
 import msgspec
 
+from tools.cq.core.contracts_constraints import PositiveInt
 from tools.cq.core.structs import CqStruct
-
-PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
@@ -35,6 +33,39 @@ def namespace_from_env_suffix(suffix: str) -> str:
         str: Lower-case underscore namespace string.
     """
     return suffix.strip("_").lower()
+
+
+def env_bool(raw: str | None, *, default: bool) -> bool:
+    """Parse a bool-like env value with fallback default.
+
+    Returns:
+        Parsed bool value or ``default`` when parsing fails.
+    """
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    return default
+
+
+def env_int(raw: str | None, *, default: int, minimum: int = 1) -> int:
+    """Parse an integer env value with bounds and fallback.
+
+    Returns:
+        Parsed int when valid and within lower bound; otherwise ``default``.
+    """
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    if parsed < minimum:
+        return default
+    return parsed
 
 
 def parse_namespace_int_overrides(
@@ -100,6 +131,8 @@ def parse_namespace_bool_overrides(
 __all__ = [
     "NamespaceEnvParseResultV1",
     "NamespacePatternV1",
+    "env_bool",
+    "env_int",
     "namespace_from_env_suffix",
     "parse_namespace_bool_overrides",
     "parse_namespace_int_overrides",

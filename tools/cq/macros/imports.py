@@ -6,75 +6,29 @@ Analyzes module import structure, identifies cycles, and maps dependencies.
 from __future__ import annotations
 
 import ast
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
     Finding,
     Section,
-    mk_result,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.graph_utils import find_sccs
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
+from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
 
-_STDLIB_PREFIXES: set[str] = {
-    "os",
-    "sys",
-    "re",
-    "json",
-    "time",
-    "datetime",
-    "collections",
-    "functools",
-    "itertools",
-    "pathlib",
-    "typing",
-    "dataclasses",
-    "abc",
-    "ast",
-    "dis",
-    "symtable",
-    "inspect",
-    "io",
-    "logging",
-    "copy",
-    "pickle",
-    "hashlib",
-    "base64",
-    "unittest",
-    "contextlib",
-    "enum",
-    "warnings",
-    "traceback",
-    "subprocess",
-    "shutil",
-    "tempfile",
-    "threading",
-    "multiprocessing",
-    "concurrent",
-    "asyncio",
-    "socket",
-    "http",
-    "urllib",
-    "email",
-    "html",
-    "xml",
-    "csv",
-    "sqlite3",
-    "argparse",
-    "configparser",
-}
+_STDLIB_MODULE_NAMES: frozenset[str] = frozenset(sys.stdlib_module_names)
 _CYCLE_LIMIT = 10
 _EXTERNAL_LIMIT = 30
 _REL_IMPORT_LIMIT = 20
@@ -327,7 +281,7 @@ def _partition_dependencies(
         top_level = imp.module.split(".")[0] if imp.module else ""
         if not top_level:
             continue
-        if top_level in _STDLIB_PREFIXES:
+        if top_level in _STDLIB_MODULE_NAMES:
             continue
         if imp.module.startswith(internal_prefix) or imp.is_relative:
             internal_deps.add(imp.module)
@@ -526,14 +480,14 @@ def _build_imports_result(
     *,
     started_ms: float,
 ) -> CqResult:
-    run_ctx = RunContext.from_parts(
+    builder = MacroResultBuilder(
+        "imports",
         root=ctx.request.root,
         argv=ctx.request.argv,
         tc=ctx.request.tc,
         started_ms=started_ms,
     )
-    run = run_ctx.to_runmeta("imports")
-    result = mk_result(run)
+    result = builder.result
 
     internal_prefix = _resolve_internal_prefix(ctx.deps)
     external_deps, internal_deps = _partition_dependencies(ctx.all_imports, internal_prefix)

@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 import msgspec
 
+from tools.cq.search.enrichment.core import string_or_none as _string
 from tools.cq.search.rust.contracts import (
     RustImportEdgeV1,
     RustMacroExpansionRequestV1,
@@ -84,13 +85,6 @@ def expand_macros(
 
 
 # --- From module_graph_builder.py ---
-
-
-def _string(value: object) -> str | None:
-    if isinstance(value, str):
-        text = value.strip()
-        return text if text else None
-    return None
 
 
 def _module_name(row: dict[str, object]) -> str | None:

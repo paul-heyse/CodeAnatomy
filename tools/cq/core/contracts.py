@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import msgspec
 
@@ -18,12 +18,10 @@ from tools.cq.core.structs import CqOutputStruct, CqStruct
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding, RunMeta
-    from tools.cq.query.language import QueryLanguage, QueryLanguageScope
-    from tools.cq.search._shared.search_contracts import (
-        CrossLanguageDiagnostic,
-        LanguageCapabilities,
-        SearchSummaryContract,
-    )
+    from tools.cq.search._shared.search_contracts import SearchSummaryContract
+
+LanguageToken = Literal["python", "rust"]
+LanguageScopeToken = Literal["auto", "python", "rust"]
 
 
 class ContractEnvelope(CqOutputStruct, frozen=True):
@@ -50,7 +48,7 @@ def contract_to_builtins(value: object) -> object:
 
 
 def summary_contract_to_mapping(
-    contract: SearchSummaryContract,
+    contract: object,
     *,
     common: Mapping[str, object] | None,
 ) -> dict[str, object]:
@@ -61,7 +59,10 @@ def summary_contract_to_mapping(
     """
     from tools.cq.search._shared.search_contracts import summary_contract_to_dict
 
-    return summary_contract_to_dict(contract, common=common)
+    return summary_contract_to_dict(
+        cast("SearchSummaryContract", contract),
+        common=common,
+    )
 
 
 def require_mapping(value: object) -> dict[str, object]:
@@ -82,22 +83,20 @@ def require_mapping(value: object) -> dict[str, object]:
 class SummaryBuildRequest(CqStruct, frozen=True):
     """Input contract for canonical multilang summary assembly."""
 
-    lang_scope: QueryLanguageScope
-    languages: Mapping[QueryLanguage, Mapping[str, object]]
+    lang_scope: LanguageScopeToken
+    languages: Mapping[LanguageToken, Mapping[str, object]]
     common: Mapping[str, object] | None = None
-    language_order: tuple[QueryLanguage, ...] | None = None
-    cross_language_diagnostics: Sequence[CrossLanguageDiagnostic | Mapping[str, object]] | None = (
-        None
-    )
-    language_capabilities: LanguageCapabilities | Mapping[str, object] | None = None
+    language_order: tuple[LanguageToken, ...] | None = None
+    cross_language_diagnostics: Sequence[Mapping[str, object]] | None = None
+    language_capabilities: Mapping[str, object] | None = None
     enrichment_telemetry: Mapping[str, object] | None = None
 
 
 class MergeResultsRequest(CqStruct, frozen=True):
     """Input contract for multi-language CQ result merge."""
 
-    scope: QueryLanguageScope
-    results: Mapping[QueryLanguage, CqResult]
+    scope: LanguageScopeToken
+    results: Mapping[LanguageToken, CqResult]
     run: RunMeta
     diagnostics: Sequence[Finding] | None = None
     diagnostic_payloads: Sequence[Mapping[str, object]] | None = None

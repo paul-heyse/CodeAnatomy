@@ -108,7 +108,8 @@ class TestMacroIntegration:
     @staticmethod
     def test_calls_macro_import() -> None:
         """Test that calls macro imports successfully."""
-        from tools.cq.macros.calls import _rg_find_candidates, cmd_calls
+        from tools.cq.macros.calls import cmd_calls
+        from tools.cq.macros.calls.scanning import _rg_find_candidates
 
         # Should not raise
         assert callable(cmd_calls)

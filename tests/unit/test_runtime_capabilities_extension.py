@@ -45,12 +45,15 @@ def test_collect_runtime_execution_metrics_prefers_internal(
         "datafusion._internal",
         payload={"summary": {"memory_reserved_bytes": 42}, "rows": []},
     )
-    ext = _MetricsModule("datafusion_ext", payload={"summary": {"memory_reserved_bytes": 1}})
+    ext = _MetricsModule(
+        "datafusion_engine.extensions.datafusion_ext",
+        payload={"summary": {"memory_reserved_bytes": 1}},
+    )
 
     def _import_module(name: str) -> ModuleType:
         if name == "datafusion._internal":
             return internal
-        if name == "datafusion_ext":
+        if name == "datafusion_engine.extensions.datafusion_ext":
             return ext
         msg = f"no module named {name}"
         raise ImportError(msg)
@@ -69,7 +72,7 @@ def test_collect_runtime_execution_metrics_falls_back_to_datafusion_ext(
 ) -> None:
     """Test collect runtime execution metrics falls back to datafusion ext."""
     ext = _MetricsModule(
-        "datafusion_ext",
+        "datafusion_engine.extensions.datafusion_ext",
         payload={"summary": {"metadata_cache_entries": 11}, "rows": []},
     )
 
@@ -77,7 +80,7 @@ def test_collect_runtime_execution_metrics_falls_back_to_datafusion_ext(
         if name == "datafusion._internal":
             msg = "module not available"
             raise ImportError(msg)
-        if name == "datafusion_ext":
+        if name == "datafusion_engine.extensions.datafusion_ext":
             return ext
         msg = f"no module named {name}"
         raise ImportError(msg)
@@ -95,12 +98,12 @@ def test_collect_runtime_execution_metrics_returns_error_payload(
 ) -> None:
     """Test collect runtime execution metrics returns error payload."""
     internal = _MetricsModule("datafusion._internal", payload=None)
-    ext = _MetricsModule("datafusion_ext", payload=None)
+    ext = _MetricsModule("datafusion_engine.extensions.datafusion_ext", payload=None)
 
     def _import_module(name: str) -> ModuleType:
         if name == "datafusion._internal":
             return internal
-        if name == "datafusion_ext":
+        if name == "datafusion_engine.extensions.datafusion_ext":
             return ext
         msg = f"no module named {name}"
         raise ImportError(msg)
@@ -112,4 +115,4 @@ def test_collect_runtime_execution_metrics_returns_error_payload(
     error = payload.get("error")
     assert isinstance(error, str)
     assert "datafusion._internal:" in error
-    assert "datafusion_ext:" in error
+    assert "datafusion_engine.extensions.datafusion_ext:" in error

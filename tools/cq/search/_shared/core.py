@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
     from ast_grep_py import SgNode
-    from tree_sitter import Node
 
     from tools.cq.search._shared.types import QueryMode, SearchLimits
 
@@ -96,20 +95,6 @@ def truncate(text: str, max_len: int) -> str:
     return text[: max(1, max_len - 3)] + "..."
 
 
-def node_text(node: Node, source_bytes: bytes, *, strip: bool = True) -> str:
-    """Extract UTF-8 text for a tree-sitter node range.
-
-    Returns:
-        str: Function return value.
-    """
-    start = int(getattr(node, "start_byte", 0))
-    end = int(getattr(node, "end_byte", start))
-    if end <= start:
-        return ""
-    text = source_bytes[start:end].decode("utf-8", errors="replace")
-    return text.strip() if strip else text
-
-
 def sg_node_text(node: SgNode | None) -> str | None:
     """Extract normalized text from an ast-grep node.
 
@@ -120,6 +105,23 @@ def sg_node_text(node: SgNode | None) -> str | None:
         return None
     text = node.text().strip()
     return text if text else None
+
+
+def node_text(
+    node: object | None,
+    source_bytes: bytes,
+    *,
+    strip: bool = True,
+    max_len: int | None = None,
+) -> str:
+    """Extract UTF-8 text from a node's byte span.
+
+    Returns:
+        str: Decoded node text for the requested byte span.
+    """
+    from tools.cq.search.tree_sitter.core.node_utils import node_text as _node_text
+
+    return _node_text(node, source_bytes, strip=strip, max_len=max_len)
 
 
 def convert_from_attributes(obj: object, *, type_: object) -> object:

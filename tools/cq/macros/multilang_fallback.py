@@ -6,12 +6,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from tools.cq.core.contracts import SummaryBuildRequest
-from tools.cq.core.multilang_summary import (
+from tools.cq.core.schema import CqResult
+from tools.cq.macros._rust_fallback import rust_fallback_search
+from tools.cq.orchestration.multilang_summary import (
     build_multilang_summary,
     partition_stats_from_result_summary,
 )
-from tools.cq.core.schema import CqResult
-from tools.cq.macros._rust_fallback import rust_fallback_search
 
 
 def _derive_macro_query(
@@ -39,14 +39,8 @@ def apply_rust_macro_fallback(
     macro_name: str,
     fallback_matches: int = 0,
     query: str | None = None,
-) -> CqResult:
-    """Apply shared Rust fallback behavior to a macro result.
-
-    Returns:
-    -------
-    CqResult
-        The updated result with merged Rust fallback findings and summary.
-    """
+) -> None:
+    """Apply shared Rust fallback behavior to a macro result."""
     rust_findings, capability_diags, rust_stats = rust_fallback_search(
         root,
         pattern,
@@ -73,7 +67,6 @@ def apply_rust_macro_fallback(
             languages={"python": py_stats, "rust": rust_stats},
         )
     )
-    return result
 
 
 __all__ = [

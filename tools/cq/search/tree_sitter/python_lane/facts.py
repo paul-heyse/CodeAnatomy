@@ -27,6 +27,18 @@ from tools.cq.search.tree_sitter.core.query_pack_executor import (
     execute_pack_rows,
 )
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    DEFAULT_MATCH_LIMIT as _DEFAULT_MATCH_LIMIT,
+)
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    PYTHON_LIFT_ANCHOR_TYPES as _PYTHON_LIFT_ANCHOR_TYPES,
+)
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    STOP_CONTEXT_KINDS as _STOP_CONTEXT_KINDS,
+)
+from tools.cq.search.tree_sitter.python_lane.constants import (
+    get_python_field_ids,
+)
 from tools.cq.search.tree_sitter.python_lane.locals_index import (
     build_locals_index,
     scope_chain_for_anchor,
@@ -48,19 +60,6 @@ if TYPE_CHECKING:
     from tree_sitter import Node
 
 _MAX_CANDIDATES = 8
-_DEFAULT_MATCH_LIMIT = 4_096
-_STOP_CONTEXT_KINDS: frozenset[str] = frozenset({"module", "source_file"})
-_PYTHON_LIFT_ANCHOR_TYPES: frozenset[str] = frozenset(
-    {
-        "call",
-        "attribute",
-        "assignment",
-        "import_statement",
-        "import_from_statement",
-        "function_definition",
-        "class_definition",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,9 +114,6 @@ class _PreparedPythonFactInputV1:
     anchor: Node
     windows: tuple[QueryWindowV1, ...]
     settings: QueryExecutionSettingsV1
-
-
-from tools.cq.search.tree_sitter.python_lane.runtime import get_python_field_ids
 
 
 def _find_child_at_byte(node: Node, byte_offset: int) -> Node | None:

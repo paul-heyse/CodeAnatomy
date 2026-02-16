@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
@@ -32,6 +35,30 @@ def _execute_query(
         ),
         tc=toolchain,
     )
+
+
+@pytest.fixture(autouse=True)
+def _stable_query_environment(tmp_path: Path) -> Generator[None]:
+    """Keep query golden tests deterministic across suite execution order.
+
+    Yields:
+    ------
+    None
+        Control back to the test with deterministic CQ environment settings.
+    """
+    close_cq_cache_backend()
+    os.environ["CQ_CACHE_ENABLED"] = "1"
+    os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
+    os.environ["CQ_ENABLE_SEMANTIC_ENRICHMENT"] = "1"
+    os.environ["CQ_CACHE_STATISTICS_ENABLED"] = "0"
+    os.environ["CQ_CACHE_STATS_ENABLED"] = "0"
+    yield
+    close_cq_cache_backend()
+    os.environ.pop("CQ_CACHE_ENABLED", None)
+    os.environ.pop("CQ_CACHE_DIR", None)
+    os.environ.pop("CQ_ENABLE_SEMANTIC_ENRICHMENT", None)
+    os.environ.pop("CQ_CACHE_STATISTICS_ENABLED", None)
+    os.environ.pop("CQ_CACHE_STATS_ENABLED", None)
 
 
 @pytest.fixture

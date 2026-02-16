@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -46,6 +47,7 @@ _DEFAULT_SCOPE_DEPTH = 24
 _CROSSCHECK_ENV = "CQ_RUST_ENRICHMENT_CROSSCHECK"
 _MAX_FUNCTION_PARAMS = 12
 _MAX_ATTRIBUTES = 10
+logger = logging.getLogger(__name__)
 
 _SCOPE_KINDS: frozenset[str] = frozenset(
     {
@@ -96,6 +98,7 @@ def _get_sg_root(source: str, *, cache_key: str | None) -> SgRoot:
 
 def clear_rust_enrichment_cache() -> None:
     """Clear ast-grep parse cache for Rust enrichment."""
+    logger.debug("Clearing Rust ast-grep enrichment cache")
     _AST_CACHE.clear()
 
 
@@ -624,7 +627,8 @@ def _safe_ast_grep_payload(
             cache_key=cache_key,
             max_scope_depth=max_scope_depth,
         )
-    except _ENRICHMENT_ERRORS:
+    except _ENRICHMENT_ERRORS as exc:
+        logger.warning("Rust ast-grep enrichment failed: %s", type(exc).__name__)
         return None
 
 
@@ -648,7 +652,8 @@ def _safe_tree_sitter_payload(
                 query_budget_ms=query_budget_ms,
             )
         )
-    except _ENRICHMENT_ERRORS:
+    except _ENRICHMENT_ERRORS as exc:
+        logger.warning("Rust tree-sitter enrichment failed: %s", type(exc).__name__)
         return {}
 
 

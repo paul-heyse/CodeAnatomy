@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from tools.cq.cli_app.app import app
 from tools.cq.run.chain import compile_chain_segments
 from tools.cq.run.spec import CallsStep, QStep, RunPlan
 
@@ -16,6 +17,7 @@ def test_chain_compiles_steps() -> None:
             ["q", "entity=function name=foo"],
             ["calls", "foo"],
         ],
+        cli_app=app,
     )
     assert isinstance(plan, RunPlan)
     assert len(plan.steps) == CHAIN_STEP_COUNT
@@ -26,4 +28,4 @@ def test_chain_compiles_steps() -> None:
 def test_chain_rejects_unused_tokens() -> None:
     """Ensure chain compilation surfaces unused forwarding tokens."""
     with pytest.raises(RuntimeError, match="Unused chain tokens"):
-        compile_chain_segments([["calls", "foo", "--unknown"]])
+        compile_chain_segments([["calls", "foo", "--unknown"]], cli_app=app)

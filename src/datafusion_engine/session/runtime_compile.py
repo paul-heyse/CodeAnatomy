@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from datafusion_engine.compile.options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
+    DataFusionSqlPolicy,
     DataFusionSubstraitFallbackEvent,
 )
 from datafusion_engine.lineage.diagnostics import record_artifact as _lineage_record_artifact
@@ -239,7 +240,7 @@ class _CompileOptionResolution:
     substrait_validation: bool
     capture_plan_artifacts: bool
     capture_semantic_diff: bool
-    sql_policy: object | None
+    sql_policy: DataFusionSqlPolicy | None
     sql_policy_name: str | None
 
 

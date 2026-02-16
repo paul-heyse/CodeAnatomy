@@ -27,7 +27,9 @@ class DynamicRouter:
 
 
 def forwarding_adapter(
-    router: DynamicRouter, operation: str, *args: object, **kwargs: object
+    router: DynamicRouter,
+    operation: str,
+    ctx: BuildContext,
 ) -> str:
-    """Forward *args/**kwargs to dispatch target for query coverage."""
-    return router.dispatch(operation, *args, **kwargs)
+    """Forward a typed context to the dispatch target for query coverage."""
+    return router.dispatch(operation, ctx)

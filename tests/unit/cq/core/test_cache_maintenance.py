@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tools.cq.core.cache import close_cq_cache_backend, get_cq_cache_backend, maintenance_tick
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
+from tools.cq.core.cache.maintenance import maintenance_tick
 
 
 def test_cache_maintenance_tick_reports_counters(tmp_path: Path) -> None:

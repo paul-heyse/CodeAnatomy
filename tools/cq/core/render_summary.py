@@ -6,10 +6,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from tools.cq.core.contract_codec import dumps_json_value
-from tools.cq.core.front_door_insight import (
-    FrontDoorInsightV1,
-    render_insight_card,
-)
+from tools.cq.core.front_door_render import render_insight_card
+from tools.cq.core.front_door_schema import FrontDoorInsightV1
+from tools.cq.core.render_utils import na as _na
 from tools.cq.core.serialization import to_builtins
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
@@ -53,10 +52,6 @@ ARTIFACT_ONLY_KEYS: frozenset[str] = frozenset(
 )
 
 RUN_QUERY_ARG_START_INDEX = 2
-
-
-def _na(reason: str) -> str:
-    return f"N/A — {reason.replace('_', ' ')}"
 
 
 def _derive_query_fallback(result: CqResult) -> str | None:

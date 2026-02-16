@@ -5,6 +5,7 @@ Executes ToolPlans and returns CqResult objects.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -13,47 +14,44 @@ import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
 from tools.cq.core.bootstrap import resolve_runtime_services
-from tools.cq.core.cache import (
-    CacheWriteTagRequestV1,
-    CqCacheBackend,
-    FragmentEntryV1,
-    FragmentHitV1,
-    FragmentPersistRuntimeV1,
-    FragmentProbeRuntimeV1,
-    FragmentRequestV1,
-    FragmentWriteV1,
-    build_cache_key,
-    build_scope_hash,
-    build_scope_snapshot_fingerprint,
-    decode_fragment_payload,
-    default_cache_policy,
-    file_content_hash,
-    get_cq_cache_backend,
-    is_namespace_cache_enabled,
-    maybe_evict_run_cache_tag,
-    partition_fragment_entries,
-    persist_fragment_writes,
-    resolve_namespace_ttl_seconds,
-    resolve_write_cache_tag,
-    snapshot_backend_metrics,
-)
+from tools.cq.core.cache.content_hash import file_content_hash
 from tools.cq.core.cache.contracts import (
     QueryEntityScanCacheV1,
-    SgRecordCacheV1,
 )
+from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
+from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.fragment_codecs import decode_fragment_payload
+from tools.cq.core.cache.fragment_contracts import (
+    FragmentEntryV1,
+    FragmentHitV1,
+    FragmentRequestV1,
+    FragmentWriteV1,
+)
+from tools.cq.core.cache.fragment_engine import (
+    FragmentPersistRuntimeV1,
+    FragmentProbeRuntimeV1,
+    partition_fragment_entries,
+    persist_fragment_writes,
+)
+from tools.cq.core.cache.interface import CqCacheBackend
+from tools.cq.core.cache.key_builder import build_cache_key, build_scope_hash
+from tools.cq.core.cache.namespaces import (
+    is_namespace_cache_enabled,
+    resolve_namespace_ttl_seconds,
+)
+from tools.cq.core.cache.policy import default_cache_policy
+from tools.cq.core.cache.run_lifecycle import (
+    CacheWriteTagRequestV1,
+    maybe_evict_run_cache_tag,
+    resolve_write_cache_tag,
+)
+from tools.cq.core.cache.snapshot_fingerprint import build_scope_snapshot_fingerprint
 from tools.cq.core.cache.telemetry import (
     record_cache_decode_failure,
     record_cache_get,
     record_cache_set,
 )
 from tools.cq.core.contracts import SummaryBuildRequest, contract_to_builtins
-from tools.cq.core.multilang_orchestrator import (
-    execute_by_language_scope,
-)
-from tools.cq.core.multilang_summary import (
-    build_multilang_summary,
-    partition_stats_from_result_summary,
-)
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.result_factory import build_error_result
 from tools.cq.core.run_context import RunContext
@@ -67,6 +65,22 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.structs import CqStruct
+from tools.cq.orchestration.multilang_orchestrator import (
+    execute_by_language_scope,
+)
+from tools.cq.orchestration.multilang_summary import (
+    build_multilang_summary,
+    partition_stats_from_result_summary,
+)
+from tools.cq.query.cache_converters import (
+    cache_record_to_record as _cache_record_to_record,
+)
+from tools.cq.query.cache_converters import (
+    record_sort_key_detailed as _record_sort_key,
+)
+from tools.cq.query.cache_converters import (
+    record_to_cache_record as _record_to_cache_record,
+)
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import (
@@ -149,6 +163,7 @@ from tools.cq.query.merge import merge_auto_scope_query_results
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
 _ENTITY_FRAGMENT_PAYLOAD_LEN = 3
 _MIN_PREFILTER_LITERAL_LEN = 3
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -298,7 +313,8 @@ def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
     )
     result.summary.update(_summary_common_for_context(ctx))
     _finalize_single_scope_summary(ctx, result)
-    return assign_result_finding_ids(result)
+    assign_result_finding_ids(result)
+    return result
 
 
 def _resolve_entity_paths(
@@ -498,57 +514,6 @@ def _assemble_entity_records(
         ordered_records.extend(records_by_rel.get(rel_path, []))
     ordered_records.sort(key=_record_sort_key)
     return ordered_records
-
-
-def _record_to_cache_record(record: SgRecord) -> SgRecordCacheV1:
-    return SgRecordCacheV1(
-        record=record.record,
-        kind=record.kind,
-        file=record.file,
-        start_line=record.start_line,
-        start_col=record.start_col,
-        end_line=record.end_line,
-        end_col=record.end_col,
-        text=record.text,
-        rule_id=record.rule_id,
-    )
-
-
-def _cache_record_to_record(payload: SgRecordCacheV1) -> SgRecord:
-    return SgRecord(
-        record=payload.record,
-        kind=payload.kind,
-        file=payload.file,
-        start_line=payload.start_line,
-        start_col=payload.start_col,
-        end_line=payload.end_line,
-        end_col=payload.end_col,
-        text=payload.text,
-        rule_id=payload.rule_id,
-    )
-
-
-def _record_sort_key(record: SgRecord) -> tuple[str, int, int, str, str, str, str]:
-    return (
-        record.file,
-        int(record.start_line),
-        int(record.start_col),
-        record.record,
-        record.kind,
-        record.rule_id,
-        record.text,
-    )
-
-
-def _finding_sort_key(finding: Finding) -> tuple[str, int, int, str]:
-    if finding.anchor is None:
-        return ("", 0, 0, finding.message)
-    return (
-        finding.anchor.file,
-        int(finding.anchor.line),
-        int(finding.anchor.col or 0),
-        finding.message,
-    )
 
 
 def _raw_match_sort_key(row: dict[str, object]) -> tuple[str, int, int, str]:
@@ -767,6 +732,13 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
     """
     root = Path(request.root).resolve()
     active_run_id = request.run_id or uuid7_str()
+    logger.debug(
+        "Executing query plan mode=%s lang=%s lang_scope=%s root=%s",
+        "pattern" if request.plan.is_pattern_query else "entity",
+        request.plan.lang,
+        request.query.lang_scope,
+        root,
+    )
     if request.query.lang_scope == "auto":
         return _execute_auto_scope_plan(
             request.query,
@@ -793,9 +765,13 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
 
 
 def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
+    from tools.cq.query.executor_dispatch import execute_entity_query, execute_pattern_query
+
     if ctx.plan.is_pattern_query:
-        return _execute_pattern_query(ctx)
-    return _execute_entity_query(ctx)
+        logger.debug("Dispatching pattern query execution for lang=%s", ctx.plan.lang)
+        return execute_pattern_query(ctx)
+    logger.debug("Dispatching entity query execution for lang=%s", ctx.plan.lang)
+    return execute_entity_query(ctx)
 
 
 def _execute_auto_scope_plan(
@@ -892,7 +868,8 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     _finalize_single_scope_summary(ctx, result)
     _attach_entity_insight(result, root=ctx.root)
     result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
-    return assign_result_finding_ids(result)
+    assign_result_finding_ids(result)
+    return result
 
 
 def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
@@ -938,7 +915,8 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     _finalize_single_scope_summary(ctx, result)
     _attach_entity_insight(result, root=ctx.root)
     result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
-    return assign_result_finding_ids(result)
+    assign_result_finding_ids(result)
+    return result
 
 
 def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
@@ -983,7 +961,8 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     _maybe_add_pattern_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
     result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
-    return assign_result_finding_ids(result)
+    assign_result_finding_ids(result)
+    return result
 
 
 def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
@@ -1046,7 +1025,8 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     _maybe_add_pattern_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
     result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
-    return assign_result_finding_ids(result)
+    assign_result_finding_ids(result)
+    return result
 
 
 def _process_decorator_query(
@@ -1083,6 +1063,7 @@ def _process_decorator_query(
         try:
             source = file_path.read_text(encoding="utf-8")
         except OSError:
+            logger.warning("Skipping unreadable file during decorator query: %s", file_path)
             continue
 
         decorator_info = enrich_with_decorators(

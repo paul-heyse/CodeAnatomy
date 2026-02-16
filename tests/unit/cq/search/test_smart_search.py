@@ -27,13 +27,13 @@ from tools.cq.search.pipeline.smart_search import (
     compute_relevance_score,
     smart_search,
 )
-from tools.cq.search.pipeline.smart_search_telemetry import _resolve_search_worker_count
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
     RawMatch,
     SearchStats,
     _PythonSemanticPrefetchResult,
 )
+from tools.cq.search.pipeline.worker_policy import resolve_search_worker_count
 from tools.cq.search.semantic.models import LanguageSemanticEnrichmentOutcome
 from tools.cq.search.tree_sitter.rust_lane.runtime import is_tree_sitter_rust_available
 
@@ -724,7 +724,7 @@ class TestSmartSearch:
         clear_caches()
         result = smart_search(tmp_path, "build_graph", lang_scope="python")
         assert result.evidence
-        assert _resolve_search_worker_count(WORKER_INPUT_FILE_COUNT) == EXPECTED_WORKER_COUNT
+        assert resolve_search_worker_count(WORKER_INPUT_FILE_COUNT) == EXPECTED_WORKER_COUNT
 
     @staticmethod
     def test_smart_search_with_include_globs(sample_repo: Path) -> None:

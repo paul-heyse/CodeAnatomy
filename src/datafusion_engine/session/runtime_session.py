@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Final, cast
 from weakref import WeakKeyDictionary
 
 import pyarrow as pa
-from datafusion import SessionContext, SQLOptions
+from datafusion import DataFrame, SessionContext, SQLOptions
 
 from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.sql.options import planning_sql_options, sql_options_for_profile
@@ -21,6 +21,7 @@ from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from datafusion_engine.catalog.introspection import IntrospectionCache
+    from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 from datafusion_engine.session.runtime_telemetry import (
@@ -387,7 +388,7 @@ def _sql_with_options(
     *,
     sql_options: SQLOptions | None = None,
     allow_statements: bool | None = None,
-) -> object:
+) -> DataFrame:
 
     resolved_sql_options = sql_options or _read_only_sql_options()
     if allow_statements:
@@ -542,7 +543,7 @@ def _datafusion_function_names(ctx: SessionContext) -> set[str]:
 @dataclass(frozen=True)
 class _ScipRegistrationSnapshot:
     name: str
-    location: object
+    location: DatasetLocation
     expected_fingerprint: str | None
     actual_fingerprint: str | None
     schema_match: bool | None

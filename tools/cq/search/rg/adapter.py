@@ -18,7 +18,7 @@ from tools.cq.search._shared.types import QueryMode, SearchLimits
 from tools.cq.search.pipeline.profiles import DEFAULT, INTERACTIVE
 from tools.cq.search.rg.codec import as_match_data, match_line_number, match_line_text, match_path
 from tools.cq.search.rg.contracts import RgRunSettingsV1
-from tools.cq.search.rg.runner import run_rg_json, run_with_settings
+from tools.cq.search.rg.runner import RgProcessResult, run_rg_json, run_with_settings
 
 _DEF_LINE_PATTERN = r"^\s*(def |async def |class |fn |pub fn |struct |enum |trait |impl )"
 
@@ -188,26 +188,80 @@ def find_call_candidates(
     limits = limits or DEFAULT
     symbol = function_name.rsplit(".", maxsplit=1)[-1]
     pattern = rf"{re.escape(symbol)}\s*\("
+    call_pattern = re.compile(rf"\b{pattern}")
+
     try:
-        proc = search_sync_with_timeout(
-            run_rg_json,
-            limits.timeout_seconds,
-            kwargs={
-                "request": RgRunRequest(
-                    root=root,
-                    pattern=pattern,
-                    mode=QueryMode.IDENTIFIER,
-                    lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
-                    include_globs=[],
-                    exclude_globs=[],
-                    limits=limits,
-                )
-            },
+        proc = _run_call_candidate_search(
+            root=root,
+            pattern=pattern,
+            mode=QueryMode.IDENTIFIER,
+            limits=limits,
+            lang_scope=lang_scope,
         )
     except TimeoutError:
         return []
+    identifier_rows = _collect_call_candidate_rows(
+        proc,
+        root=root,
+        call_pattern=call_pattern,
+        limits=limits,
+        lang_scope=lang_scope,
+    )
+    if identifier_rows:
+        return identifier_rows
+    try:
+        proc = _run_call_candidate_search(
+            root=root,
+            pattern=pattern,
+            mode=QueryMode.REGEX,
+            limits=limits,
+            lang_scope=lang_scope,
+        )
+    except TimeoutError:
+        return []
+    return _collect_call_candidate_rows(
+        proc,
+        root=root,
+        call_pattern=call_pattern,
+        limits=limits,
+        lang_scope=lang_scope,
+    )
 
-    results: list[tuple[Path, int]] = []
+
+def _run_call_candidate_search(
+    *,
+    root: Path,
+    pattern: str,
+    mode: QueryMode,
+    limits: SearchLimits,
+    lang_scope: QueryLanguageScope,
+) -> RgProcessResult:
+    return search_sync_with_timeout(
+        run_rg_json,
+        limits.timeout_seconds,
+        kwargs={
+            "request": RgRunRequest(
+                root=root,
+                pattern=pattern,
+                mode=mode,
+                lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
+                include_globs=[],
+                exclude_globs=[],
+                limits=limits,
+            )
+        },
+    )
+
+
+def _collect_call_candidate_rows(
+    proc: RgProcessResult,
+    *,
+    root: Path,
+    call_pattern: re.Pattern[str],
+    limits: SearchLimits,
+    lang_scope: QueryLanguageScope,
+) -> list[tuple[Path, int]]:
+    rows: list[tuple[Path, int]] = []
     for event in proc.events:
         data = as_match_data(event)
         if data is None:
@@ -216,12 +270,14 @@ def find_call_candidates(
         line = match_line_number(data)
         if rel_path is None or line is None:
             continue
+        if not call_pattern.search(match_line_text(data)):
+            continue
         if not is_path_in_lang_scope(rel_path, lang_scope):
             continue
-        results.append(((root / rel_path).resolve(), line))
-        if len(results) >= limits.max_total_matches:
+        rows.append(((root / rel_path).resolve(), line))
+        if len(rows) >= limits.max_total_matches:
             break
-    return results
+    return rows
 
 
 def find_callers(

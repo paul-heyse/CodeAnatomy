@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.core.cache import build_namespace_cache_tag, build_scope_hash
+from tools.cq.core.cache.key_builder import build_namespace_cache_tag, build_scope_hash
 
 
 def test_build_namespace_cache_tag_uses_canonical_atom_order() -> None:

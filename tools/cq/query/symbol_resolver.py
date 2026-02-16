@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from tools.cq.query.finding_builders import extract_call_target as _extract_call_target
 from tools.cq.query.sg_parser import SgRecord, filter_records_by_kind
 from tools.cq.query.shared_utils import extract_def_name
 
@@ -352,32 +353,6 @@ def resolve_call_target(
         return resolved, "resolved"
 
     return None, "unresolved"
-
-
-def _extract_call_target(call: SgRecord) -> str:
-    """Extract the target name from a call record.
-
-    Used by ``resolve_call_target`` to normalize call expressions.
-
-    Returns:
-    -------
-    str
-        Extracted call target name, or empty string if unknown.
-    """
-    text = call.text.lstrip()
-
-    # For attribute calls (obj.method()), extract the method name
-    if call.kind in {"attr_call", "attr"}:
-        match = re.search(r"\.(\w+)\s*\(", text)
-        if match:
-            return match.group(1)
-
-    # For name calls (func()), extract the function name
-    match = re.search(r"\b(\w+)\s*\(", text)
-    if match:
-        return match.group(1)
-
-    return ""
 
 
 def _is_builtin(name: str) -> bool:

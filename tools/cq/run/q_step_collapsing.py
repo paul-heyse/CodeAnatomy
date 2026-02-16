@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import cast
 
-from tools.cq.cli_app.context import CliContext
 from tools.cq.core.contracts import MergeResultsRequest
-from tools.cq.core.multilang_orchestrator import (
+from tools.cq.core.run_context import RunExecutionContext
+from tools.cq.core.schema import CqResult, Finding
+from tools.cq.orchestration.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
-from tools.cq.core.schema import CqResult, Finding
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
@@ -29,7 +29,7 @@ from tools.cq.search.semantic.diagnostics import (
 def collapse_parent_q_results(
     step_results: list[tuple[str, CqResult]],
     *,
-    ctx: CliContext,
+    ctx: RunExecutionContext,
 ) -> list[tuple[str, CqResult]]:
     """Collapse multi-language Q-step results by parent step ID.
 
@@ -37,7 +37,7 @@ def collapse_parent_q_results(
     ----------
     step_results : list[tuple[str, CqResult]]
         List of (step_id, result) tuples.
-    ctx : CliContext
+    ctx : RunExecutionContext
         CLI context.
 
     Returns:
@@ -199,7 +199,7 @@ def _summary_common_for_collapse(
     return summary_common
 
 
-def _merge_collapsed_q_group(group: list[CqResult], *, ctx: CliContext) -> CqResult:
+def _merge_collapsed_q_group(group: list[CqResult], *, ctx: RunExecutionContext) -> CqResult:
     lang_results, query_text, mode, lang_scope = _collect_collapse_group_metadata(group)
     diagnostics = _build_collapse_diagnostics(lang_results, query_text)
     run = runmeta_for_scope_merge(

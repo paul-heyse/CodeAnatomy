@@ -32,7 +32,7 @@ from tools.cq.cli_app.params import (
     SideEffectsParams,
     SigImpactParams,
 )
-from tools.cq.core.request_factory import RequestContextV1, RequestFactory
+from tools.cq.orchestration.request_factory import RequestContextV1, RequestFactory
 
 
 def impact(

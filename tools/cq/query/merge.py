@@ -7,13 +7,13 @@ from typing import cast
 
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.contracts import MergeResultsRequest
-from tools.cq.core.multilang_orchestrator import (
-    merge_language_cq_results,
-    runmeta_for_scope_merge,
-)
 from tools.cq.core.schema import CqResult
 from tools.cq.core.services import EntityFrontDoorRequest
 from tools.cq.core.toolchain import Toolchain
+from tools.cq.orchestration.multilang_orchestrator import (
+    merge_language_cq_results,
+    runmeta_for_scope_merge,
+)
 from tools.cq.query.ir import Query
 from tools.cq.query.language import QueryLanguage
 from tools.cq.query.shared_utils import count_result_matches, extract_missing_languages
@@ -70,7 +70,7 @@ def _merge_semantic_contract_inputs(
 def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
     import msgspec
 
-    from tools.cq.core.front_door_insight import (
+    from tools.cq.core.front_door_builders import (
         coerce_front_door_insight,
         mark_partial_for_missing_languages,
         to_public_front_door_insight_dict,

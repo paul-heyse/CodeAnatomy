@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Mapping
+from typing import Literal, Protocol
 
 import msgspec
 
 from tools.cq.core.structs import CqOutputStruct
+from tools.cq.query.language import QueryLanguage
 
 EnrichmentStatus = Literal["applied", "degraded", "skipped"]
 
@@ -37,9 +39,32 @@ class RustEnrichmentPayload(CqOutputStruct, frozen=True):
     data: dict[str, object] = msgspec.field(default_factory=dict)
 
 
+class LanguageEnrichmentPort(Protocol):
+    """Protocol for language-specific enrichment adapter operations."""
+
+    language: QueryLanguage
+
+    def payload_from_match(self, match: object) -> dict[str, object] | None:
+        """Extract language-specific payload from an enriched match."""
+        ...
+
+    def accumulate_telemetry(
+        self,
+        lang_bucket: dict[str, object],
+        payload: dict[str, object],
+    ) -> None:
+        """Accumulate telemetry for one language payload."""
+        ...
+
+    def build_diagnostics(self, payload: Mapping[str, object]) -> list[dict[str, object]]:
+        """Build diagnostics rows for semantic plane preview."""
+        ...
+
+
 __all__ = [
     "EnrichmentMeta",
     "EnrichmentStatus",
+    "LanguageEnrichmentPort",
     "PythonEnrichmentPayload",
     "RustEnrichmentPayload",
 ]

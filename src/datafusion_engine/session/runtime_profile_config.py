@@ -40,7 +40,7 @@ from storage.cdf_cursor_protocol import CdfCursorStoreLike
 from storage.deltalake.config import DeltaMutationPolicy
 
 if TYPE_CHECKING:
-    from datafusion import SessionContext
+    from datafusion import RuntimeEnvBuilder, SessionContext
 
     from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 
@@ -497,7 +497,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
     plan_artifacts_root: str | None = None
     input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
     prepared_statements: tuple[PreparedStatementSpec, ...] = INFO_SCHEMA_STATEMENTS
-    runtime_env_hook: Callable[[object], object] | None = None
+    runtime_env_hook: Callable[[RuntimeEnvBuilder], RuntimeEnvBuilder] | None = None
 
     @staticmethod
     def _callable_identity(value: object | None) -> str | None:

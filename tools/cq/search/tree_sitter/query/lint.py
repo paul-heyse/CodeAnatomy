@@ -177,8 +177,9 @@ def lint_search_query_packs() -> QueryPackLintResultV1:
         QueryPackLintResultV1: Lint status and tuple of errors.
     """
     errors = (*_lint_language("python"), *_lint_language("rust"))
-    if errors:
-        return QueryPackLintResultV1(status="failed", errors=tuple(errors))
+    ordered_errors = tuple(sorted(errors))
+    if ordered_errors:
+        return QueryPackLintResultV1(status="failed", errors=ordered_errors)
     return QueryPackLintResultV1(status="ok", errors=())
 
 

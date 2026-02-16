@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import Any, cast
 
 from cyclopts.exceptions import CycloptsError
 
-from tools.cq.cli_app.app import app
 from tools.cq.run.spec import (
     BytecodeSurfaceStep,
     CallsStep,
@@ -66,11 +66,12 @@ def _require_str_attr(opts: object | None, attr: str, label: str) -> str:
     raise RuntimeError(msg)
 
 
-def compile_chain_segments(groups: Iterable[list[str]]) -> RunPlan:
+def compile_chain_segments(groups: Iterable[list[str]], *, cli_app: object) -> RunPlan:
     """Compile token groups into a RunPlan.
 
     Args:
         groups: Token groups representing chained CQ commands.
+        cli_app: Cyclopts app wrapper used to parse each command segment.
 
     Returns:
         RunPlan: Normalized run plan built from the chain.
@@ -78,6 +79,7 @@ def compile_chain_segments(groups: Iterable[list[str]]) -> RunPlan:
     Raises:
         RuntimeError: If a segment is empty or cannot be parsed.
     """
+    app = cast("Any", cli_app)
     steps: list[RunStep] = []
     for group in groups:
         if not group:
@@ -124,10 +126,15 @@ def _build_q_step(args: tuple[object, ...], _opts: object | None) -> RunStep:
 
 
 def _build_search_step(args: tuple[object, ...], opts: object | None) -> RunStep:
+    regex_enabled = bool(getattr(opts, "regex", False))
+    literal_enabled = bool(getattr(opts, "literal", False))
+    if regex_enabled and literal_enabled:
+        msg = "search step cannot set both regex and literal"
+        raise RuntimeError(msg)
+    mode = "regex" if regex_enabled else "literal" if literal_enabled else None
     return SearchStep(
         query=_require_str_arg(args, 0, "query"),
-        regex=getattr(opts, "regex", False),
-        literal=getattr(opts, "literal", False),
+        mode=mode,
         include_strings=getattr(opts, "include_strings", False),
         in_dir=getattr(opts, "in_dir", None),
     )

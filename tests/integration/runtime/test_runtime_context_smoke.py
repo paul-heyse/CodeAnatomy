@@ -12,6 +12,9 @@ from datafusion_engine.session.runtime import (
     SchemaRegistryValidationResult,
     ZeroRowBootstrapConfig,
 )
+from datafusion_engine.session.runtime_schema_registry import (
+    _schema_registry_issues as schema_registry_issues,
+)
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_datafusion_udfs
 
@@ -50,7 +53,7 @@ def test_runtime_context_pool_cleans_run_scoped_tables() -> None:
 @pytest.mark.integration
 def test_schema_registry_view_errors_are_advisory_in_non_strict_bootstrap_mode() -> None:
     """Bootstrap mode should downgrade schema view errors when strict mode is disabled."""
-    issues, advisory = DataFusionRuntimeProfile._schema_registry_issues(  # noqa: SLF001
+    issues, advisory = schema_registry_issues(
         SchemaRegistryValidationResult(view_errors={"semantic_types": "missing metadata"}),
         zero_row_bootstrap=ZeroRowBootstrapConfig(
             validation_mode="bootstrap",

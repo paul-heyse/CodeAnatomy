@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import msgspec
 from tools.cq.core.contract_codec import (
     dumps_json_value,
@@ -76,7 +78,7 @@ class TestToPublicDict:
         import pytest
 
         with pytest.raises(TypeError, match="Expected dict payload"):
-            to_public_dict([1, 2, 3])  # type: ignore[arg-type]
+            to_public_dict(cast("msgspec.Struct", [1, 2, 3]))
 
 
 class TestToPublicList:

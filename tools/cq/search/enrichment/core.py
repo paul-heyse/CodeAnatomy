@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import cast
 
+import msgspec
+
 from tools.cq.search._shared.core import encode_mapping
 from tools.cq.search.enrichment.contracts import (
     EnrichmentMeta,
@@ -12,6 +14,8 @@ from tools.cq.search.enrichment.contracts import (
     PythonEnrichmentPayload,
     RustEnrichmentPayload,
 )
+from tools.cq.search.enrichment.python_facts import PythonEnrichmentFacts
+from tools.cq.search.enrichment.rust_facts import RustEnrichmentFacts
 
 _DEFAULT_METADATA_KEYS: frozenset[str] = frozenset(
     {"enrichment_status", "enrichment_sources", "degrade_reason", "language"}
@@ -40,6 +44,42 @@ def has_value(value: object) -> bool:
     if isinstance(value, (list, tuple, set, dict)):
         return bool(value)
     return True
+
+
+def string_or_none(value: object) -> str | None:
+    """Return stripped string when value is a non-empty string."""
+    if isinstance(value, str):
+        text = value.strip()
+        return text if text else None
+    return None
+
+
+def parse_python_enrichment(raw: dict[str, object] | None) -> PythonEnrichmentFacts | None:
+    """Parse Python enrichment payload into typed facts.
+
+    Returns:
+        PythonEnrichmentFacts | None: Parsed Python enrichment facts when valid.
+    """
+    if raw is None:
+        return None
+    try:
+        return msgspec.convert(raw, type=PythonEnrichmentFacts, strict=False)
+    except (msgspec.ValidationError, TypeError, ValueError, RuntimeError):
+        return None
+
+
+def parse_rust_enrichment(raw: dict[str, object] | None) -> RustEnrichmentFacts | None:
+    """Parse Rust enrichment payload into typed facts.
+
+    Returns:
+        RustEnrichmentFacts | None: Parsed Rust enrichment facts when valid.
+    """
+    if raw is None:
+        return None
+    try:
+        return msgspec.convert(raw, type=RustEnrichmentFacts, strict=False)
+    except (msgspec.ValidationError, TypeError, ValueError, RuntimeError):
+        return None
 
 
 def append_source(payload: dict[str, object], source: str) -> None:
@@ -367,6 +407,9 @@ __all__ = [
     "merge_gap_fill_payload",
     "normalize_python_payload",
     "normalize_rust_payload",
+    "parse_python_enrichment",
+    "parse_rust_enrichment",
     "payload_size_hint",
     "set_degraded",
+    "string_or_none",
 ]

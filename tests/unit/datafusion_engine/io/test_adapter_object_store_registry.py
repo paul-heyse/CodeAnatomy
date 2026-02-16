@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import cast
+
+from datafusion import SessionContext
 
 from datafusion_engine.io.adapter import DataFusionIOAdapter, ObjectStoreRegistries
 
@@ -18,7 +21,7 @@ def test_register_object_store_deduplicates_with_injected_registry() -> None:
     ctx = _FakeSessionContext()
     registries = ObjectStoreRegistries()
     adapter = DataFusionIOAdapter(
-        ctx=ctx,  # type: ignore[arg-type]
+        ctx=cast("SessionContext", ctx),
         profile=None,
         object_store_registries=registries,
     )

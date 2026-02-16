@@ -8,7 +8,7 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.front_door_insight import (
+from tools.cq.core.front_door_builders import (
     EntityInsightBuildRequestV1,
     FrontDoorInsightV1,
     InsightBudgetV1,

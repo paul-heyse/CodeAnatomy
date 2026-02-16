@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from tools.cq.core.python_ast_utils import get_call_name
-from tools.cq.index.def_index import _SELF_CLS, DefIndex, FnDecl
+from tools.cq.index.def_index import SELF_CLS_NAMES, DefIndex, FnDecl
 
 _CALL_SPLIT_PARTS = 2
 
@@ -247,7 +247,7 @@ def resolve_call_targets(
             resolution_path=resolution_path,
         )
     receiver = call.receiver_name
-    if receiver in _SELF_CLS:
+    if receiver in SELF_CLS_NAMES:
         targets, confidence, resolution_path = _resolve_self_or_cls_call(
             index,
             call,

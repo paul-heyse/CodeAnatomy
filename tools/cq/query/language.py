@@ -112,6 +112,16 @@ def primary_language(scope: QueryLanguageScope) -> QueryLanguage:
     return expand_language_scope(scope)[0]
 
 
+def is_python_language(lang: QueryLanguage | str) -> bool:
+    """Return whether a language token resolves to Python."""
+    return str(lang).strip().lower() == "python"
+
+
+def is_rust_language(lang: QueryLanguage | str) -> bool:
+    """Return whether a language token resolves to Rust."""
+    return str(lang).strip().lower() == "rust"
+
+
 def file_extensions_for_language(lang: QueryLanguage) -> tuple[str, ...]:
     """Return extensions for a concrete language.
 
@@ -300,6 +310,8 @@ __all__ = [
     "file_globs_for_scope",
     "infer_language_for_path",
     "is_path_in_lang_scope",
+    "is_python_language",
+    "is_rust_language",
     "language_extension_exclude_globs",
     "parse_query_language",
     "parse_query_language_scope",

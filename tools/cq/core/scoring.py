@@ -6,10 +6,11 @@ Provides standardized scoring for cq findings based on impact and confidence sig
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from tools.cq.core.schema import DetailPayload, ScoreDetails
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.type_coercion import coerce_float_optional
 
 if TYPE_CHECKING:
     from tools.cq.macros.contracts import ScoringDetailsV1
@@ -50,6 +51,8 @@ _SEVERITY_MULTIPLIERS: dict[str, float] = {
     "warning": 1.0,
     "info": 0.5,
 }
+
+type ScoreBucket = Literal["high", "med", "low"]
 
 
 class ImpactSignals(CqStruct, frozen=True):
@@ -158,7 +161,7 @@ def confidence_score(signals: ConfidenceSignals) -> float:
     return _CONFIDENCE_SCORES.get(signals.evidence_kind, 0.30)
 
 
-def bucket(score: float) -> str:
+def bucket(score: float) -> ScoreBucket:
     """Convert a score to a bucket label.
 
     Parameters
@@ -168,7 +171,7 @@ def bucket(score: float) -> str:
 
     Returns:
     -------
-    str
+    ScoreBucket
         Bucket label: "high" (>= 0.7), "med" (>= 0.4), or "low".
     """
     if score >= _HIGH_THRESHOLD:
@@ -242,13 +245,6 @@ def _score_details_from_mapping(
     else:
         scoring_dict = scoring
 
-    def _coerce_float(value: object) -> float | None:
-        if value is None:
-            return None
-        if isinstance(value, (int, float)):
-            return float(value)
-        return None
-
     def _coerce_str(value: object) -> str | None:
         if value is None:
             return None
@@ -257,9 +253,9 @@ def _score_details_from_mapping(
         return str(value)
 
     return ScoreDetails(
-        impact_score=_coerce_float(scoring_dict.get("impact_score")),
+        impact_score=coerce_float_optional(scoring_dict.get("impact_score")),
         impact_bucket=_coerce_str(scoring_dict.get("impact_bucket")),
-        confidence_score=_coerce_float(scoring_dict.get("confidence_score")),
+        confidence_score=coerce_float_optional(scoring_dict.get("confidence_score")),
         confidence_bucket=_coerce_str(scoring_dict.get("confidence_bucket")),
         evidence_kind=_coerce_str(scoring_dict.get("evidence_kind")),
     )

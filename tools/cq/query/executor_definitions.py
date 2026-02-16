@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 MAX_RELATIONSHIP_DETAIL_RECORDS = 50
 
 
-class DefQueryRelationshipPolicyV1(CqStruct, frozen=True):  # type: ignore[misc]
+class DefQueryRelationshipPolicyV1(CqStruct, frozen=True):
     """Policy controls for definition-query relationship detail expansion."""
 
     compute_relationship_details: bool

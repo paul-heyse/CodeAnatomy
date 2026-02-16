@@ -21,12 +21,11 @@ def test_parse_run_step_json_q_step() -> None:
 
 def test_parse_run_step_json_search_step() -> None:
     """Test parsing a single search step from JSON."""
-    raw = '{"type": "search", "query": "build_graph", "regex": true}'
+    raw = '{"type": "search", "query": "build_graph", "mode": "regex"}'
     step = parse_run_step_json(raw)
     assert isinstance(step, SearchStep)
     assert step.query == "build_graph"
-    assert step.regex is True
-    assert step.literal is False
+    assert step.mode == "regex"
 
 
 def test_parse_run_step_json_calls_step() -> None:

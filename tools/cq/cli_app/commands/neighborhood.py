@@ -9,9 +9,9 @@ from cyclopts import App, Parameter, validators
 from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import analysis_group, require_context
 from tools.cq.cli_app.types import NeighborhoodLanguageToken
-from tools.cq.core.cache import maybe_evict_run_cache_tag
+from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.schema import assign_result_finding_ids, mk_runmeta, ms
-from tools.cq.core.snb_schema import SemanticNeighborhoodBundleV1
+from tools.cq.neighborhood.semantic_env import semantic_env_from_bundle
 from tools.cq.utils.uuid_factory import uuid7_str
 
 neighborhood_app = App(
@@ -105,7 +105,7 @@ def neighborhood(
             language=resolved_lang,
             top_k=top_k,
             enable_semantic_enrichment=semantic_enrichment,
-            semantic_env=_semantic_env_from_bundle(bundle),
+            semantic_env=semantic_env_from_bundle(bundle),
         )
     )
     result.summary["target_resolution_kind"] = resolved.resolution_kind
@@ -113,27 +113,6 @@ def neighborhood(
     maybe_evict_run_cache_tag(root=ctx.root, language=resolved_lang, run_id=run_id)
 
     return CliResult(result=result, context=ctx, filters=None)
-
-
-def _semantic_env_from_bundle(bundle: SemanticNeighborhoodBundleV1) -> dict[str, object]:
-    """Extract compact semantic environment flags from bundle metadata.
-
-    Returns:
-        Mapping of normalized semantic environment flags.
-    """
-    if bundle.meta is None or not bundle.meta.semantic_sources:
-        return {}
-    first = bundle.meta.semantic_sources[0]
-    env: dict[str, object] = {}
-    for in_key, out_key in (
-        ("workspace_health", "semantic_health"),
-        ("quiescent", "semantic_quiescent"),
-        ("position_encoding", "semantic_position_encoding"),
-    ):
-        value = first.get(in_key)
-        if value is not None:
-            env[out_key] = value
-    return env
 
 
 def get_app() -> App:

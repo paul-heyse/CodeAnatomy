@@ -9,12 +9,11 @@ from typing import cast
 
 import pytest
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.macros.calls import (
-    _calls_payload_reason,
-    _extract_context_snippet,
-    _find_function_signature,
-    cmd_calls,
-)
+from tools.cq.macros.calls import cmd_calls
+from tools.cq.macros.calls.context_snippet import _extract_context_snippet
+from tools.cq.macros.calls.insight import _find_function_signature
+from tools.cq.macros.calls.semantic import _calls_payload_reason
+from tools.cq.macros.contracts import CallsRequest
 
 MAX_TARGET_CALLEE_FINDINGS = 10
 
@@ -42,7 +41,9 @@ def test_cmd_calls_uses_ast_grep_when_available(tmp_path: Path) -> None:
             """),
     )
 
-    result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
+    result = cmd_calls(
+        CallsRequest(tc=tc, root=repo, argv=["cq", "calls", "foo"], function_name="foo")
+    )
 
     assert result.summary["scan_method"] == "ast-grep"
     assert result.summary["total_sites"] == 1
@@ -66,7 +67,9 @@ def test_cmd_calls_finds_call_sites(tmp_path: Path) -> None:
             """),
     )
 
-    result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
+    result = cmd_calls(
+        CallsRequest(tc=tc, root=repo, argv=["cq", "calls", "foo"], function_name="foo")
+    )
     assert result.summary["scan_method"] == "ast-grep"
     assert not result.evidence
     sites = [
@@ -148,7 +151,9 @@ def test_cmd_calls_signature_in_summary(tmp_path: Path) -> None:
             """),
     )
 
-    result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
+    result = cmd_calls(
+        CallsRequest(tc=tc, root=repo, argv=["cq", "calls", "foo"], function_name="foo")
+    )
     assert result.summary["signature"] == "(x, y)"
 
 
@@ -170,7 +175,9 @@ def test_cmd_calls_sets_summary_query_and_mode(tmp_path: Path) -> None:
             """),
     )
 
-    result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
+    result = cmd_calls(
+        CallsRequest(tc=tc, root=repo, argv=["cq", "calls", "foo"], function_name="foo")
+    )
     assert result.summary["mode"] == "macro:calls"
     assert result.summary["query"] == "foo"
 
@@ -199,7 +206,9 @@ def test_cmd_calls_includes_target_callees_and_insight_counters(tmp_path: Path) 
         ),
     )
 
-    result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
+    result = cmd_calls(
+        CallsRequest(tc=tc, root=repo, argv=["cq", "calls", "foo"], function_name="foo")
+    )
     target_callees = [section for section in result.sections if section.title == "Target Callees"]
     assert target_callees, "Target Callees section missing"
     assert len(target_callees[0].findings) <= MAX_TARGET_CALLEE_FINDINGS
@@ -242,7 +251,11 @@ def test_cmd_calls_rust_target_metadata_and_callees(tmp_path: Path) -> None:
         ),
     )
 
-    result = cmd_calls(tc, repo, ["cq", "calls", "compile_target"], "compile_target")
+    result = cmd_calls(
+        CallsRequest(
+            tc=tc, root=repo, argv=["cq", "calls", "compile_target"], function_name="compile_target"
+        )
+    )
     target_file = result.summary.get("target_file")
     target_line = result.summary.get("target_line")
     assert isinstance(target_file, str)

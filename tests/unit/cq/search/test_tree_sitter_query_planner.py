@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from tools.cq.search.tree_sitter.query.planner import (
     build_pack_plan,
@@ -111,6 +113,6 @@ def test_build_pattern_plan_handles_invalid_capture_quantifier() -> None:
         def end_byte_for_pattern(_pattern_idx: int) -> int:
             return 10
 
-    plans = build_pattern_plan(_FakeQuery())  # type: ignore[arg-type]
+    plans = build_pattern_plan(cast("Any", _FakeQuery()))
     assert len(plans) == 1
     assert plans[0].capture_quantifiers == ("none", "one")

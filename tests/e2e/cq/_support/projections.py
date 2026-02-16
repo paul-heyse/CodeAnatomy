@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from tools.cq.core.front_door_insight import coerce_front_door_insight
+from tools.cq.core.front_door_render import coerce_front_door_insight
 from tools.cq.core.schema import CqResult
 
 _DURATION_PATTERN = re.compile(r"(\*\*(?:Created|Elapsed):\*\*)\s+[0-9]+(?:\.[0-9]+)?ms")

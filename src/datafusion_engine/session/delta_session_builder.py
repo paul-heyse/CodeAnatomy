@@ -233,12 +233,23 @@ def build_delta_session_context(
                 delta_runtime,
             )
         else:
-            ctx = resolution.builder(
-                list(settings.items()),
-                None,
-                delta_runtime,
-                bridge.options,
-            )
+            try:
+                ctx = resolution.builder(
+                    list(settings.items()),
+                    None,
+                    delta_runtime,
+                    bridge.options,
+                )
+            except TypeError:
+                ctx = resolution.builder(
+                    list(settings.items()),
+                    None,
+                    delta_runtime,
+                )
+                runtime_policy_bridge = {
+                    "enabled": False,
+                    "reason": "legacy_builder_signature",
+                }
     except (RuntimeError, TypeError, ValueError) as exc:
         return DeltaSessionBuildResult(
             ctx=None,

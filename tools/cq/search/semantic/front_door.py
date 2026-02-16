@@ -7,27 +7,26 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.cq.core.cache import (
-    CacheWriteTagRequestV1,
-    CqCacheBackend,
-    CqCachePolicyV1,
-    build_cache_key,
-    build_scope_hash,
-    default_cache_policy,
-    file_content_hash,
-    get_cq_cache_backend,
-    is_namespace_cache_enabled,
-    record_cache_decode_failure,
-    record_cache_get,
-    record_cache_set,
-    resolve_namespace_ttl_seconds,
-    resolve_write_cache_tag,
-)
+from tools.cq.core.cache.content_hash import file_content_hash
 from tools.cq.core.cache.coordination import publish_once_per_barrier, tree_sitter_lane_guard
+from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import (
     decode_fragment_payload,
     encode_fragment_payload,
     is_fragment_cache_payload,
+)
+from tools.cq.core.cache.interface import CqCacheBackend
+from tools.cq.core.cache.key_builder import build_cache_key, build_scope_hash
+from tools.cq.core.cache.namespaces import (
+    is_namespace_cache_enabled,
+    resolve_namespace_ttl_seconds,
+)
+from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
+from tools.cq.core.cache.run_lifecycle import CacheWriteTagRequestV1, resolve_write_cache_tag
+from tools.cq.core.cache.telemetry import (
+    record_cache_decode_failure,
+    record_cache_get,
+    record_cache_set,
 )
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.search._shared.core import PythonByteRangeEnrichmentRequest, line_col_to_byte_offset
@@ -212,9 +211,11 @@ def _execute_provider(
     request: LanguageSemanticEnrichmentRequest,
     context: _PipelineContext,
 ) -> LanguageSemanticEnrichmentOutcome:
-    if request.language == "python":
-        return _execute_python_provider(request=request, context=context)
-    return _execute_rust_provider(request=request, context=context)
+    provider = {
+        "python": _execute_python_provider,
+        "rust": _execute_rust_provider,
+    }.get(request.language, _execute_rust_provider)
+    return provider(request=request, context=context)
 
 
 def _line_col_to_byte_offset(source_bytes: bytes, line: int, col: int) -> int:

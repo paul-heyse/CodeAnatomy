@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from tools.cq.cli_app.types import LdmdSliceMode
 from tools.cq.ldmd.format import (
     LdmdParseError,
     _safe_utf8_truncate,
@@ -184,7 +185,7 @@ Grandchild line
 <!--LDMD:END id=\"root\"-->
 """
     index = build_index(content)
-    preview = get_slice(content, index, section_id="root", mode="preview", depth=0)
+    preview = get_slice(content, index, section_id="root", mode=LdmdSliceMode.preview, depth=0)
     assert b"Root line" in preview
     assert b"Child line" in preview
     assert b"Grandchild line" not in preview
@@ -202,7 +203,7 @@ Body text
 <!--LDMD:END id=\"section\"-->
 """
     index = build_index(content)
-    tldr = get_slice(content, index, section_id="section", mode="tldr")
+    tldr = get_slice(content, index, section_id="section", mode=LdmdSliceMode.tldr)
     assert b"TLDR text" in tldr
     assert b"Body text" not in tldr
 

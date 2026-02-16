@@ -12,14 +12,20 @@ from tools.cq.search._shared.search_contracts import (
     coerce_python_semantic_overview,
     coerce_python_semantic_telemetry,
 )
-from tools.cq.search.pipeline.contracts import SmartSearchContext
+from tools.cq.search.pipeline._semantic_helpers import (
+    count_mapping_rows as _count_mapping_rows,
+)
+from tools.cq.search.pipeline._semantic_helpers import (
+    normalize_python_semantic_degradation_reason as _normalize_python_semantic_degradation_reason,
+)
+from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search_telemetry import (
     new_python_semantic_telemetry as _new_python_semantic_telemetry,
 )
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
+    LanguageSearchResult,
     RawMatch,
-    _LanguageSearchResult,
     _PythonSemanticAnchorKey,
     _PythonSemanticOverviewAccumulator,
     _PythonSemanticPrefetchResult,
@@ -201,59 +207,6 @@ def _python_semantic_partial_signal_diagnostic(
     }
 
 
-def _normalize_python_semantic_degradation_reason(
-    *,
-    reasons: tuple[str, ...],
-    coverage_reason: str | None,
-) -> str:
-    """Normalize degradation reason from multiple sources.
-
-    Parameters
-    ----------
-    reasons
-        Collection of degradation reasons.
-    coverage_reason
-        Optional coverage-specific reason.
-
-    Returns:
-    -------
-    str
-        Normalized reason string.
-    """
-    explicit_reasons = {
-        "unsupported_capability",
-        "capability_probe_unavailable",
-        "request_interface_unavailable",
-        "request_failed",
-        "request_timeout",
-        "session_unavailable",
-        "timeout",
-        "no_signal",
-    }
-    normalized_coverage_reason = coverage_reason
-    if normalized_coverage_reason and normalized_coverage_reason.startswith(
-        "no_python_semantic_signal:"
-    ):
-        normalized_coverage_reason = normalized_coverage_reason.removeprefix(
-            "no_python_semantic_signal:"
-        )
-    if normalized_coverage_reason == "timeout":
-        normalized_coverage_reason = "request_timeout"
-    if (
-        isinstance(normalized_coverage_reason, str)
-        and normalized_coverage_reason in explicit_reasons
-    ):
-        return normalized_coverage_reason
-    if coverage_reason:
-        return "no_signal"
-
-    for reason in reasons:
-        normalized_reason = "request_timeout" if reason == "timeout" else reason
-        if normalized_reason in explicit_reasons and normalized_reason != "no_signal":
-            return normalized_reason
-    return "no_signal"
-
-
 def _python_semantic_coverage_reason(payload: dict[str, object]) -> str | None:
     """Extract coverage degradation reason from payload.
 
@@ -277,7 +230,7 @@ def _python_semantic_coverage_reason(payload: dict[str, object]) -> str | None:
 
 
 def _prefetch_python_semantic_for_raw_matches(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     *,
     lang: str,
     raw_matches: list[RawMatch],
@@ -378,7 +331,7 @@ def _prefetch_python_semantic_for_raw_matches(
 
 
 def run_prefetch_python_semantic_for_raw_matches(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     *,
     lang: str,
     raw_matches: list[RawMatch],
@@ -403,7 +356,7 @@ def run_prefetch_python_semantic_for_raw_matches(
 
 
 def _python_semantic_enrich_match(
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     match: EnrichedMatch,
 ) -> LanguageSemanticEnrichmentOutcome:
     """Enrich a single match with python semantic payload.
@@ -492,7 +445,7 @@ def _python_semantic_payload_from_prefetch(
 
 def _fetch_python_semantic_payload(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     match: EnrichedMatch,
     prefetched: _PythonSemanticPrefetchResult | None,
     telemetry: dict[str, int],
@@ -642,24 +595,6 @@ def _first_string(*values: object) -> str | None:
     return None
 
 
-def _count_mapping_rows(value: object) -> int:
-    """Count dictionary rows in a list.
-
-    Parameters
-    ----------
-    value
-        Value to count rows in.
-
-    Returns:
-    -------
-    int
-        Number of dictionary rows.
-    """
-    if not isinstance(value, list):
-        return 0
-    return sum(1 for row in value if isinstance(row, dict))
-
-
 def _accumulate_python_semantic_overview(
     *,
     acc: _PythonSemanticOverviewAccumulator,
@@ -736,7 +671,7 @@ def _build_python_semantic_overview(matches: list[EnrichedMatch]) -> dict[str, o
 
 def attach_python_semantic_enrichment(
     *,
-    ctx: SmartSearchContext,
+    ctx: SearchConfig,
     matches: list[EnrichedMatch],
     prefetched: _PythonSemanticPrefetchResult | None = None,
 ) -> tuple[list[EnrichedMatch], dict[str, object], dict[str, object], list[dict[str, object]]]:
@@ -808,8 +743,8 @@ def attach_python_semantic_enrichment(
 
 
 def merge_matches_and_python_semantic(
-    ctx: SmartSearchContext,
-    partition_results: list[_LanguageSearchResult],
+    ctx: SearchConfig,
+    partition_results: list[LanguageSearchResult],
 ) -> tuple[
     list[EnrichedMatch],
     dict[str, object],

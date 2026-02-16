@@ -10,18 +10,17 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
     Finding,
     Section,
-    mk_result,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
-from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
+from tools.cq.macros.result_builder import MacroResultBuilder
+from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1
 from tools.cq.macros.shared import macro_scoring_details, resolve_target_files
 
 _MAX_FILES_ANALYZED = 50
@@ -263,20 +262,19 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
     )
     all_scopes = _collect_scopes(request.root, files)
 
-    run_ctx = RunContext.from_parts(
+    builder = MacroResultBuilder(
+        "scopes",
         root=request.root,
         argv=request.argv,
         tc=request.tc,
         started_ms=started,
     )
-    run = run_ctx.to_runmeta("scopes")
-    result = mk_result(run)
-
-    result.summary = {
-        "target": request.target,
-        "files_analyzed": len(files),
-        "scopes_with_captures": len(all_scopes),
-    }
+    builder.set_summary(
+        target=request.target,
+        files_analyzed=len(files),
+        scopes_with_captures=len(all_scopes),
+    )
+    result = builder.result
 
     # Compute scoring signals
     unique_files = len({s.file for s in all_scopes})
@@ -331,12 +329,10 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
     _append_scope_section(result, all_scopes, scoring_details)
     _append_scope_evidence(result, all_scopes, scoring_details)
 
-    return apply_rust_fallback_policy(
-        result,
-        root=request.root,
+    return builder.apply_rust_fallback(
         policy=RustFallbackPolicyV1(
             macro_name="scopes",
             pattern=request.target,
             query=request.target,
-        ),
-    )
+        )
+    ).build()

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, cast
 
 from tools.cq.search._shared.bounded_cache import BoundedCache
 from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids
-from tools.cq.search.tree_sitter.core.lane_support import make_parser
+from tools.cq.search.tree_sitter.core.lane_support import make_parser_from_language
 from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
 from tools.cq.search.tree_sitter.query.compiler import compile_query
@@ -105,7 +105,7 @@ def _parse_with_session(
     if _TreeSitterParser is None:
         return None, source_bytes, ()
     session = get_parse_session(
-        language="rust", parser_factory=lambda: make_parser(_rust_language())
+        language="rust", parser_factory=lambda: make_parser_from_language(_rust_language())
     )
     _touch_tree_cache(_session=session, cache_key=cache_key)
     tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
@@ -133,7 +133,7 @@ def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
         Cache statistics (entries, hits, misses, evictions, parse counts).
     """
     session = get_parse_session(
-        language="rust", parser_factory=lambda: make_parser(_rust_language())
+        language="rust", parser_factory=lambda: make_parser_from_language(_rust_language())
     )
     stats = session.stats()
     return {

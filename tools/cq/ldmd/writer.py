@@ -5,6 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.core.snb_schema import (
+    NeighborhoodSliceV1,
+    SemanticNeighborhoodBundleV1,
+)
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 if TYPE_CHECKING:
@@ -12,7 +16,7 @@ if TYPE_CHECKING:
 
 
 def render_ldmd_document(
-    bundle: object,
+    bundle: SemanticNeighborhoodBundleV1,
     *,
     include_manifest: bool = True,
 ) -> str:
@@ -49,11 +53,11 @@ def render_ldmd_document(
 # -- SNB bundle LDMD helpers -------------------------------------------------
 
 
-def _emit_snb_target(lines: list[str], bundle: object) -> None:
-    subject = getattr(bundle, "subject", None)
-    subject_name = getattr(subject, "name", "<unknown>") if subject else "<unknown>"
-    subject_file = getattr(subject, "file_path", "") if subject else ""
-    subject_span = getattr(subject, "byte_span", None) if subject else None
+def _emit_snb_target(lines: list[str], bundle: SemanticNeighborhoodBundleV1) -> None:
+    subject = bundle.subject
+    subject_name = subject.name if subject is not None else "<unknown>"
+    subject_file = subject.file_path if subject is not None else ""
+    subject_span = subject.byte_span if subject is not None else None
 
     lines.append(_ldmd_begin("target_tldr", title="Target", level=1))
     lines.append(f"## Target: {subject_name}")
@@ -65,10 +69,10 @@ def _emit_snb_target(lines: list[str], bundle: object) -> None:
     lines.append("")
 
 
-def _emit_snb_summary(lines: list[str], bundle: object) -> None:
-    graph = getattr(bundle, "graph", None)
-    node_count = getattr(graph, "node_count", 0) if graph else 0
-    edge_count = getattr(graph, "edge_count", 0) if graph else 0
+def _emit_snb_summary(lines: list[str], bundle: SemanticNeighborhoodBundleV1) -> None:
+    graph = bundle.graph
+    node_count = graph.node_count if graph is not None else 0
+    edge_count = graph.edge_count if graph is not None else 0
 
     lines.append(_ldmd_begin("neighborhood_summary", title="Neighborhood Summary", level=1))
     lines.append("## Neighborhood Summary")
@@ -78,16 +82,15 @@ def _emit_snb_summary(lines: list[str], bundle: object) -> None:
     lines.append("")
 
 
-def _emit_snb_slices(lines: list[str], bundle: object) -> None:
-    slices = getattr(bundle, "slices", [])
-    for s in slices:
+def _emit_snb_slices(lines: list[str], bundle: SemanticNeighborhoodBundleV1) -> None:
+    for s in bundle.slices:
         _emit_snb_slice(lines, s)
 
 
-def _emit_snb_slice(lines: list[str], s: object) -> None:
-    kind = getattr(s, "kind", "unknown")
-    total = getattr(s, "total", 0)
-    preview = getattr(s, "preview", [])
+def _emit_snb_slice(lines: list[str], s: NeighborhoodSliceV1) -> None:
+    kind = s.kind
+    total = s.total
+    preview = s.preview
 
     lines.append(_ldmd_begin(kind, title=kind.replace("_", " ").title(), level=2))
     lines.append(f"### {kind.replace('_', ' ').title()} ({total})")
@@ -95,9 +98,7 @@ def _emit_snb_slice(lines: list[str], s: object) -> None:
     if preview:
         lines.append(_ldmd_begin(f"{kind}_tldr", parent=kind, level=3))
         for i, node in enumerate(preview, 1):
-            lines.append(
-                f"{i}. {getattr(node, 'name', 'unknown')} ({getattr(node, 'kind', 'unknown')})"
-            )
+            lines.append(f"{i}. {node.name} ({node.kind})")
         lines.append(_ldmd_end(f"{kind}_tldr"))
 
     lines.append(_ldmd_begin(f"{kind}_body", parent=kind, level=3))
@@ -105,10 +106,8 @@ def _emit_snb_slice(lines: list[str], s: object) -> None:
         lines.append(f"*Full data: see artifact `slice_{kind}.json` ({total} items)*")
     else:
         for node in preview:
-            node_file = getattr(node, "file_path", "")
-            lines.append(
-                f"- **{getattr(node, 'name', 'unknown')}** ({getattr(node, 'kind', 'unknown')})"
-            )
+            node_file = node.file_path
+            lines.append(f"- **{node.name}** ({node.kind})")
             if node_file:
                 lines.append(f"  - {node_file}")
     lines.append(_ldmd_end(f"{kind}_body"))
@@ -116,42 +115,39 @@ def _emit_snb_slice(lines: list[str], s: object) -> None:
     lines.append("")
 
 
-def _emit_snb_diagnostics(lines: list[str], bundle: object) -> None:
-    diagnostics = getattr(bundle, "diagnostics", [])
+def _emit_snb_diagnostics(lines: list[str], bundle: SemanticNeighborhoodBundleV1) -> None:
+    diagnostics = bundle.diagnostics
     if not diagnostics:
         return
     lines.append(_ldmd_begin("diagnostics", title="Diagnostics", level=1))
     lines.append("## Diagnostics")
-    lines.extend(
-        f"- **{getattr(diag, 'stage', 'unknown')}:** {getattr(diag, 'message', '')}"
-        for diag in diagnostics
-    )
+    lines.extend(f"- **{diag.stage}:** {diag.message}" for diag in diagnostics)
     lines.append(_ldmd_end("diagnostics"))
     lines.append("")
 
 
-def _emit_snb_provenance(lines: list[str], bundle: object) -> None:
-    slices = getattr(bundle, "slices", [])
+def _emit_snb_provenance(lines: list[str], bundle: SemanticNeighborhoodBundleV1) -> None:
+    slices = bundle.slices
     lines.append(_ldmd_begin("provenance", title="Provenance", level=1))
     lines.append("## Provenance")
     lines.append(f"- **Sections:** {len(slices)}")
 
-    meta = getattr(bundle, "meta", None)
+    meta = bundle.meta
     if meta:
-        created_at = getattr(meta, "created_at_ms", None)
+        created_at = meta.created_at_ms
         if created_at is not None:
             lines.append(f"- **Created at (ms):** {created_at}")
 
-    artifacts = getattr(bundle, "artifacts", [])
+    artifacts = bundle.artifacts
     if artifacts:
         lines.append("- **Artifacts:**")
         for art in artifacts:
-            storage_path = getattr(art, "storage_path", None)
-            byte_size = getattr(art, "byte_size", 0)
+            storage_path = art.storage_path
+            byte_size = art.byte_size
             if storage_path:
                 lines.append(f"  - `{Path(storage_path).name}` ({byte_size} bytes)")
             else:
-                artifact_id = getattr(art, "artifact_id", "unknown")
+                artifact_id = art.artifact_id
                 lines.append(f"  - `{artifact_id}` ({byte_size} bytes)")
     lines.append(_ldmd_end("provenance"))
 
@@ -193,7 +189,8 @@ def _emit_insight_card(lines: list[str], result: CqResult) -> None:
     if raw is None:
         return
 
-    from tools.cq.core.front_door_insight import FrontDoorInsightV1, render_insight_card
+    from tools.cq.core.front_door_render import render_insight_card
+    from tools.cq.core.front_door_schema import FrontDoorInsightV1
 
     insight: FrontDoorInsightV1 | None = None
     if isinstance(raw, FrontDoorInsightV1):
@@ -290,7 +287,7 @@ def _extract_insight_artifact_refs(summary: dict[str, object]) -> dict[str, str]
     Returns:
         Mapping of artifact reference keys to paths.
     """
-    from tools.cq.core.front_door_insight import coerce_front_door_insight
+    from tools.cq.core.front_door_render import coerce_front_door_insight
 
     insight = coerce_front_door_insight(summary.get("front_door_insight"))
     if insight is None:

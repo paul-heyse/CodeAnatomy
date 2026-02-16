@@ -24,3 +24,5 @@ class QueryExecutionContext(CqStruct, frozen=True):
     started_ms: float
     run_id: str
     query_text: str | None = None
+    cache_backend: object | None = None
+    symtable_enricher: object | None = None

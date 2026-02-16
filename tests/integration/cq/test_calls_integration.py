@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
+from tools.cq.macros.contracts import CallsRequest
 
 
 def _write_file(path: Path, content: str) -> None:
@@ -33,6 +34,8 @@ def test_calls_integration_basic(tmp_path: Path) -> None:
             """),
     )
 
-    result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
+    result = cmd_calls(
+        CallsRequest(tc=tc, root=repo, argv=["cq", "calls", "foo"], function_name="foo")
+    )
     assert result.summary["total_sites"] == 1
     assert result.summary["scan_method"] == "ast-grep"

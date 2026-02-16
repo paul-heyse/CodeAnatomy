@@ -18,13 +18,11 @@ import msgspec
 TaintSiteKind = Literal["source", "call", "return", "assign"]
 
 from tools.cq.core.python_ast_utils import get_call_name
-from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
     Finding,
     Section,
-    mk_result,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
@@ -32,6 +30,7 @@ from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_b
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
 from tools.cq.index.def_index import DefIndex, FnDecl
 from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
+from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import macro_scoring_details
 from tools.cq.search._shared.types import SearchLimits
@@ -685,14 +684,14 @@ def _resolve_functions(index: DefIndex, function_name: str) -> list[FnDecl]:
 
 
 def _build_not_found_result(request: ImpactRequest, *, started_ms: float) -> CqResult:
-    run_ctx = RunContext.from_parts(
+    builder = MacroResultBuilder(
+        "impact",
         root=request.root,
         argv=request.argv,
         tc=request.tc,
         started_ms=started_ms,
     )
-    run = run_ctx.to_runmeta("impact")
-    result = mk_result(run)
+    result = builder.result
     result.summary = {
         "status": "not_found",
         "function": request.function_name,
@@ -787,14 +786,14 @@ def _build_impact_result(
     if not ctx.functions:
         return _build_not_found_result(request, started_ms=started_ms)
 
-    run_ctx = RunContext.from_parts(
+    builder = MacroResultBuilder(
+        "impact",
         root=request.root,
         argv=request.argv,
         tc=request.tc,
         started_ms=started_ms,
     )
-    run = run_ctx.to_runmeta("impact")
-    result = mk_result(run)
+    result = builder.result
 
     _append_missing_param_warnings(result, ctx.functions, request=request)
     all_sites = _analyze_functions(ctx)

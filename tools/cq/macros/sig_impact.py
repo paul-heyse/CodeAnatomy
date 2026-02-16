@@ -12,18 +12,17 @@ from typing import TYPE_CHECKING, Literal
 
 import msgspec
 
-from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
     Finding,
     Section,
-    mk_result,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.macros.calls import collect_call_sites, group_candidates, rg_find_candidates
 from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
+from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import macro_scoring_details
 from tools.cq.search._shared.types import SearchLimits
@@ -325,14 +324,14 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
     all_sites = _collect_sites(request.root, request.symbol)
     buckets = _classify_sites(all_sites, new_params)
 
-    run_ctx = RunContext.from_parts(
+    builder = MacroResultBuilder(
+        "sig-impact",
         root=request.root,
         argv=request.argv,
         tc=request.tc,
         started_ms=started,
     )
-    run = run_ctx.to_runmeta("sig-impact")
-    result = mk_result(run)
+    result = builder.result
 
     result.summary = {
         "symbol": request.symbol,

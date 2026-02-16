@@ -24,9 +24,9 @@ from datafusion_engine.schema.introspection import (
 )
 
 if TYPE_CHECKING:
-    from datafusion_engine.session.runtime import (
+    from datafusion_engine.session.runtime_profile_config import PreparedStatementSpec
+    from datafusion_engine.session.runtime_session import (
         DataFusionViewRegistry,
-        PreparedStatementSpec,
         SessionRuntime,
     )
 
@@ -219,7 +219,7 @@ def _sql_parse_errors(
         List of parsing errors if any, None if parsing succeeds.
     """
     # Import here to avoid circular dependency
-    from datafusion_engine.session.runtime import _sql_with_options
+    from datafusion_engine.session.runtime_session import _sql_with_options
 
     try:
         _ = _sql_with_options(ctx, sql, sql_options=sql_options)

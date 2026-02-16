@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
-from app.api import build_pipeline
+from importlib import import_module
 
 
 def run() -> None:
     """Run."""
+    api_module = import_module("app.api")
+    build_pipeline = api_module.build_pipeline
     registry, router, service = build_pipeline()
     _ = registry, router, service
 

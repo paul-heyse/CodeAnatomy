@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from tools.cq.core.id import stable_digest24
+from tools.cq.search.enrichment.core import parse_python_enrichment
 from tools.cq.search.objects.render import (
     ResolvedObjectRef,
     SearchObjectResolvedViewV1,
@@ -151,14 +152,42 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
         if isinstance(match.python_enrichment, dict)
         else _EMPTY_OBJECT_PAYLOAD
     )
+    python_facts = parse_python_enrichment(python) if python else None
     resolution_raw = python.get("resolution")
+    if (
+        not isinstance(resolution_raw, dict)
+        and python_facts is not None
+        and python_facts.resolution
+    ):
+        resolution_raw = {
+            "qualified_name_candidates": list(python_facts.resolution.qualified_name_candidates),
+            "binding_candidates": [
+                {"name": name} for name in python_facts.resolution.binding_candidates
+            ],
+            "enclosing_callable": python_facts.resolution.enclosing_callable,
+            "enclosing_class": python_facts.resolution.enclosing_class,
+        }
     structural_raw = python.get("structural")
+    if not isinstance(structural_raw, dict) and python_facts is not None and python_facts.structure:
+        structural_raw = {
+            "node_kind": python_facts.structure.node_kind,
+            "scope_kind": python_facts.structure.scope_kind,
+            "scope_chain": list(python_facts.structure.scope_chain),
+            "scope_name": python_facts.structure.scope_name,
+            "item_role": python_facts.structure.item_role,
+            "class_name": python_facts.structure.class_name,
+            "class_kind": python_facts.structure.class_kind,
+        }
     agreement_raw = python.get("agreement")
     return _PayloadViews(
         semantic=semantic,
         python=python,
-        resolution=resolution_raw if isinstance(resolution_raw, dict) else _EMPTY_OBJECT_PAYLOAD,
-        structural=structural_raw if isinstance(structural_raw, dict) else _EMPTY_OBJECT_PAYLOAD,
+        resolution=cast("dict[str, object]", resolution_raw)
+        if isinstance(resolution_raw, dict)
+        else _EMPTY_OBJECT_PAYLOAD,
+        structural=cast("dict[str, object]", structural_raw)
+        if isinstance(structural_raw, dict)
+        else _EMPTY_OBJECT_PAYLOAD,
         agreement=agreement_raw if isinstance(agreement_raw, dict) else _EMPTY_OBJECT_PAYLOAD,
     )
 

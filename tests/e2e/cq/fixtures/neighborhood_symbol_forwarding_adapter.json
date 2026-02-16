@@ -26,7 +26,7 @@
     {
       "count": 1,
       "messages": [
-        "- **# ruff: noqa: D102, D107, DOC201, TID252\n\"\"\"Dynamic dispatch fixture module.\"\"\"\n\nfrom __future__ import annotations\n\nfrom .models import BuildContext\nfrom .services import ServiceRegistry\n\n\nclass DynamicRouter:\n    \"\"\"Router using getattr-based dispatch.\"\"\"\n\n    def __init__(self, registry: ServiceRegistry) -> None:\n        self.registry = registry\n\n    def dispatch(self, operation: str, ctx: BuildContext) -> str:\n        handler = getattr(self, f\"op_{operation}\")\n        return handler(ctx)\n\n    def op_direct(self, ctx: BuildContext) -> str:\n        candidate = self.registry.resolve_factory(\"direct\")\n        value = candidate(ctx)\n        if isinstance(value, str):\n            return value\n        msg = \"unexpected awaitable in op_direct\"\n        raise RuntimeError(msg)\n\n\ndef forwarding_adapter(\n    router: DynamicRouter, operation: str, *args: object, **kwargs: object\n) -> str:\n    \"\"\"Forward *args/**kwargs to dispatch target for query coverage.\"\"\"\n    return router.dispatch(operation, *args, **kwargs)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+        "- **# ruff: noqa: D102, D107, DOC201, TID252\n\"\"\"Dynamic dispatch fixture module.\"\"\"\n\nfrom __future__ import annotations\n\nfrom .models import BuildContext\nfrom .services import ServiceRegistry\n\n\nclass DynamicRouter:\n    \"\"\"Router using getattr-based dispatch.\"\"\"\n\n    def __init__(self, registry: ServiceRegistry) -> None:\n        self.registry = registry\n\n    def dispatch(self, operation: str, ctx: BuildContext) -> str:\n        handler = getattr(self, f\"op_{operation}\")\n        return handler(ctx)\n\n    def op_direct(self, ctx: BuildContext) -> str:\n        candidate = self.registry.resolve_factory(\"direct\")\n        value = candidate(ctx)\n        if isinstance(value, str):\n            return value\n        msg = \"unexpected awaitable in op_direct\"\n        raise RuntimeError(msg)\n\n\ndef forwarding_adapter(\n    router: DynamicRouter,\n    operation: str,\n    ctx: BuildContext,\n) -> str:\n    \"\"\"Forward a typed context to the dispatch target for query coverage.\"\"\"\n    return router.dispatch(operation, ctx)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
       ],
       "title": "Parent Scopes"
     },
@@ -34,9 +34,9 @@
       "count": 4,
       "messages": [
         "- **forwarding_adapter** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
-        "- **(\n    router: DynamicRouter, operation: str, *args: object, **kwargs: object\n)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
+        "- **(\n    router: DynamicRouter,\n    operation: str,\n    ctx: BuildContext,\n)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
         "- **str** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
-        "- **\"\"\"Forward *args/**kwargs to dispatch target for query coverage.\"\"\"\n    return router.dispatch(operation, *args, **kwargs)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+        "- **\"\"\"Forward a typed context to the dispatch target for query coverage.\"\"\"\n    return router.dispatch(operation, ctx)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
       ],
       "title": "Children"
     },
@@ -51,7 +51,7 @@
     {
       "count": 1,
       "messages": [
-        "- **router.dispatch(operation, *args, **kwargs)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+        "- **router.dispatch(operation, ctx)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
       ],
       "title": "Callees"
     },

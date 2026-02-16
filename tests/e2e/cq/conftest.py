@@ -163,7 +163,7 @@ def run_command(repo_root: Path) -> Callable[[list[str]], subprocess.CompletedPr
         """
         env = os.environ.copy()
         # Keep CQ e2e snapshots deterministic: semantic availability is environment-dependent.
-        env.setdefault("CQ_ENABLE_SEMANTIC_ENRICHMENT", "0")
+        env["CQ_ENABLE_SEMANTIC_ENRICHMENT"] = "0"
         return subprocess.run(
             args,
             cwd=repo_root,
@@ -187,7 +187,7 @@ def run_cq_command(
         command = ["./cq", *args]
         env = os.environ.copy()
         # Keep CQ e2e snapshots deterministic: semantic availability is environment-dependent.
-        env.setdefault("CQ_ENABLE_SEMANTIC_ENRICHMENT", "0")
+        env["CQ_ENABLE_SEMANTIC_ENRICHMENT"] = "0"
         return subprocess.run(
             command,
             cwd=cwd or repo_root,

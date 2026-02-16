@@ -55,10 +55,21 @@ class MacroScorePayloadV1(CqStruct, frozen=True):
     details: dict[str, object] = msgspec.field(default_factory=dict)
 
 
+class ScoringDetailsV1(CqStruct, frozen=True):
+    """Normalized scoring details for macro findings."""
+
+    impact_score: float
+    impact_bucket: str
+    confidence_score: float
+    confidence_bucket: str
+    evidence_kind: str
+
+
 __all__ = [
     "MacroExecutionRequestV1",
     "MacroRequestBase",
     "MacroScorePayloadV1",
     "MacroTargetResolutionV1",
     "ScopedMacroRequestBase",
+    "ScoringDetailsV1",
 ]

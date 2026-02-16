@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.query.language import ripgrep_types_for_scope
-from tools.cq.search.pipeline.classifier import QueryMode
-from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search._shared.types import QueryMode, SearchLimits
+from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.runner import RgFilesWithMatchesRequest, run_rg_files_with_matches
 
 if TYPE_CHECKING:

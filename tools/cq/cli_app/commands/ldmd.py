@@ -10,7 +10,7 @@ import cyclopts
 from cyclopts import validators
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.infrastructure import protocol_group, require_context, require_ctx
+from tools.cq.cli_app.infrastructure import protocol_group, require_context
 from tools.cq.cli_app.protocol_output import text_result, wants_json
 from tools.cq.cli_app.types import LdmdSliceMode
 from tools.cq.ldmd.format import (
@@ -29,7 +29,6 @@ ldmd_app = cyclopts.App(
 
 
 @ldmd_app.command
-@require_ctx
 def index(
     path: Annotated[str, cyclopts.Parameter(help="Path to LDMD document")],
     *,
@@ -85,7 +84,6 @@ def index(
 
 
 @ldmd_app.command
-@require_ctx
 def get(
     path: Annotated[str, cyclopts.Parameter(help="Path to LDMD document")],
     *,
@@ -177,7 +175,6 @@ def get(
 
 
 @ldmd_app.command
-@require_ctx
 def search(
     path: Annotated[str, cyclopts.Parameter(help="Path to LDMD document")],
     *,
@@ -216,7 +213,6 @@ def search(
 
 
 @ldmd_app.command
-@require_ctx
 def neighbors(
     path: Annotated[str, cyclopts.Parameter(help="Path to LDMD document")],
     *,

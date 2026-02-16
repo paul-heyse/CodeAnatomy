@@ -7,10 +7,12 @@ for Python code objects.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from types import CodeType
+
+CfgEdgeType = Literal["fallthrough", "jump", "exception"]
 
 from tools.cq.introspection.bytecode_index import (
     BytecodeIndex,
@@ -69,7 +71,7 @@ class CFGEdge:
 
     source: int
     target: int
-    edge_type: str  # "fallthrough", "jump", "exception"
+    edge_type: CfgEdgeType
 
 
 @dataclass

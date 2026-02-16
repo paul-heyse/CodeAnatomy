@@ -42,6 +42,7 @@ def canonicalize_python_lane_payload(payload: dict[str, Any]) -> dict[str, Any]:
     Returns:
         dict[str, Any]: Function return value.
     """
+    payload = dict(payload)
     legacy = payload.pop("tree_sitter_diagnostics", None)
     if "cst_diagnostics" not in payload and isinstance(legacy, list):
         payload["cst_diagnostics"] = legacy
@@ -57,6 +58,7 @@ def canonicalize_rust_lane_payload(payload: dict[str, Any]) -> dict[str, Any]:
     Returns:
         dict[str, Any]: Function return value.
     """
+    payload = dict(payload)
     legacy = payload.pop("tree_sitter_diagnostics", None)
     if "cst_diagnostics" not in payload and isinstance(legacy, list):
         payload["cst_diagnostics"] = legacy

@@ -11,14 +11,13 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.infrastructure import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.cli_app.options import ReportOptions, options_from_params
 from tools.cq.cli_app.params import ReportParams
 from tools.cq.cli_app.types import ReportPreset
 from tools.cq.core.result_factory import build_error_result
 
 
-@require_ctx
 def report(
     preset: Annotated[
         ReportPreset,

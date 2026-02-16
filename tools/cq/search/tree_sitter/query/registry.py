@@ -27,7 +27,6 @@ _DISTRIBUTION_PACKAGES: dict[str, str] = {
     "rust": "tree-sitter-rust",
 }
 
-_LAST_DRIFT_REPORTS: dict[str, GrammarDriftReportV1] = {}
 
 
 class QueryPackSourceV1(CqStruct, frozen=True):
@@ -211,11 +210,14 @@ def load_query_pack_sources(
             language=normalized,
             include_distribution=include_distribution,
         )
+    from tools.cq.search.tree_sitter.query.runtime_state import get_query_runtime_state
+
+    runtime_state = get_query_runtime_state()
     report = build_grammar_drift_report(language=normalized, query_sources=loaded_rows)
-    _LAST_DRIFT_REPORTS[normalized] = report
+    runtime_state.last_drift_reports[normalized] = report
     if not report.compatible and include_distribution:
         fallback_rows = _load_sources_uncached(language=normalized, include_distribution=False)
-        _LAST_DRIFT_REPORTS[normalized] = build_grammar_drift_report(
+        runtime_state.last_drift_reports[normalized] = build_grammar_drift_report(
             language=normalized,
             query_sources=fallback_rows,
         )
@@ -248,7 +250,9 @@ def load_query_pack_sources_for_profile(
 
 def get_last_grammar_drift_report(language: str) -> GrammarDriftReportV1 | None:
     """Return latest grammar drift report for a language load lane."""
-    return _LAST_DRIFT_REPORTS.get(language.strip().lower())
+    from tools.cq.search.tree_sitter.query.runtime_state import get_query_runtime_state
+
+    return get_query_runtime_state().last_drift_reports.get(language.strip().lower())
 
 
 __all__ = [

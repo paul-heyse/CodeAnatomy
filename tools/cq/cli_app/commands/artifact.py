@@ -10,7 +10,7 @@ import msgspec
 from cyclopts import validators
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.infrastructure import protocol_group, require_context, require_ctx
+from tools.cq.cli_app.infrastructure import protocol_group, require_context
 from tools.cq.cli_app.protocol_output import text_result, wants_json
 from tools.cq.core.artifacts import list_search_artifact_index_entries, load_search_artifact_bundle
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
@@ -32,7 +32,6 @@ _ArtifactKind = Literal[
 
 
 @artifact_app.command(name="list")
-@require_ctx
 def list_artifacts(
     *,
     run_id: Annotated[
@@ -84,7 +83,6 @@ def list_artifacts(
 
 
 @artifact_app.command
-@require_ctx
 def get(
     *,
     run_id: Annotated[str, cyclopts.Parameter(name="--run-id", help="Run id to retrieve")],

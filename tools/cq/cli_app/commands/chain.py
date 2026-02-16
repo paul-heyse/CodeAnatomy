@@ -8,12 +8,11 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.infrastructure import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.run.chain import compile_chain_segments
 from tools.cq.run.runner import execute_run_plan
 
 
-@require_ctx
 def chain(
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
     delimiter: Annotated[str, Parameter(name="--delimiter")] = "AND",

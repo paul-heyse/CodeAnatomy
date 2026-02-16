@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 import symtable
-from enum import Enum
 from pathlib import Path
 from typing import Literal
 
@@ -19,6 +18,7 @@ from ast_grep_py import SgNode, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
+from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.pipeline.classifier_runtime import (
     _find_containing_scope,
     _find_node_at_position,
@@ -31,15 +31,6 @@ from tools.cq.search.pipeline.classifier_runtime import (
     get_sg_root,
     get_symtable_table,
 )
-
-
-class QueryMode(Enum):
-    """Search query mode classification."""
-
-    IDENTIFIER = "identifier"  # Word boundary match
-    REGEX = "regex"  # User-provided regex
-    LITERAL = "literal"  # Exact string match
-
 
 MatchCategory = Literal[
     # Definitions (write sites)

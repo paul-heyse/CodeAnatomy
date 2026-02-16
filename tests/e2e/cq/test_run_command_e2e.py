@@ -67,7 +67,7 @@ def test_run_inline_neighborhood_step_golden(
             (
                 '{"type":"neighborhood",'
                 '"target":"tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:9",'
-                '"lang":"rust","top_k":4,"no_semantic_enrichment":true}'
+                '"lang":"rust","top_k":4,"semantic_enrichment":false}'
             ),
             "--format",
             "json",

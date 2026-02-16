@@ -14,7 +14,7 @@ from tools.cq.core.definition_parser import (
 from tools.cq.core.schema import DetailPayload, Finding
 
 if TYPE_CHECKING:
-    from tools.cq.search.pipeline.smart_search import EnrichedMatch
+    from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
 
 _DEFINITION_NODE_KINDS = {

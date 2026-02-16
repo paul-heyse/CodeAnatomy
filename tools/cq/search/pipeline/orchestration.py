@@ -10,7 +10,7 @@ from tools.cq.core.schema import CqResult, Finding, Section
 from tools.cq.search.pipeline.contracts import SmartSearchContext
 
 if TYPE_CHECKING:
-    from tools.cq.search.pipeline.smart_search import SearchResultAssembly
+    from tools.cq.search.pipeline.smart_search_types import SearchResultAssembly
 
 TPartition = TypeVar("TPartition")
 
@@ -23,12 +23,12 @@ def assemble_result(assembly: SearchResultAssembly) -> CqResult:
     Returns:
         CqResult: Function return value.
     """
-    from tools.cq.search.pipeline.smart_search import _assemble_smart_search_result
+    from tools.cq.search.pipeline.smart_search import assemble_smart_search_result
 
     pipeline = SearchPipeline(assembly.context)
     assembler = cast(
         "Callable[[SmartSearchContext, list[object]], CqResult]",
-        _assemble_smart_search_result,
+        assemble_smart_search_result,
     )
     return pipeline.assemble(assembly.partition_results, assembler)
 

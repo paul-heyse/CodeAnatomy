@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from tools.cq.search._shared.core import line_col_to_byte_offset
+from tools.cq.search.python.ast_utils import ast_node_priority, node_byte_span
 
 if TYPE_CHECKING:
     from tools.cq.search.python.analysis_session import AstSpanEntry, PythonAnalysisSession
@@ -59,48 +59,6 @@ class _ResolutionPayloadInputs:
     byte_end: int
 
 
-def _node_byte_span(node: ast.AST, source_bytes: bytes) -> tuple[int, int] | None:
-    lineno = getattr(node, "lineno", None)
-    col_offset = getattr(node, "col_offset", None)
-    end_lineno = getattr(node, "end_lineno", None)
-    end_col_offset = getattr(node, "end_col_offset", None)
-    if not isinstance(lineno, int):
-        return None
-    if not isinstance(col_offset, int):
-        return None
-    if not isinstance(end_lineno, int):
-        return None
-    if not isinstance(end_col_offset, int):
-        return None
-    start = line_col_to_byte_offset(
-        source_bytes,
-        lineno,
-        col_offset,
-    )
-    end = line_col_to_byte_offset(
-        source_bytes,
-        end_lineno,
-        end_col_offset,
-    )
-    if start is None or end is None or end <= start:
-        return None
-    return start, end
-
-
-def _ast_node_priority(node: ast.AST) -> int:
-    if isinstance(node, ast.Name):
-        return 0
-    if isinstance(node, ast.Attribute):
-        return 1
-    if isinstance(node, ast.alias):
-        return 2
-    if isinstance(node, ast.Call):
-        return 3
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return 4
-    return 10
-
-
 def _iter_nodes_with_parents(tree: ast.AST) -> Iterator[tuple[ast.AST, tuple[ast.AST, ...]]]:
     stack: list[tuple[ast.AST, tuple[ast.AST, ...]]] = [(tree, ())]
     while stack:
@@ -120,7 +78,7 @@ def _find_ast_anchor(
     best: _AstAnchor | None = None
     best_key: tuple[int, int, int] | None = None
     for node, parents in _iter_nodes_with_parents(tree):
-        span = _node_byte_span(node, source_bytes)
+        span = node_byte_span(node, source_bytes)
         if span is None:
             continue
         span_start, span_end = span
@@ -130,7 +88,7 @@ def _find_ast_anchor(
             continue
         size = span_end - span_start
         depth = len(parents)
-        priority = _ast_node_priority(node)
+        priority = ast_node_priority(node)
         candidate_key = (size, priority, -depth)
         if best_key is None or candidate_key < best_key:
             best = _AstAnchor(
@@ -269,7 +227,7 @@ def _build_import_alias_map(tree: ast.AST) -> dict[str, str]:
 
 
 def _site_with_kind(kind: str, node: ast.AST, source_bytes: bytes) -> _DefinitionSite:
-    span = _node_byte_span(node, source_bytes)
+    span = node_byte_span(node, source_bytes)
     return _DefinitionSite(kind=kind, byte_start=(span[0] if span else None))
 
 

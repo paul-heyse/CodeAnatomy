@@ -22,7 +22,7 @@ __all__ = [
 def __getattr__(name: str) -> Any:
     if name in {"SearchResultAssembly", "assemble_result"}:
         from tools.cq.search.pipeline.orchestration import assemble_result
-        from tools.cq.search.pipeline.smart_search import SearchResultAssembly
+        from tools.cq.search.pipeline.smart_search_types import SearchResultAssembly
 
         return SearchResultAssembly if name == "SearchResultAssembly" else assemble_result
     if name == "SearchPipeline":

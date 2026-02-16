@@ -29,6 +29,14 @@ from tools.cq.query.language import (
 if TYPE_CHECKING:
     from tools.cq.query.ir import StrictnessMode
 
+__all__ = [
+    "AstGrepRule",
+    "ToolPlan",
+    "compile_query",
+    "scope_to_globs",
+    "scope_to_paths",
+]
+
 
 class AstGrepRule(msgspec.Struct, frozen=True):
     """ast-grep rule specification.

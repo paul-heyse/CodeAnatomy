@@ -46,6 +46,10 @@ _RUNTIME_SERVICES: dict[str, CqRuntimeServices] = {}
 def resolve_runtime_services(root: Path) -> CqRuntimeServices:
     """Resolve workspace-scoped CQ runtime services.
 
+    Services are cached per workspace root and shared across run steps.
+    This ensures consistent state and avoids re-initialization overhead
+    within a single workspace session.
+
     Returns:
         Reused runtime service bundle keyed by resolved workspace path.
     """

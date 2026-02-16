@@ -26,7 +26,8 @@ from tools.cq.macros.calls import collect_call_sites, group_candidates, rg_find_
 from tools.cq.macros.contracts import MacroRequestBase
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import macro_scoring_details
-from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search._shared.types import SearchLimits
+from tools.cq.search.pipeline.profiles import INTERACTIVE
 
 if TYPE_CHECKING:
     from tools.cq.macros.calls import CallSite

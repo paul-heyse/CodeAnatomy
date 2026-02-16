@@ -12,7 +12,7 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.infrastructure import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.cli_app.options import (
     BytecodeSurfaceOptions,
     CommonFilters,
@@ -35,7 +35,6 @@ from tools.cq.cli_app.params import (
 from tools.cq.core.request_factory import RequestContextV1, RequestFactory
 
 
-@require_ctx
 def impact(
     function: Annotated[str, Parameter(help="Function name to analyze")],
     *,
@@ -70,7 +69,6 @@ def impact(
     return CliResult(result=result, context=ctx, filters=options)
 
 
-@require_ctx
 def calls(
     function: Annotated[str, Parameter(help="Function name to find calls for")],
     *,
@@ -104,7 +102,6 @@ def calls(
     return CliResult(result=result, context=ctx, filters=options)
 
 
-@require_ctx
 def imports(
     *,
     opts: Annotated[ImportsParams, Parameter(name="*")] | None = None,
@@ -140,7 +137,6 @@ def imports(
     return CliResult(result=result, context=ctx, filters=options)
 
 
-@require_ctx
 def exceptions(
     *,
     opts: Annotated[ExceptionsParams, Parameter(name="*")] | None = None,
@@ -175,7 +171,6 @@ def exceptions(
     return CliResult(result=result, context=ctx, filters=options)
 
 
-@require_ctx
 def sig_impact(
     symbol: Annotated[str, Parameter(help="Function name to analyze")],
     *,
@@ -205,7 +200,6 @@ def sig_impact(
     return CliResult(result=result, context=ctx, filters=options)
 
 
-@require_ctx
 def side_effects(
     *,
     opts: Annotated[SideEffectsParams, Parameter(name="*")] | None = None,
@@ -240,7 +234,6 @@ def side_effects(
     return CliResult(result=result, context=ctx, filters=options)
 
 
-@require_ctx
 def scopes(
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,
@@ -272,7 +265,6 @@ def scopes(
     return CliResult(result=result, context=ctx, filters=options)
 
 
-@require_ctx
 def bytecode_surface(
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,

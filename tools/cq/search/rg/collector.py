@@ -28,8 +28,8 @@ from tools.cq.search.rg.codec import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.search.pipeline.profiles import SearchLimits
-    from tools.cq.search.pipeline.smart_search import RawMatch
+    from tools.cq.search._shared.types import SearchLimits
+    from tools.cq.search.pipeline.smart_search_types import RawMatch
 
 
 @dataclass(frozen=True)

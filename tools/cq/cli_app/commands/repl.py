@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext
-from tools.cq.cli_app.infrastructure import dispatch_bound_command, require_context, require_ctx
+from tools.cq.cli_app.infrastructure import dispatch_bound_command, require_context
 
 
 def _dispatch_with_ctx(
@@ -27,7 +27,6 @@ def _dispatch_with_ctx(
     return dispatch_bound_command(command, bound)
 
 
-@require_ctx
 def repl(
     *,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -57,7 +56,6 @@ def repl(
     return 0
 
 
-@require_ctx
 def repl_help(
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,

@@ -11,11 +11,11 @@ from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import RecordType, SgRecord, filter_records_by_type, scan_files
 from tools.cq.core.pathing import is_relative_to, match_ordered_globs, normalize_repo_relative_path
 from tools.cq.query.enrichment import SymtableEnricher
-from tools.cq.query.executor import (
+from tools.cq.query.scan import (
     EntityCandidates,
     ScanContext,
-    _build_entity_candidates,
-    _build_scan_context,
+    build_entity_candidates,
+    build_scan_context,
 )
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE,
@@ -72,8 +72,8 @@ def build_batch_session(
             records = scan_files(files, rules, root, lang=lang, prefilter=True)
         records = filter_records_by_type(records, normalized_record_types)
 
-    scan_ctx = _build_scan_context(records)
-    candidates = _build_entity_candidates(scan_ctx, records)
+    scan_ctx = build_scan_context(records)
+    candidates = build_entity_candidates(scan_ctx, records)
     return BatchEntityQuerySession(
         root=root,
         tc=tc,

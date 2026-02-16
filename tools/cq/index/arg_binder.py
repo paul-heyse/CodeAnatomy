@@ -8,9 +8,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 
-from tools.cq.index.def_index import FnDecl, ParamInfo
-
-_SELF_CLS: set[str] = {"self", "cls"}
+from tools.cq.index.def_index import FnDecl, ParamInfo, _SELF_CLS
 
 
 @dataclass

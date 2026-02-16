@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.search._shared.core import RgRunRequest
-from tools.cq.search.pipeline.classifier import QueryMode
-from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search._shared.types import QueryMode, SearchLimits
+from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.codec import RgAnyEvent, decode_rg_event
 
 if TYPE_CHECKING:

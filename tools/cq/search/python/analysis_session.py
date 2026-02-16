@@ -13,13 +13,17 @@ from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
-from tools.cq.search._shared.core import line_col_to_byte_offset, source_hash
+from tools.cq.search._shared.bounded_cache import BoundedCache
+from tools.cq.search._shared.core import source_hash
+from tools.cq.search.python.ast_utils import ast_node_priority, node_byte_span
 
 if TYPE_CHECKING:
     from ast_grep_py import SgRoot
 
 _MAX_SESSION_CACHE_ENTRIES = 64
-_SESSION_CACHE: dict[str, PythonAnalysisSession] = {}
+_SESSION_CACHE: BoundedCache[str, PythonAnalysisSession] = BoundedCache(
+    max_size=_MAX_SESSION_CACHE_ENTRIES, policy="fifo"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,26 +37,6 @@ class AstSpanEntry:
     priority: int
 
 
-def _node_byte_span(node: ast.AST, source_bytes: bytes) -> tuple[int, int] | None:
-    lineno = getattr(node, "lineno", None)
-    col_offset = getattr(node, "col_offset", None)
-    end_lineno = getattr(node, "end_lineno", None)
-    end_col_offset = getattr(node, "end_col_offset", None)
-    if not isinstance(lineno, int):
-        return None
-    if not isinstance(col_offset, int):
-        return None
-    if not isinstance(end_lineno, int):
-        return None
-    if not isinstance(end_col_offset, int):
-        return None
-    start = line_col_to_byte_offset(source_bytes, lineno, col_offset)
-    end = line_col_to_byte_offset(source_bytes, end_lineno, end_col_offset)
-    if start is None or end is None or end <= start:
-        return None
-    return start, end
-
-
 def _iter_nodes_with_parents(tree: ast.AST) -> list[tuple[ast.AST, tuple[ast.AST, ...]]]:
     nodes: list[tuple[ast.AST, tuple[ast.AST, ...]]] = []
     stack: list[tuple[ast.AST, tuple[ast.AST, ...]]] = [(tree, ())]
@@ -62,20 +46,6 @@ def _iter_nodes_with_parents(tree: ast.AST) -> list[tuple[ast.AST, tuple[ast.AST
         children = tuple(ast.iter_child_nodes(node))
         stack.extend((child, (*parents, node)) for child in reversed(children))
     return nodes
-
-
-def _ast_node_priority(node: ast.AST) -> int:
-    if isinstance(node, ast.Name):
-        return 0
-    if isinstance(node, ast.Attribute):
-        return 1
-    if isinstance(node, ast.alias):
-        return 2
-    if isinstance(node, ast.Call):
-        return 3
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return 4
-    return 10
 
 
 @dataclass(slots=True)
@@ -219,7 +189,7 @@ class PythonAnalysisSession:
         rows: list[AstSpanEntry] = []
         try:
             for node, parents in _iter_nodes_with_parents(tree):
-                span = _node_byte_span(node, self.source_bytes)
+                span = node_byte_span(node, self.source_bytes)
                 if span is None:
                     continue
                 span_start, span_end = span
@@ -229,7 +199,7 @@ class PythonAnalysisSession:
                         parents=parents,
                         byte_start=span_start,
                         byte_end=span_end,
-                        priority=_ast_node_priority(node),
+                        priority=ast_node_priority(node),
                     )
                 )
         except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
@@ -294,10 +264,7 @@ def get_python_analysis_session(
         content_hash=content_hash,
         sg_root=sg_root,
     )
-    if len(_SESSION_CACHE) >= _MAX_SESSION_CACHE_ENTRIES and cache_key not in _SESSION_CACHE:
-        oldest_key = next(iter(_SESSION_CACHE))
-        del _SESSION_CACHE[oldest_key]
-    _SESSION_CACHE[cache_key] = session
+    _SESSION_CACHE.put(cache_key, session)
     return session
 
 

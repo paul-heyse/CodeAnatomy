@@ -19,12 +19,8 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
 )
 from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_python_lane_payload
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
-from tools.cq.search.tree_sitter.core.change_windows import (
-    contains_window,
-    ensure_query_windows,
-    windows_from_changed_ranges,
-)
-from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids, child_by_field
+from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
+from tools.cq.search.tree_sitter.core.lane_support import build_query_windows, lift_anchor
 from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.core.query_pack_executor import (
     QueryPackExecutionContextV1,
@@ -54,6 +50,17 @@ if TYPE_CHECKING:
 _MAX_CANDIDATES = 8
 _DEFAULT_MATCH_LIMIT = 4_096
 _STOP_CONTEXT_KINDS: frozenset[str] = frozenset({"module", "source_file"})
+_PYTHON_LIFT_ANCHOR_TYPES: frozenset[str] = frozenset(
+    {
+        "call",
+        "attribute",
+        "assignment",
+        "import_statement",
+        "import_from_statement",
+        "function_definition",
+        "class_definition",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,9 +117,7 @@ class _PreparedPythonFactInputV1:
     settings: QueryExecutionSettingsV1
 
 
-@lru_cache(maxsize=1)
-def _python_field_ids() -> dict[str, int]:
-    return cached_field_ids("python")
+from tools.cq.search.tree_sitter.python_lane.runtime import get_python_field_ids
 
 
 def _find_child_at_byte(node: Node, byte_offset: int) -> Node | None:
@@ -167,29 +172,11 @@ def _filter_changed_nodes(
     return [node for node in nodes if _should_enrich_node(node, has_change_context=True)]
 
 
-def _lift_anchor(node: Node) -> Node:
-    current = node
-    while current.parent is not None:
-        parent = current.parent
-        if parent.type in {
-            "call",
-            "attribute",
-            "assignment",
-            "import_statement",
-            "import_from_statement",
-            "function_definition",
-            "class_definition",
-        }:
-            return parent
-        current = parent
-    return node
-
-
 def _anchor_call_target(anchor: Node, source_bytes: bytes) -> str | None:
     current = anchor
     while current is not None:
         if current.type == "call":
-            function_node = child_by_field(current, "function", _python_field_ids())
+            function_node = child_by_field(current, "function", get_python_field_ids())
             if function_node is None:
                 function_node = _find_child_at_byte(
                     current,
@@ -230,7 +217,7 @@ def _find_enclosing(anchor: Node, source_bytes: bytes, kind: str) -> str | None:
         current = current.parent
         if current.type != kind:
             continue
-        name = child_by_field(current, "name", _python_field_ids())
+        name = child_by_field(current, "name", get_python_field_ids())
         if name is None:
             return None
         text = node_text(name, source_bytes)
@@ -276,27 +263,6 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
 
 def _pack_sources() -> tuple[tuple[str, str], ...]:
     return tuple((pack_name, source) for pack_name, source, _ in _pack_source_rows())
-
-
-def _build_query_windows(
-    *,
-    anchor_window: QueryWindowV1,
-    source_byte_len: int,
-    changed_ranges: tuple[object, ...],
-) -> tuple[QueryWindowV1, ...]:
-    windows = windows_from_changed_ranges(
-        changed_ranges,
-        source_byte_len=source_byte_len,
-        pad_bytes=96,
-    )
-    windows = ensure_query_windows(windows, fallback=anchor_window)
-    if windows and not contains_window(
-        windows,
-        value=anchor_window.start_byte,
-        width=anchor_window.end_byte - anchor_window.start_byte,
-    ):
-        return (*windows, anchor_window)
-    return windows
 
 
 def _collect_query_pack_captures(
@@ -562,7 +528,9 @@ def _build_payload_context(
             scope_chain,
         ),
         resolved_call_target=(
-            facts.call_targets[0] if facts.call_targets else _anchor_call_target(anchor, source_bytes)
+            facts.call_targets[0]
+            if facts.call_targets
+            else _anchor_call_target(anchor, source_bytes)
         ),
     )
 
@@ -688,13 +656,13 @@ def _prepare_python_fact_input(
     anchor = tree.root_node.named_descendant_for_byte_range(byte_start, byte_end)
     if anchor is None:
         return None
-    lifted_anchor = _lift_anchor(anchor)
+    lifted_anchor = lift_anchor(anchor, parent_types=_PYTHON_LIFT_ANCHOR_TYPES)
     anchor_window = _resolve_anchor_window(
         anchor=lifted_anchor,
         fallback_start=byte_start,
         fallback_end=byte_end,
     )
-    query_windows = _build_query_windows(
+    query_windows = build_query_windows(
         anchor_window=anchor_window,
         source_byte_len=len(source_bytes),
         changed_ranges=changed_ranges,

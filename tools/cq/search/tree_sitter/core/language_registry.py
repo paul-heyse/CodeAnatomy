@@ -61,7 +61,7 @@ class TreeSitterRuntimeCapabilitiesV1(CqStruct, frozen=True):
 _SEMANTIC_VERSION_PARTS = 3
 
 
-def _normalize_semantic_version(value: object) -> tuple[int, int, int] | None:
+def normalize_semantic_version(value: object) -> tuple[int, int, int] | None:
     if not isinstance(value, tuple) or len(value) != _SEMANTIC_VERSION_PARTS:
         return None
     if not all(isinstance(part, int) and not isinstance(part, bool) for part in value):
@@ -86,7 +86,7 @@ def _extract_provenance(
     abi_version = getattr(language_obj, "abi_version", None)
     return (
         grammar_name if isinstance(grammar_name, str) and grammar_name else None,
-        _normalize_semantic_version(semantic_version),
+        normalize_semantic_version(semantic_version),
         _normalize_int(abi_version),
     )
 
@@ -274,4 +274,5 @@ __all__ = [
     "load_language_registry",
     "load_tree_sitter_capabilities",
     "load_tree_sitter_language",
+    "normalize_semantic_version",
 ]

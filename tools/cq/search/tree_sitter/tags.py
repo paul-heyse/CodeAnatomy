@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol
 
 import msgspec
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.tree_sitter.contracts.core_models import NodeLike
 from tools.cq.search.tree_sitter.core.node_utils import node_text
 
 # -- Contracts ----------------------------------------------------------------
@@ -25,20 +25,6 @@ class RustTagEventV1(CqStruct, frozen=True):
 
 
 # -- Runtime ------------------------------------------------------------------
-
-
-class NodeLike(Protocol):
-    """Structural node protocol for tag runtime projection."""
-
-    @property
-    def start_byte(self) -> int:
-        """Return byte offset of node start."""
-        ...
-
-    @property
-    def end_byte(self) -> int:
-        """Return byte offset of node end."""
-        ...
 
 
 def _normalized_role(capture_names: Sequence[str]) -> str | None:

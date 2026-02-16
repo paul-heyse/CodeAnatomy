@@ -11,9 +11,11 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import msgspec
+
+TaintSiteKind = Literal["source", "call", "return", "assign"]
 
 from tools.cq.core.python_ast_utils import get_call_name
 from tools.cq.core.run_context import RunContext
@@ -29,10 +31,11 @@ from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_bound_call
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
 from tools.cq.index.def_index import DefIndex, FnDecl
-from tools.cq.macros.contracts import MacroRequestBase
+from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import macro_scoring_details
-from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search._shared.types import SearchLimits
+from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import find_callers
 
 _DEFAULT_MAX_DEPTH = 5
@@ -49,7 +52,7 @@ class TaintedSite(msgspec.Struct):
         File path.
     line : int
         Line number.
-    kind : str
+    kind : TaintSiteKind
         Site type: "source", "call", "return", "assign".
     description : str
         Human-readable description.
@@ -61,7 +64,7 @@ class TaintedSite(msgspec.Struct):
 
     file: str
     line: int
-    kind: str
+    kind: TaintSiteKind
     description: str
     param: str | None = None
     depth: int = 0
@@ -110,7 +113,7 @@ class ImpactDepthSummary:
     depth_counts: dict[int, int]
     files_affected: set[str]
     site_count: int
-    scoring_details: dict[str, object]
+    scoring_details: ScoringDetailsV1
 
 
 class TaintVisitor(ast.NodeVisitor):
@@ -577,6 +580,7 @@ def _append_depth_findings(result: CqResult, summary: ImpactDepthSummary) -> Non
         return
     request = summary.request
     scoring_details = summary.scoring_details
+    scoring_dict = msgspec.structs.asdict(scoring_details)
     result.key_findings.append(
         Finding(
             category="summary",
@@ -585,7 +589,7 @@ def _append_depth_findings(result: CqResult, summary: ImpactDepthSummary) -> Non
                 f"reaches {summary.site_count} sites in {len(summary.files_affected)} files"
             ),
             severity="info",
-            details=build_detail_payload(scoring=scoring_details),
+            details=build_detail_payload(scoring=scoring_dict),
         )
     )
     for depth, count in sorted(summary.depth_counts.items()):
@@ -594,7 +598,7 @@ def _append_depth_findings(result: CqResult, summary: ImpactDepthSummary) -> Non
                 category="depth",
                 message=f"Depth {depth}: {count} taint sites",
                 severity="info",
-                details=build_detail_payload(scoring=scoring_details),
+                details=build_detail_payload(scoring=scoring_dict),
             )
         )
 
@@ -609,8 +613,9 @@ def _group_sites_by_kind(all_sites: list[TaintedSite]) -> dict[str, list[Tainted
 def _append_kind_sections(
     result: CqResult,
     by_kind: dict[str, list[TaintedSite]],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
+    scoring_dict = msgspec.structs.asdict(scoring_details)
     for kind, sites in by_kind.items():
         section = Section(title=f"Taint {kind.title()} Sites")
         for site in sites[:_SECTION_SITE_LIMIT]:
@@ -621,7 +626,7 @@ def _append_kind_sections(
                     message=site.description,
                     anchor=Anchor(file=site.file, line=site.line),
                     severity="info",
-                    details=build_detail_payload(scoring=scoring_details, data=details),
+                    details=build_detail_payload(scoring=scoring_dict, data=details),
                 )
             )
         result.sections.append(section)
@@ -630,10 +635,11 @@ def _append_kind_sections(
 def _append_callers_section(
     result: CqResult,
     caller_sites: list[tuple[str, int]],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     if not caller_sites:
         return
+    scoring_dict = msgspec.structs.asdict(scoring_details)
     caller_section = Section(title="Callers (via rg)")
     for file, line in caller_sites[:_CALLER_LIMIT]:
         caller_section.findings.append(
@@ -642,7 +648,7 @@ def _append_callers_section(
                 message="Potential call site",
                 anchor=Anchor(file=file, line=line),
                 severity="info",
-                details=build_detail_payload(scoring=scoring_details),
+                details=build_detail_payload(scoring=scoring_dict),
             )
         )
     result.sections.append(caller_section)
@@ -651,8 +657,9 @@ def _append_callers_section(
 def _append_evidence(
     result: CqResult,
     all_sites: list[TaintedSite],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
+    scoring_dict = msgspec.structs.asdict(scoring_details)
     seen: set[tuple[str, int]] = set()
     for site in all_sites:
         key = (site.file, site.line)
@@ -665,7 +672,7 @@ def _append_evidence(
                 category=site.kind,
                 message=site.description,
                 anchor=Anchor(file=site.file, line=site.line),
-                details=build_detail_payload(scoring=scoring_details, data=details),
+                details=build_detail_payload(scoring=scoring_dict, data=details),
             )
         )
 
@@ -741,7 +748,7 @@ def _append_missing_param_warnings(
 
 def _build_impact_scoring(
     all_sites: list[TaintedSite],
-) -> tuple[dict[str, object], dict[int, int], set[str]]:
+) -> tuple[ScoringDetailsV1, dict[int, int], set[str]]:
     depth_counts, files_affected = _collect_depth_stats(all_sites)
     max_depth = max(depth_counts.keys()) if depth_counts else 0
     evidence_kind = "resolved_ast" if max_depth == 0 else "cross_file_taint"

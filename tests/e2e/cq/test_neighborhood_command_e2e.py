@@ -57,7 +57,7 @@ def test_neighborhood_cli_and_run_step_parity(
         "target": target,
         "lang": "python",
         "top_k": 5,
-        "no_semantic_enrichment": True,
+        "semantic_enrichment": False,
     }
 
     direct = run_cq_result(

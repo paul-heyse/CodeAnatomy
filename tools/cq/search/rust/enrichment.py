@@ -11,6 +11,7 @@ from ast_grep_py import SgRoot
 
 from tools.cq.core.locations import byte_offset_to_line_col
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
+from tools.cq.search._shared.bounded_cache import BoundedCache
 from tools.cq.search._shared.core import RustEnrichmentRequest
 from tools.cq.search._shared.core import sg_node_text as _shared_sg_node_text
 from tools.cq.search._shared.core import source_hash as _shared_source_hash
@@ -37,7 +38,9 @@ if TYPE_CHECKING:
 
 _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 _MAX_AST_CACHE_ENTRIES = 64
-_AST_CACHE: dict[str, tuple[SgRoot, str]] = {}
+_AST_CACHE: BoundedCache[str, tuple[SgRoot, str]] = BoundedCache(
+    max_size=_MAX_AST_CACHE_ENTRIES, policy="fifo"
+)
 
 _DEFAULT_SCOPE_DEPTH = 24
 _CROSSCHECK_ENV = "CQ_RUST_ENRICHMENT_CROSSCHECK"
@@ -87,10 +90,7 @@ def _get_sg_root(source: str, *, cache_key: str | None) -> SgRoot:
             return root
 
     root = SgRoot(source, "rust")
-    if len(_AST_CACHE) >= _MAX_AST_CACHE_ENTRIES and cache_key not in _AST_CACHE:
-        oldest_key = next(iter(_AST_CACHE))
-        del _AST_CACHE[oldest_key]
-    _AST_CACHE[cache_key] = (root, content_hash)
+    _AST_CACHE.put(cache_key, (root, content_hash))
     return root
 
 

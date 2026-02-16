@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 from tools.cq.search.tree_sitter.contracts.core_models import (
+    NodeLike,
     QueryWindowV1,
     TreeSitterCstTokenV1,
     TreeSitterDiagnosticV1,
@@ -126,19 +127,6 @@ def export_cst_tokens(
 
 
 # -- Query Hit Export ---------------------------------------------------------
-
-
-class NodeLike(Protocol):
-    """Structural node protocol for query-hit projection."""
-
-    @property
-    def type(self) -> str: ...
-
-    @property
-    def start_byte(self) -> int: ...
-
-    @property
-    def end_byte(self) -> int: ...
 
 
 def export_query_hits(

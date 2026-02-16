@@ -23,8 +23,7 @@ if TYPE_CHECKING:
     from ast_grep_py import SgNode
     from tree_sitter import Node
 
-    from tools.cq.search.pipeline.classifier import QueryMode
-    from tools.cq.search.pipeline.profiles import SearchLimits
+    from tools.cq.search._shared.types import QueryMode, SearchLimits
 
 
 # Shared core helpers

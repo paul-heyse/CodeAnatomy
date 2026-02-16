@@ -19,7 +19,7 @@ from tools.cq.search.objects.render import (
 from tools.cq.search.python.evidence import evaluate_python_semantic_signal_from_mapping
 
 if TYPE_CHECKING:
-    from tools.cq.search.pipeline.smart_search import EnrichedMatch
+    from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
 
 _DEFINITION_CATEGORIES = {"definition"}

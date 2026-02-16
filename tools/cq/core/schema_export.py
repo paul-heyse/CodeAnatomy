@@ -14,8 +14,8 @@ from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.ir import Query
 from tools.cq.run.spec import RunPlan, RunStep
 from tools.cq.search._shared.search_contracts import SearchSummaryContract
+from tools.cq.search._shared.types import SearchLimits
 from tools.cq.search.pipeline.contracts import SearchConfig
-from tools.cq.search.pipeline.profiles import SearchLimits
 from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterArtifactBundleV1,
     TreeSitterDiagnosticV1,

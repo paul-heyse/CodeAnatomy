@@ -7,36 +7,7 @@ scattered across the codebase.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
-
-
-@runtime_checkable
-class NodeLike(Protocol):
-    """Structural protocol for tree-sitter-like node objects.
-
-    This protocol matches the interface of tree-sitter Node objects,
-    allowing generic code to work with any node-like structure.
-    """
-
-    @property
-    def start_byte(self) -> int:
-        """Return the byte offset where this node starts in the source."""
-        ...
-
-    @property
-    def end_byte(self) -> int:
-        """Return the byte offset where this node ends in the source."""
-        ...
-
-    @property
-    def start_point(self) -> tuple[int, int]:
-        """Return the (row, column) position where this node starts."""
-        ...
-
-    @property
-    def end_point(self) -> tuple[int, int]:
-        """Return the (row, column) position where this node ends."""
-        ...
+from tools.cq.search.tree_sitter.contracts.core_models import NodeLike
 
 
 def node_text(

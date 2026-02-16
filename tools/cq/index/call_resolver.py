@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
+from typing import Literal
 
 from tools.cq.core.python_ast_utils import get_call_name
-from tools.cq.index.def_index import DefIndex, FnDecl
-
-_SELF_CLS: set[str] = {"self", "cls"}
+from tools.cq.index.def_index import DefIndex, FnDecl, _SELF_CLS
 _CALL_SPLIT_PARTS = 2
+
+CallConfidence = Literal["exact", "likely", "ambiguous", "unresolved"]
 
 
 @dataclass
@@ -56,7 +57,7 @@ class ResolvedCall:
         The call site.
     targets : list[FnDecl]
         Possible target definitions.
-    confidence : str
+    confidence : CallConfidence
         Resolution confidence: "exact", "likely", "ambiguous", "unresolved".
     resolution_path : str
         How resolution was performed.
@@ -64,7 +65,7 @@ class ResolvedCall:
 
     call: CallInfo
     targets: list[FnDecl]
-    confidence: str
+    confidence: CallConfidence
     resolution_path: str
 
 
@@ -72,7 +73,7 @@ def _method_name(callee: str) -> str:
     return callee.rsplit(".", maxsplit=1)[-1] if "." in callee else callee
 
 
-def _confidence_exact_ambiguous(targets: list[FnDecl]) -> str:
+def _confidence_exact_ambiguous(targets: list[FnDecl]) -> CallConfidence:
     if len(targets) == 1:
         return "exact"
     if targets:
@@ -80,7 +81,7 @@ def _confidence_exact_ambiguous(targets: list[FnDecl]) -> str:
     return "unresolved"
 
 
-def _confidence_exact_likely(targets: list[FnDecl]) -> str:
+def _confidence_exact_likely(targets: list[FnDecl]) -> CallConfidence:
     if len(targets) == 1:
         return "exact"
     if targets:
@@ -132,7 +133,7 @@ def extract_calls_from_file(file: str, source: str) -> list[CallInfo]:
 def _resolve_simple_call(
     index: DefIndex,
     call: CallInfo,
-) -> tuple[list[FnDecl], str, str]:
+) -> tuple[list[FnDecl], CallConfidence, str]:
     mod, sym = index.resolve_import_alias(call.file, call.callee_name)
     if sym:
         targets = index.find_function_by_name(sym)
@@ -149,7 +150,7 @@ def _resolve_self_or_cls_call(
     call: CallInfo,
     *,
     receiver: str,
-) -> tuple[list[FnDecl], str, str]:
+) -> tuple[list[FnDecl], CallConfidence, str]:
     mod_info = index.get_module_for_file(call.file)
     if mod_info is None:
         targets: list[FnDecl] = []
@@ -168,7 +169,7 @@ def _resolve_self_or_cls_call(
 def _resolve_qualified_call(
     index: DefIndex,
     call: CallInfo,
-) -> tuple[list[FnDecl], str, str] | None:
+) -> tuple[list[FnDecl], CallConfidence, str] | None:
     if "." not in call.callee_name:
         return None
     prefix, name = call.callee_name.split(".", 1)
@@ -194,7 +195,7 @@ def _resolve_typed_receiver(
     call: CallInfo,
     *,
     var_types: dict[str, str],
-) -> tuple[list[FnDecl], str, str] | None:
+) -> tuple[list[FnDecl], CallConfidence, str] | None:
     receiver = call.receiver_name
     if not receiver:
         return None

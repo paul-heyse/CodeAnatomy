@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
-from functools import wraps
 from inspect import BoundArguments
 from pathlib import Path
 from typing import Any
@@ -78,24 +77,6 @@ setup_group = Group(
 # ── Context Decorators ──
 
 
-def require_ctx(func: Callable[..., Any]) -> Callable[..., Any]:
-    """Assert and verify CLI context injection for command entrypoints.
-
-    Returns:
-        Callable[..., Any]: Wrapped callable that validates `ctx`.
-    """
-
-    @wraps(func)
-    def _wrapped(*args: object, **kwargs: object) -> Any:
-        ctx = kwargs.get("ctx")
-        if not isinstance(ctx, CliContext):
-            msg = "Context not injected"
-            raise TypeError(msg)
-        return func(*args, **kwargs)
-
-    return _wrapped
-
-
 def require_context(ctx: CliContext | None) -> CliContext:
     """Return a non-optional context or raise when injection is missing.
 
@@ -149,6 +130,5 @@ __all__ = [
     "global_group",
     "protocol_group",
     "require_context",
-    "require_ctx",
     "setup_group",
 ]

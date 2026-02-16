@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import msgspec
 
 from tools.cq.core.structs import CqOutputStruct
 
-EnrichmentStatus = str
+EnrichmentStatus = Literal["applied", "degraded", "skipped"]
 
 
 class EnrichmentMeta(CqOutputStruct, frozen=True):

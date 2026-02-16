@@ -27,6 +27,46 @@ _SCORE_FIELDS: tuple[str, ...] = (
 )
 
 
+def coerce_float(value: object) -> float | None:
+    """Coerce value to float or None.
+
+    Parameters
+    ----------
+    value : object
+        Value to coerce.
+
+    Returns:
+    -------
+    float | None
+        Float value or None if value cannot be coerced.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def coerce_str(value: object) -> str | None:
+    """Coerce value to str or None.
+
+    Parameters
+    ----------
+    value : object
+        Value to coerce.
+
+    Returns:
+    -------
+    str | None
+        String value or None if value is None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
 class ScoreDetails(msgspec.Struct, omit_defaults=True):
     """Scoring metadata for a finding."""
 
@@ -43,22 +83,6 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
     kind: str | None = None
     score: ScoreDetails | None = None
     data: dict[str, object] = msgspec.field(default_factory=dict)
-
-    @staticmethod
-    def _coerce_float(value: object) -> float | None:
-        if value is None:
-            return None
-        if isinstance(value, (int, float)):
-            return float(value)
-        return None
-
-    @staticmethod
-    def _coerce_str(value: object) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return value
-        return str(value)
 
     @classmethod
     def from_legacy(cls, details: dict[str, object]) -> DetailPayload:
@@ -84,11 +108,11 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
         score = None
         if score_values:
             score = ScoreDetails(
-                impact_score=cls._coerce_float(score_values.get("impact_score")),
-                impact_bucket=cls._coerce_str(score_values.get("impact_bucket")),
-                confidence_score=cls._coerce_float(score_values.get("confidence_score")),
-                confidence_bucket=cls._coerce_str(score_values.get("confidence_bucket")),
-                evidence_kind=cls._coerce_str(score_values.get("evidence_kind")),
+                impact_score=coerce_float(score_values.get("impact_score")),
+                impact_bucket=coerce_str(score_values.get("impact_bucket")),
+                confidence_score=coerce_float(score_values.get("confidence_score")),
+                confidence_bucket=coerce_str(score_values.get("confidence_bucket")),
+                evidence_kind=coerce_str(score_values.get("evidence_kind")),
             )
         return cls(kind=kind, score=score, data=data)
 
@@ -488,6 +512,8 @@ __all__ = [
     "ScoreDetails",
     "Section",
     "assign_result_finding_ids",
+    "coerce_float",
+    "coerce_str",
     "mk_result",
     "mk_runmeta",
     "ms",

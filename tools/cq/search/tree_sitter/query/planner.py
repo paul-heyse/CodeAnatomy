@@ -14,16 +14,9 @@ from tools.cq.search.tree_sitter.contracts.query_models import (
 if TYPE_CHECKING:
     from tree_sitter import Query
 
+from tools.cq.search.tree_sitter.core.language_registry import normalize_semantic_version
+
 _MIN_ASSERTION_TUPLE_SIZE = 2
-_SEMANTIC_VERSION_PARTS = 3
-
-
-def _normalize_semantic_version(value: object) -> tuple[int, int, int] | None:
-    if not isinstance(value, tuple) or len(value) != _SEMANTIC_VERSION_PARTS:
-        return None
-    if not all(isinstance(part, int) and not isinstance(part, bool) for part in value):
-        return None
-    return (int(value[0]), int(value[1]), int(value[2]))
 
 
 def _extract_provenance(
@@ -33,7 +26,7 @@ def _extract_provenance(
     if language_obj is None:
         return None, None, None
     grammar_name = getattr(language_obj, "name", None)
-    semantic_version = _normalize_semantic_version(getattr(language_obj, "semantic_version", None))
+    semantic_version = normalize_semantic_version(getattr(language_obj, "semantic_version", None))
     abi_version_raw = getattr(language_obj, "abi_version", None)
     abi_version = (
         int(abi_version_raw)

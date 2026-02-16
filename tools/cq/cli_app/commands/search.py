@@ -11,7 +11,7 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.infrastructure import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.cli_app.options import SearchOptions, options_from_params
 from tools.cq.cli_app.params import SearchParams
 from tools.cq.core.request_factory import (
@@ -21,7 +21,6 @@ from tools.cq.core.request_factory import (
 )
 
 
-@require_ctx
 def search(
     query: Annotated[str, Parameter(help="Search query")],
     *,
@@ -40,7 +39,7 @@ def search(
     """
     from tools.cq.core.bootstrap import resolve_runtime_services
     from tools.cq.query.language import parse_query_language_scope
-    from tools.cq.search.pipeline.classifier import QueryMode
+    from tools.cq.search._shared.types import QueryMode
     from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
 
     ctx = require_context(ctx)

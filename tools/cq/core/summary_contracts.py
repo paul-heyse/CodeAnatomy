@@ -46,8 +46,62 @@ def summary_envelope_to_mapping(envelope: SummaryEnvelopeV1) -> dict[str, Any]:
     return require_mapping(envelope)
 
 
+class RunSummaryV1(CqStrictOutputStruct, frozen=True):
+    """Typed run summary for structured summary access.
+
+    Provides typed access to common summary fields while remaining
+    convertible to/from the dict[str, object] transport format.
+    """
+
+    query: str | None = None
+    mode: str | None = None
+    lang_scope: str | None = None
+    total_matches: int = 0
+    matched_files: int = 0
+    scanned_files: int = 0
+    step_summaries: dict[str, dict[str, Any]] = msgspec.field(default_factory=dict)
+
+
+def run_summary_from_dict(raw: Mapping[str, Any] | None) -> RunSummaryV1:
+    """Parse a raw summary dict into a typed RunSummaryV1.
+
+    Returns:
+        RunSummaryV1: Typed summary with defaults for missing keys.
+    """
+    if not raw:
+        return RunSummaryV1()
+    query = raw.get("query")
+    mode = raw.get("mode")
+    lang_scope = raw.get("lang_scope")
+    total_matches = raw.get("total_matches", 0)
+    matched_files = raw.get("matched_files", 0)
+    scanned_files = raw.get("scanned_files", 0)
+    step_summaries = raw.get("step_summaries")
+    return RunSummaryV1(
+        query=query if isinstance(query, str) else None,
+        mode=mode if isinstance(mode, str) else None,
+        lang_scope=lang_scope if isinstance(lang_scope, str) else None,
+        total_matches=total_matches if isinstance(total_matches, int) else 0,
+        matched_files=matched_files if isinstance(matched_files, int) else 0,
+        scanned_files=scanned_files if isinstance(scanned_files, int) else 0,
+        step_summaries=dict(step_summaries) if isinstance(step_summaries, dict) else {},
+    )
+
+
+def run_summary_to_dict(summary: RunSummaryV1) -> dict[str, Any]:
+    """Convert a typed RunSummaryV1 to a plain dict.
+
+    Returns:
+        dict[str, Any]: Summary as mapping payload.
+    """
+    return require_mapping(summary)
+
+
 __all__ = [
+    "RunSummaryV1",
     "SummaryEnvelopeV1",
     "build_summary_envelope",
+    "run_summary_from_dict",
+    "run_summary_to_dict",
     "summary_envelope_to_mapping",
 ]

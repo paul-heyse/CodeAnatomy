@@ -11,8 +11,7 @@ from tools.cq.core.structs import CqStruct
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.query.language import QueryLanguageScope
-    from tools.cq.search.pipeline.classifier import QueryMode
-    from tools.cq.search.pipeline.profiles import SearchLimits
+    from tools.cq.search._shared.types import QueryMode, SearchLimits
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
 

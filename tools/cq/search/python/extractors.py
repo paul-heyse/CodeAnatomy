@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import ast
 import os
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.locations import byte_offset_to_line_col
+from tools.cq.search._shared.bounded_cache import BoundedCache
 from tools.cq.search._shared.core import (
     PythonByteRangeEnrichmentRequest,
     PythonNodeEnrichmentRequest,
@@ -45,6 +46,36 @@ from tools.cq.search.enrichment.core import (
     payload_size_hint as _shared_payload_size_hint,
 )
 from tools.cq.search.python.analysis_session import PythonAnalysisSession
+from tools.cq.search.python.extractors_analysis import (
+    extract_behavior_summary as _extract_behavior_summary,
+)
+from tools.cq.search.python.extractors_analysis import (
+    extract_generator_flag as _extract_generator_flag,
+)
+from tools.cq.search.python.extractors_analysis import (
+    extract_import_detail as _extract_import_detail,
+)
+from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function
+from tools.cq.search.python.extractors_classification import (
+    _is_class_node,
+    _is_function_node,
+    _unwrap_decorated,
+)
+from tools.cq.search.python.extractors_classification import (
+    classify_item_role as _classify_item_role,
+)
+from tools.cq.search.python.extractors_structure import (
+    classify_class_kind as _classify_class_kind,
+)
+from tools.cq.search.python.extractors_structure import (
+    extract_base_classes as _extract_base_classes,
+)
+from tools.cq.search.python.extractors_structure import (
+    extract_class_shape as _extract_class_shape,
+)
+from tools.cq.search.python.extractors_structure import (
+    find_enclosing_class as _find_enclosing_class,
+)
 from tools.cq.search.python.resolution_index import enrich_python_resolution_by_byte_range
 from tools.cq.search.tree_sitter.python_lane.facts import build_python_tree_sitter_facts
 
@@ -66,14 +97,9 @@ _MAX_PARAMS = 12
 _MAX_RETURN_TYPE_LEN = 100
 _MAX_DECORATORS = 8
 _MAX_DECORATOR_LEN = 60
-_MAX_BASE_CLASSES = 6
-_MAX_BASE_CLASS_LEN = 60
 _MAX_CALL_TARGET_LEN = 120
 _MAX_CALL_RECEIVER_LEN = 80
 _MAX_SCOPE_CHAIN = 8
-_MAX_IMPORT_NAMES = 12
-_MAX_METHODS_SHOWN = 8
-_MAX_PROPERTIES_SHOWN = 8
 _MAX_PAYLOAD_BYTES = 4096
 _FULL_AGREEMENT_SOURCE_COUNT = 3
 _PYTHON_ENRICHMENT_CROSSCHECK_ENV = "CQ_PY_ENRICHMENT_CROSSCHECK"
@@ -130,21 +156,6 @@ _PREFERRED_ENRICHMENT_KINDS: frozenset[str] = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# Test / role constants
-# ---------------------------------------------------------------------------
-
-_TEST_DECORATOR_NAMES: frozenset[str] = frozenset(
-    {
-        "pytest.fixture",
-        "pytest.mark.parametrize",
-        "pytest.mark.skipif",
-        "pytest.mark.skip",
-    }
-)
-
-_TEST_FUNCTION_PREFIX = "test_"
-
-# ---------------------------------------------------------------------------
 # Structural context mapping
 # ---------------------------------------------------------------------------
 
@@ -170,28 +181,29 @@ _SCOPE_BOUNDARY_NODE_KINDS: frozenset[str] = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# Python ast scope boundary types
+# Enrichment context (per-invocation state)
 # ---------------------------------------------------------------------------
 
-_AST_SCOPE_BOUNDARY_TYPES: tuple[type, ...] = (
-    ast.FunctionDef,
-    ast.AsyncFunctionDef,
-    ast.ClassDef,
-    ast.Lambda,
-)
 
-# ---------------------------------------------------------------------------
-# Truncation tracking
-# ---------------------------------------------------------------------------
+@dataclass
+class EnrichmentContext:
+    """Per-invocation context for enrichment operations."""
 
-_truncation_tracker: list[str] = []
+    truncations: list[str] = field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _truncate(text: str, max_len: int, *, field_name: str = "") -> str:
+def _truncate(
+    text: str,
+    max_len: int,
+    field_name: str | None = None,
+    *,
+    context: EnrichmentContext | None = None,
+) -> str:
     """Truncate *text* to *max_len* characters, appending ``...`` when needed.
 
     Parameters
@@ -202,6 +214,8 @@ def _truncate(text: str, max_len: int, *, field_name: str = "") -> str:
         Maximum allowed length.
     field_name
         Optional field name for truncation tracking.
+    context
+        Per-invocation enrichment context for tracking truncations.
 
     Returns:
     -------
@@ -211,8 +225,8 @@ def _truncate(text: str, max_len: int, *, field_name: str = "") -> str:
     truncated = _shared_truncate(text, max_len)
     if truncated == text:
         return text
-    if field_name:
-        _truncation_tracker.append(field_name)
+    if field_name and context is not None:
+        context.truncations.append(field_name)
     return truncated
 
 
@@ -249,7 +263,9 @@ def _try_extract(
 # Python ast cache (per-file, hash-verified)
 # ---------------------------------------------------------------------------
 
-_AST_CACHE: dict[str, tuple[ast.Module, str]] = {}
+_AST_CACHE: BoundedCache[str, tuple[ast.Module, str]] = BoundedCache(
+    max_size=_MAX_TREE_CACHE_ENTRIES, policy="fifo"
+)
 
 
 def _get_ast(source_bytes: bytes, *, cache_key: str) -> ast.Module | None:
@@ -277,80 +293,8 @@ def _get_ast(source_bytes: bytes, *, cache_key: str) -> ast.Module | None:
         tree = ast.parse(source_bytes)
     except SyntaxError:
         return None
-    if len(_AST_CACHE) >= _MAX_TREE_CACHE_ENTRIES and cache_key not in _AST_CACHE:
-        oldest_key = next(iter(_AST_CACHE))
-        del _AST_CACHE[oldest_key]
-    _AST_CACHE[cache_key] = (tree, content_hash)
+    _AST_CACHE.put(cache_key, (tree, content_hash))
     return tree
-
-
-# ---------------------------------------------------------------------------
-# ast-grep tier: node helpers
-# ---------------------------------------------------------------------------
-
-
-def _unwrap_decorated(node: SgNode) -> SgNode:
-    """Unwrap a ``decorated_definition`` to its inner definition.
-
-    Parameters
-    ----------
-    node
-        An ast-grep node that may be a ``decorated_definition``.
-
-    Returns:
-    -------
-    SgNode
-        The inner definition node, or the original node if not decorated.
-    """
-    if node.kind() != "decorated_definition":
-        return node
-    for child in node.children():
-        kind = child.kind()
-        if kind in {"function_definition", "class_definition"}:
-            return child
-    return node
-
-
-def _is_class_node(node: SgNode) -> bool:
-    """Check whether a node represents a class definition.
-
-    Parameters
-    ----------
-    node
-        An ast-grep node.
-
-    Returns:
-    -------
-    bool
-        True if the node is or wraps a class definition.
-    """
-    if node.kind() == "class_definition":
-        return True
-    if node.kind() == "decorated_definition":
-        inner = _unwrap_decorated(node)
-        return inner.kind() == "class_definition"
-    return False
-
-
-def _is_function_node(node: SgNode) -> bool:
-    """Check whether a node represents a function definition.
-
-    Parameters
-    ----------
-    node
-        An ast-grep node.
-
-    Returns:
-    -------
-    bool
-        True if the node is or wraps a function definition.
-    """
-    if node.kind() == "function_definition":
-        return True
-    if node.kind() == "decorated_definition":
-        inner = _unwrap_decorated(node)
-        return inner.kind() == "function_definition"
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +351,9 @@ def _extract_return_type(func_node: SgNode) -> str | None:
     return ret_text if ret_text else None
 
 
-def _extract_signature(node: SgNode, _source_bytes: bytes) -> dict[str, object]:
+def _extract_signature(
+    node: SgNode, _source_bytes: bytes, *, context: EnrichmentContext | None = None
+) -> dict[str, object]:
     """Extract function signature details.
 
     Parameters
@@ -416,6 +362,8 @@ def _extract_signature(node: SgNode, _source_bytes: bytes) -> dict[str, object]:
         A function_definition or decorated_definition node.
     _source_bytes
         Full source bytes (unused, kept for _try_extract compat).
+    context
+        Per-invocation enrichment context for tracking truncations.
 
     Returns:
     -------
@@ -433,14 +381,16 @@ def _extract_signature(node: SgNode, _source_bytes: bytes) -> dict[str, object]:
 
     ret_text = _extract_return_type(func_node)
     if ret_text is not None:
-        result["return_type"] = _truncate(ret_text, _MAX_RETURN_TYPE_LEN, field_name="return_type")
+        result["return_type"] = _truncate(
+            ret_text, _MAX_RETURN_TYPE_LEN, "return_type", context=context
+        )
 
     func_text = func_node.text()
     result["is_async"] = func_text.lstrip().startswith("async ")
 
     sig_text = _extract_sig_text(node.text())
     if sig_text:
-        result["signature"] = _truncate(sig_text, _MAX_SIGNATURE_LEN, field_name="signature")
+        result["signature"] = _truncate(sig_text, _MAX_SIGNATURE_LEN, "signature", context=context)
 
     return result
 
@@ -477,13 +427,17 @@ def _extract_sig_text(full_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _extract_decorators(node: SgNode) -> dict[str, object]:
+def _extract_decorators(
+    node: SgNode, *, context: EnrichmentContext | None = None
+) -> dict[str, object]:
     """Extract decorator list from a decorated definition.
 
     Parameters
     ----------
     node
         A decorated_definition or function_definition/class_definition node.
+    context
+        Per-invocation enrichment context for tracking truncations.
 
     Returns:
     -------
@@ -499,7 +453,7 @@ def _extract_decorators(node: SgNode) -> dict[str, object]:
             if text.startswith("@"):
                 text = text[1:]
             if text:
-                decorators.append(_truncate(text, _MAX_DECORATOR_LEN, field_name="decorator"))
+                decorators.append(_truncate(text, _MAX_DECORATOR_LEN, "decorator", context=context))
             if len(decorators) >= _MAX_DECORATORS:
                 break
     if decorators:
@@ -508,282 +462,21 @@ def _extract_decorators(node: SgNode) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# ast-grep tier: Item role classification (Rec 2)
-# ---------------------------------------------------------------------------
-
-
-def _get_first_param_name(func_node: SgNode) -> str | None:
-    """Get the name of the first parameter of a function.
-
-    Parameters
-    ----------
-    func_node
-        A function_definition node.
-
-    Returns:
-    -------
-    str | None
-        The first parameter name, or None.
-    """
-    params_node = func_node.field("parameters")
-    if params_node is None:
-        return None
-    for child in params_node.children():
-        if child.is_named() and child.kind() not in {"(", ")", ","}:
-            text = child.text().strip()
-            # Handle typed parameters: "self: Type" or just "self"
-            if ":" in text:
-                text = text.split(":")[0].strip()
-            if "/" in text:
-                continue  # Skip positional-only separator
-            if "*" in text:
-                continue  # Skip *args / **kwargs / * separator
-            return text
-    return None
-
-
-# Dispatch table for simple node-kind to item-role mappings.
-_NODE_KIND_ROLE_MAP: dict[str, str] = {
-    "call": "callsite",
-    "import_statement": "import",
-    "import_from_statement": "from_import",
-    "assignment": "assignment",
-    "augmented_assignment": "assignment",
-    "identifier": "reference",
-    "attribute": "reference",
-}
-
-
-def _classify_item_role(node: SgNode, decorators: list[str]) -> dict[str, object]:
-    """Classify the semantic role of a node.
-
-    Parameters
-    ----------
-    node
-        The ast-grep node at the match location.
-    decorators
-        Pre-extracted decorator strings.
-
-    Returns:
-    -------
-    dict[str, object]
-        Dict with ``item_role`` key.
-    """
-    kind = node.kind()
-
-    # Fast-path: direct kind-to-role lookup
-    direct_role = _NODE_KIND_ROLE_MAP.get(kind)
-    if direct_role is not None:
-        return {"item_role": direct_role}
-
-    # Function definitions
-    if kind in {"function_definition", "decorated_definition"} and _is_function_node(node):
-        return {"item_role": _classify_function_role(node, decorators)}
-
-    # Class definitions
-    if _is_class_node(node):
-        return {"item_role": _classify_class_role(decorators)}
-
-    return {"item_role": kind}
-
-
-# Decorator-based role dispatch table: maps decorator name to role string.
-_DECORATOR_ROLE_MAP: dict[str, str] = {
-    "classmethod": "classmethod",
-    "staticmethod": "staticmethod",
-    "property": "property_getter",
-    "abstractmethod": "abstractmethod",
-    "pytest.fixture": "fixture",
-}
-
-
-def _classify_function_role_by_decorator(decorators: list[str]) -> str | None:
-    """Classify a function role based on its decorators.
-
-    Parameters
-    ----------
-    decorators
-        Pre-extracted decorator strings.
-
-    Returns:
-    -------
-    str | None
-        A role string if a decorator matches, or None.
-    """
-    decorator_set = frozenset(decorators)
-    for dec_name, role in _DECORATOR_ROLE_MAP.items():
-        if dec_name in decorator_set:
-            return role
-    if any(d.endswith(".setter") for d in decorators):
-        return "property_setter"
-    return None
-
-
-def _classify_function_role_by_name(
-    func_node: SgNode,
-    decorators: list[str],
-) -> str | None:
-    """Classify a function role based on its name (test detection).
-
-    Parameters
-    ----------
-    func_node
-        The unwrapped function_definition node.
-    decorators
-        Pre-extracted decorator strings.
-
-    Returns:
-    -------
-    str | None
-        ``"test_function"`` if detected, else None.
-    """
-    name_node = func_node.field("name")
-    func_name = name_node.text() if name_node is not None else ""
-    if func_name.startswith(_TEST_FUNCTION_PREFIX):
-        return "test_function"
-    if frozenset(decorators) & _TEST_DECORATOR_NAMES:
-        return "test_function"
-    return None
-
-
-def _classify_function_role_by_parent(
-    node: SgNode,
-    func_node: SgNode,
-) -> str:
-    """Classify a function role based on its parent chain (method detection).
-
-    Parameters
-    ----------
-    node
-        The original node (may be decorated_definition).
-    func_node
-        The unwrapped function_definition node.
-
-    Returns:
-    -------
-    str
-        A role string such as ``"method"``, ``"static_or_classmethod"``,
-        or ``"free_function"``.
-    """
-    if not node.inside(kind="class_definition"):
-        return "free_function"
-
-    parent = node.parent()
-    while parent is not None:
-        parent_kind = parent.kind()
-        if parent_kind == "class_definition":
-            return _method_role_by_first_param(func_node)
-        if parent_kind == "decorated_definition":
-            inner = _unwrap_decorated(parent)
-            if inner.kind() == "class_definition":
-                return _method_role_by_first_param(func_node)
-        if parent_kind in {"function_definition", "module"}:
-            break
-        parent = parent.parent()
-    return "free_function"
-
-
-def _method_role_by_first_param(func_node: SgNode) -> str:
-    """Determine method role from first parameter name.
-
-    Parameters
-    ----------
-    func_node
-        A function_definition node.
-
-    Returns:
-    -------
-    str
-        ``"method"`` if first param is self/cls, else ``"static_or_classmethod"``.
-    """
-    first_param = _get_first_param_name(func_node)
-    if first_param in {"self", "cls"}:
-        return "method"
-    return "static_or_classmethod"
-
-
-def _classify_function_role(node: SgNode, decorators: list[str]) -> str:
-    """Classify a function definition into a specific role.
-
-    Parameters
-    ----------
-    node
-        A function_definition or decorated_definition node.
-    decorators
-        Pre-extracted decorator strings.
-
-    Returns:
-    -------
-    str
-        A semantic role string.
-    """
-    func_node = _unwrap_decorated(node)
-
-    # Decorator-based roles
-    dec_role = _classify_function_role_by_decorator(decorators)
-    if dec_role is not None:
-        return dec_role
-
-    # Test function detection
-    name_role = _classify_function_role_by_name(func_node, decorators)
-    if name_role is not None:
-        return name_role
-
-    # Class method detection via parent chain
-    return _classify_function_role_by_parent(node, func_node)
-
-
-def _classify_class_role(decorators: list[str]) -> str:
-    """Classify a class definition into a specific role.
-
-    Parameters
-    ----------
-    decorators
-        Pre-extracted decorator strings.
-
-    Returns:
-    -------
-    str
-        One of ``"dataclass"`` or ``"class_def"``.
-    """
-    for dec in decorators:
-        # Match "dataclass", "dataclass(...)", "dataclasses.dataclass", etc.
-        bare = dec.split("(")[0].strip()
-        if bare.endswith("dataclass"):
-            return "dataclass"
-    return "class_def"
-
-
-# ---------------------------------------------------------------------------
 # ast-grep tier: Class context extraction (Rec 3)
 # ---------------------------------------------------------------------------
 
-_ENUM_BASE_NAMES: frozenset[str] = frozenset(
-    {
-        "Enum",
-        "IntEnum",
-        "StrEnum",
-        "Flag",
-        "IntFlag",
-    }
-)
 
-_PROTOCOL_BASE_NAMES: frozenset[str] = frozenset(
-    {
-        "Protocol",
-        "ABC",
-        "ABCMeta",
-    }
-)
-
-
-def _extract_class_context(node: SgNode) -> dict[str, object]:
+def _extract_class_context(
+    node: SgNode, *, context: EnrichmentContext | None = None
+) -> dict[str, object]:
     """Extract class context for a node inside a class.
 
     Parameters
     ----------
     node
         An ast-grep node.
+    context
+        Per-invocation enrichment context for tracking truncations.
 
     Returns:
     -------
@@ -802,7 +495,10 @@ def _extract_class_context(node: SgNode) -> dict[str, object]:
         result["class_name"] = name_node.text()
 
     # Base classes
-    bases = _extract_base_classes(class_node)
+    def truncate_wrapper(text: str, max_len: int, field_name: str | None) -> str:
+        return _truncate(text, max_len, field_name, context=context)
+
+    bases = _extract_base_classes(class_node, truncate=truncate_wrapper)
     if bases:
         result["base_classes"] = bases
 
@@ -812,129 +508,22 @@ def _extract_class_context(node: SgNode) -> dict[str, object]:
     return result
 
 
-def _find_enclosing_class(node: SgNode) -> SgNode | None:
-    """Walk parent chain to find enclosing class_definition.
-
-    Parameters
-    ----------
-    node
-        Starting ast-grep node.
-
-    Returns:
-    -------
-    SgNode | None
-        The enclosing class_definition node, or None.
-    """
-    if not node.inside(kind="class_definition"):
-        return None
-
-    current = node.parent()
-    depth = 0
-    while current is not None and depth < _MAX_PARENT_DEPTH:
-        kind = current.kind()
-        if kind == "class_definition":
-            return current
-        if kind == "decorated_definition":
-            inner = _unwrap_decorated(current)
-            if inner.kind() == "class_definition":
-                return inner
-        depth += 1
-        current = current.parent()
-    return None
-
-
-def _extract_base_classes(class_node: SgNode) -> list[str]:
-    """Extract base class names from a class definition.
-
-    Parameters
-    ----------
-    class_node
-        A class_definition node.
-
-    Returns:
-    -------
-    list[str]
-        List of base class names, capped at ``_MAX_BASE_CLASSES``.
-    """
-    bases: list[str] = []
-    # Look for argument_list (superclass list) child
-    superclasses = class_node.field("superclasses")
-    if superclasses is None:
-        # Fallback: look for argument_list child
-        for child in class_node.children():
-            if child.kind() == "argument_list":
-                superclasses = child
-                break
-    if superclasses is None:
-        return bases
-
-    for child in superclasses.children():
-        if child.is_named() and child.kind() not in {"(", ")", ","}:
-            text = child.text().strip()
-            if text:
-                bases.append(_truncate(text, _MAX_BASE_CLASS_LEN, field_name="base_class"))
-            if len(bases) >= _MAX_BASE_CLASSES:
-                break
-    return bases
-
-
-def _classify_class_kind(class_node: SgNode, bases: list[str]) -> str:
-    """Classify a class into a kind category.
-
-    Parameters
-    ----------
-    class_node
-        A class_definition node.
-    bases
-        Pre-extracted base class names.
-
-    Returns:
-    -------
-    str
-        One of ``"dataclass"``, ``"protocol"``, ``"enum"``, ``"exception"``,
-        or ``"class"``.
-    """
-    # Check for dataclass decorator on parent decorated_definition
-    parent = class_node.parent()
-    if parent is not None and parent.kind() == "decorated_definition":
-        for child in parent.children():
-            if child.kind() == "decorator":
-                dec_text = child.text().strip()
-                if dec_text.startswith("@"):
-                    dec_text = dec_text[1:]
-                bare = dec_text.split("(")[0].strip()
-                if bare.endswith("dataclass"):
-                    return "dataclass"
-
-    base_set = frozenset(bases)
-
-    if base_set & _PROTOCOL_BASE_NAMES:
-        return "protocol"
-
-    if base_set & _ENUM_BASE_NAMES:
-        return "enum"
-
-    # Exception detection
-    name_node = class_node.field("name")
-    class_name = name_node.text() if name_node is not None else ""
-    if "Exception" in base_set or "BaseException" in base_set or class_name.endswith("Error"):
-        return "exception"
-
-    return "class"
-
-
 # ---------------------------------------------------------------------------
 # ast-grep tier: Call target extraction (Rec 4)
 # ---------------------------------------------------------------------------
 
 
-def _extract_call_target(node: SgNode) -> dict[str, object]:
+def _extract_call_target(
+    node: SgNode, *, context: EnrichmentContext | None = None
+) -> dict[str, object]:
     """Extract call target information from a call node.
 
     Parameters
     ----------
     node
         A call node.
+    context
+        Per-invocation enrichment context for tracking truncations.
 
     Returns:
     -------
@@ -959,23 +548,31 @@ def _extract_call_target(node: SgNode) -> dict[str, object]:
         method = attr_node.text().strip() if attr_node is not None else ""
         if receiver and method:
             result["call_target"] = _truncate(
-                f"{receiver}.{method}", _MAX_CALL_TARGET_LEN, field_name="call_target"
+                f"{receiver}.{method}",
+                _MAX_CALL_TARGET_LEN,
+                "call_target",
+                context=context,
             )
             result["call_receiver"] = _truncate(
-                receiver, _MAX_CALL_RECEIVER_LEN, field_name="call_receiver"
+                receiver, _MAX_CALL_RECEIVER_LEN, "call_receiver", context=context
             )
             result["call_method"] = method
         elif method:
             result["call_target"] = method
     elif func_kind == "identifier":
         result["call_target"] = _truncate(
-            func_node.text().strip(), _MAX_CALL_TARGET_LEN, field_name="call_target"
+            func_node.text().strip(),
+            _MAX_CALL_TARGET_LEN,
+            "call_target",
+            context=context,
         )
     else:
         # Complex expression (e.g., subscript call)
         text = func_node.text().strip()
         if text:
-            result["call_target"] = _truncate(text, _MAX_CALL_TARGET_LEN, field_name="call_target")
+            result["call_target"] = _truncate(
+                text, _MAX_CALL_TARGET_LEN, "call_target", context=context
+            )
 
     # Count arguments
     args_node = node.field("arguments")
@@ -1068,416 +665,6 @@ def _extract_structural_context(node: SgNode) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# Python ast tier: Scope-safe walker (Rec 7, C6)
-# ---------------------------------------------------------------------------
-
-
-def _walk_function_body(
-    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> Iterator[ast.AST]:
-    """Walk function body nodes, skipping nested scopes.
-
-    Parameters
-    ----------
-    func_node
-        A function definition AST node.
-
-    Yields:
-    ------
-    ast.AST
-        Body nodes excluding nested function/class/lambda definitions.
-    """
-    stack: list[ast.AST] = list(reversed(func_node.body))
-    while stack:
-        current = stack.pop()
-        yield current
-        # Do not recurse into nested scope boundaries
-        if isinstance(current, _AST_SCOPE_BOUNDARY_TYPES):
-            continue
-        stack.extend(
-            child
-            for child in ast.iter_child_nodes(current)
-            if not isinstance(child, _AST_SCOPE_BOUNDARY_TYPES)
-        )
-
-
-# ---------------------------------------------------------------------------
-# Python ast tier: Function behavior summary (Rec 7)
-# ---------------------------------------------------------------------------
-
-# Map from AST node type to the behavior flag name it sets.
-_BEHAVIOR_TYPE_MAP: dict[type, str] = {
-    ast.Raise: "raises_exception",
-    ast.Yield: "yields",
-    ast.YieldFrom: "yields",
-    ast.Await: "awaits",
-    ast.With: "has_context_manager",
-    ast.AsyncWith: "has_context_manager",
-}
-
-
-def _extract_behavior_summary(
-    func_ast: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> dict[str, object]:
-    """Extract behavioral flags from a function body.
-
-    Parameters
-    ----------
-    func_ast
-        A function definition AST node.
-
-    Returns:
-    -------
-    dict[str, object]
-        Behavior flags: returns_value, raises_exception, yields, awaits,
-        has_context_manager.
-    """
-    flags: dict[str, bool] = {}
-
-    for child in _walk_function_body(func_ast):
-        if isinstance(child, ast.Return) and child.value is not None:
-            flags["returns_value"] = True
-        else:
-            flag_name = _BEHAVIOR_TYPE_MAP.get(type(child))
-            if flag_name is not None:
-                flags[flag_name] = True
-
-    return dict(flags)
-
-
-# ---------------------------------------------------------------------------
-# Python ast tier: Generator detection (C6)
-# ---------------------------------------------------------------------------
-
-
-def _extract_generator_flag(
-    func_ast: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> dict[str, object]:
-    """Detect whether a function is a generator (scope-safe).
-
-    Parameters
-    ----------
-    func_ast
-        A function definition AST node.
-
-    Returns:
-    -------
-    dict[str, object]
-        Dict with ``is_generator`` key.
-    """
-    for child in _walk_function_body(func_ast):
-        if isinstance(child, (ast.Yield, ast.YieldFrom)):
-            return {"is_generator": True}
-    return {"is_generator": False}
-
-
-# ---------------------------------------------------------------------------
-# Python ast tier: AST function finder
-# ---------------------------------------------------------------------------
-
-
-def _find_ast_function(
-    tree: ast.Module,
-    line: int,
-) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    """Find a function definition starting on the given line.
-
-    Parameters
-    ----------
-    tree
-        Parsed AST module.
-    line
-        1-indexed line number.
-
-    Returns:
-    -------
-    ast.FunctionDef | ast.AsyncFunctionDef | None
-        The matching function node, or None.
-    """
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.lineno == line:
-                return node
-            # Check for decorated functions (decorator may be on a different line)
-            if (
-                hasattr(node, "decorator_list")
-                and node.decorator_list
-                and node.decorator_list[0].lineno <= line <= node.lineno
-            ):
-                return node
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Python ast tier: Import detail extraction (Rec 6, C8)
-# ---------------------------------------------------------------------------
-
-
-def _find_ast_import(
-    tree: ast.Module,
-    line: int,
-) -> ast.Import | ast.ImportFrom | None:
-    """Find an import statement on the given line.
-
-    Parameters
-    ----------
-    tree
-        Parsed AST module.
-    line
-        1-indexed line number.
-
-    Returns:
-    -------
-    ast.Import | ast.ImportFrom | None
-        The matching import node, or None.
-    """
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)) and node.lineno == line:
-            return node
-    return None
-
-
-def _is_type_checking_import(tree: ast.Module, import_node: ast.Import | ast.ImportFrom) -> bool:
-    """Detect whether an import is inside a TYPE_CHECKING guard.
-
-    Parameters
-    ----------
-    tree
-        Parsed AST module.
-    import_node
-        The import node to check.
-
-    Returns:
-    -------
-    bool
-        True if inside an ``if TYPE_CHECKING:`` block.
-    """
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        test = node.test
-        is_tc = (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
-            isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
-        )
-        if is_tc:
-            for child in ast.walk(node):
-                if child is import_node:
-                    return True
-    return False
-
-
-def _extract_import_detail(
-    _node: SgNode,
-    source_bytes: bytes,
-    cache_key: str,
-    line: int,
-) -> dict[str, object]:
-    """Extract normalized import details using Python ``ast``.
-
-    Parameters
-    ----------
-    _node
-        An import_statement or import_from_statement ast-grep node (unused).
-    source_bytes
-        Full source bytes.
-    cache_key
-        File path for AST cache keying.
-    line
-        1-indexed line number.
-
-    Returns:
-    -------
-    dict[str, object]
-        Import detail fields.
-    """
-    result: dict[str, object] = {}
-    ast_tree = _get_ast(source_bytes, cache_key=cache_key)
-    if ast_tree is None:
-        return result
-
-    import_node = _find_ast_import(ast_tree, line)
-    if import_node is None:
-        return result
-
-    if isinstance(import_node, ast.Import):
-        if import_node.names:
-            result["import_module"] = import_node.names[0].name
-            if import_node.names[0].asname:
-                result["import_alias"] = import_node.names[0].asname
-        result["import_level"] = 0
-
-    elif isinstance(import_node, ast.ImportFrom):
-        if import_node.module:
-            result["import_module"] = import_node.module
-        names = [alias.name for alias in import_node.names[:_MAX_IMPORT_NAMES]]
-        result["import_names"] = names
-        if len(import_node.names) == 1 and import_node.names[0].asname:
-            result["import_alias"] = import_node.names[0].asname
-        result["import_level"] = import_node.level or 0
-
-    # TYPE_CHECKING detection
-    if _is_type_checking_import(ast_tree, import_node):
-        result["is_type_import"] = True
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# ast-grep tier: Class API shape summary (Rec 9)
-# ---------------------------------------------------------------------------
-
-
-def _count_methods_and_properties(
-    body_node: SgNode,
-) -> tuple[int, list[str], int]:
-    """Count methods, collect property names, and count abstract members.
-
-    Parameters
-    ----------
-    body_node
-        The body node of a class_definition.
-
-    Returns:
-    -------
-    tuple[int, list[str], int]
-        method_count, property_names, abstract_count.
-    """
-    method_count = 0
-    property_names: list[str] = []
-    abstract_count = 0
-
-    for child in body_node.children():
-        kind = child.kind()
-        if kind == "function_definition":
-            method_count += 1
-        elif kind == "decorated_definition":
-            method_count += 1
-            _inspect_decorated_member(child, property_names)
-            abstract_count += _count_abstract_decorator(child)
-
-    return method_count, property_names, abstract_count
-
-
-def _inspect_decorated_member(
-    child: SgNode,
-    property_names: list[str],
-) -> None:
-    """Inspect decorators on a decorated class member for property names.
-
-    Parameters
-    ----------
-    child
-        A decorated_definition node inside a class body.
-    property_names
-        Accumulator list for property names (mutated in place).
-    """
-    for dec_child in child.children():
-        if dec_child.kind() != "decorator":
-            continue
-        dec_text = dec_child.text().strip()
-        if dec_text.startswith("@"):
-            dec_text = dec_text[1:]
-        if dec_text == "property":
-            inner_func = _unwrap_decorated(child)
-            name_node = inner_func.field("name")
-            if name_node is not None and len(property_names) < _MAX_PROPERTIES_SHOWN:
-                property_names.append(name_node.text())
-
-
-def _count_abstract_decorator(child: SgNode) -> int:
-    """Return 1 if the decorated member has an ``@abstractmethod`` decorator.
-
-    Parameters
-    ----------
-    child
-        A decorated_definition node.
-
-    Returns:
-    -------
-    int
-        1 if abstract, 0 otherwise.
-    """
-    for dec_child in child.children():
-        if dec_child.kind() != "decorator":
-            continue
-        dec_text = dec_child.text().strip()
-        if dec_text.startswith("@"):
-            dec_text = dec_text[1:]
-        if dec_text == "abstractmethod":
-            return 1
-    return 0
-
-
-def _extract_class_markers(inner: SgNode) -> list[str]:
-    """Extract class markers from the parent decorated_definition.
-
-    Parameters
-    ----------
-    inner
-        A class_definition node.
-
-    Returns:
-    -------
-    list[str]
-        List of marker strings (e.g., ``"dataclass"``, ``"frozen"``).
-    """
-    markers: list[str] = []
-    parent = inner.parent()
-    if parent is None or parent.kind() != "decorated_definition":
-        return markers
-    for dec_child in parent.children():
-        if dec_child.kind() != "decorator":
-            continue
-        dec_text = dec_child.text().strip()
-        if dec_text.startswith("@"):
-            dec_text = dec_text[1:]
-        bare = dec_text.split("(")[0].strip()
-        if bare.endswith("dataclass"):
-            markers.append("dataclass")
-            if "frozen=True" in dec_text:
-                markers.append("frozen")
-            if "slots=True" in dec_text:
-                markers.append("slots")
-    return markers
-
-
-def _extract_class_shape(class_node: SgNode) -> dict[str, object]:
-    """Extract class API shape summary.
-
-    Parameters
-    ----------
-    class_node
-        A class_definition node.
-
-    Returns:
-    -------
-    dict[str, object]
-        Shape fields: method_count, property_names, abstract_member_count.
-    """
-    inner = _unwrap_decorated(class_node)
-    if inner.kind() != "class_definition":
-        return {}
-
-    body_node = inner.field("body")
-    if body_node is None:
-        return {}
-
-    method_count, property_names, abstract_count = _count_methods_and_properties(body_node)
-
-    result: dict[str, object] = {"method_count": method_count}
-    if property_names:
-        result["property_names"] = property_names
-    if abstract_count:
-        result["abstract_member_count"] = abstract_count
-
-    class_markers = _extract_class_markers(inner)
-    if class_markers:
-        result["class_markers"] = class_markers
-
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Public entrypoints - enrichment sub-extractors
 # ---------------------------------------------------------------------------
 
@@ -1528,6 +715,8 @@ def _enrich_ast_grep_core(
     source_bytes: bytes,
     payload: dict[str, object],
     degrade_reasons: list[str],
+    *,
+    context: EnrichmentContext | None = None,
 ) -> None:
     """Run the core ast-grep tier extractors, mutating *payload* in place.
 
@@ -1543,8 +732,26 @@ def _enrich_ast_grep_core(
         Accumulator dict (mutated in place).
     degrade_reasons
         Accumulator list (mutated in place).
+    context
+        Per-invocation enrichment context for tracking truncations.
     """
-    dec_result = _collect_extract(payload, degrade_reasons, "decorators", _extract_decorators, node)
+
+    # Create wrapper to pass context to extractors
+    def extract_with_context(
+        label: str, extractor: Callable[..., dict[str, object]], *args: object
+    ) -> dict[str, object]:
+        # Call extractor with context keyword argument
+        try:
+            result = extractor(*args, context=context)
+        except _ENRICHMENT_ERRORS as exc:
+            result: dict[str, object] = {}
+            reason = f"{label}: {type(exc).__name__}"
+            degrade_reasons.append(reason)
+        else:
+            payload.update(result)
+        return result
+
+    dec_result = extract_with_context("decorators", _extract_decorators, node)
     decorators = _coerce_str_list(dec_result.get("decorators"))
 
     role_result = _collect_extract(
@@ -1559,17 +766,15 @@ def _enrich_ast_grep_core(
         payload["is_dataclass"] = True
 
     if _is_function_node(node):
-        _collect_extract(
-            payload, degrade_reasons, "signature", _extract_signature, node, source_bytes
-        )
+        extract_with_context("signature", _extract_signature, node, source_bytes)
 
-    _collect_extract(payload, degrade_reasons, "class_context", _extract_class_context, node)
+    extract_with_context("class_context", _extract_class_context, node)
     class_kind = payload.get("class_kind")
     if isinstance(class_kind, str):
         payload["is_dataclass"] = class_kind == "dataclass"
 
     if node_kind == "call":
-        _collect_extract(payload, degrade_reasons, "call_target", _extract_call_target, node)
+        extract_with_context("call_target", _extract_call_target, node)
 
     _collect_extract(payload, degrade_reasons, "scope_chain", _extract_scope_chain, node)
     _collect_extract(
@@ -1584,6 +789,8 @@ def _enrich_ast_grep_tier(
     node: SgNode,
     node_kind: str,
     source_bytes: bytes,
+    *,
+    context: EnrichmentContext | None = None,
 ) -> tuple[dict[str, object], list[str]]:
     """Run the ast-grep tier extractors for a match node.
 
@@ -1595,6 +802,8 @@ def _enrich_ast_grep_tier(
         The ``kind()`` of *node*.
     source_bytes
         Raw source bytes (for signature extraction compat).
+    context
+        Per-invocation enrichment context for tracking truncations.
 
     Returns:
     -------
@@ -1603,7 +812,7 @@ def _enrich_ast_grep_tier(
     """
     payload: dict[str, object] = {"node_kind": node_kind}
     degrade_reasons: list[str] = []
-    _enrich_ast_grep_core(node, node_kind, source_bytes, payload, degrade_reasons)
+    _enrich_ast_grep_core(node, node_kind, source_bytes, payload, degrade_reasons, context=context)
     return payload, degrade_reasons
 
 
@@ -1678,12 +887,16 @@ def _enrich_import_tier(
         Extracted payload fields and any degrade reasons.
     """
     degrade_reasons: list[str] = []
+    ast_tree = _get_ast(source_bytes, cache_key=cache_key)
+    if ast_tree is None:
+        return {}, degrade_reasons
+
     imp_result, imp_reason = _try_extract(
         "import",
         _extract_import_detail,
         node,
         source_bytes,
-        cache_key,
+        ast_tree,
         line,
     )
     if imp_reason:
@@ -1780,16 +993,6 @@ def _extract_ast_grep_stage_fields(payload: dict[str, object]) -> dict[str, obje
     return {key: payload[key] for key in keys if key in payload}
 
 
-def _merge_gap_fill_fields(
-    payload: dict[str, object],
-    *,
-    supplemental: dict[str, object],
-) -> None:
-    for key, value in supplemental.items():
-        if key not in payload:
-            payload[key] = value
-
-
 def _build_agreement_section(
     *,
     ast_fields: dict[str, object],
@@ -1840,6 +1043,7 @@ def _build_agreement_section(
 @dataclass(slots=True)
 class _PythonEnrichmentState:
     payload: dict[str, object]
+    context: EnrichmentContext = field(default_factory=EnrichmentContext)
     stage_status: dict[str, str] = field(default_factory=dict)
     stage_timings_ms: dict[str, float] = field(default_factory=dict)
     degrade_reasons: list[str] = field(default_factory=list)
@@ -1877,7 +1081,9 @@ def _run_ast_grep_stage(
     source_bytes: bytes,
 ) -> None:
     ast_started = perf_counter()
-    sg_fields, degrade_reasons = _enrich_ast_grep_tier(node, node_kind, source_bytes)
+    sg_fields, degrade_reasons = _enrich_ast_grep_tier(
+        node, node_kind, source_bytes, context=state.context
+    )
     state.stage_timings_ms["ast_grep"] = (perf_counter() - ast_started) * 1000.0
     state.stage_status["ast_grep"] = "degraded" if degrade_reasons else "applied"
     state.payload.update(sg_fields)
@@ -1976,22 +1182,6 @@ def _run_python_resolution_stage(
     state.stage_status["python_resolution"] = "degraded" if resolution_reasons else "skipped"
 
 
-def _extract_tree_sitter_gap_fill(
-    ts_payload: dict[str, object],
-) -> tuple[dict[str, object], dict[str, object] | None]:
-    parse_quality = ts_payload.get("parse_quality")
-    normalized_parse_quality = parse_quality if isinstance(parse_quality, dict) else None
-    excluded = {
-        "language",
-        "enrichment_status",
-        "enrichment_sources",
-        "degrade_reason",
-        "parse_quality",
-    }
-    gap_fill = {key: value for key, value in ts_payload.items() if key not in excluded}
-    return gap_fill, normalized_parse_quality
-
-
 def _run_tree_sitter_stage(
     state: _PythonEnrichmentState,
     *,
@@ -2065,9 +1255,8 @@ def _finalize_python_enrichment_payload(state: _PythonEnrichmentState) -> None:
     state.payload["stage_status"] = state.stage_status
     state.payload["stage_timings_ms"] = state.stage_timings_ms
 
-    if _truncation_tracker:
-        state.payload["truncated_fields"] = list(_truncation_tracker)
-        _truncation_tracker.clear()
+    if state.context.truncations:
+        state.payload["truncated_fields"] = list(state.context.truncations)
 
     dropped_fields, size_hint = _enforce_payload_budget(state.payload)
     state.payload["payload_size_hint"] = size_hint
@@ -2097,8 +1286,6 @@ def enrich_python_context(request: PythonNodeEnrichmentRequest) -> dict[str, obj
     node_kind = node.kind()
     if node_kind not in _ENRICHABLE_KINDS:
         return None
-
-    _truncation_tracker.clear()
 
     state = _PythonEnrichmentState(
         payload={
@@ -2216,7 +1403,6 @@ def enrich_python_context_by_byte_range(
 def clear_python_enrichment_cache() -> None:
     """Clear per-process Python enrichment caches."""
     _AST_CACHE.clear()
-    _truncation_tracker.clear()
 
 
 def extract_python_node(request: PythonNodeEnrichmentRequest) -> dict[str, object]:

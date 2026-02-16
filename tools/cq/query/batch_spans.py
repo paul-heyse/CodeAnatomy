@@ -9,14 +9,14 @@ from ast_grep_py import SgNode, SgRoot
 
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.pathing import normalize_repo_relative_path
-from tools.cq.query.executor import (
+from tools.cq.query.executor_ast_grep import (
     AstGrepMatchSpan,
-    _execute_rule_matches,
-    _group_match_spans,
-    _match_passes_filters,
-    _partition_query_metavar_filters,
-    _resolve_rule_metavar_names,
-    _resolve_rule_variadic_metavars,
+    execute_rule_matches,
+    group_match_spans,
+    match_passes_filters,
+    partition_query_metavar_filters,
+    resolve_rule_metavar_names,
+    resolve_rule_variadic_metavars,
 )
 from tools.cq.query.language import QueryLanguage, file_extensions_for_language
 
@@ -82,14 +82,14 @@ def _collect_file_matches(
             roots_by_lang[lang] = SgRoot(src, lang).root()
         node = roots_by_lang[lang]
         for rule in rules:
-            metavar_names = _resolve_rule_metavar_names(rule, queries[idx])
-            variadic_names = _resolve_rule_variadic_metavars(rule)
-            constraints, residual_filters = _partition_query_metavar_filters(
+            metavar_names = resolve_rule_metavar_names(rule, queries[idx])
+            variadic_names = resolve_rule_variadic_metavars(rule)
+            constraints, residual_filters = partition_query_metavar_filters(
                 queries[idx],
                 allowed_names=frozenset(metavar_names),
             )
-            for match in _execute_rule_matches(node, rule, constraints=constraints or None):
-                if not _match_passes_filters(
+            for match in execute_rule_matches(node, rule, constraints=constraints or None):
+                if not match_passes_filters(
                     match,
                     filters=residual_filters,
                     metavar_names=metavar_names,
@@ -130,7 +130,7 @@ def _query_spans(
     _ = query
     if not matches:
         return {}
-    return _group_match_spans(matches)
+    return group_match_spans(matches)
 
 
 __all__ = [

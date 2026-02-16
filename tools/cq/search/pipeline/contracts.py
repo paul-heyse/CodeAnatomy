@@ -13,8 +13,7 @@ from tools.cq.query.language import (
     QueryLanguage,
     QueryLanguageScope,
 )
-from tools.cq.search.pipeline.classifier import QueryMode
-from tools.cq.search.pipeline.profiles import SearchLimits
+from tools.cq.search._shared.types import QueryMode, SearchLimits
 
 # --- From partition_contracts.py ---
 

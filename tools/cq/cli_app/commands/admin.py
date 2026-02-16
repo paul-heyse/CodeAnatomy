@@ -7,13 +7,12 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.infrastructure import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.cli_app.protocol_output import emit_payload
 from tools.cq.cli_app.types import SchemaKind
 from tools.cq.core.schema_export import cq_result_schema, cq_schema_components, query_schema
 
 
-@require_ctx
 def index(
     *,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -34,7 +33,6 @@ def index(
     )
 
 
-@require_ctx
 def cache(
     *,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -55,7 +53,6 @@ def cache(
     )
 
 
-@require_ctx
 def schema(
     *,
     kind: Annotated[SchemaKind, Parameter(help="Schema export kind")] = SchemaKind.result,

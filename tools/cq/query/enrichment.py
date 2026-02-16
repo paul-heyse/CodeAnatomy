@@ -8,13 +8,13 @@ from __future__ import annotations
 import ast
 import dis
 import logging
-import re
 import symtable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.introspection.symtable_extract import ScopeGraph, extract_scope_graph
+from tools.cq.query.shared_utils import extract_def_name
 
 if TYPE_CHECKING:
     from types import CodeType
@@ -24,6 +24,18 @@ if TYPE_CHECKING:
     from tools.cq.query.sg_parser import SgRecord
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "BytecodeInfo",
+    "SymtableEnricher",
+    "SymtableInfo",
+    "analyze_bytecode",
+    "analyze_symtable",
+    "enrich_records",
+    "enrich_with_decorators",
+    "extract_decorators_from_function",
+    "filter_by_scope",
+]
 
 
 @dataclass(frozen=True)
@@ -412,7 +424,7 @@ class SymtableEnricher:
             return {}
 
         # Extract function name from record
-        func_name = _extract_def_name_from_record(record)
+        func_name = extract_def_name(record)
         if not func_name:
             return {}
 
@@ -429,24 +441,6 @@ class SymtableEnricher:
         }
 
         return enrichment
-
-
-def _extract_def_name_from_record(record: SgRecord) -> str | None:
-    """Extract function/class name from an ast-grep record.
-
-    Returns:
-    -------
-    str | None
-        Definition name when it can be parsed.
-    """
-    text = record.text
-
-    # Match def name(...) or class name
-    match = re.match(r"(?:async\s+)?(?:def|class)\s+(\w+)", text)
-    if match:
-        return match.group(1)
-
-    return None
 
 
 def filter_by_scope(

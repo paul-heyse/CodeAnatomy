@@ -110,7 +110,7 @@ class NeighborhoodStep(RunStepBase, tag="neighborhood", frozen=True):
     target: str
     lang: str = "python"
     top_k: int = 10
-    no_semantic_enrichment: bool = False
+    semantic_enrichment: bool = True
 
 
 RunStep = (

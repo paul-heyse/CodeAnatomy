@@ -406,6 +406,8 @@ class DefIndexVisitor(ast.NodeVisitor):
 class DefIndex:
     """Repository-wide definition index.
 
+    Implements SymbolIndex protocol.
+
     Parameters
     ----------
     root : str
@@ -474,43 +476,6 @@ class DefIndex:
             index.modules[rel_path] = visitor.to_module_info()
 
         return index
-
-    @staticmethod
-    def load_or_build(
-        root: str | Path,
-        max_files: int = 10000,
-        include_patterns: list[str] | None = None,
-        exclude_patterns: list[str] | None = None,
-    ) -> DefIndex:
-        """Build a fresh definition index.
-
-        Build is always fresh; no caching is performed.
-
-        Returns:
-        -------
-        DefIndex
-            Populated definition index.
-        """
-        root_path = Path(root).resolve()
-        if include_patterns is None:
-            include_patterns = ["**/*.py"]
-        if exclude_patterns is None:
-            exclude_patterns = [
-                "**/.*",
-                "**/__pycache__/**",
-                "**/node_modules/**",
-                "**/venv/**",
-                "**/.venv/**",
-                "**/build/**",
-                "**/dist/**",
-            ]
-
-        return DefIndex.build(
-            root=root_path,
-            max_files=max_files,
-            include_patterns=include_patterns,
-            exclude_patterns=exclude_patterns,
-        )
 
     def all_functions(self) -> Iterator[FnDecl]:
         """Iterate over all function declarations.

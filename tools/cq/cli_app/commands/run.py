@@ -7,13 +7,12 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.infrastructure import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.cli_app.options import RunOptions, options_from_params
 from tools.cq.cli_app.params import RunParams
 from tools.cq.core.result_factory import build_error_result
 
 
-@require_ctx
 def run(
     *,
     opts: Annotated[RunParams, Parameter(name="*")] | None = None,

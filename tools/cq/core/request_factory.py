@@ -22,8 +22,7 @@ if TYPE_CHECKING:
     from tools.cq.macros.side_effects import SideEffectsRequest
     from tools.cq.macros.sig_impact import SigImpactRequest
     from tools.cq.query.language import QueryLanguageScope
-    from tools.cq.search.pipeline.classifier import QueryMode
-    from tools.cq.search.pipeline.profiles import SearchLimits
+    from tools.cq.search._shared.types import QueryMode, SearchLimits
 
 
 class RequestContextV1(CqStruct, frozen=True):

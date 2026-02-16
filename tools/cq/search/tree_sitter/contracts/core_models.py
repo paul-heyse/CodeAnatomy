@@ -3,13 +3,52 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 import msgspec
 
 from tools.cq.core.structs import CqCacheStruct, CqStruct
 
 PointV1 = tuple[int, int]
+
+
+@runtime_checkable
+class NodeLike(Protocol):
+    """Canonical structural protocol for tree-sitter-like node objects.
+
+    This is the single authority for node-like structural typing across
+    the tree-sitter subsystem. Supersedes local definitions in node_utils,
+    exports, injections, tags, and locals_index modules.
+    """
+
+    @property
+    def start_byte(self) -> int:
+        """Return the byte offset where this node starts in the source."""
+        ...
+
+    @property
+    def end_byte(self) -> int:
+        """Return the byte offset where this node ends in the source."""
+        ...
+
+    @property
+    def start_point(self) -> tuple[int, int]:
+        """Return the (row, column) position where this node starts."""
+        ...
+
+    @property
+    def end_point(self) -> tuple[int, int]:
+        """Return the (row, column) position where this node ends."""
+        ...
+
+    @property
+    def type(self) -> str:
+        """Return the grammar type name of this node."""
+        ...
+
+    def child_by_field_name(self, name: str, /) -> NodeLike | None:
+        """Return child node for the given field name, or None."""
+        ...
 
 
 # Runtime execution contracts
@@ -254,6 +293,7 @@ class TreeSitterArtifactBundleV1(CqCacheStruct, frozen=True):
 
 __all__ = [
     "AdaptiveRuntimeSnapshotV1",
+    "NodeLike",
     "InjectionRuntimeResultV1",
     "ObjectEvidenceRowV1",
     "ParseSessionStatsV1",

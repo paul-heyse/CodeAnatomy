@@ -16,6 +16,7 @@ from tools.cq.core.services import EntityFrontDoorRequest
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.ir import Query
 from tools.cq.query.language import QueryLanguage
+from tools.cq.query.shared_utils import count_result_matches, extract_missing_languages
 from tools.cq.search.semantic.diagnostics import (
     build_capability_diagnostics,
     build_cross_language_diagnostics,
@@ -24,39 +25,6 @@ from tools.cq.search.semantic.diagnostics import (
     features_from_query,
     is_python_oriented_query_ir,
 )
-
-
-def _count_result_matches(result: CqResult | None) -> int:
-    if result is None:
-        return 0
-    summary_matches = result.summary.get("matches")
-    if isinstance(summary_matches, int):
-        return summary_matches
-    summary_total = result.summary.get("total_matches")
-    if isinstance(summary_total, int):
-        return summary_total
-    return len(result.key_findings)
-
-
-def _missing_languages_from_summary(summary: dict[str, object]) -> list[str]:
-    languages = summary.get("languages")
-    if not isinstance(languages, dict):
-        return []
-    missing: list[str] = []
-    for lang, payload in languages.items():
-        lang_name = str(lang)
-        if not isinstance(payload, dict):
-            missing.append(lang_name)
-            continue
-        total = payload.get("total_matches")
-        if isinstance(total, int):
-            if total <= 0:
-                missing.append(lang_name)
-            continue
-        matches = payload.get("matches")
-        if isinstance(matches, int) and matches <= 0:
-            missing.append(lang_name)
-    return missing
 
 
 def _coerce_semantic_telemetry(payload: object) -> tuple[int, int, int, int]:
@@ -107,7 +75,7 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
         mark_partial_for_missing_languages,
         to_public_front_door_insight_dict,
     )
-    from tools.cq.search.semantic.models import (
+    from tools.cq.core.semantic_contracts import (
         SemanticContractStateInputV1,
         SemanticProvider,
         derive_semantic_contract_state,
@@ -118,7 +86,7 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
         return
     lang_scope = result.summary.get("lang_scope")
     if isinstance(lang_scope, str) and lang_scope == "auto":
-        missing = _missing_languages_from_summary(result.summary)
+        missing = extract_missing_languages(result.summary)
         if missing:
             insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
     provider, available, attempted, applied, failed, timed_out = _merge_semantic_contract_inputs(
@@ -161,8 +129,8 @@ def merge_auto_scope_query_results(
     """
     diagnostics = build_cross_language_diagnostics(
         lang_scope=query.lang_scope,
-        python_matches=_count_result_matches(results.get("python")),
-        rust_matches=_count_result_matches(results.get("rust")),
+        python_matches=count_result_matches(results.get("python")),
+        rust_matches=count_result_matches(results.get("rust")),
         python_oriented=is_python_oriented_query_ir(query),
     )
     capability_diagnostics = build_capability_diagnostics(

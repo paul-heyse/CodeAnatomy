@@ -49,6 +49,29 @@ _DYNAMIC_COLLAPSE_SECTIONS: dict[str, int] = {
 }
 
 
+def is_section_collapsed(kind: str, total: int) -> bool:
+    """Return whether a section kind should default to collapsed.
+
+    Parameters
+    ----------
+    kind : str
+        Section kind identifier.
+    total : int
+        Total number of items in the section.
+
+    Returns:
+    -------
+    bool
+        True if section should be collapsed by default.
+    """
+    if kind in _UNCOLLAPSED_SECTIONS:
+        return False
+    threshold = _DYNAMIC_COLLAPSE_SECTIONS.get(kind)
+    if threshold is None:
+        return True
+    return total > threshold
+
+
 class SectionV1(CqStruct, frozen=True):
     """A single section in the bundle view.
 
@@ -316,12 +339,7 @@ def _slice_to_section(slice_: NeighborhoodSliceV1) -> SectionV1:
         items.append(f"_... and {overflow} more_")
 
     # Determine collapse state
-    collapsed = True
-    if slice_.kind in _UNCOLLAPSED_SECTIONS:
-        collapsed = False
-    elif slice_.kind in _DYNAMIC_COLLAPSE_SECTIONS:
-        threshold = _DYNAMIC_COLLAPSE_SECTIONS[slice_.kind]
-        collapsed = slice_.total > threshold
+    collapsed = is_section_collapsed(slice_.kind, slice_.total)
 
     return SectionV1(
         kind=slice_.kind,
@@ -469,5 +487,6 @@ __all__ = [
     "BundleViewV1",
     "FindingV1",
     "SectionV1",
+    "is_section_collapsed",
     "materialize_section_layout",
 ]

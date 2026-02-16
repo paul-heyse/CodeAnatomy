@@ -179,6 +179,22 @@ def get_worker_scheduler() -> WorkerScheduler:
         return _SCHEDULER_STATE.scheduler
 
 
+def set_worker_scheduler(scheduler: WorkerScheduler | None) -> None:
+    """Set or reset process-global worker scheduler.
+
+    Primarily for testing - allows injection of custom scheduler instances
+    or reset to None to force recreation.
+
+    Args:
+        scheduler: Scheduler instance to set, or None to reset.
+    """
+    with _SCHEDULER_LOCK:
+        old_scheduler = _SCHEDULER_STATE.scheduler
+        _SCHEDULER_STATE.scheduler = scheduler
+    if old_scheduler is not None and scheduler is None:
+        old_scheduler.close()
+
+
 def close_worker_scheduler() -> None:
     """Close and clear process-global worker scheduler."""
     with _SCHEDULER_LOCK:
@@ -196,4 +212,5 @@ __all__ = [
     "WorkerScheduler",
     "close_worker_scheduler",
     "get_worker_scheduler",
+    "set_worker_scheduler",
 ]

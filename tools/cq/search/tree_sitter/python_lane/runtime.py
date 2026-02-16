@@ -19,12 +19,13 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
 )
 from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_python_lane_payload
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
-from tools.cq.search.tree_sitter.core.change_windows import (
-    contains_window,
-    ensure_query_windows,
-    windows_from_changed_ranges,
-)
 from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids, child_by_field
+from tools.cq.search.tree_sitter.core.lane_support import (
+    ENRICHMENT_ERRORS,
+    build_query_windows,
+    lift_anchor,
+    make_parser,
+)
 from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
 from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
@@ -39,7 +40,7 @@ from tools.cq.search.tree_sitter.query.predicates import (
 from tools.cq.search.tree_sitter.query.registry import load_query_pack_sources
 
 if TYPE_CHECKING:
-    from tree_sitter import Language, Node, Parser, Query, Tree
+    from tree_sitter import Language, Node, Query, Tree
 
 try:
     from tree_sitter import Parser as _TreeSitterParser
@@ -54,12 +55,12 @@ _MAX_SOURCE_BYTES = 5 * 1024 * 1024
 _MAX_CAPTURE_ITEMS = 8
 _MAX_CAPTURE_TEXT_LEN = 120
 _DEFAULT_MATCH_LIMIT = 4_096
-_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 _STOP_CONTEXT_KINDS: frozenset[str] = frozenset({"module", "source_file"})
 
 
 @lru_cache(maxsize=1)
-def _python_field_ids() -> dict[str, int]:
+def get_python_field_ids() -> dict[str, int]:
+    """Return cached Python grammar field ID mapping."""
     return cached_field_ids("python")
 
 
@@ -95,22 +96,6 @@ def _python_language() -> Language:
     return cast("Language", resolved)
 
 
-def _make_parser() -> Parser:
-    if _TreeSitterParser is None:
-        msg = "tree_sitter parser bindings are unavailable"
-        raise RuntimeError(msg)
-    return _TreeSitterParser(_python_language())
-
-
-def _parse_tree(source_bytes: bytes) -> Tree:
-    parser = _make_parser()
-    tree = parser.parse(source_bytes)
-    if tree is None:
-        msg = "tree-sitter parser returned no tree"
-        raise RuntimeError(msg)
-    return tree
-
-
 def _parse_with_session(
     source: str,
     *,
@@ -119,7 +104,9 @@ def _parse_with_session(
     source_bytes = source.encode("utf-8", errors="replace")
     if not is_tree_sitter_python_available():
         return None, source_bytes, ()
-    session = get_parse_session(language="python", parser_factory=_make_parser)
+    session = get_parse_session(
+        language="python", parser_factory=lambda: make_parser(_python_language())
+    )
     tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
     return tree, source_bytes, tuple(changed_ranges) if changed_ranges is not None else ()
 
@@ -138,7 +125,9 @@ def parse_python_tree_with_ranges(
     source_bytes = source.encode("utf-8", errors="replace")
     if not is_tree_sitter_python_available():
         return None, ()
-    session = get_parse_session(language="python", parser_factory=_make_parser)
+    session = get_parse_session(
+        language="python", parser_factory=lambda: make_parser(_python_language())
+    )
     tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
     return tree, changed_ranges
 
@@ -154,30 +143,9 @@ def parse_python_tree(source: str, *, cache_key: str | None = None) -> Tree | No
         return None
     try:
         tree, _, _ = _parse_with_session(source, cache_key=cache_key)
-    except _ENRICHMENT_ERRORS:
+    except ENRICHMENT_ERRORS:
         return None
     return tree
-
-
-def _build_query_windows(
-    *,
-    anchor_window: QueryWindowV1,
-    source_byte_len: int,
-    changed_ranges: tuple[object, ...],
-) -> tuple[QueryWindowV1, ...]:
-    windows = windows_from_changed_ranges(
-        changed_ranges,
-        source_byte_len=source_byte_len,
-        pad_bytes=96,
-    )
-    windows = ensure_query_windows(windows, fallback=anchor_window)
-    if windows and not contains_window(
-        windows,
-        value=anchor_window.start_byte,
-        width=anchor_window.end_byte - anchor_window.start_byte,
-    ):
-        return (*windows, anchor_window)
-    return windows
 
 
 def clear_tree_sitter_python_cache() -> None:
@@ -190,7 +158,9 @@ def clear_tree_sitter_python_cache() -> None:
 
 def get_tree_sitter_python_cache_stats() -> dict[str, int]:
     """Return tree-sitter Python cache counters."""
-    session = get_parse_session(language="python", parser_factory=_make_parser)
+    session = get_parse_session(
+        language="python", parser_factory=lambda: make_parser(_python_language())
+    )
     stats = session.stats()
     return {
         "entries": stats.entries,
@@ -300,7 +270,7 @@ def _extract_parse_quality(
             match_limit=1_024,
             budget_ms=query_budget_ms,
         )
-    except _ENRICHMENT_ERRORS:
+    except ENRICHMENT_ERRORS:
         captures = {}
 
     def _collect(name: str) -> list[str]:
@@ -360,7 +330,7 @@ def _capture_gap_fill_fields(
             window_split_count += int(telemetry.window_split_count)
             if isinstance(telemetry.degrade_reason, str) and telemetry.degrade_reason:
                 degrade_reasons.add(telemetry.degrade_reason)
-        except _ENRICHMENT_ERRORS:
+        except ENRICHMENT_ERRORS:
             continue
         _apply_gap_fill_from_captures(payload, captures, source_bytes)
     _finalize_gap_fill_payload(payload)
@@ -477,38 +447,31 @@ def _capture_call_target(captures: dict[str, list[Node]], source_bytes: bytes) -
     call_nodes = captures.get("call.expression", [])
     if not call_nodes:
         return None
-    function_node = child_by_field(call_nodes[0], "function", _python_field_ids())
+    function_node = child_by_field(call_nodes[0], "function", get_python_field_ids())
     if function_node is None:
         return None
     text = node_text(function_node, source_bytes)
     return text[:_MAX_CAPTURE_TEXT_LEN] if text else None
 
 
-def _lift_anchor(node: Node) -> Node:
-    current = node
-    while current.parent is not None:
-        parent = current.parent
-        if parent.type in {
-            "call",
-            "attribute",
-            "assignment",
-            "import_statement",
-            "import_from_statement",
-            "function_definition",
-            "class_definition",
-        }:
-            return parent
-        if current.type in _STOP_CONTEXT_KINDS:
-            return current
-        current = parent
-    return node
+_PYTHON_LIFT_ANCHOR_TYPES: frozenset[str] = frozenset(
+    {
+        "call",
+        "attribute",
+        "assignment",
+        "import_statement",
+        "import_from_statement",
+        "function_definition",
+        "class_definition",
+    }
+)
 
 
 def _effective_capture_window(root: Node, *, byte_start: int, byte_end: int) -> tuple[int, int]:
     anchor = root.named_descendant_for_byte_range(byte_start, byte_end)
     if anchor is None:
         return byte_start, byte_end
-    lifted = _lift_anchor(anchor)
+    lifted = lift_anchor(anchor, parent_types=_PYTHON_LIFT_ANCHOR_TYPES)
     start = int(getattr(lifted, "start_byte", byte_start))
     end = int(getattr(lifted, "end_byte", byte_end))
     if end <= start:
@@ -539,7 +502,7 @@ def _parse_tree_for_enrichment(
 ) -> tuple[Node, bytes, tuple[object, ...]] | None:
     try:
         tree, source_bytes, changed_ranges = _parse_with_session(source, cache_key=cache_key)
-    except _ENRICHMENT_ERRORS as exc:
+    except ENRICHMENT_ERRORS as exc:
         _mark_degraded(payload, reason=type(exc).__name__)
         return None
     if tree is None:
@@ -583,7 +546,7 @@ def _apply_capture_fields(
                 query_budget_ms=query_budget_ms,
             )
         )
-    except _ENRICHMENT_ERRORS as exc:
+    except ENRICHMENT_ERRORS as exc:
         payload["enrichment_status"] = "degraded"
         payload["degrade_reason"] = type(exc).__name__
 
@@ -634,7 +597,7 @@ def enrich_python_context_by_byte_range(
         byte_end=byte_end,
     )
     anchor_window = QueryWindowV1(start_byte=window_start, end_byte=window_end)
-    query_windows = _build_query_windows(
+    query_windows = build_query_windows(
         anchor_window=anchor_window,
         source_byte_len=len(source_bytes),
         changed_ranges=changed_ranges,
@@ -680,6 +643,7 @@ def enrich_python_context_by_byte_range(
 __all__ = [
     "clear_tree_sitter_python_cache",
     "enrich_python_context_by_byte_range",
+    "get_python_field_ids",
     "get_tree_sitter_python_cache_stats",
     "is_tree_sitter_python_available",
     "parse_python_tree",

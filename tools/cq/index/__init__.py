@@ -12,6 +12,7 @@ from tools.cq.index.graph_utils import (
     get_descendants,
     topological_sort,
 )
+from tools.cq.index.protocol import SymbolIndex
 
 __all__ = [
     "BoundCall",
@@ -19,6 +20,7 @@ __all__ = [
     "DefIndex",
     "FnDecl",
     "ModuleInfo",
+    "SymbolIndex",
     "bind_call_to_params",
     "find_sccs",
     "find_simple_cycles",

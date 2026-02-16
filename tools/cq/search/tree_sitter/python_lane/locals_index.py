@@ -3,27 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from functools import lru_cache
-from typing import Protocol
 
 from tools.cq.core.structs import CqStruct
-from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids, child_by_field
+from tools.cq.search.tree_sitter.contracts.core_models import NodeLike
+from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
+from tools.cq.search.tree_sitter.python_lane.runtime import get_python_field_ids
 from tools.cq.search.tree_sitter.core.node_utils import node_text
-
-
-class NodeLike(Protocol):
-    """Structural node protocol for locals indexing."""
-
-    @property
-    def start_byte(self) -> int: ...
-
-    @property
-    def end_byte(self) -> int: ...
-
-    @property
-    def type(self) -> str: ...
-
-    def child_by_field_name(self, name: str, /) -> NodeLike | None: ...
 
 
 class LocalBindingV1(CqStruct, frozen=True):
@@ -35,9 +20,7 @@ class LocalBindingV1(CqStruct, frozen=True):
     definition_start: int
 
 
-@lru_cache(maxsize=1)
-def _python_field_ids() -> dict[str, int]:
-    return cached_field_ids("python")
+from tools.cq.search.tree_sitter.python_lane.runtime import get_python_field_ids
 
 
 def _contains(container: NodeLike, item: NodeLike) -> bool:
@@ -62,7 +45,7 @@ def _nearest_scope(node: NodeLike, scopes: Sequence[NodeLike]) -> NodeLike | Non
 
 
 def _scope_label(scope: NodeLike, source_bytes: bytes) -> str:
-    name_node = child_by_field(scope, "name", _python_field_ids())
+    name_node = child_by_field(scope, "name", get_python_field_ids())
     if name_node is not None:
         name = node_text(name_node, source_bytes)
         if name:

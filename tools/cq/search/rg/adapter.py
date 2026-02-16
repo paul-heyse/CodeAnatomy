@@ -14,8 +14,8 @@ from tools.cq.query.language import (
     ripgrep_types_for_scope,
 )
 from tools.cq.search._shared.core import RgRunRequest, search_sync_with_timeout
-from tools.cq.search.pipeline.classifier import QueryMode
-from tools.cq.search.pipeline.profiles import DEFAULT, INTERACTIVE, SearchLimits
+from tools.cq.search._shared.types import QueryMode, SearchLimits
+from tools.cq.search.pipeline.profiles import DEFAULT, INTERACTIVE
 from tools.cq.search.rg.codec import as_match_data, match_line_number, match_line_text, match_path
 from tools.cq.search.rg.contracts import RgRunSettingsV1
 from tools.cq.search.rg.runner import run_rg_json, run_with_settings

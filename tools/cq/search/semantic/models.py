@@ -6,16 +6,14 @@ import os
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 import msgspec
 from pathspec import PathSpec
 
+from tools.cq.core.semantic_contracts import SemanticProvider
 from tools.cq.core.structs import CqOutputStruct, CqStruct
 from tools.cq.query.language import QueryLanguage
-
-SemanticProvider = Literal["python_static", "rust_static", "none"]
-SemanticStatus = Literal["unavailable", "skipped", "failed", "partial", "ok"]
 
 _SEMANTIC_PLANES_VERSION = "cq.semantic_planes.v2"
 _SEMANTIC_DISABLED_VALUES = {"0", "false", "no", "off"}
@@ -67,31 +65,6 @@ class SemanticOutcomeCacheV1(CqStruct, frozen=True):
     failure_reason: str | None = None
 
 
-class SemanticContractStateV1(CqStruct, frozen=True):
-    """Deterministic static-semantic state for front-door degradation semantics."""
-
-    provider: SemanticProvider = "none"
-    available: bool = False
-    attempted: int = 0
-    applied: int = 0
-    failed: int = 0
-    timed_out: int = 0
-    status: SemanticStatus = "unavailable"
-    reasons: tuple[str, ...] = ()
-
-
-class SemanticContractStateInputV1(CqStruct, frozen=True):
-    """Input envelope for deterministic semantic contract-state derivation."""
-
-    provider: SemanticProvider
-    available: bool
-    attempted: int = 0
-    applied: int = 0
-    failed: int = 0
-    timed_out: int = 0
-    reasons: tuple[str, ...] = ()
-
-
 class SemanticRequestBudgetV1(CqStruct, frozen=True):
     """Timeout and retry budget for one static semantic request envelope."""
 
@@ -99,60 +72,6 @@ class SemanticRequestBudgetV1(CqStruct, frozen=True):
     probe_timeout_seconds: float = 1.0
     max_attempts: int = 2
     retry_backoff_ms: int = 100
-
-
-def derive_semantic_contract_state(
-    input_state: SemanticContractStateInputV1,
-) -> SemanticContractStateV1:
-    """Derive canonical semantic state from capability + attempt telemetry.
-
-    Returns:
-        SemanticContractStateV1: Function return value.
-    """
-    attempted_count = max(0, int(input_state.attempted))
-    applied_count = max(0, int(input_state.applied))
-    failed_count = max(0, int(input_state.failed))
-    timed_out_count = max(0, int(input_state.timed_out))
-    normalized_reasons = tuple(dict.fromkeys(reason for reason in input_state.reasons if reason))
-
-    if not input_state.available:
-        return SemanticContractStateV1(
-            provider=input_state.provider,
-            available=False,
-            status="unavailable",
-            reasons=normalized_reasons,
-        )
-    if attempted_count <= 0:
-        return SemanticContractStateV1(
-            provider=input_state.provider,
-            available=True,
-            status="skipped",
-            reasons=normalized_reasons,
-        )
-    if applied_count <= 0:
-        return SemanticContractStateV1(
-            provider=input_state.provider,
-            available=True,
-            attempted=attempted_count,
-            failed=max(failed_count, attempted_count),
-            timed_out=timed_out_count,
-            status="failed",
-            reasons=normalized_reasons,
-        )
-
-    status: SemanticStatus = (
-        "ok" if failed_count <= 0 and applied_count >= attempted_count else "partial"
-    )
-    return SemanticContractStateV1(
-        provider=input_state.provider,
-        available=True,
-        attempted=attempted_count,
-        applied=applied_count,
-        failed=failed_count,
-        timed_out=timed_out_count,
-        status=status,
-        reasons=normalized_reasons,
-    )
 
 
 def compile_globs(globs: list[str]) -> PathSpec:
@@ -503,43 +422,17 @@ def enrich_with_language_semantics(
     )
 
 
-def fail_open(reason: str) -> SemanticOutcomeV1:
-    """Return a fail-open semantic outcome for graceful degradation."""
-    return SemanticOutcomeV1(payload=None, timed_out=False, failure_reason=reason)
-
-
-def enrich_semantics(request: LanguageSemanticEnrichmentRequest) -> SemanticOutcomeV1:
-    """Execute semantic enrichment via the shared language front door.
-
-    Returns:
-        SemanticOutcomeV1: Function return value.
-    """
-    outcome = enrich_with_language_semantics(request)
-    return SemanticOutcomeV1(
-        payload=dict(outcome.payload) if isinstance(outcome.payload, dict) else None,
-        timed_out=bool(outcome.timed_out),
-        failure_reason=outcome.failure_reason,
-    )
-
-
 __all__ = [
     "LanguageSemanticEnrichmentOutcome",
     "LanguageSemanticEnrichmentRequest",
-    "SemanticContractStateInputV1",
-    "SemanticContractStateV1",
     "SemanticOutcomeCacheV1",
     "SemanticOutcomeV1",
-    "SemanticProvider",
     "SemanticRequestBudgetV1",
-    "SemanticStatus",
     "budget_for_mode",
     "build_static_semantic_planes",
     "call_with_retry",
     "compile_globs",
-    "derive_semantic_contract_state",
-    "enrich_semantics",
     "enrich_with_language_semantics",
-    "fail_open",
     "infer_language_for_path",
     "match_path",
     "provider_for_language",

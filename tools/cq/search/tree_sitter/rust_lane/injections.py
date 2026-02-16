@@ -4,31 +4,15 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from typing import Protocol
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.tree_sitter.contracts.core_models import NodeLike
 from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.rust_lane.injection_config import (
     InjectionSettingsV1,
     resolve_rust_injection_profile,
     settings_for_pattern,
 )
-
-
-class NodeLike(Protocol):
-    """Structural node protocol for injection planning."""
-
-    @property
-    def start_byte(self) -> int: ...
-
-    @property
-    def end_byte(self) -> int: ...
-
-    @property
-    def start_point(self) -> tuple[int, int]: ...
-
-    @property
-    def end_point(self) -> tuple[int, int]: ...
 
 
 class InjectionPlanV1(CqStruct, frozen=True):

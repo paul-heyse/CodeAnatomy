@@ -35,8 +35,14 @@ from tools.cq.core.cache.fragment_codecs import (
 from tools.cq.core.contracts import contract_to_builtins, require_mapping
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.query.language import QueryLanguage, constrain_include_globs_for_language
-from tools.cq.search.pipeline.classifier import QueryMode
+from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.pipeline.contracts import SearchPartitionPlanV1
+from tools.cq.search.pipeline.smart_search_types import (
+    EnrichedMatch,
+    LanguageSearchResult,
+    RawMatch,
+    SearchStats,
+)
 from tools.cq.search.tree_sitter.core.infrastructure import run_file_lanes_parallel
 
 if TYPE_CHECKING:
@@ -92,30 +98,26 @@ def run_search_partition(
         object: Language-search result payload for this partition.
     """
     lang = plan.language
-    sm = _smart_search_module()
     scope = _scope_context(ctx, lang, mode)
     raw_matches, stats, pattern = _candidate_phase(
         ctx=ctx,
         lang=lang,
         mode=mode,
         scope=scope,
-        smart_search_mod=sm,
     )
     prefetch_future = _maybe_submit_prefetch(
         ctx=ctx,
         lang=lang,
         raw_matches=raw_matches,
-        smart_search_mod=sm,
     )
     enriched = _enrichment_phase(
         ctx=ctx,
         lang=lang,
         raw_matches=raw_matches,
         scope=scope,
-        smart_search_mod=sm,
     )
-    python_semantic_prefetch = _resolve_prefetch_result(prefetch_future, smart_search_mod=sm)
-    return sm.LanguageSearchResult(
+    python_semantic_prefetch = _resolve_prefetch_result(prefetch_future)
+    return LanguageSearchResult(
         lang=lang,
         raw_matches=raw_matches,
         stats=stats,
@@ -124,12 +126,6 @@ def run_search_partition(
         dropped_by_scope=int(getattr(stats, "dropped_by_scope", 0)),
         python_semantic_prefetch=python_semantic_prefetch,
     )
-
-
-def _smart_search_module() -> Any:
-    from tools.cq.search.pipeline import smart_search as smart_search_module
-
-    return smart_search_module
 
 
 def _scope_context(
@@ -192,7 +188,6 @@ def _candidate_phase(
     lang: QueryLanguage,
     mode: QueryMode,
     scope: _PartitionScopeContext,
-    smart_search_mod: Any,
 ) -> tuple[list[object], object, str]:
     namespace = "search_candidates"
     cache_enabled = is_namespace_cache_enabled(policy=scope.policy, namespace=namespace)
@@ -225,7 +220,6 @@ def _candidate_phase(
         ctx=ctx,
         lang=lang,
         mode=mode,
-        smart_search_mod=smart_search_mod,
     )
     if cache_enabled and not hit:
         payload = SearchCandidatesCacheV1(
@@ -260,23 +254,24 @@ def _candidate_payload_from_cache(
     ctx: SmartSearchContext,
     lang: QueryLanguage,
     mode: QueryMode,
-    smart_search_mod: Any,
 ) -> tuple[list[object], object, str, bool]:
     payload = decode_fragment_payload(cached, type_=SearchCandidatesCacheV1)
     if payload is not None:
         try:
             raw_matches = [
-                msgspec.convert(item, type=smart_search_mod.RawMatch)
+                msgspec.convert(item, type=RawMatch)
                 for item in payload.raw_matches
             ]
-            stats = msgspec.convert(payload.stats, type=smart_search_mod.SearchStats)
+            stats = msgspec.convert(payload.stats, type=SearchStats)
         except (RuntimeError, TypeError, ValueError):
             record_cache_decode_failure(namespace="search_candidates")
         else:
             return raw_matches, stats, payload.pattern, True
     elif is_fragment_cache_payload(cached):
         record_cache_decode_failure(namespace="search_candidates")
-    raw_matches, stats, pattern = smart_search_mod.run_candidate_phase(ctx, lang=lang, mode=mode)
+    from tools.cq.search.pipeline.smart_search import run_candidate_phase
+
+    raw_matches, stats, pattern = run_candidate_phase(ctx, lang=lang, mode=mode)
     return raw_matches, stats, pattern, False
 
 
@@ -285,12 +280,15 @@ def _maybe_submit_prefetch(
     ctx: SmartSearchContext,
     lang: QueryLanguage,
     raw_matches: list[Any],
-    smart_search_mod: Any,
 ) -> Future[object] | None:
     if lang != "python" or not raw_matches:
         return None
+    from tools.cq.search.pipeline.python_semantic import (
+        run_prefetch_python_semantic_for_raw_matches,
+    )
+
     return get_worker_scheduler().submit_io(
-        smart_search_mod.run_prefetch_python_semantic_for_raw_matches,
+        run_prefetch_python_semantic_for_raw_matches,
         ctx,
         lang=lang,
         raw_matches=raw_matches,
@@ -303,7 +301,6 @@ def _enrichment_phase(
     lang: QueryLanguage,
     raw_matches: list[Any],
     scope: _PartitionScopeContext,
-    smart_search_mod: Any,
 ) -> list[object]:
     namespace = "search_enrichment"
     context = _EnrichmentCacheContext(
@@ -328,7 +325,6 @@ def _enrichment_phase(
     enriched_results, misses = _probe_enrichment_cache(
         raw_matches=raw_matches,
         context=context,
-        smart_search_mod=smart_search_mod,
     )
     if misses:
         _compute_and_persist_enrichment_misses(
@@ -336,10 +332,9 @@ def _enrichment_phase(
             misses=misses,
             enriched_results=enriched_results,
             context=context,
-            smart_search_mod=smart_search_mod,
         )
     return [
-        match for match in enriched_results if isinstance(match, smart_search_mod.EnrichedMatch)
+        match for match in enriched_results if isinstance(match, EnrichedMatch)
     ]
 
 
@@ -347,7 +342,6 @@ def _probe_enrichment_cache(
     *,
     raw_matches: list[Any],
     context: _EnrichmentCacheContext,
-    smart_search_mod: Any,
 ) -> tuple[list[Any | None], list[tuple[int, Any, str, str]]]:
     enriched_results: list[Any | None] = [None] * len(raw_matches)
     misses: list[tuple[int, Any, str, str]] = []
@@ -374,7 +368,7 @@ def _probe_enrichment_cache(
                 hit=is_fragment_cache_payload(cached),
                 key=cache_key,
             )
-            decoded = _decode_enrichment_cached(cached=cached, smart_search_mod=smart_search_mod)
+            decoded = _decode_enrichment_cached(cached=cached)
             if decoded is not None:
                 enriched_results[idx] = decoded
                 continue
@@ -382,14 +376,14 @@ def _probe_enrichment_cache(
     return enriched_results, misses
 
 
-def _decode_enrichment_cached(*, cached: object, smart_search_mod: Any) -> Any | None:
+def _decode_enrichment_cached(*, cached: object) -> Any | None:
     payload = decode_fragment_payload(cached, type_=SearchEnrichmentAnchorCacheV1)
     if payload is None:
         if is_fragment_cache_payload(cached):
             record_cache_decode_failure(namespace="search_enrichment")
         return None
     try:
-        return msgspec.convert(payload.enriched_match, type=smart_search_mod.EnrichedMatch)
+        return msgspec.convert(payload.enriched_match, type=EnrichedMatch)
     except (RuntimeError, TypeError, ValueError):
         record_cache_decode_failure(namespace="search_enrichment")
         return None
@@ -401,13 +395,11 @@ def _compute_and_persist_enrichment_misses(
     misses: list[tuple[int, Any, str, str]],
     enriched_results: list[Any | None],
     context: _EnrichmentCacheContext,
-    smart_search_mod: Any,
 ) -> None:
     miss_results = _classify_enrichment_misses(
         ctx=ctx,
         misses=misses,
         context=context,
-        smart_search_mod=smart_search_mod,
     )
     with context.cache.transact():
         for row in miss_results:
@@ -440,7 +432,6 @@ def _classify_enrichment_misses(
     ctx: SmartSearchContext,
     misses: list[tuple[int, Any, str, str]],
     context: _EnrichmentCacheContext,
-    smart_search_mod: Any,
 ) -> list[_EnrichmentMissResult]:
     if len(misses) <= 1:
         return _classify_enrichment_miss_batch(
@@ -455,8 +446,10 @@ def _classify_enrichment_misses(
     for item in misses:
         partitioned.setdefault(str(item[1].file), []).append(item)
     batches = list(partitioned.values())
+    from tools.cq.search.pipeline.smart_search import MAX_SEARCH_CLASSIFY_WORKERS
+
     workers = min(
-        len(batches), max(1, int(getattr(smart_search_mod, "MAX_SEARCH_CLASSIFY_WORKERS", 1)))
+        len(batches), max(1, int(MAX_SEARCH_CLASSIFY_WORKERS))
     )
     if workers <= 1:
         return _classify_enrichment_miss_batch(
@@ -534,16 +527,19 @@ def _classify_enrichment_miss_batch(
 
 def _resolve_prefetch_result(
     prefetch_future: Future[object] | None,
-    *,
-    smart_search_mod: Any,
 ) -> object | None:
     if prefetch_future is None:
         return None
     try:
         return prefetch_future.result()
     except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
-        return smart_search_mod.PythonSemanticPrefetchResult(
-            telemetry=smart_search_mod.new_python_semantic_telemetry()
+        from tools.cq.search.pipeline.smart_search_telemetry import (
+            new_python_semantic_telemetry,
+        )
+        from tools.cq.search.pipeline.smart_search_types import _PythonSemanticPrefetchResult
+
+        return _PythonSemanticPrefetchResult(
+            telemetry=new_python_semantic_telemetry()
         )
 
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
 
 from tools.cq.core.scoring import (
     ConfidenceSignals,
@@ -15,7 +14,7 @@ from tools.cq.core.scoring import (
 )
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.macros.contracts import MacroScorePayloadV1
+from tools.cq.macros.contracts import MacroScorePayloadV1, ScoringDetailsV1
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import find_symbol_definition_files
 
@@ -137,12 +136,12 @@ def macro_scoring_details(
     breakages: int = 0,
     ambiguities: int = 0,
     evidence_kind: str = "resolved_ast",
-) -> dict[str, object]:
-    """Build a normalized scoring-details mapping for macro findings.
+) -> ScoringDetailsV1:
+    """Build a normalized scoring-details struct for macro findings.
 
     Returns:
     -------
-    dict[str, object]
+    ScoringDetailsV1
         Scoring metrics and buckets for macro findings.
     """
     impact = impact_score(
@@ -155,13 +154,13 @@ def macro_scoring_details(
         )
     )
     confidence = confidence_score(ConfidenceSignals(evidence_kind=evidence_kind))
-    return {
-        "impact_score": impact,
-        "impact_bucket": bucket(impact),
-        "confidence_score": confidence,
-        "confidence_bucket": bucket(confidence),
-        "evidence_kind": evidence_kind,
-    }
+    return ScoringDetailsV1(
+        impact_score=impact,
+        impact_bucket=bucket(impact),
+        confidence_score=confidence,
+        confidence_bucket=bucket(confidence),
+        evidence_kind=evidence_kind,
+    )
 
 
 def macro_score_payload(*, files: int, findings: int) -> MacroScorePayloadV1:
@@ -177,13 +176,11 @@ def macro_score_payload(*, files: int, findings: int) -> MacroScorePayloadV1:
         files=files,
         evidence_kind="resolved_ast",
     )
-    impact = cast("float", scoring["impact_score"])
-    confidence = cast("float", scoring["confidence_score"])
     return MacroScorePayloadV1(
-        impact=impact,
-        confidence=confidence,
-        impact_bucket=str(scoring["impact_bucket"]),
-        confidence_bucket=str(scoring["confidence_bucket"]),
+        impact=scoring.impact_score,
+        confidence=scoring.confidence_score,
+        impact_bucket=scoring.impact_bucket,
+        confidence_bucket=scoring.confidence_bucket,
         details={
             "files": files,
             "findings": findings,

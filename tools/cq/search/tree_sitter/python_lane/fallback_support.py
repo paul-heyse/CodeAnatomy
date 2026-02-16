@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids, child_by_field
@@ -15,8 +14,8 @@ _MAX_CAPTURE_ITEMS = 8
 _MAX_CAPTURE_TEXT_LEN = 120
 
 
-@lru_cache(maxsize=1)
-def _python_field_ids() -> dict[str, int]:
+def get_python_field_ids() -> dict[str, int]:
+    """Delegate to cached_field_ids; avoids circular import with runtime.py."""
     return cached_field_ids("python")
 
 
@@ -31,7 +30,7 @@ def _capture_named_definition(
             return name
     if not fallback_nodes:
         return None
-    name_node = child_by_field(fallback_nodes[0], "name", _python_field_ids())
+    name_node = child_by_field(fallback_nodes[0], "name", get_python_field_ids())
     if name_node is None:
         return None
     name = node_text(name_node, source_bytes)
@@ -72,8 +71,8 @@ def _append_named_import_chain(
         _append_chain_row(chain, key="module", value=node_text(name_node, source_bytes))
         return
 
-    module_node = child_by_field(name_node, "name", _python_field_ids())
-    alias_node = child_by_field(name_node, "alias", _python_field_ids())
+    module_node = child_by_field(name_node, "name", get_python_field_ids())
+    alias_node = child_by_field(name_node, "alias", get_python_field_ids())
     if module_node is not None:
         _append_chain_row(chain, key="module", value=node_text(module_node, source_bytes))
     if alias_node is not None:
@@ -86,7 +85,7 @@ def _append_import_statement_chain(
     source_bytes: bytes,
 ) -> None:
     for statement in captures.get("import.statement", []):
-        name_node = child_by_field(statement, "name", _python_field_ids())
+        name_node = child_by_field(statement, "name", get_python_field_ids())
         if name_node is None:
             continue
         _append_named_import_chain(chain, name_node, source_bytes)
@@ -100,10 +99,10 @@ def _append_import_from_statement_chain(
     source_bytes: bytes,
 ) -> None:
     for statement in captures.get("import.from_statement", []):
-        module_node = child_by_field(statement, "module_name", _python_field_ids())
+        module_node = child_by_field(statement, "module_name", get_python_field_ids())
         if module_node is not None:
             _append_chain_row(chain, key="from", value=node_text(module_node, source_bytes))
-        name_node = child_by_field(statement, "name", _python_field_ids())
+        name_node = child_by_field(statement, "name", get_python_field_ids())
         if name_node is not None:
             _append_named_import_chain(chain, name_node, source_bytes)
         if len(chain) >= _MAX_CAPTURE_ITEMS:

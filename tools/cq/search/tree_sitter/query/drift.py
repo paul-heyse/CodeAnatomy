@@ -72,8 +72,6 @@ def has_breaking_changes(diff: GrammarDiffV1) -> bool:
 
 # -- Drift Report -------------------------------------------------------------
 
-_LAST_CONTRACT_SNAPSHOTS: dict[str, QueryContractSnapshotV1] = {}
-
 
 def _digest(parts: list[str]) -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
@@ -134,7 +132,10 @@ def build_grammar_drift_report(
         query_digest=query_digest,
     )
 
-    previous = _LAST_CONTRACT_SNAPSHOTS.get(language)
+    from tools.cq.search.tree_sitter.query.runtime_state import get_query_runtime_state
+
+    runtime_state = get_query_runtime_state()
+    previous = runtime_state.last_contract_snapshots.get(language)
     schema_diff = diff_snapshots(previous, snapshot) if previous is not None else GrammarDiffV1()
 
     errors: list[str] = []
@@ -144,7 +145,7 @@ def build_grammar_drift_report(
         errors.extend(f"removed_node_kind:{name}" for name in schema_diff.removed_node_kinds[:32])
         errors.extend(f"removed_field:{name}" for name in schema_diff.removed_fields[:32])
 
-    _LAST_CONTRACT_SNAPSHOTS[language] = snapshot
+    runtime_state.last_contract_snapshots[language] = snapshot
     return GrammarDriftReportV1(
         language=language,
         grammar_digest=grammar_digest,
@@ -157,7 +158,9 @@ def build_grammar_drift_report(
 
 def get_last_contract_snapshot(language: str) -> QueryContractSnapshotV1 | None:
     """Return last snapshot captured by ``build_grammar_drift_report``."""
-    return _LAST_CONTRACT_SNAPSHOTS.get(language)
+    from tools.cq.search.tree_sitter.query.runtime_state import get_query_runtime_state
+
+    return get_query_runtime_state().last_contract_snapshots.get(language)
 
 
 __all__ = [

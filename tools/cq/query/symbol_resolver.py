@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, field
 
 from tools.cq.query.sg_parser import SgRecord, filter_records_by_kind
+from tools.cq.query.shared_utils import extract_def_name
 
 
 @dataclass
@@ -191,7 +192,7 @@ def _build_symbol_key(record: SgRecord) -> SymbolKey | None:
         Symbol key for the record, or None if no name is found.
     """
     # Extract name from definition
-    name = _extract_def_name(record)
+    name = extract_def_name(record)
     if not name:
         return None
 
@@ -199,27 +200,6 @@ def _build_symbol_key(record: SgRecord) -> SymbolKey | None:
     module_path = _file_to_module_path(record.file)
 
     return SymbolKey(module_path=module_path, qualname=name)
-
-
-def _extract_def_name(record: SgRecord) -> str | None:
-    """Extract the name from a definition record.
-
-    Used by ``_build_symbol_key`` to derive a qualname.
-
-    Returns:
-    -------
-    str | None
-        Definition name if one is found.
-    """
-    text = record.text.lstrip()
-
-    # Match def name(...) or class name
-    if record.record == "def":
-        match = re.search(r"(?:async\s+)?(?:def|class)\s+(\w+)", text)
-        if match:
-            return match.group(1)
-
-    return None
 
 
 def _file_to_module_path(file_path: str) -> str:

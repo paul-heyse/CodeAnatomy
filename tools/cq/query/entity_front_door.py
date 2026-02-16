@@ -24,13 +24,16 @@ from tools.cq.core.front_door_insight import (
     to_public_front_door_insight_dict,
 )
 from tools.cq.core.schema import CqResult, Finding
-from tools.cq.core.snb_schema import SemanticNodeRefV1
-from tools.cq.query.language import QueryLanguage
-from tools.cq.search.semantic.models import (
-    LanguageSemanticEnrichmentRequest,
+from tools.cq.core.semantic_contracts import (
     SemanticContractStateInputV1,
     SemanticProvider,
     derive_semantic_contract_state,
+)
+from tools.cq.core.snb_schema import SemanticNodeRefV1
+from tools.cq.query.language import QueryLanguage
+from tools.cq.query.shared_utils import extract_missing_languages
+from tools.cq.search.semantic.models import (
+    LanguageSemanticEnrichmentRequest,
     enrich_with_language_semantics,
     infer_language_for_path,
     provider_for_language,
@@ -103,7 +106,7 @@ def attach_entity_front_door_insight(
     )
     insight = _apply_semantic_contract_state(insight, telemetry)
 
-    missing = _missing_languages_from_summary(result.summary)
+    missing = extract_missing_languages(result.summary)
     if missing:
         insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
 
@@ -441,27 +444,6 @@ def _confidence_from_candidates(candidates: list[Finding]) -> InsightConfidenceV
             bucket=score.confidence_bucket or confidence.bucket,
         )
     return confidence
-
-
-def _missing_languages_from_summary(summary: dict[str, object]) -> list[str]:
-    languages = summary.get("languages")
-    if not isinstance(languages, dict):
-        return []
-    missing: list[str] = []
-    for lang, payload in languages.items():
-        lang_name = str(lang)
-        if not isinstance(payload, dict):
-            missing.append(lang_name)
-            continue
-        total = payload.get("total_matches")
-        if isinstance(total, int):
-            if total <= 0:
-                missing.append(lang_name)
-            continue
-        matches = payload.get("matches")
-        if isinstance(matches, int) and matches <= 0:
-            missing.append(lang_name)
-    return missing
 
 
 __all__ = ["attach_entity_front_door_insight"]

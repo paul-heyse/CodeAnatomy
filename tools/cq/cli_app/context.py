@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from tools.cq.cli_app.options import CommonFilters
 from tools.cq.cli_app.types import OutputFormat
@@ -14,6 +14,7 @@ from tools.cq.index.repo import resolve_repo_context
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from tools.cq.core.schema import CqResult
     from tools.cq.core.toolchain import Toolchain
 
 
@@ -147,6 +148,10 @@ class CliTextResult(CqStruct, frozen=True):
     media_type: str = "text/plain"
 
 
+if TYPE_CHECKING:
+    CliResultPayload = CqResult | CliTextResult | int
+
+
 class CliResult(CqStruct, frozen=True):
     """Result from a CLI command execution.
 
@@ -162,17 +167,23 @@ class CliResult(CqStruct, frozen=True):
         Filter configuration for result filtering.
     """
 
-    result: Any
+    result: CliResultPayload
     context: CliContext
     exit_code: int | None = None
     filters: FilterConfig | None = None
 
     @property
     def is_cq_result(self) -> bool:
-        """Check if result is a CqResult."""
-        from tools.cq.core.schema import CqResult
+        """Check if result is a CqResult.
 
-        return isinstance(self.result, CqResult)
+        Returns:
+        -------
+        bool
+            True if result is a CqResult.
+        """
+        from tools.cq.core.schema import CqResult as CqResultType
+
+        return isinstance(self.result, CqResultType)
 
     def get_exit_code(self) -> int:
         """Get the exit code for this result.

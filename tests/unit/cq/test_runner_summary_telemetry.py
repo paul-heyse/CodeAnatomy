@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.run.runner import _populate_run_summary_metadata
+from tools.cq.run.run_summary import populate_run_summary_metadata
 
 
 def test_populate_run_summary_aggregates_step_semantic_telemetry() -> None:
@@ -59,7 +59,7 @@ def test_populate_run_summary_aggregates_step_semantic_telemetry() -> None:
         },
     }
 
-    _populate_run_summary_metadata(merged, executed_results=[], total_steps=2)
+    populate_run_summary_metadata(merged, executed_results=[], total_steps=2)
 
     assert merged.summary["python_semantic_telemetry"] == {
         "attempted": 3,

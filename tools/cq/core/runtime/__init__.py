@@ -12,6 +12,7 @@ from tools.cq.core.runtime.worker_scheduler import (
     WorkerScheduler,
     close_worker_scheduler,
     get_worker_scheduler,
+    set_worker_scheduler,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "close_worker_scheduler",
     "default_runtime_execution_policy",
     "get_worker_scheduler",
+    "set_worker_scheduler",
 ]

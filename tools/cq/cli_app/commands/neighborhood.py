@@ -7,7 +7,7 @@ from typing import Annotated
 from cyclopts import App, Parameter, validators
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.infrastructure import analysis_group, require_context, require_ctx
+from tools.cq.cli_app.infrastructure import analysis_group, require_context
 from tools.cq.cli_app.types import NeighborhoodLanguageToken
 from tools.cq.core.cache import maybe_evict_run_cache_tag
 from tools.cq.core.schema import assign_result_finding_ids, mk_runmeta, ms
@@ -22,7 +22,6 @@ neighborhood_app = App(
 
 
 @neighborhood_app.default
-@require_ctx
 def neighborhood(
     target: Annotated[str, Parameter(help="Target location (file:line[:col] or symbol)")],
     *,

@@ -12,6 +12,12 @@ class _FakeNode:
     type: str
     start_byte: int
     end_byte: int
+    start_point: tuple[int, int] = (0, 0)
+    end_point: tuple[int, int] = (0, 0)
+
+    def child_by_field_name(self, name: str, /) -> _FakeNode | None:
+        _ = name
+        return None
 
 
 def test_export_query_hits_emits_typed_rows() -> None:

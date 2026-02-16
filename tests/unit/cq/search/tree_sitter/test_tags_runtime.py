@@ -13,6 +13,13 @@ EXPECTED_TAG_ROWS = 2
 class _FakeNode:
     start_byte: int
     end_byte: int
+    type: str = "identifier"
+    start_point: tuple[int, int] = (0, 0)
+    end_point: tuple[int, int] = (0, 0)
+
+    def child_by_field_name(self, name: str, /) -> _FakeNode | None:
+        _ = name
+        return None
 
 
 def test_build_tag_events_emits_definition_and_reference_rows() -> None:

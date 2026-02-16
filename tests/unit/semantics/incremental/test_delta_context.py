@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from semantics.incremental.delta_context import DeltaAccessContext, DeltaStorageOptions
+from semantics.incremental.runtime import IncrementalRuntime
 
 
 class _RuntimeStub:
@@ -35,7 +36,7 @@ def test_resolve_storage_prefers_policy_resolution(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(module, "resolve_delta_store_policy", _resolve_delta_store_policy)
 
     context = DeltaAccessContext(
-        runtime=_RuntimeStub(),
+        runtime=cast("IncrementalRuntime", _RuntimeStub()),
         storage=DeltaStorageOptions(storage_options={"in": "1"}),
     )
 

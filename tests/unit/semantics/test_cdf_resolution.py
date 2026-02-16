@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datafusion_engine.dataset.registry import DatasetLocation
 from semantics.cdf_resolution import outputs_from_changed_inputs, resolve_cdf_location
 from semantics.registry import SEMANTIC_MODEL
 
@@ -9,12 +10,18 @@ from semantics.registry import SEMANTIC_MODEL
 class _ResolverStub:
     def __init__(self) -> None:
         self._locations = {
-            "canonical": object(),
-            "source": object(),
+            "canonical": DatasetLocation(path="/tmp/canonical", format="delta"),
+            "source": DatasetLocation(path="/tmp/source", format="delta"),
         }
 
-    def location(self, name: str) -> object | None:
+    def location(self, name: str) -> DatasetLocation | None:
         return self._locations.get(name)
+
+    def has_location(self, name: str) -> bool:
+        return name in self._locations
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._locations)
 
 
 def test_resolve_cdf_location_prefers_canonical_name() -> None:

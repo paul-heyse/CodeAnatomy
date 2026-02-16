@@ -11,10 +11,15 @@ from tools.cq.search.tree_sitter.rust_lane.injections import (
 
 @dataclass(frozen=True)
 class _FakeNode:
+    type: str
     start_byte: int
     end_byte: int
     start_point: tuple[int, int]
     end_point: tuple[int, int]
+
+    def child_by_field_name(self, name: str, /) -> _FakeNode | None:
+        _ = name
+        return None
 
 
 class _FakeQuery:
@@ -41,8 +46,8 @@ def test_build_injection_plan_from_matches_uses_pattern_settings_and_macro_profi
         (
             0,
             {
-                "injection.content": [_FakeNode(5, 16, (0, 5), (0, 16))],
-                "injection.macro.name": [_FakeNode(0, 3, (0, 0), (0, 3))],
+                "injection.content": [_FakeNode("string_literal", 5, 16, (0, 5), (0, 16))],
+                "injection.macro.name": [_FakeNode("macro_identifier", 0, 3, (0, 0), (0, 3))],
             },
         )
     ]
@@ -67,8 +72,8 @@ def test_build_injection_plan_from_matches_reads_captured_language() -> None:
         (
             0,
             {
-                "injection.content": [_FakeNode(12, 16, (0, 12), (0, 16))],
-                "injection.language": [_FakeNode(6, 12, (0, 6), (0, 12))],
+                "injection.content": [_FakeNode("string_literal", 12, 16, (0, 12), (0, 16))],
+                "injection.language": [_FakeNode("identifier", 6, 12, (0, 6), (0, 12))],
             },
         )
     ]

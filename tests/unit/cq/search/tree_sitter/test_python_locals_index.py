@@ -18,10 +18,12 @@ class _FakeNode:
     type: str
     start_byte: int
     end_byte: int
+    start_point: tuple[int, int]
+    end_point: tuple[int, int]
     text: bytes
     name_node: _FakeNode | None = None
 
-    def child_by_field_name(self, name: str) -> _FakeNode | None:
+    def child_by_field_name(self, name: str, /) -> _FakeNode | None:
         if name == "name":
             return self.name_node
         return None
@@ -31,17 +33,28 @@ def test_build_locals_index_selects_nearest_scope() -> None:
     """Test build locals index selects nearest scope."""
     source = b"def outer():\n    def inner():\n        x = 1\n"
     x_start = source.index(b"x =")
-    definition = _FakeNode(type="identifier", start_byte=x_start, end_byte=x_start + 1, text=b"x")
+    definition = _FakeNode(
+        type="identifier",
+        start_byte=x_start,
+        end_byte=x_start + 1,
+        start_point=(2, 8),
+        end_point=(2, 9),
+        text=b"x",
+    )
     inner_scope = _FakeNode(
         type="function_definition",
         start_byte=17,
         end_byte=46,
+        start_point=(1, 4),
+        end_point=(2, 13),
         text=b"def inner():\n        x = 1",
     )
     outer_scope = _FakeNode(
         type="function_definition",
         start_byte=0,
         end_byte=46,
+        start_point=(0, 0),
+        end_point=(2, 13),
         text=b"def outer():\n    def inner():\n        x = 1",
     )
 
@@ -60,7 +73,14 @@ def test_build_locals_index_selects_nearest_scope() -> None:
 def test_scope_chain_for_anchor_falls_back_to_module() -> None:
     """Test scope chain for anchor falls back to module."""
     source = b"value = 1\n"
-    anchor = _FakeNode(type="identifier", start_byte=0, end_byte=5, text=b"value")
+    anchor = _FakeNode(
+        type="identifier",
+        start_byte=0,
+        end_byte=5,
+        start_point=(0, 0),
+        end_point=(0, 5),
+        text=b"value",
+    )
 
     chain = scope_chain_for_anchor(anchor=anchor, scopes=[], source_bytes=source)
 

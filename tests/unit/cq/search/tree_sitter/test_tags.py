@@ -15,6 +15,13 @@ class _FakeNode:
 
     start_byte: int
     end_byte: int
+    type: str = "identifier"
+    start_point: tuple[int, int] = (0, 0)
+    end_point: tuple[int, int] = (0, 0)
+
+    def child_by_field_name(self, name: str, /) -> _FakeNode | None:
+        _ = name
+        return None
 
 
 def test_rust_tag_event_v1_is_importable() -> None:

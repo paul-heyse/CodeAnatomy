@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Generator
 
 import pytest
 from tools.cq.search.tree_sitter.contracts.query_models import GrammarDriftReportV1
@@ -136,7 +137,7 @@ def test_runtime_state_mutation() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_state() -> None:
+def _reset_state() -> Generator[None, None, None]:
     """Reset global runtime state around each test.
 
     Yields:

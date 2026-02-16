@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pyarrow as pa
+from typing import cast
 
 from semantics.incremental.delta_port import DeltaServiceCdfPort
+from datafusion_engine.delta.service import DeltaService
 from storage.deltalake import DeltaCdfOptions, StorageOptions
 
 EXPECTED_TABLE_VERSION = 7
@@ -45,7 +47,7 @@ class _FakeService:
 
 def test_delta_service_cdf_port_delegates_core_calls() -> None:
     """DeltaServiceCdfPort delegates table version/enabled/read operations."""
-    port = DeltaServiceCdfPort(_FakeService())
+    port = DeltaServiceCdfPort(cast("DeltaService", _FakeService()))
 
     assert port.table_version("/tmp/table") == EXPECTED_TABLE_VERSION
     assert port.cdf_enabled("/tmp/table") is True

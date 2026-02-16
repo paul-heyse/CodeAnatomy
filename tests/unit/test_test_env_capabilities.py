@@ -67,7 +67,9 @@ def _assert_capabilities_payload(
     has_unified_runtime: bool,
     has_modular_runtime: bool,
 ) -> None:
-    capabilities = extension.capabilities_snapshot()
+    capabilities_fn = getattr(extension, "capabilities_snapshot", None)
+    assert callable(capabilities_fn)
+    capabilities = capabilities_fn()
     assert isinstance(capabilities, dict)
     runtime_contract = capabilities.get("runtime_install_contract")
     if isinstance(runtime_contract, dict):

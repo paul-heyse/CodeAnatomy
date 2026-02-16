@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
 
 from semantics.incremental import metadata as module
 from semantics.incremental.metadata import ArtifactWriteContext
+from semantics.incremental.runtime import IncrementalRuntime
 
 
 class _RuntimeStub:
@@ -23,7 +24,7 @@ def test_write_named_artifact_uses_shared_delta_writer(
     tmp_path: Path,
 ) -> None:
     """_write_named_artifact delegates through write_delta_table_via_pipeline."""
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _resolve_delta_store_policy(
         *,
@@ -43,7 +44,7 @@ def test_write_named_artifact_uses_shared_delta_writer(
     monkeypatch.setattr(module, "resolve_delta_store_policy", _resolve_delta_store_policy)
     monkeypatch.setattr(module, "write_delta_table_via_pipeline", _write_delta_table_via_pipeline)
 
-    context = ArtifactWriteContext(runtime=_RuntimeStub())
+    context = ArtifactWriteContext(runtime=cast("IncrementalRuntime", _RuntimeStub()))
     path = tmp_path / "artifact"
 
     write_named_artifact = module.__dict__["_write_named_artifact"]
@@ -80,7 +81,7 @@ def test_write_artifact_rows_delegates_to_shared_writer(
 
     monkeypatch.setattr(module, "_write_named_artifact", _write_named_artifact)
 
-    context = ArtifactWriteContext(runtime=_RuntimeStub())
+    context = ArtifactWriteContext(runtime=cast("IncrementalRuntime", _RuntimeStub()))
     write_artifact_rows = module.__dict__["_write_artifact_rows"]
     result = write_artifact_rows(
         name="artifact_rows",

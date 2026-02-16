@@ -11,6 +11,7 @@ from semantics.output_materialization import (
     ensure_semantic_output_locations,
     semantic_output_view_names,
 )
+from semantics.program_manifest import SemanticProgramManifest
 from semantics.registry import SEMANTIC_MODEL
 
 
@@ -20,7 +21,10 @@ class _ManifestStub:
 
 def test_semantic_output_view_names_includes_relation_output() -> None:
     """Semantic output names include the synthetic relation output view."""
-    names = semantic_output_view_names(model=SEMANTIC_MODEL, manifest=_ManifestStub())
+    names = semantic_output_view_names(
+        model=SEMANTIC_MODEL,
+        manifest=cast("SemanticProgramManifest", _ManifestStub()),
+    )
 
     assert "relation_output" in names
 

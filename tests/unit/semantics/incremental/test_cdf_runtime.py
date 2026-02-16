@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_runtime import (
@@ -12,6 +12,7 @@ from semantics.incremental.cdf_runtime import (
     _resolve_cdf_inputs,
 )
 from semantics.incremental.cdf_types import CdfFilterPolicy
+from semantics.incremental.delta_context import DeltaAccessContext
 
 EXPECTED_START_VERSION = 4
 EXPECTED_CURRENT_VERSION = 8
@@ -72,7 +73,7 @@ def test_resolve_cdf_inputs_accepts_object_store_uri() -> None:
     context = _ContextStub()
 
     inputs = _resolve_cdf_inputs(
-        context,
+        cast("DeltaAccessContext", context),
         dataset_path="s3://bucket/table",
         dataset_name="dataset",
     )
@@ -97,7 +98,7 @@ def test_prepare_cdf_state_pushes_filter_policy(tmp_path: Path) -> None:
     )
 
     state = _prepare_cdf_read_state(
-        _ContextStub(),
+        cast("DeltaAccessContext", _ContextStub()),
         dataset_name="dataset",
         inputs=inputs,
         cursor_store=cursor_store,

@@ -17,32 +17,34 @@ from storage.external_index import (
 class _NoopProvider:
     provider_name = "noop"
 
-    @staticmethod
-    def supports(_request: ExternalIndexRequest) -> bool:
+    def supports(self, request: ExternalIndexRequest) -> bool:
+        _ = self, request
         return True
 
-    @staticmethod
     def select_candidates(
-        _ctx: SessionContext,
+        self,
+        ctx: SessionContext,
         *,
-        _request: ExternalIndexRequest,
-    ) -> None:
+        request: ExternalIndexRequest,
+    ) -> ExternalIndexSelection | None:
+        _ = self, ctx, request
         return None
 
 
 class _SelectionProvider:
     provider_name = "selection"
 
-    @staticmethod
-    def supports(_request: ExternalIndexRequest) -> bool:
+    def supports(self, request: ExternalIndexRequest) -> bool:
+        _ = self, request
         return True
 
-    @staticmethod
     def select_candidates(
-        _ctx: SessionContext,
+        self,
+        ctx: SessionContext,
         *,
-        _request: ExternalIndexRequest,
+        request: ExternalIndexRequest,
     ) -> ExternalIndexSelection:
+        _ = self, ctx, request
         return ExternalIndexSelection(
             candidate_files=(Path("a.parquet"),),
             total_files=10,
@@ -54,16 +56,17 @@ class _SelectionProvider:
 class _ExplodingProvider:
     provider_name = "exploding"
 
-    @staticmethod
-    def supports(_request: ExternalIndexRequest) -> bool:
+    def supports(self, request: ExternalIndexRequest) -> bool:
+        _ = self, request
         return True
 
-    @staticmethod
     def select_candidates(
-        _ctx: SessionContext,
+        self,
+        ctx: SessionContext,
         *,
-        _request: ExternalIndexRequest,
-    ) -> None:
+        request: ExternalIndexRequest,
+    ) -> ExternalIndexSelection | None:
+        _ = self, ctx, request
         message = "boom"
         raise RuntimeError(message)
 

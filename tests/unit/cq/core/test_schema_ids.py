@@ -51,7 +51,6 @@ def _build_result(*, run_id: str) -> CqResult:
     )
 
 
-
 def test_assign_result_finding_ids_sets_stable_and_execution_fields() -> None:
     """Assign both stable and execution IDs on all result findings."""
     result = _build_result(run_id="run-A")
@@ -64,7 +63,6 @@ def test_assign_result_finding_ids_sets_stable_and_execution_fields() -> None:
         assert isinstance(finding.execution_id, str)
         assert finding.execution_id
         assert finding.id_taxonomy == "stable_execution"
-
 
 
 def test_stable_ids_match_across_runs_but_execution_ids_differ() -> None:

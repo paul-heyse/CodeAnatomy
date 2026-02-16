@@ -45,21 +45,17 @@ RUN_STEP_NON_FATAL_EXCEPTIONS = (
 def execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext, *, run_id: str) -> CqResult:
     """Execute a non-Q step.
 
-    Parameters
-    ----------
-    step : RunStep
-        Step to execute.
-    plan : RunPlan
-        Parent run plan for scope filtering.
-    ctx : CliContext
-        CLI context.
-    run_id : str
-        Run ID for tracing.
+    Parameters:
+        step: Step to execute.
+        plan: Parent run plan for scope filtering.
+        ctx: CLI context.
+        run_id: Run ID for tracing.
 
-    Returns
-    -------
-    CqResult
-        Step execution result.
+    Returns:
+        CqResult: Step execution result.
+
+    Raises:
+        TypeError: When the step type has no registered executor.
     """
     if isinstance(step, SearchStep):
         return _execute_search_step(step, plan, ctx, run_id=run_id)
@@ -95,7 +91,7 @@ def execute_non_q_step_safe(
     run_id : str
         Run ID for tracing.
 
-    Returns
+    Returns:
     -------
     tuple[str, CqResult]
         (step_id, result) tuple with error result on exception.
@@ -130,7 +126,7 @@ def execute_non_q_steps_serial(
     stop_on_error : bool
         Stop on first error if True.
 
-    Returns
+    Returns:
     -------
     list[tuple[str, CqResult]]
         List of (step_id, result) tuples.
@@ -164,7 +160,7 @@ def execute_non_q_steps_parallel(
     run_id : str
         Run ID for tracing.
 
-    Returns
+    Returns:
     -------
     list[tuple[str, CqResult]]
         List of (step_id, result) tuples.
@@ -242,7 +238,7 @@ def execute_search_fallback(query: str, plan: RunPlan, ctx: CliContext) -> CqRes
     ctx : CliContext
         CLI context.
 
-    Returns
+    Returns:
     -------
     CqResult
         Search result.
@@ -359,7 +355,7 @@ def _execute_neighborhood_step(
     run_id : str | None
         Run ID for tracing.
 
-    Returns
+    Returns:
     -------
     CqResult
         Neighborhood analysis result.
@@ -536,3 +532,11 @@ _NON_SEARCH_DISPATCH: dict[type, Callable[..., CqResult]] = {
     BytecodeSurfaceStep: _execute_bytecode_surface,
     NeighborhoodStep: _execute_neighborhood_step,
 }
+
+__all__ = [
+    "execute_non_q_step",
+    "execute_non_q_step_safe",
+    "execute_non_q_steps_parallel",
+    "execute_non_q_steps_serial",
+    "execute_search_fallback",
+]

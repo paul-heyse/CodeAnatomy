@@ -4,22 +4,15 @@ from __future__ import annotations
 
 import multiprocessing
 import re
-from collections.abc import Callable
-from dataclasses import dataclass
-from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import msgspec
 
 from tools.cq.core.cache import (
-    get_cq_cache_backend,
-    maintenance_tick,
     maybe_evict_run_cache_tag,
-    snapshot_backend_metrics,
 )
-from tools.cq.core.contract_codec import to_public_dict, to_public_list
-from tools.cq.core.contracts import SummaryBuildRequest, contract_to_builtins
+from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.locations import (
     line_relative_byte_range_to_absolute,
 )
@@ -31,7 +24,6 @@ from tools.cq.core.multilang_summary import (
     assert_multilang_summary,
     build_multilang_summary,
 )
-from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import (
     Anchor,
@@ -40,14 +32,7 @@ from tools.cq.core.schema import (
     Finding,
     ScoreDetails,
     Section,
-    assign_result_finding_ids,
     ms,
-)
-from tools.cq.core.semantic_contracts import (
-    SemanticContractStateInputV1,
-    SemanticContractStateV1,
-    SemanticProvider,
-    derive_semantic_contract_state,
 )
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE,
@@ -67,16 +52,9 @@ from tools.cq.search._shared.core import (
     PythonByteRangeEnrichmentRequest,
     RgRunRequest,
 )
-from tools.cq.search._shared.search_contracts import (
-    coerce_python_semantic_diagnostics,
-    coerce_python_semantic_overview,
-    coerce_python_semantic_telemetry,
-)
 from tools.cq.search._shared.types import SearchLimits
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
 from tools.cq.search.objects.render import (
-    SearchObjectResolvedViewV1,
-    SearchObjectSummaryV1,
     SearchOccurrenceV1,
     build_non_code_occurrence_section,
     build_occurrence_hot_files_section,
@@ -86,6 +64,7 @@ from tools.cq.search.objects.render import (
     is_non_code_occurrence,
 )
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime, build_object_resolved_view
+from tools.cq.search.pipeline.assembly import assemble_smart_search_result
 from tools.cq.search.pipeline.classifier import (
     HeuristicResult,
     MatchCategory,
@@ -118,14 +97,16 @@ from tools.cq.search.pipeline.contracts import (
 )
 from tools.cq.search.pipeline.orchestration import (
     SearchPipeline,
-    insert_neighborhood_preview,
-    insert_target_candidates,
 )
-from tools.cq.search.pipeline.assembly import assemble_smart_search_result
 from tools.cq.search.pipeline.partition_pipeline import run_search_partition
 from tools.cq.search.pipeline.profiles import INTERACTIVE
-from tools.cq.search.pipeline.python_semantic import run_prefetch_python_semantic_for_raw_matches
 from tools.cq.search.pipeline.search_object_view_store import pop_search_object_view_for_run
+from tools.cq.search.pipeline.smart_search_telemetry import (
+    build_enrichment_telemetry as _build_enrichment_telemetry,
+)
+from tools.cq.search.pipeline.smart_search_telemetry import (
+    new_python_semantic_telemetry as _new_python_semantic_telemetry,
+)
 from tools.cq.search.pipeline.smart_search_types import (
     ClassificationBatchResult,
     ClassificationBatchTask,
@@ -139,15 +120,10 @@ from tools.cq.search.pipeline.smart_search_types import (
     SearchStats,
     SearchSummaryInputs,
     _LanguageSearchResult,
-    _NeighborhoodPreviewInputs,
     _PythonSemanticAnchorKey,
-    _PythonSemanticOverviewAccumulator,
     _PythonSemanticPrefetchResult,
-    _SearchAssemblyInputs,
-    _SearchSemanticOutcome,
 )
 from tools.cq.search.python.analysis_session import get_python_analysis_session
-from tools.cq.search.python.evidence import evaluate_python_semantic_signal_from_mapping
 from tools.cq.search.python.extractors import (
     _ENRICHMENT_ERRORS as _PYTHON_ENRICHMENT_ERRORS,
 )
@@ -162,16 +138,8 @@ from tools.cq.search.semantic.diagnostics import (
     is_python_oriented_query_text,
 )
 from tools.cq.search.semantic.models import (
-    LanguageSemanticEnrichmentOutcome,
     LanguageSemanticEnrichmentRequest,
     enrich_with_language_semantics,
-    infer_language_for_path,
-    provider_for_language,
-    semantic_runtime_enabled,
-)
-from tools.cq.search.pipeline.smart_search_telemetry import (
-    build_enrichment_telemetry as _build_enrichment_telemetry,
-    new_python_semantic_telemetry as _new_python_semantic_telemetry,
 )
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 from tools.cq.search.tree_sitter.core.runtime_support import budget_ms_per_anchor
@@ -179,12 +147,6 @@ from tools.cq.search.tree_sitter.query.lint import lint_search_query_packs
 from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
-
-    from tools.cq.core.front_door_insight import (
-        FrontDoorInsightV1,
-        InsightNeighborhoodV1,
-        InsightRiskV1,
-    )
     from tools.cq.core.toolchain import Toolchain
 
 # Derive smart search limits from INTERACTIVE profile
@@ -1727,8 +1689,6 @@ def _classify_partition_batch(
     ]
 
 
-
-
 def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchResult]:
     by_lang = execute_by_language_scope(
         ctx.lang_scope,
@@ -1897,8 +1857,6 @@ def _build_tree_sitter_runtime_diagnostics(
     return findings
 
 
-
-
 def _build_search_summary(
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
@@ -1983,10 +1941,6 @@ def _build_search_summary(
         summary["dropped_by_scope"] = dropped_by_scope
     assert_multilang_summary(summary)
     return summary, all_diagnostics
-
-
-
-
 
 
 def smart_search(
@@ -2075,7 +2029,6 @@ __all__ = [
     "SMART_SEARCH_LIMITS",
     "EnrichedMatch",
     "RawMatch",
-    "SearchContext",
     "SearchResultAssembly",
     "SearchStats",
     "SmartSearchContext",

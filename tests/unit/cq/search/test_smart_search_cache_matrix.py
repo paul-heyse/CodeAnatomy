@@ -45,7 +45,6 @@ def _normalize_result_payload(result: object) -> dict[str, object]:
     return payload
 
 
-
 def test_smart_search_is_deterministic_across_reruns(tmp_path: Path) -> None:
     """Re-run smart search with stable inputs should yield deterministic payloads."""
     root = tmp_path / "repo"
@@ -71,7 +70,6 @@ def test_smart_search_is_deterministic_across_reruns(tmp_path: Path) -> None:
     )
 
     assert _normalize_result_payload(result_a) == _normalize_result_payload(result_b)
-
 
 
 def test_smart_search_is_deterministic_across_backend_restarts(tmp_path: Path) -> None:

@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING
 
 import pytest
-
 from tools.cq.search.tree_sitter.contracts.query_models import GrammarDriftReportV1
 from tools.cq.search.tree_sitter.query.contract_snapshot import QueryContractSnapshotV1
 from tools.cq.search.tree_sitter.query.runtime_state import (
@@ -14,9 +12,6 @@ from tools.cq.search.tree_sitter.query.runtime_state import (
     get_query_runtime_state,
     set_query_runtime_state,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 def test_query_runtime_state_creation() -> None:
@@ -76,11 +71,13 @@ def test_get_query_runtime_state_lazy_init() -> None:
 def test_set_query_runtime_state_custom() -> None:
     """Test set_query_runtime_state can install custom state."""
     custom_state = QueryRuntimeState(
-        last_contract_snapshots={"rust": QueryContractSnapshotV1(
-            language="rust",
-            grammar_digest="rust_digest",
-            query_digest="query_digest",
-        )},
+        last_contract_snapshots={
+            "rust": QueryContractSnapshotV1(
+                language="rust",
+                grammar_digest="rust_digest",
+                query_digest="query_digest",
+            )
+        },
     )
 
     set_query_runtime_state(custom_state)
@@ -119,7 +116,7 @@ def test_runtime_state_thread_safety() -> None:
         t.join()
 
     # All threads should get same singleton
-    assert len(set(id(state) for state in results)) == 1
+    assert len({id(state) for state in results}) == 1
 
 
 def test_runtime_state_mutation() -> None:
@@ -140,6 +137,10 @@ def test_runtime_state_mutation() -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_state() -> None:
-    """Reset global state after each test."""
+    """Reset global runtime state around each test.
+
+    Yields:
+        None: Control returns to the test body before state reset.
+    """
     yield
     set_query_runtime_state(None)

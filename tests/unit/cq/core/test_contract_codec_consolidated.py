@@ -25,18 +25,21 @@ class _SampleStruct(CqStruct, frozen=True):
 
 
 class TestDumpsJsonValue:
-    def test_roundtrip_dict(self) -> None:
+    @staticmethod
+    def test_roundtrip_dict() -> None:
         val = {"key": "value", "num": 42}
         encoded = dumps_json_value(val)
         decoded = loads_json_value(encoded)
         assert decoded == val
 
-    def test_with_indent(self) -> None:
+    @staticmethod
+    def test_with_indent() -> None:
         val = {"a": 1}
         encoded = dumps_json_value(val, indent=2)
         assert "\n" in encoded
 
-    def test_roundtrip_list(self) -> None:
+    @staticmethod
+    def test_roundtrip_list() -> None:
         val = [1, "two", 3.0, None, True]
         encoded = dumps_json_value(val)
         decoded = loads_json_value(encoded)
@@ -44,7 +47,8 @@ class TestDumpsJsonValue:
 
 
 class TestLoadsJsonResult:
-    def test_decode_minimal_result(self) -> None:
+    @staticmethod
+    def test_decode_minimal_result() -> None:
         result = CqResult(
             run=RunMeta(
                 macro="test",
@@ -60,13 +64,15 @@ class TestLoadsJsonResult:
 
 
 class TestToPublicDict:
-    def test_struct_to_dict(self) -> None:
+    @staticmethod
+    def test_struct_to_dict() -> None:
         s = _SampleStruct(name="hello", count=SAMPLE_STRUCT_COUNT)
         d = to_public_dict(s)
         assert d["name"] == "hello"
         assert d["count"] == SAMPLE_STRUCT_COUNT
 
-    def test_non_dict_raises(self) -> None:
+    @staticmethod
+    def test_non_dict_raises() -> None:
         import pytest
 
         with pytest.raises(TypeError, match="Expected dict payload"):
@@ -74,7 +80,8 @@ class TestToPublicDict:
 
 
 class TestToPublicList:
-    def test_structs_to_list(self) -> None:
+    @staticmethod
+    def test_structs_to_list() -> None:
         items = [_SampleStruct(name="a"), _SampleStruct(name="b")]
         result = to_public_list(items)
         assert len(result) == PUBLIC_LIST_LENGTH
@@ -83,10 +90,12 @@ class TestToPublicList:
 
 
 class TestJsonTypeAliases:
-    def test_scalar_types(self) -> None:
+    @staticmethod
+    def test_scalar_types() -> None:
         scalars: list[JsonScalar] = ["str", 1, 1.0, True, None]
         assert len(scalars) == JSON_SCALAR_COUNT
 
-    def test_nested_value(self) -> None:
+    @staticmethod
+    def test_nested_value() -> None:
         val: JsonValue = {"key": [1, "two", {"nested": None}]}
         assert isinstance(val, dict)

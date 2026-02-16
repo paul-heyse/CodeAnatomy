@@ -36,7 +36,6 @@ def _empty_result(root: Path) -> CqResult:
     )
 
 
-
 def test_calls_target_cache_revalidates_when_target_file_changes(tmp_path: Path) -> None:
     """Invalidate cached callees when target file body changes."""
     root = tmp_path / "repo"

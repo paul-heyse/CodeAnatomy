@@ -127,7 +127,7 @@ def test_find_function_signature_not_found(tmp_path: Path) -> None:
     )
 
     sig = _find_function_signature(repo, "nonexistent")
-    assert sig == ""
+    assert not sig
 
 
 def test_cmd_calls_signature_in_summary(tmp_path: Path) -> None:

@@ -31,6 +31,7 @@ def test_main_async_invokes_meta_run_async(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_main_async_normalizes_bool_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test main async normalizes bool exit code."""
+
     async def fake_run_async(_self: object, **_kwargs: object) -> bool:
         await asyncio.sleep(0)
         return True

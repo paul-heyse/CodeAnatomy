@@ -55,7 +55,6 @@ def test_build_cache_key_is_deterministic() -> None:
     assert key_a.startswith("cq:semantic_front_door:v2:")
 
 
-
 def test_canonicalize_cache_payload_sorts_unordered_values() -> None:
     """Normalize cache payload ordering before hashing or serialization."""
     payload = canonicalize_cache_payload(
@@ -68,13 +67,11 @@ def test_canonicalize_cache_payload_sorts_unordered_values() -> None:
     assert payload["b"] == {"z": ["x", "y"]}
 
 
-
 def test_build_cache_tag() -> None:
     """Generate a canonical workspace-level cache tag."""
     tag = build_cache_tag(workspace="/repo", language="rust")
     assert tag.startswith("ws:")
     assert "|lang:rust" in tag
-
 
 
 def test_build_run_cache_tag() -> None:
@@ -85,14 +82,12 @@ def test_build_run_cache_tag() -> None:
     assert "run:" in tag
 
 
-
 def test_build_scope_hash_is_stable() -> None:
     """Verify scope hash is stable independent of key ordering."""
     hash_a = build_scope_hash({"paths": ["a", "b"], "globs": ("*.py",)})
     hash_b = build_scope_hash({"globs": ("*.py",), "paths": ["a", "b"]})
     assert isinstance(hash_a, str)
     assert hash_a == hash_b
-
 
 
 def test_cache_backend_roundtrip(tmp_path: Path) -> None:
@@ -111,7 +106,6 @@ def test_cache_backend_roundtrip(tmp_path: Path) -> None:
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_DIR", None)
     os.environ.pop("CQ_CACHE_ENABLED", None)
-
 
 
 def test_cache_backend_advanced_operations(tmp_path: Path) -> None:
@@ -156,7 +150,6 @@ def test_cache_backend_advanced_operations(tmp_path: Path) -> None:
     os.environ.pop("CQ_CACHE_ENABLED", None)
 
 
-
 def test_cache_backend_noop_when_disabled(tmp_path: Path) -> None:
     """Expect no writes or reads when CQ cache is disabled by env."""
     close_cq_cache_backend()
@@ -168,7 +161,6 @@ def test_cache_backend_noop_when_disabled(tmp_path: Path) -> None:
 
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_ENABLED", None)
-
 
 
 def test_cache_backend_is_workspace_keyed(tmp_path: Path) -> None:

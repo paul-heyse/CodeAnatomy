@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import Generic, Literal, TypeVar
-
-K = TypeVar("K")
-V = TypeVar("V")
+from typing import Literal
 
 EvictionPolicy = Literal["fifo", "lru"]
 
 
-class BoundedCache(Generic[K, V]):
+class BoundedCache[K, V]:
     """Bounded cache with FIFO or LRU eviction.
 
     Parameters
@@ -36,7 +33,7 @@ class BoundedCache(Generic[K, V]):
         key : K
             Key to retrieve.
 
-        Returns
+        Returns:
         -------
         V | None
             Value if key exists, None otherwise.
@@ -57,7 +54,7 @@ class BoundedCache(Generic[K, V]):
         factory : Callable[[], V]
             Factory function to compute value if key is missing.
 
-        Returns
+        Returns:
         -------
         V
             Cached or newly computed value.

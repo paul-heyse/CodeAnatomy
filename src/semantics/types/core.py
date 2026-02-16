@@ -45,6 +45,7 @@ class SemanticType(StrEnum):
     ORIGIN = auto()
     CONFIDENCE = auto()
     EVIDENCE_TIER = auto()
+    TEXT = auto()
 
     # Generic
     UNKNOWN = auto()
@@ -197,16 +198,38 @@ def _matches_pattern(lower_name: str, column_name: str, pattern: tuple[str, ...]
 # Heuristic patterns for semantic type inference
 # Order matters - first match wins
 _INFERENCE_PATTERNS: tuple[tuple[tuple[str, ...], SemanticType], ...] = (
-    (("contains:file+id",), SemanticType.FILE_ID),
+    (("exact:file_id", "contains:file+id"), SemanticType.FILE_ID),
+    (("exact:path", "exact:file_path", "exact:document_path", "contains:path"), SemanticType.PATH),
     (("suffix:_id",), SemanticType.ENTITY_ID),
-    (("contains:start", "exact:bstart"), SemanticType.SPAN_START),
-    (("contains:end", "exact:bend"), SemanticType.SPAN_END),
+    (
+        (
+            "exact:bstart",
+            "exact:byte_start",
+            "suffix:_bstart",
+            "suffix:_byte_start",
+            "contains:start",
+        ),
+        SemanticType.SPAN_START,
+    ),
+    (
+        (
+            "exact:bend",
+            "exact:byte_end",
+            "exact:byte_len",
+            "suffix:_bend",
+            "suffix:_byte_end",
+            "suffix:_byte_len",
+            "contains:end",
+            "contains:byte_len",
+        ),
+        SemanticType.SPAN_END,
+    ),
     (("contains:symbol",), SemanticType.SYMBOL),
     (("contains:qname", "contains:qualified_name"), SemanticType.QNAME),
-    (("contains:path",), SemanticType.PATH),
+    (("exact:name", "suffix:_name", "suffix:_text"), SemanticType.TEXT),
     (("contains:line+no",), SemanticType.LINE_NO),
     (("contains:col+no",), SemanticType.COL_NO),
-    (("exact:origin",), SemanticType.ORIGIN),
+    (("exact:origin", "exact:resolution_method"), SemanticType.ORIGIN),
     (("contains:confidence", "contains:score"), SemanticType.CONFIDENCE),
 )
 

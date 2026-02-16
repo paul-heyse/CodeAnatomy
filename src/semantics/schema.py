@@ -430,6 +430,26 @@ class SemanticSchema:
         """
         return len(self._span_start_candidates()) > 1 or len(self._span_end_candidates()) > 1
 
+    def require_unambiguous_spans(self, *, table: str) -> None:
+        """Raise when multiple span start/end candidates exist.
+
+        Parameters:
+            table: Table name for diagnostic messages.
+
+        Raises:
+            SemanticSchemaError: If span start/end candidates are ambiguous.
+        """
+        if not self._has_ambiguous_span():
+            return
+        starts = self._span_start_candidates()
+        ends = self._span_end_candidates()
+        msg = (
+            f"Ambiguous span columns in table {table!r}: "
+            f"start candidates={starts}, end candidates={ends}. "
+            "Specify span columns explicitly."
+        )
+        raise SemanticSchemaError(msg)
+
     def prefixed(self, prefix: str) -> SemanticSchema:
         """Return a SemanticSchema with prefixed column names.
 
@@ -475,9 +495,9 @@ class SemanticSchema:
         Expr
             DataFusion column expression.
         """
-        from datafusion import col
+        from semantics.expr_builder import SemanticExprBuilder
 
-        return col(self.path_name())
+        return SemanticExprBuilder(self).path_col()
 
     def span_start_col(self) -> Expr:
         """Get span start column expression.
@@ -487,7 +507,9 @@ class SemanticSchema:
         Expr
             DataFusion column expression.
         """
-        return _expr_for_path(self.span_start_name())
+        from semantics.expr_builder import SemanticExprBuilder
+
+        return SemanticExprBuilder(self).span_start_col()
 
     def span_end_col(self) -> Expr:
         """Get span end column expression.
@@ -497,10 +519,9 @@ class SemanticSchema:
         Expr
             DataFusion column expression.
         """
-        end_name = self.span_end_name()
-        if end_name.endswith("byte_len"):
-            return _expr_for_path(self.span_start_name()) + _expr_for_path(end_name)
-        return _expr_for_path(end_name)
+        from semantics.expr_builder import SemanticExprBuilder
+
+        return SemanticExprBuilder(self).span_end_col()
 
     def entity_id_col(self) -> Expr:
         """Get first entity ID column expression.
@@ -510,9 +531,9 @@ class SemanticSchema:
         Expr
             DataFusion column expression.
         """
-        from datafusion import col
+        from semantics.expr_builder import SemanticExprBuilder
 
-        return col(self.entity_id_name())
+        return SemanticExprBuilder(self).entity_id_col()
 
     def symbol_col(self) -> Expr:
         """Get first symbol column expression.
@@ -522,9 +543,9 @@ class SemanticSchema:
         Expr
             DataFusion column expression.
         """
-        from datafusion import col
+        from semantics.expr_builder import SemanticExprBuilder
 
-        return col(self.symbol_name())
+        return SemanticExprBuilder(self).symbol_col()
 
     def span_expr(self) -> Expr:
         """Generate span struct expression using Rust UDF.
@@ -536,10 +557,9 @@ class SemanticSchema:
         Expr
             Span struct expression.
         """
-        from datafusion_engine.udf.expr import udf_expr
+        from semantics.expr_builder import SemanticExprBuilder
 
-        # span_make(bstart, bend) -> struct
-        return udf_expr("span_make", self.span_start_col(), self.span_end_col())
+        return SemanticExprBuilder(self).span_expr()
 
     def entity_id_expr(self, prefix: str) -> Expr:
         """Generate stable entity ID using Rust UDF.
@@ -554,17 +574,9 @@ class SemanticSchema:
         Expr
             stable_id(prefix, path, bstart, bend) expression.
         """
-        from datafusion import functions as f
+        from semantics.expr_builder import SemanticExprBuilder
 
-        from datafusion_engine.udf.expr import udf_expr
-
-        joined = f.concat_ws(
-            "\x1f",
-            self.path_col().cast(pa.string()),
-            self.span_start_col().cast(pa.string()),
-            self.span_end_col().cast(pa.string()),
-        )
-        return udf_expr("stable_id", prefix, joined)
+        return SemanticExprBuilder(self).entity_id_expr(prefix)
 
 
 def _matches_any(name: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
@@ -630,16 +642,6 @@ def _infer_span_unit(span_start: str | None) -> str | None:
     if span_start.endswith("byte_start"):
         return "byte"
     return None
-
-
-def _expr_for_path(path: str) -> Expr:
-    from datafusion import col
-
-    parts = path.split(".")
-    expr = col(parts[0])
-    for part in parts[1:]:
-        expr = expr[part]
-    return expr
 
 
 def _arrow_schema_from_df(df: DataFrame) -> pa.Schema | None:

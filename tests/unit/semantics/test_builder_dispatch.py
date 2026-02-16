@@ -90,7 +90,8 @@ def _stub_context() -> _SemanticSpecContext:
 class TestDispatchFromRegistry:
     """Test the ``_dispatch_from_registry`` factory."""
 
-    def test_returns_builder_for_known_name(self) -> None:
+    @staticmethod
+    def test_returns_builder_for_known_name() -> None:
         """Resolve a builder for a name present in the registry."""
         registry: dict[str, DataFrameBuilder] = {"alpha": _stub_builder}
 
@@ -104,7 +105,8 @@ class TestDispatchFromRegistry:
         result = handler(spec, ctx)
         assert result is _stub_builder
 
-    def test_raises_key_error_for_unknown_name(self) -> None:
+    @staticmethod
+    def test_raises_key_error_for_unknown_name() -> None:
         """Raise ``KeyError`` when the spec name is not in the registry."""
         registry: dict[str, DataFrameBuilder] = {"alpha": _stub_builder}
 
@@ -118,7 +120,8 @@ class TestDispatchFromRegistry:
         with pytest.raises(KeyError, match="Missing test builder for output 'missing'"):
             handler(spec, ctx)
 
-    def test_error_message_includes_context_label(self) -> None:
+    @staticmethod
+    def test_error_message_includes_context_label() -> None:
         """Verify the error message uses the provided context label."""
 
         def factory(_ctx: _SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
@@ -131,7 +134,8 @@ class TestDispatchFromRegistry:
         with pytest.raises(KeyError, match="Missing span-unnest builder"):
             handler(spec, ctx)
 
-    def test_finalize_wraps_builder(self) -> None:
+    @staticmethod
+    def test_finalize_wraps_builder() -> None:
         """When finalize=True, wrap the resolved builder."""
         registry: dict[str, DataFrameBuilder] = {"alpha": _stub_builder}
 
@@ -148,7 +152,8 @@ class TestDispatchFromRegistry:
         # It should be callable (a DataFrameBuilder).
         assert callable(result)
 
-    def test_finalize_false_returns_raw_builder(self) -> None:
+    @staticmethod
+    def test_finalize_false_returns_raw_builder() -> None:
         """When finalize=False (default), return the builder as-is."""
         registry: dict[str, DataFrameBuilder] = {"alpha": _stub_builder}
 
@@ -162,7 +167,8 @@ class TestDispatchFromRegistry:
         result = handler(spec, ctx)
         assert result is _stub_builder
 
-    def test_factory_receives_context(self) -> None:
+    @staticmethod
+    def test_factory_receives_context() -> None:
         """Verify the registry factory is called with the spec context."""
         received_contexts: list[object] = []
 
@@ -187,7 +193,8 @@ class TestDispatchFromRegistry:
 class TestBuilderHandlersTable:
     """Verify consolidated dispatcher coverage."""
 
-    def test_all_spec_kinds_have_handlers(self) -> None:
+    @staticmethod
+    def test_all_spec_kinds_have_handlers() -> None:
         """Every consolidated kind has a dedicated dispatch handler."""
         expected_kinds = {
             "normalize",
@@ -199,11 +206,13 @@ class TestBuilderHandlersTable:
         }
         assert set(_CONSOLIDATED_BUILDER_HANDLERS.keys()) == expected_kinds
 
-    def test_handler_count_matches_spec_kinds(self) -> None:
+    @staticmethod
+    def test_handler_count_matches_spec_kinds() -> None:
         """Handler table has exactly 6 entries (one per consolidated kind)."""
         assert len(_CONSOLIDATED_BUILDER_HANDLERS) == CONSOLIDATED_HANDLER_COUNT
 
-    def test_all_handlers_are_callable(self) -> None:
+    @staticmethod
+    def test_all_handlers_are_callable() -> None:
         """Every handler in the table must be callable."""
         for kind, handler in _CONSOLIDATED_BUILDER_HANDLERS.items():
             assert callable(handler), f"Handler for {kind!r} is not callable"
@@ -217,7 +226,8 @@ class TestBuilderHandlersTable:
 class TestRegistryFunctions:
     """Verify the registry helper functions return expected keys."""
 
-    def test_span_unnest_registry_keys(self) -> None:
+    @staticmethod
+    def test_span_unnest_registry_keys() -> None:
         """The span-unnest registry returns all 4 expected builder names."""
         from semantics.pipeline import _span_unnest_registry
 
@@ -231,7 +241,8 @@ class TestRegistryFunctions:
         }
         assert set(registry.keys()) == expected
 
-    def test_symtable_registry_keys(self) -> None:
+    @staticmethod
+    def test_symtable_registry_keys() -> None:
         """The symtable registry returns all 5 expected builder names."""
         from semantics.pipeline import _symtable_registry
 
@@ -246,7 +257,8 @@ class TestRegistryFunctions:
         }
         assert set(registry.keys()) == expected
 
-    def test_diagnostic_registry_keys(self) -> None:
+    @staticmethod
+    def test_diagnostic_registry_keys() -> None:
         """The diagnostic registry returns at least one builder."""
         from semantics.pipeline import _diagnostic_registry
 
@@ -256,7 +268,8 @@ class TestRegistryFunctions:
         for name, builder in registry.items():
             assert callable(builder), f"Builder for {name!r} is not callable"
 
-    def test_finalize_kind_is_rust_only(self) -> None:
+    @staticmethod
+    def test_finalize_kind_is_rust_only() -> None:
         """FINALIZE views should be rejected in Python dispatch."""
         from semantics.pipeline import _builder_for_project_kind
 
@@ -264,7 +277,8 @@ class TestRegistryFunctions:
         with pytest.raises(ValueError, match="Rust CpgEmit transforms"):
             _builder_for_project_kind(spec, _stub_context())
 
-    def test_registry_builders_are_callable(self) -> None:
+    @staticmethod
+    def test_registry_builders_are_callable() -> None:
         """All registry values must be callable DataFrameBuilder instances."""
         from semantics.pipeline import _span_unnest_registry, _symtable_registry
 

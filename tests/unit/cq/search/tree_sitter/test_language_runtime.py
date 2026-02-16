@@ -8,6 +8,7 @@ from tools.cq.search.tree_sitter.core import infrastructure
 
 def test_load_language_raises_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """Propagate runtime error when language loader returns no module."""
+
     def _fake_loader(_language: str) -> object:
         return None
 

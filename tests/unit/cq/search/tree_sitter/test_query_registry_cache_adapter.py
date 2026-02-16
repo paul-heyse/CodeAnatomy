@@ -11,8 +11,8 @@ from tools.cq.search.tree_sitter.query.support import query_registry_cache
 
 
 class _CacheWithGetSet:
+    @staticmethod
     def get(
-        self,
         _key: str,
         default: object | None = None,
         *,
@@ -20,8 +20,8 @@ class _CacheWithGetSet:
     ) -> object | None:
         return default
 
+    @staticmethod
     def set(
-        self,
         _key: str,
         _value: object,
         *,
@@ -36,6 +36,7 @@ def test_query_registry_cache_returns_none_when_backend_has_no_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Return None when cache backend does not expose a cache interface."""
+
     @dataclass
     class _Backend:
         cache: object | None = None

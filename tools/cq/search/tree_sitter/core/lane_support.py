@@ -48,7 +48,7 @@ def build_query_windows(
     changed_ranges
         Tuple of changed ranges from incremental parse, or empty tuple.
 
-    Returns
+    Returns:
     -------
     tuple[QueryWindowV1, ...]
         Query windows to execute, always including the anchor window.
@@ -117,11 +117,7 @@ def make_parser(language: Language) -> Parser:
         A configured parser instance.
 
     Raises:
-    ------
-    RuntimeError
-        When tree-sitter parser bindings are unavailable.
-    ImportError
-        When tree-sitter module is not installed.
+        RuntimeError: When tree-sitter parser bindings are unavailable.
     """
     try:
         from tree_sitter import Parser as _TreeSitterParser
@@ -148,11 +144,7 @@ def parse_tree(source_bytes: bytes, *, language: Language) -> Tree:
         The parsed syntax tree.
 
     Raises:
-    ------
-    RuntimeError
-        When parser returns None (invalid parse).
-    ImportError
-        When tree-sitter module is not installed.
+        RuntimeError: When parser bindings are unavailable or parse returns no tree.
     """
     parser = make_parser(language)
     tree = parser.parse(source_bytes)

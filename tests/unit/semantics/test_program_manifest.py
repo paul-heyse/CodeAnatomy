@@ -13,6 +13,7 @@ from semantics.compile_context import (
 )
 from semantics.ir import SemanticIR
 from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
+from semantics.registry import SEMANTIC_MODEL
 from semantics.validation.catalog_validation import SemanticInputValidationResult
 
 
@@ -112,5 +113,6 @@ def test_semantic_execution_context_carries_manifest_resolver() -> None:
         dataset_resolver=bindings,
         runtime_profile=profile,
         ctx=ctx,
+        model=SEMANTIC_MODEL,
     )
     assert execution_context.dataset_resolver.location("repo_snapshot") is not None

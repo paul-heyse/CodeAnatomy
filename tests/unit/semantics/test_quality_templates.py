@@ -33,7 +33,8 @@ class _EntitySymbolConfigOverrides(TypedDict, total=False):
 class TestEntitySymbolConfig:
     """Tests for EntitySymbolConfig dataclass."""
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """Config is immutable."""
         cfg = EntitySymbolConfig(
             name="test", left_view="left", entity_id_col="l__id", origin="test"
@@ -45,7 +46,8 @@ class TestEntitySymbolConfig:
             expected_exception=FrozenInstanceError,
         )
 
-    def test_required_fields(self) -> None:
+    @staticmethod
+    def test_required_fields() -> None:
         """Config requires name, left_view, entity_id_col, and origin."""
         cfg = EntitySymbolConfig(
             name="rel_x", left_view="cst_x_norm", entity_id_col="l__x_id", origin="cst_x"
@@ -55,28 +57,32 @@ class TestEntitySymbolConfig:
         assert cfg.entity_id_col == "l__x_id"
         assert cfg.origin == "cst_x"
 
-    def test_default_span_strategy(self) -> None:
+    @staticmethod
+    def test_default_span_strategy() -> None:
         """Default span_strategy is overlap."""
         cfg = EntitySymbolConfig(
             name="test", left_view="left", entity_id_col="l__id", origin="test"
         )
         assert cfg.span_strategy == "overlap"
 
-    def test_default_scip_role_filter(self) -> None:
+    @staticmethod
+    def test_default_scip_role_filter() -> None:
         """Default scip_role_filter is None."""
         cfg = EntitySymbolConfig(
             name="test", left_view="left", entity_id_col="l__id", origin="test"
         )
         assert cfg.scip_role_filter is None
 
-    def test_default_exact_span_weight(self) -> None:
+    @staticmethod
+    def test_default_exact_span_weight() -> None:
         """Default exact_span_weight is 20.0."""
         cfg = EntitySymbolConfig(
             name="test", left_view="left", entity_id_col="l__id", origin="test"
         )
         assert cfg.exact_span_weight == DEFAULT_EXACT_SPAN_WEIGHT
 
-    def test_custom_span_strategy(self) -> None:
+    @staticmethod
+    def test_custom_span_strategy() -> None:
         """Config accepts contains span_strategy."""
         cfg = EntitySymbolConfig(
             name="test",
@@ -87,7 +93,8 @@ class TestEntitySymbolConfig:
         )
         assert cfg.span_strategy == "contains"
 
-    def test_custom_scip_role_filter(self) -> None:
+    @staticmethod
+    def test_custom_scip_role_filter() -> None:
         """Config accepts custom scip_role_filter."""
         cfg = EntitySymbolConfig(
             name="test",
@@ -98,7 +105,8 @@ class TestEntitySymbolConfig:
         )
         assert cfg.scip_role_filter == "r__is_definition"
 
-    def test_custom_exact_span_weight(self) -> None:
+    @staticmethod
+    def test_custom_exact_span_weight() -> None:
         """Config accepts custom exact_span_weight."""
         cfg = EntitySymbolConfig(
             name="test",
@@ -113,7 +121,8 @@ class TestEntitySymbolConfig:
 class TestEntitySymbolRelationship:
     """Tests for entity_symbol_relationship factory."""
 
-    def _default_cfg(self, **overrides: Unpack[_EntitySymbolConfigOverrides]) -> EntitySymbolConfig:
+    @staticmethod
+    def _default_cfg(**overrides: Unpack[_EntitySymbolConfigOverrides]) -> EntitySymbolConfig:
         """Build a default config with optional overrides.
 
         Returns:
@@ -235,7 +244,8 @@ class TestEntitySymbolRelationship:
 class TestEntitySymbolRelationshipRanking:
     """Projection/ranking focused tests for entity_symbol_relationship."""
 
-    def _default_cfg(self, **overrides: Unpack[_EntitySymbolConfigOverrides]) -> EntitySymbolConfig:
+    @staticmethod
+    def _default_cfg(**overrides: Unpack[_EntitySymbolConfigOverrides]) -> EntitySymbolConfig:
         """Build a default config with optional overrides.
 
         Returns:
@@ -307,7 +317,8 @@ class TestEntitySymbolRelationshipRanking:
 class TestEntitySymbolRelationshipWithQualitySpecs:
     """Cross-check template output against known quality_specs.py constants."""
 
-    def test_rel_name_symbol_structure(self) -> None:
+    @staticmethod
+    def test_rel_name_symbol_structure() -> None:
         """REL_NAME_SYMBOL matches template with scip_role_filter."""
         from semantics.quality_specs import REL_NAME_SYMBOL
 
@@ -321,7 +332,8 @@ class TestEntitySymbolRelationshipWithQualitySpecs:
         # Has role filter -> 2 hard predicates
         assert len(REL_NAME_SYMBOL.signals.hard) == TWO_ENTRIES
 
-    def test_rel_def_symbol_uses_contains(self) -> None:
+    @staticmethod
+    def test_rel_def_symbol_uses_contains() -> None:
         """REL_DEF_SYMBOL uses contains strategy and custom weight."""
         from semantics.quality_specs import REL_DEF_SYMBOL
 
@@ -333,7 +345,8 @@ class TestEntitySymbolRelationshipWithQualitySpecs:
         # Has role filter -> 2 hard predicates
         assert len(REL_DEF_SYMBOL.signals.hard) == TWO_ENTRIES
 
-    def test_rel_import_symbol_structure(self) -> None:
+    @staticmethod
+    def test_rel_import_symbol_structure() -> None:
         """REL_IMPORT_SYMBOL has default overlap and role filter."""
         from semantics.quality_specs import REL_IMPORT_SYMBOL
 
@@ -341,7 +354,8 @@ class TestEntitySymbolRelationshipWithQualitySpecs:
         assert REL_IMPORT_SYMBOL.left_view == "cst_imports_norm"
         assert len(REL_IMPORT_SYMBOL.signals.hard) == TWO_ENTRIES
 
-    def test_rel_callsite_symbol_no_role_filter(self) -> None:
+    @staticmethod
+    def test_rel_callsite_symbol_no_role_filter() -> None:
         """REL_CALLSITE_SYMBOL has no role filter (only span predicate)."""
         from semantics.quality_specs import REL_CALLSITE_SYMBOL
 
@@ -350,7 +364,8 @@ class TestEntitySymbolRelationshipWithQualitySpecs:
         # No role filter -> only 1 hard predicate
         assert len(REL_CALLSITE_SYMBOL.signals.hard) == 1
 
-    def test_all_template_specs_in_registry(self) -> None:
+    @staticmethod
+    def test_all_template_specs_in_registry() -> None:
         """All four template-based specs appear in QUALITY_RELATIONSHIP_SPECS."""
         from semantics.quality_specs import QUALITY_RELATIONSHIP_SPECS
 

@@ -32,8 +32,6 @@ def test_runtime_execution_policy_parses_extended_cache_settings(
     assert policy.cache.eviction_policy == "least-recently-used"
     assert policy.cache.statistics_enabled is True
     assert policy.cache.evict_run_tag_on_exit is True
-    assert (
-        policy.cache.namespace_ttl_seconds["search_candidates"] == SEARCH_CANDIDATES_TTL_SECONDS
-    )
+    assert policy.cache.namespace_ttl_seconds["search_candidates"] == SEARCH_CANDIDATES_TTL_SECONDS
     assert policy.cache.namespace_enabled["search_candidates"] is False
     assert policy.cache.namespace_ephemeral["search_candidates"] is True

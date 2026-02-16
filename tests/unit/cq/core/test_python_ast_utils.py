@@ -73,6 +73,6 @@ def test_get_call_name_with_other_node_type() -> None:
         body=ast.Constant(value=1),
     )
     name, is_attribute, receiver = get_call_name(func)
-    assert name == ""
+    assert not name
     assert is_attribute is False
     assert receiver is None

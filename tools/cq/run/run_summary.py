@@ -204,3 +204,8 @@ def _derive_run_scope_metadata(
         inferred = _derive_scope_from_orders(language_orders)
         scope = inferred if inferred is not None else DEFAULT_QUERY_LANGUAGE_SCOPE
     return scope, expand_language_scope(scope)
+
+
+__all__ = [
+    "populate_run_summary_metadata",
+]

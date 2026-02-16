@@ -5,8 +5,8 @@ This module provides semantic typing for CPG columns:
 - CompatibilityGroup: Sets of columns that can be joined
 - AnnotatedSchema: Schema with semantic annotations
 
-Also re-exports column_types for backward compatibility:
-- ColumnType, TableType, infer_column_type, infer_table_type, TYPE_PATTERNS
+Also re-exports ``column_types`` compatibility helpers:
+- ColumnType, TableType, infer_column_type, infer_table_type
 
 Example:
 -------
@@ -28,7 +28,6 @@ True
 """
 
 from semantics.column_types import (
-    TYPE_PATTERNS,
     ColumnType,
     TableType,
     infer_column_type,
@@ -47,7 +46,6 @@ from semantics.types.core import (
 
 __all__ = [
     "STANDARD_COLUMNS",
-    "TYPE_PATTERNS",
     # New semantic type system
     "AnnotatedColumn",
     "AnnotatedSchema",

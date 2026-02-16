@@ -11,15 +11,12 @@ import pytest
 from tools.cq.core.locations import SourceSpan
 from tools.cq.search.pipeline.classifier import QueryMode, clear_caches
 from tools.cq.search.pipeline.contracts import SearchConfig
+from tools.cq.search.pipeline.python_semantic import (
+    _python_semantic_no_signal_diagnostic,
+    attach_python_semantic_enrichment,
+)
 from tools.cq.search.pipeline.smart_search import (
     SMART_SEARCH_LIMITS,
-    EnrichedMatch,
-    RawMatch,
-    SearchStats,
-    _attach_python_semantic_enrichment,
-    _python_semantic_no_signal_diagnostic,
-    _PythonSemanticPrefetchResult,
-    _resolve_search_worker_count,
     _run_single_partition,
     build_candidate_searcher,
     build_finding,
@@ -29,6 +26,13 @@ from tools.cq.search.pipeline.smart_search import (
     classify_match,
     compute_relevance_score,
     smart_search,
+)
+from tools.cq.search.pipeline.smart_search_telemetry import _resolve_search_worker_count
+from tools.cq.search.pipeline.smart_search_types import (
+    EnrichedMatch,
+    RawMatch,
+    SearchStats,
+    _PythonSemanticPrefetchResult,
 )
 from tools.cq.search.semantic.models import LanguageSemanticEnrichmentOutcome
 from tools.cq.search.tree_sitter.rust_lane.runtime import is_tree_sitter_rust_available
@@ -144,7 +148,8 @@ def test_build_graph():
 class TestRawMatch:
     """Tests for RawMatch struct."""
 
-    def test_raw_match_creation(self) -> None:
+    @staticmethod
+    def test_raw_match_creation() -> None:
         """Test RawMatch creation."""
         raw = RawMatch(
             span=_span("src/module.py", 10, 9, 20),
@@ -160,7 +165,8 @@ class TestRawMatch:
         assert raw.col == DEFAULT_COLUMN_OFFSET
         assert raw.match_text == "build_graph"
 
-    def test_raw_match_no_context_fields(self) -> None:
+    @staticmethod
+    def test_raw_match_no_context_fields() -> None:
         """RawMatch should not store line-context payloads."""
         raw = RawMatch(
             span=_span("src/module.py", 10, 9, 20),
@@ -178,7 +184,8 @@ class TestRawMatch:
 class TestSearchStats:
     """Tests for SearchStats struct."""
 
-    def test_search_stats_basic(self) -> None:
+    @staticmethod
+    def test_search_stats_basic() -> None:
         """Test basic SearchStats."""
         stats = SearchStats(
             scanned_files=100,
@@ -192,7 +199,8 @@ class TestSearchStats:
         assert stats.max_files_hit is False
         assert stats.max_matches_hit is False
 
-    def test_search_stats_truncated(self) -> None:
+    @staticmethod
+    def test_search_stats_truncated() -> None:
         """Test truncated SearchStats."""
         stats = SearchStats(
             scanned_files=100,
@@ -208,7 +216,8 @@ class TestSearchStats:
 class TestEnrichedMatch:
     """Tests for EnrichedMatch struct."""
 
-    def test_enriched_match_creation(self) -> None:
+    @staticmethod
+    def test_enriched_match_creation() -> None:
         """Test EnrichedMatch creation."""
         match = EnrichedMatch(
             span=_span("src/module.py", 10, 4),
@@ -226,7 +235,8 @@ class TestEnrichedMatch:
 class TestRelevanceScoring:
     """Tests for relevance scoring."""
 
-    def test_definition_scores_highest(self) -> None:
+    @staticmethod
+    def test_definition_scores_highest() -> None:
         """Definitions should outrank callsites in relevance scoring."""
         definition = EnrichedMatch(
             span=_span("src/module.py", 1, 0),
@@ -246,7 +256,8 @@ class TestRelevanceScoring:
         )
         assert compute_relevance_score(definition) > compute_relevance_score(callsite)
 
-    def test_src_files_score_higher_than_tests(self) -> None:
+    @staticmethod
+    def test_src_files_score_higher_than_tests() -> None:
         """Test that src files score higher than tests."""
         src_match = EnrichedMatch(
             span=_span("src/module.py", 1, 0),
@@ -266,7 +277,8 @@ class TestRelevanceScoring:
         )
         assert compute_relevance_score(src_match) > compute_relevance_score(test_match)
 
-    def test_comment_match_scores_low(self) -> None:
+    @staticmethod
+    def test_comment_match_scores_low() -> None:
         """Test that comment matches score low."""
         comment = EnrichedMatch(
             span=_span("src/module.py", 1, 0),
@@ -290,7 +302,8 @@ class TestRelevanceScoring:
 class TestClassifyMatch:
     """Tests for match classification."""
 
-    def test_classify_comment(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_classify_comment(sample_repo: Path) -> None:
         """Test classification of comment match."""
         clear_caches()
         raw = RawMatch(
@@ -308,7 +321,8 @@ class TestClassifyMatch:
         assert enriched.category == "comment_match"
         assert enriched.evidence_kind == "heuristic"
 
-    def test_classify_import(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_classify_import(sample_repo: Path) -> None:
         """Test classification of import match."""
         clear_caches()
         raw = RawMatch(
@@ -325,7 +339,8 @@ class TestClassifyMatch:
         enriched = classify_match(raw, sample_repo)
         assert enriched.category == "import"
 
-    def test_classify_import_force_semantic_enrichment(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_classify_import_force_semantic_enrichment(sample_repo: Path) -> None:
         """Forced semantic enrichment should attach Python enrichment for imports."""
         clear_caches()
         raw = RawMatch(
@@ -346,7 +361,8 @@ class TestClassifyMatch:
 class TestBuildFinding:
     """Tests for Finding construction."""
 
-    def test_build_finding_basic(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_build_finding_basic(sample_repo: Path) -> None:
         """Test basic Finding construction."""
         match = EnrichedMatch(
             span=_span("src/module.py", 10, 4),
@@ -362,7 +378,8 @@ class TestBuildFinding:
         assert finding.anchor.file == "src/module.py"
         assert finding.anchor.line == DEFAULT_LINE_NUMBER
 
-    def test_build_finding_with_scope(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_build_finding_with_scope(sample_repo: Path) -> None:
         """Test Finding with containing scope."""
         match = EnrichedMatch(
             span=_span("src/module.py", 10, 4),
@@ -380,7 +397,8 @@ class TestBuildFinding:
 class TestBuildFollowups:
     """Tests for follow-up suggestions."""
 
-    def test_followups_for_identifier_with_defs(self) -> None:
+    @staticmethod
+    def test_followups_for_identifier_with_defs() -> None:
         """Test follow-ups when definitions found."""
         matches = [
             EnrichedMatch(
@@ -398,7 +416,8 @@ class TestBuildFollowups:
         messages = [f.message for f in followups]
         assert any("callers" in m.lower() for m in messages)
 
-    def test_followups_for_identifier_with_calls(self) -> None:
+    @staticmethod
+    def test_followups_for_identifier_with_calls() -> None:
         """Test follow-ups when callsites found."""
         matches = [
             EnrichedMatch(
@@ -415,7 +434,8 @@ class TestBuildFollowups:
         messages = [f.message for f in followups]
         assert any("impact" in m.lower() for m in messages)
 
-    def test_no_followups_for_regex(self) -> None:
+    @staticmethod
+    def test_no_followups_for_regex() -> None:
         """Test no follow-ups for regex mode."""
         matches = [
             EnrichedMatch(
@@ -435,7 +455,8 @@ class TestBuildFollowups:
 class TestBuildSummary:
     """Tests for summary construction."""
 
-    def test_summary_basic(self) -> None:
+    @staticmethod
+    def test_summary_basic() -> None:
         """Test basic summary construction."""
         stats = SearchStats(
             scanned_files=100,
@@ -466,7 +487,8 @@ class TestBuildSummary:
         assert summary["matched_files"] == BASIC_MATCHED_FILES
         assert summary["returned_matches"] == 1
 
-    def test_summary_with_truncation(self) -> None:
+    @staticmethod
+    def test_summary_with_truncation() -> None:
         """Test summary with truncation."""
         stats = SearchStats(
             scanned_files=100,
@@ -485,7 +507,8 @@ class TestBuildSummary:
         assert summary["truncated"] is True
         assert summary["caps_hit"] == "max_total_matches"
 
-    def test_summary_multilang_contract_keys(self) -> None:
+    @staticmethod
+    def test_summary_multilang_contract_keys() -> None:
         """Summary should expose canonical multilang contract keys."""
         stats = SearchStats(
             scanned_files=1,
@@ -509,7 +532,8 @@ class TestBuildSummary:
 class TestBuildSections:
     """Tests for section construction."""
 
-    def test_sections_include_resolved_objects(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_sections_include_resolved_objects(sample_repo: Path) -> None:
         """Object-resolved output should include a deduplicated object section."""
         matches = [
             EnrichedMatch(
@@ -525,7 +549,8 @@ class TestBuildSections:
         titles = [s.title for s in sections]
         assert "Resolved Objects" in titles
 
-    def test_sections_include_occurrences_for_identifier(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_sections_include_occurrences_for_identifier(sample_repo: Path) -> None:
         """Identifier mode should include explicit occurrence rows."""
         matches = [
             EnrichedMatch(
@@ -541,7 +566,8 @@ class TestBuildSections:
         titles = [s.title for s in sections]
         assert "Occurrences" in titles
 
-    def test_non_code_matches_collapsed(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_non_code_matches_collapsed(sample_repo: Path) -> None:
         """Test that non-code matches section is collapsed."""
         matches = [
             EnrichedMatch(
@@ -558,7 +584,8 @@ class TestBuildSections:
         if non_code_section:
             assert non_code_section.collapsed is True
 
-    def test_occurrences_include_block_ranges(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_occurrences_include_block_ranges(sample_repo: Path) -> None:
         """Occurrence rows should surface location + enclosing block range."""
         matches = [
             EnrichedMatch(
@@ -611,7 +638,8 @@ class TestBuildSections:
         assert all("line_id=" in finding.message for finding in occurrences_section.findings)
         assert all("object_id=" in finding.message for finding in occurrences_section.findings)
 
-    def test_sections_include_strings_when_enabled(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_sections_include_strings_when_enabled(sample_repo: Path) -> None:
         """Non-code matches should surface in occurrence rows when include_strings is set."""
         matches = [
             EnrichedMatch(
@@ -642,7 +670,8 @@ class TestBuildSections:
 class TestSmartSearch:
     """Tests for the full smart search pipeline."""
 
-    def test_smart_search_identifier(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_smart_search_identifier(sample_repo: Path) -> None:
         """Test smart search with identifier mode."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
@@ -653,9 +682,8 @@ class TestSmartSearch:
         # Should find matches
         assert len(result.evidence) > 0
 
-    def test_python_enrichment_telemetry_uses_python_resolution_stage(
-        self, sample_repo: Path
-    ) -> None:
+    @staticmethod
+    def test_python_enrichment_telemetry_uses_python_resolution_stage(sample_repo: Path) -> None:
         """Telemetry stage buckets should use python_resolution and exclude legacy libcst."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph", lang_scope="python")
@@ -672,7 +700,8 @@ class TestSmartSearch:
         assert "libcst" not in stages
         assert "libcst" not in timings
 
-    def test_smart_search_scanned_files_exact(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_smart_search_scanned_files_exact(sample_repo: Path) -> None:
         """Smart search should report exact scanned file counts when available."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
@@ -682,8 +711,8 @@ class TestSmartSearch:
         matched_files = cast("int", summary["matched_files"])
         assert scanned_files >= matched_files
 
+    @staticmethod
     def test_smart_search_classification_uses_fixed_worker_cap(
-        self,
         tmp_path: Path,
     ) -> None:
         """Classification path should use at most four worker processes."""
@@ -697,7 +726,8 @@ class TestSmartSearch:
         assert result.evidence
         assert _resolve_search_worker_count(WORKER_INPUT_FILE_COUNT) == EXPECTED_WORKER_COUNT
 
-    def test_smart_search_with_include_globs(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_smart_search_with_include_globs(sample_repo: Path) -> None:
         """Test smart search with include globs."""
         clear_caches()
         result = smart_search(
@@ -710,7 +740,8 @@ class TestSmartSearch:
             if finding.anchor:
                 assert finding.anchor.file.startswith("src/") or "src" in finding.anchor.file
 
-    def test_smart_search_with_tools_scope_glob(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_smart_search_with_tools_scope_glob(tmp_path: Path) -> None:
         """Directory include globs should match files under tools/ recursively."""
         target = tmp_path / "tools" / "cq" / "search"
         target.mkdir(parents=True)
@@ -736,7 +767,8 @@ class TestSmartSearch:
             if finding.anchor:
                 assert finding.anchor.file.removeprefix("./").startswith("tools/")
 
-    def test_smart_search_with_rust_scope_glob(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_smart_search_with_rust_scope_glob(tmp_path: Path) -> None:
         """Rust directory include globs should match Rust files recursively."""
         rust_src = tmp_path / "rust" / "codeanatomy_engine_py" / "src"
         rust_src.mkdir(parents=True)
@@ -762,7 +794,8 @@ class TestSmartSearch:
             if finding.anchor:
                 assert finding.anchor.file.removeprefix("./").startswith("rust/")
 
-    def test_smart_search_with_tools_cq_scope_glob(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_smart_search_with_tools_cq_scope_glob(tmp_path: Path) -> None:
         """Nested directory include globs should remain reliable for tools/cq."""
         target = tmp_path / "tools" / "cq" / "search"
         target.mkdir(parents=True)
@@ -783,7 +816,8 @@ class TestSmartSearch:
             if finding.anchor:
                 assert finding.anchor.file.removeprefix("./").startswith("tools/cq/")
 
-    def test_python_query_under_rust_include_glob_returns_no_evidence(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_python_query_under_rust_include_glob_returns_no_evidence(tmp_path: Path) -> None:
         """Python searches constrained to rust/** should remain empty."""
         rust_src = tmp_path / "rust" / "codeanatomy_engine_py" / "src"
         rust_src.mkdir(parents=True)
@@ -801,7 +835,8 @@ class TestSmartSearch:
         )
         assert not result.evidence
 
-    def test_rust_query_under_python_include_glob_returns_no_evidence(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_rust_query_under_python_include_glob_returns_no_evidence(tmp_path: Path) -> None:
         """Rust searches constrained to tools/** with only Python files should remain empty."""
         target = tmp_path / "tools" / "cq" / "search"
         target.mkdir(parents=True)
@@ -819,7 +854,8 @@ class TestSmartSearch:
         )
         assert not result.evidence
 
-    def test_smart_search_sections_present(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_smart_search_sections_present(sample_repo: Path) -> None:
         """Test that sections are present in result."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
@@ -829,7 +865,8 @@ class TestSmartSearch:
         assert "Occurrences" in titles
         assert "Target Candidates" in titles
 
-    def test_smart_search_key_findings(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_smart_search_key_findings(sample_repo: Path) -> None:
         """Test that key findings are populated."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
@@ -843,7 +880,8 @@ class TestSmartSearch:
             "callsite",
         }
 
-    def test_search_insight_target_grounded_from_definitions(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_search_insight_target_grounded_from_definitions(sample_repo: Path) -> None:
         """Insight target should resolve to a definition location when available."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
@@ -858,9 +896,8 @@ class TestSmartSearch:
         assert isinstance(location.get("line"), int)
         assert target.get("kind") in {"function", "class", "type"}
 
-    def test_search_insight_excludes_annotation_reference_target_kinds(
-        self, tmp_path: Path
-    ) -> None:
+    @staticmethod
+    def test_search_insight_excludes_annotation_reference_target_kinds(tmp_path: Path) -> None:
         """Definition candidates should not surface annotation/reference target kinds."""
         module = tmp_path / "module.py"
         module.write_text(
@@ -882,8 +919,9 @@ class TestSmartSearch:
         target = cast("dict[str, object]", insight.get("target", {}))
         assert target.get("kind") in {"function", "class", "type"}
 
+    @staticmethod
     def test_search_neighborhood_preview_section_present_for_resolved_definition(
-        self, sample_repo: Path
+        sample_repo: Path,
     ) -> None:
         """Resolved definition targets should include a neighborhood preview section."""
         clear_caches()
@@ -891,14 +929,16 @@ class TestSmartSearch:
         titles = [section.title for section in result.sections]
         assert "Neighborhood Preview" in titles
 
-    def test_search_neighborhood_preview_disabled_by_default(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_search_neighborhood_preview_disabled_by_default(sample_repo: Path) -> None:
         """Neighborhood preview should be opt-in for search latency control."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
         titles = [section.title for section in result.sections]
         assert "Neighborhood Preview" not in titles
 
-    def test_search_degradation_notes_are_deduplicated(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_search_degradation_notes_are_deduplicated(sample_repo: Path) -> None:
         """Degradation notes should avoid duplicate status markers."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
@@ -907,18 +947,18 @@ class TestSmartSearch:
         notes = cast("list[str]", degradation.get("notes", []))
         assert len(notes) == len(set(notes))
 
-    def test_evidence_cap(self, sample_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    @staticmethod
+    def test_evidence_cap(sample_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Evidence should respect MAX_EVIDENCE cap."""
-        import importlib
-
-        smart_search_module = importlib.import_module("tools.cq.search.pipeline.smart_search")
+        from tools.cq.search.pipeline import assembly as assembly_module
 
         clear_caches()
-        monkeypatch.setattr(smart_search_module, "MAX_EVIDENCE", 1)
-        result = smart_search_module.smart_search(sample_repo, "build_graph")
+        monkeypatch.setattr(assembly_module, "MAX_EVIDENCE", 1)
+        result = smart_search(sample_repo, "build_graph")
         assert len(result.evidence) <= 1
 
-    def test_multilang_order_is_python_first(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_multilang_order_is_python_first(tmp_path: Path) -> None:
         """Merged evidence should prefer Python before Rust for tied relevance."""
         (tmp_path / "a.py").write_text("def build_graph():\n    return 1\n", encoding="utf-8")
         (tmp_path / "b.rs").write_text("fn build_graph() -> i32 { 1 }\n", encoding="utf-8")
@@ -929,7 +969,8 @@ class TestSmartSearch:
         assert result.evidence
         assert result.evidence[0].details.get("language") == "python"
 
-    def test_rust_scope_filters_out_python_files(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_rust_scope_filters_out_python_files(tmp_path: Path) -> None:
         """Rust scope should not emit findings anchored to Python files."""
         (tmp_path / "mod.py").write_text("def classify_match():\n    return 1\n", encoding="utf-8")
         (tmp_path / "lib.rs").write_text("fn classify_match() -> i32 { 1 }\n", encoding="utf-8")
@@ -945,7 +986,8 @@ class TestSmartSearch:
 class TestSmartSearchFiltersAndEnrichment:
     """Additional smart-search tests split from TestSmartSearch."""
 
-    def test_python_scope_filters_out_rust_files(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_python_scope_filters_out_rust_files(tmp_path: Path) -> None:
         """Python scope should not emit findings anchored to Rust files."""
         (tmp_path / "mod.py").write_text("def classify_match():\n    return 1\n", encoding="utf-8")
         (tmp_path / "lib.rs").write_text("fn classify_match() -> i32 { 1 }\n", encoding="utf-8")
@@ -957,7 +999,8 @@ class TestSmartSearchFiltersAndEnrichment:
         assert all(Path(anchor.file).suffix in {".py", ".pyi"} for anchor in anchors)
         assert all(finding.details.get("language") == "python" for finding in result.evidence)
 
-    def test_top_level_import_context_window_is_compact(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_top_level_import_context_window_is_compact(tmp_path: Path) -> None:
         """Top-level import matches should not expand context to the full file."""
         filler = "\n".join(f"    value_{idx} = {idx}" for idx in range(120))
         (tmp_path / "module.py").write_text(
@@ -987,7 +1030,8 @@ class TestSmartSearchFiltersAndEnrichment:
         assert start_line == 1
         assert end_line < MAX_CONTEXT_END_LINE
 
-    def test_rust_scope_in_python_tree_has_no_scope_drop_anomaly(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_rust_scope_in_python_tree_has_no_scope_drop_anomaly(tmp_path: Path) -> None:
         """Rust searches constrained to Python-only trees should not inflate dropped_by_scope."""
         search_dir = tmp_path / "tools" / "cq" / "search"
         search_dir.mkdir(parents=True)
@@ -1008,7 +1052,8 @@ class TestSmartSearchFiltersAndEnrichment:
             assert dropped_by_scope.get("rust", 0) == 0
         assert not result.evidence
 
-    def test_auto_identifier_falls_back_to_literal_when_no_hits(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_auto_identifier_falls_back_to_literal_when_no_hits(tmp_path: Path) -> None:
         """Auto-identifier mode should fallback to literal search when identifier is empty."""
         (tmp_path / "module.py").write_text("build_graph_v2 = 1\n", encoding="utf-8")
         clear_caches()
@@ -1019,7 +1064,8 @@ class TestSmartSearchFiltersAndEnrichment:
         assert result.summary.get("mode_chain") == ["identifier", "literal"]
         assert result.summary.get("fallback_applied") is True
 
-    def test_forced_identifier_does_not_fallback_to_literal(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_forced_identifier_does_not_fallback_to_literal(tmp_path: Path) -> None:
         """Forced mode should never auto-fallback."""
         (tmp_path / "module.py").write_text("build_graph_v2 = 1\n", encoding="utf-8")
         clear_caches()
@@ -1030,7 +1076,8 @@ class TestSmartSearchFiltersAndEnrichment:
         assert result.summary.get("mode_chain") == ["identifier"]
         assert result.summary.get("fallback_applied") is False
 
-    def test_file_include_scope_accepts_exact_file_path(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_file_include_scope_accepts_exact_file_path(tmp_path: Path) -> None:
         """Single-file include globs should constrain search to that exact file."""
         target = tmp_path / "tools" / "cq" / "search"
         target.mkdir(parents=True)
@@ -1052,7 +1099,8 @@ class TestSmartSearchFiltersAndEnrichment:
         assert anchored_files
         assert all(file.endswith("tools/cq/search/classifier.py") for file in anchored_files)
 
-    def test_context_snippet_keeps_header_and_anchor_block(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_context_snippet_keeps_header_and_anchor_block(tmp_path: Path) -> None:
         """Context snippets should preserve function top and the match anchor block."""
         filler = "\n".join(f"    filler_{i} = {i}" for i in range(40))
         (tmp_path / "module.py").write_text(
@@ -1082,7 +1130,8 @@ class TestSmartSearchFiltersAndEnrichment:
         assert "target_marker = value" in snippet
         assert "docstring should be omitted" not in snippet
 
-    def test_cross_language_warning_for_python_intent_rust_only(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_cross_language_warning_for_python_intent_rust_only(tmp_path: Path) -> None:
         """Python-oriented text with Rust-only matches should emit a warning."""
         (tmp_path / "only.rs").write_text("// decorator\nfn f() {}\n", encoding="utf-8")
         clear_caches()
@@ -1094,11 +1143,12 @@ class TestSmartSearchFiltersAndEnrichment:
         assert first.get("code") == "ML001"
         assert "Python-oriented query produced no Python matches" in str(first.get("message"))
 
+    @staticmethod
     @pytest.mark.skipif(
         not is_tree_sitter_rust_available(),
         reason="tree-sitter-rust is not available in this environment",
     )
-    def test_rust_tree_sitter_enrichment_attached(self, tmp_path: Path) -> None:
+    def test_rust_tree_sitter_enrichment_attached(tmp_path: Path) -> None:
         """Rust findings should include optional tree-sitter enrichment details."""
         (tmp_path / "lib.rs").write_text(
             'fn build_graph() {\n    println!("x");\n}\n',
@@ -1116,7 +1166,8 @@ class TestSmartSearchFiltersAndEnrichment:
         assert isinstance(rust_payload, dict)
         assert rust_payload.get("enrichment_status") in {"applied", "degraded", "skipped"}
 
-    def test_python_enrichment_dictionary_attached(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_python_enrichment_dictionary_attached(sample_repo: Path) -> None:
         """Python findings should expose structured enrichment payloads."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph", lang_scope="python")
@@ -1131,7 +1182,8 @@ class TestSmartSearchFiltersAndEnrichment:
         assert first.get("language") == "python"
         assert isinstance(first.get("python"), dict)
 
-    def test_python_semantic_summary_fields_present(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_python_semantic_summary_fields_present(sample_repo: Path) -> None:
         """Search summaries should include additive PythonSemantic metadata blocks."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph", lang_scope="python")
@@ -1140,7 +1192,8 @@ class TestSmartSearchFiltersAndEnrichment:
         assert "python_semantic_telemetry" in summary
         assert "python_semantic_diagnostics" in summary
 
-    def test_python_semantic_payload_key_attached_when_available(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_python_semantic_payload_key_attached_when_available(sample_repo: Path) -> None:
         """Per-finding enrichment should expose a dedicated python_semantic payload key."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph", lang_scope="python")
@@ -1152,7 +1205,8 @@ class TestSmartSearchFiltersAndEnrichment:
         if "python_semantic" in enrichment:
             assert isinstance(enrichment["python_semantic"], dict)
 
-    def test_python_semantic_no_signal_diagnostic_normalizes_capability_reason(self) -> None:
+    @staticmethod
+    def test_python_semantic_no_signal_diagnostic_normalizes_capability_reason() -> None:
         """Capability-specific coverage reasons should remain explicit."""
         diagnostic = _python_semantic_no_signal_diagnostic(
             ("no_python_semantic_signal",),
@@ -1160,7 +1214,8 @@ class TestSmartSearchFiltersAndEnrichment:
         )
         assert diagnostic["reason"] == "unsupported_capability"
 
-    def test_python_semantic_no_signal_diagnostic_normalizes_request_interface_reason(self) -> None:
+    @staticmethod
+    def test_python_semantic_no_signal_diagnostic_normalizes_request_interface_reason() -> None:
         """Request-interface failures should not be collapsed into generic no-signal."""
         diagnostic = _python_semantic_no_signal_diagnostic(
             ("no_python_semantic_signal",),
@@ -1168,13 +1223,15 @@ class TestSmartSearchFiltersAndEnrichment:
         )
         assert diagnostic["reason"] == "request_interface_unavailable"
 
-    def test_python_semantic_no_signal_diagnostic_defaults_to_no_signal(self) -> None:
+    @staticmethod
+    def test_python_semantic_no_signal_diagnostic_defaults_to_no_signal() -> None:
         """Unexpected/noisy reasons should collapse to canonical no_signal."""
         diagnostic = _python_semantic_no_signal_diagnostic(("empty_payload",), coverage_reason=None)
         assert diagnostic["reason"] == "no_signal"
 
+    @staticmethod
     def test_attach_python_semantic_uses_prefetched_payload(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Prefetched PythonSemantic payloads should bypass synchronous fallback calls."""
         clear_caches()
@@ -1209,9 +1266,9 @@ class TestSmartSearchFiltersAndEnrichment:
             raise AssertionError(msg)
 
         monkeypatch.setattr(
-            "tools.cq.search.pipeline.smart_search._python_semantic_enrich_match", _boom
+            "tools.cq.search.pipeline.python_semantic._python_semantic_enrich_match", _boom
         )
-        enriched, _overview, telemetry, diagnostics = _attach_python_semantic_enrichment(
+        enriched, _overview, telemetry, diagnostics = attach_python_semantic_enrichment(
             ctx=ctx,
             matches=[match],
             prefetched=prefetched,
@@ -1222,8 +1279,9 @@ class TestSmartSearchFiltersAndEnrichment:
         assert telemetry_map.get("attempted") == 1
         assert telemetry_map.get("applied") == 1
 
+    @staticmethod
     def test_run_single_partition_starts_python_semantic_prefetch_before_classification(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """PythonSemantic prefetch should run concurrently with classification."""
         clear_caches()
@@ -1291,7 +1349,7 @@ class TestSmartSearchFiltersAndEnrichment:
             "tools.cq.search.pipeline.smart_search._run_candidate_phase", _fake_candidate_phase
         )
         monkeypatch.setattr(
-            "tools.cq.search.pipeline.smart_search._prefetch_python_semantic_for_raw_matches",
+            "tools.cq.search.pipeline.python_semantic.run_prefetch_python_semantic_for_raw_matches",
             _fake_prefetch,
         )
         monkeypatch.setattr(
@@ -1301,9 +1359,8 @@ class TestSmartSearchFiltersAndEnrichment:
         result = _run_single_partition(ctx, "python", mode=QueryMode.IDENTIFIER)
         assert result.python_semantic_prefetch is not None
 
-    def test_rust_tree_sitter_fail_open(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    @staticmethod
+    def test_rust_tree_sitter_fail_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Tree-sitter enrichment failures must not break core search results."""
         (tmp_path / "lib.rs").write_text(
             'fn build_graph() {\n    println!("x");\n}\n',
@@ -1327,7 +1384,8 @@ class TestSmartSearchFiltersAndEnrichment:
 class TestCandidateSearcher:
     """Tests for candidate searcher construction."""
 
-    def test_build_searcher_identifier(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_build_searcher_identifier(sample_repo: Path) -> None:
         """Test building searcher for identifier mode."""
         _searcher, pattern = build_candidate_searcher(
             sample_repo,
@@ -1338,7 +1396,8 @@ class TestCandidateSearcher:
         assert r"\b" not in pattern  # Boundaries are handled by rg -w
         assert pattern == "build_graph"
 
-    def test_build_searcher_literal(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_build_searcher_literal(sample_repo: Path) -> None:
         """Test building searcher for literal mode."""
         _searcher, pattern = build_candidate_searcher(
             sample_repo,
@@ -1348,7 +1407,8 @@ class TestCandidateSearcher:
         )
         assert pattern == "hello world"
 
-    def test_build_searcher_regex(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_build_searcher_regex(sample_repo: Path) -> None:
         """Test building searcher for regex mode."""
         _searcher, pattern = build_candidate_searcher(
             sample_repo,
@@ -1368,7 +1428,7 @@ def test_search_rust_front_door_uses_rust_semantic_adapter(
     clear_caches()
 
     monkeypatch.setattr(
-        "tools.cq.search.pipeline.smart_search.enrich_with_language_semantics",
+        "tools.cq.search.pipeline.search_semantic.enrich_with_language_semantics",
         lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
             payload={
                 "call_graph": {
@@ -1403,9 +1463,8 @@ def test_search_python_capability_probe_unavailable_is_non_fatal(
     )
     clear_caches()
 
-    monkeypatch.setattr(
-        "tools.cq.search.pipeline.smart_search.enrich_with_language_semantics",
-        lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
+    def capability_stub(*_args: object, **_kwargs: object) -> LanguageSemanticEnrichmentOutcome:
+        return LanguageSemanticEnrichmentOutcome(
             payload={
                 "coverage": {"status": "applied", "reason": None},
                 "call_graph": {
@@ -1415,7 +1474,15 @@ def test_search_python_capability_probe_unavailable_is_non_fatal(
                     "outgoing_callees": [],
                 },
             }
-        ),
+        )
+
+    monkeypatch.setattr(
+        "tools.cq.search.pipeline.python_semantic.enrich_with_language_semantics",
+        capability_stub,
+    )
+    monkeypatch.setattr(
+        "tools.cq.search.pipeline.search_semantic.enrich_with_language_semantics",
+        capability_stub,
     )
 
     result = smart_search(tmp_path, "build_graph", lang_scope="python")
@@ -1442,13 +1509,20 @@ def test_search_python_timeout_reason_not_collapsed_to_session_unavailable(
     )
     clear_caches()
 
-    monkeypatch.setattr(
-        "tools.cq.search.pipeline.smart_search.enrich_with_language_semantics",
-        lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
+    def timeout_stub(*_args: object, **_kwargs: object) -> LanguageSemanticEnrichmentOutcome:
+        return LanguageSemanticEnrichmentOutcome(
             payload=None,
             timed_out=True,
             failure_reason="request_timeout",
-        ),
+        )
+
+    monkeypatch.setattr(
+        "tools.cq.search.pipeline.python_semantic.enrich_with_language_semantics",
+        timeout_stub,
+    )
+    monkeypatch.setattr(
+        "tools.cq.search.pipeline.search_semantic.enrich_with_language_semantics",
+        timeout_stub,
     )
 
     result = smart_search(tmp_path, "build_graph", lang_scope="python")

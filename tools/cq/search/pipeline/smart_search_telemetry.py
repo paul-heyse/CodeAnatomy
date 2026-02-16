@@ -12,9 +12,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
-from tools.cq.search.tree_sitter.python_lane.runtime import get_tree_sitter_python_cache_stats
-from tools.cq.search.tree_sitter.rust_lane.runtime import get_tree_sitter_rust_cache_stats
-
 
 def status_from_enrichment(payload: dict[str, object] | None) -> str:
     """Extract enrichment status from payload.
@@ -24,7 +21,7 @@ def status_from_enrichment(payload: dict[str, object] | None) -> str:
     payload
         Enrichment payload.
 
-    Returns
+    Returns:
     -------
     str
         Status string (applied, degraded, or skipped).
@@ -45,7 +42,7 @@ def status_from_enrichment(payload: dict[str, object] | None) -> str:
 def empty_enrichment_telemetry() -> dict[str, object]:
     """Create empty enrichment telemetry structure.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Empty telemetry dictionary with initialized counters.
@@ -175,9 +172,15 @@ def attach_enrichment_cache_stats(telemetry: dict[str, object]) -> None:
     """
     rust_bucket = telemetry.get("rust")
     if isinstance(rust_bucket, dict):
+        from tools.cq.search.tree_sitter.rust_lane.runtime import get_tree_sitter_rust_cache_stats
+
         rust_bucket.update(get_tree_sitter_rust_cache_stats())
     python_bucket = telemetry.get("python")
     if isinstance(python_bucket, dict):
+        from tools.cq.search.tree_sitter.python_lane.runtime import (
+            get_tree_sitter_python_cache_stats,
+        )
+
         python_bucket["tree_sitter_cache"] = get_tree_sitter_python_cache_stats()
 
 
@@ -196,14 +199,16 @@ def accumulate_rust_enrichment(
     """
 
     def int_counter(value: object) -> int:
-        """Convert value to int counter, defaulting to 0."""
+        """Convert value to an integer counter with a safe default.
+
+        Returns:
+            int: ``value`` when it is a non-bool ``int``; otherwise ``0``.
+        """
         return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
     tags = payload.get("query_pack_tags")
     if isinstance(tags, list):
-        lang_bucket["query_pack_tags"] = int_counter(lang_bucket.get("query_pack_tags")) + len(
-            tags
-        )
+        lang_bucket["query_pack_tags"] = int_counter(lang_bucket.get("query_pack_tags")) + len(tags)
     accumulate_rust_runtime(lang_bucket=lang_bucket, payload=payload, counter=int_counter)
     accumulate_rust_bundle(lang_bucket=lang_bucket, payload=payload, counter=int_counter)
 
@@ -288,7 +293,7 @@ def build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, object
     matches
         List of enriched matches to build telemetry from.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Per-language enrichment status counters and Rust cache metrics.
@@ -314,10 +319,30 @@ def build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, object
     return telemetry
 
 
+def _resolve_search_worker_count(partition_count: int) -> int:
+    """Resolve worker count for search classification parallelism.
+
+    Parameters
+    ----------
+    partition_count
+        Number of partitions to classify.
+
+    Returns:
+    -------
+    int
+        Number of workers to use.
+    """
+    from tools.cq.search.pipeline.smart_search import MAX_SEARCH_CLASSIFY_WORKERS
+
+    if partition_count <= 1:
+        return 1
+    return min(partition_count, MAX_SEARCH_CLASSIFY_WORKERS)
+
+
 def new_python_semantic_telemetry() -> dict[str, int]:
     """Create new Python semantic telemetry counters.
 
-    Returns
+    Returns:
     -------
     dict[str, int]
         Initialized telemetry counters.

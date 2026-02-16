@@ -306,9 +306,10 @@ def _normalize_dataset_spec(name: str, *, ctx: SessionContext | None = None) -> 
     )
     if not callable(normalize_dataset_spec):
         return None
-    normalize_dataset_spec = cast("Callable[..., DatasetSpec]", normalize_dataset_spec)
+    _ = ctx
+    normalize_dataset_spec = cast("Callable[[str], DatasetSpec]", normalize_dataset_spec)
     try:
-        return normalize_dataset_spec(name, ctx=ctx)
+        return normalize_dataset_spec(name)
     except KeyError:
         return None
 

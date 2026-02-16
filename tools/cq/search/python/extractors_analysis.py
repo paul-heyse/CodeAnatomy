@@ -230,7 +230,7 @@ def is_type_checking_import(tree: ast.Module, import_node: ast.Import | ast.Impo
 
 def extract_import_detail(
     _node: SgNode,
-    source_bytes: bytes,
+    _source_bytes: bytes,
     ast_tree: ast.Module,
     line: int,
 ) -> dict[str, object]:

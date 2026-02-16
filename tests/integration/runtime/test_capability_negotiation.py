@@ -21,7 +21,8 @@ def setup_module() -> None:
 class TestCapabilityNegotiation:
     """Verify deterministic failure payloads for unsupported capabilities."""
 
-    def test_delta_extension_compatibility_check(self) -> None:
+    @staticmethod
+    def test_delta_extension_compatibility_check() -> None:
         """Verify is_delta_extension_compatible returns structured result.
 
         The compatibility check should return a structured object with
@@ -37,7 +38,8 @@ class TestCapabilityNegotiation:
         assert hasattr(compat, "compatible")
         assert isinstance(compat.available, bool)
 
-    def test_extension_hook_resolution_structured(self) -> None:
+    @staticmethod
+    def test_extension_hook_resolution_structured() -> None:
         """Verify extension hook resolution returns structured result.
 
         _resolve_datafusion_extension() should return module or None,
@@ -50,7 +52,8 @@ class TestCapabilityNegotiation:
         # Should return module or None, not raise
         assert result is None or hasattr(result, "install_codeanatomy_policy_config")
 
-    def test_require_datafusion_udfs_graceful_fallback(self) -> None:
+    @staticmethod
+    def test_require_datafusion_udfs_graceful_fallback() -> None:
         """Verify require_datafusion_udfs() provides actionable error.
 
         Raises:
@@ -67,7 +70,8 @@ class TestCapabilityNegotiation:
                 msg = "RuntimeError should include rebuild instructions or UDF context."
                 raise AssertionError(msg) from exc
 
-    def test_session_context_information_schema_required(self) -> None:
+    @staticmethod
+    def test_session_context_information_schema_required() -> None:
         """Verify DataFusionRuntimeProfile enforces information_schema.
 
         Profiles that disable information_schema should raise ValueError
@@ -98,7 +102,8 @@ class TestCapabilityNegotiation:
         except (ValueError, TypeError):
             pass  # Expected: validation catches the invalid config
 
-    def test_async_udf_policy_validation(self) -> None:
+    @staticmethod
+    def test_async_udf_policy_validation() -> None:
         """Verify async UDF policy validation produces clear errors.
 
         Invalid async UDF policies should raise ValueError with

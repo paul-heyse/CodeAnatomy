@@ -72,8 +72,8 @@ def plan_all_sources() -> EvidencePlan:
 class TestEvidencePlanToExtractorPipeline:
     """Verify plan gating flows through to extractor configuration."""
 
+    @staticmethod
     def test_plan_feature_flags_propagate_to_rule_execution_options(
-        self,
         plan_without_bytecode: EvidencePlan,
     ) -> None:
         """Verify plan_feature_flags() values appear in rule_execution_options().
@@ -90,8 +90,8 @@ class TestEvidencePlanToExtractorPipeline:
             assert key in options.feature_flags
             assert options.feature_flags[key] == value
 
+    @staticmethod
     def test_rule_execution_options_merge_overrides(
-        self,
         plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify rule_execution_options() merges manual overrides with plan flags."""
@@ -107,20 +107,22 @@ class TestEvidencePlanToExtractorPipeline:
         # Other flags should remain from plan
         assert isinstance(options_no_override.feature_flags, dict)
 
+    @staticmethod
     def test_extractor_option_values_incorporates_plan(
-        self,
         plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify extractor_option_values() merges plan with registry defaults."""
         values = extractor_option_values("cst", plan_cst_only)
         assert isinstance(values, dict)
 
-    def test_extractor_option_values_with_none_plan_uses_defaults(self) -> None:
+    @staticmethod
+    def test_extractor_option_values_with_none_plan_uses_defaults() -> None:
         """Verify None plan returns registry defaults without restriction."""
         values_none = extractor_option_values("cst", None)
         assert isinstance(values_none, dict)
 
-    def test_plan_feature_flags_unrequired_template_disables_all(self) -> None:
+    @staticmethod
+    def test_plan_feature_flags_unrequired_template_disables_all() -> None:
         """Verify plan_feature_flags() disables all for unrequired template.
 
         When the evidence plan doesn't require a template, all feature
@@ -134,8 +136,8 @@ class TestEvidencePlanToExtractorPipeline:
             if not plan.requires_template("cst"):
                 assert flag_value is False
 
+    @staticmethod
     def test_required_columns_for_returns_subset(
-        self,
         plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify required_columns_for() returns projected column subset."""
@@ -145,7 +147,8 @@ class TestEvidencePlanToExtractorPipeline:
         assert "bstart" in cols
         assert "bend" in cols
 
-    def test_plan_feature_flags_consistent_with_requires_template(self) -> None:
+    @staticmethod
+    def test_plan_feature_flags_consistent_with_requires_template() -> None:
         """Verify plan_feature_flags aligns with requires_template."""
         plan = EvidencePlan(sources=("cst_refs", "cst_defs"))
         flags = plan_feature_flags("cst", plan)
@@ -153,7 +156,8 @@ class TestEvidencePlanToExtractorPipeline:
         if plan.requires_template("cst") and flags:
             assert any(v is True for v in flags.values())
 
-    def test_empty_plan_disables_all_feature_flags(self) -> None:
+    @staticmethod
+    def test_empty_plan_disables_all_feature_flags() -> None:
         """Verify empty plan (no sources) disables all feature flags."""
         plan = EvidencePlan(sources=())
         flags = plan_feature_flags("cst", plan)

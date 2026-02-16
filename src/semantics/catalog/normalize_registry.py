@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Final
 
-from semantics.catalog.dataset_registry import DatasetRegistrySpec
+from semantics.catalog.dataset_rows import SemanticDatasetRow
 
 NORMALIZE_SCHEMA_VERSION: Final[int] = 1
 
-NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
-    DatasetRegistrySpec(
+NORMALIZE_DATASETS: Final[tuple[SemanticDatasetRow, ...]] = (
+    SemanticDatasetRow(
         name="normalize_evidence",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
@@ -28,7 +28,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_evidence",
         register_view=False,
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="type_exprs_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
@@ -48,7 +48,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_cst",
         view_builder="type_exprs_df_builder",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="type_nodes",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=(),
@@ -59,7 +59,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_type",
         view_builder="type_nodes_df_builder",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="py_bc_blocks_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
@@ -71,7 +71,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_bytecode",
         view_builder="cfg_blocks_df_builder",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="py_bc_cfg_edges_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity",),
@@ -91,7 +91,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_bytecode",
         view_builder="cfg_edges_df_builder",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="py_bc_instr_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity",),
@@ -111,7 +111,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_bytecode",
         view_builder="instructions_df_builder",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="py_bc_exceptions_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity",),
@@ -132,7 +132,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_bytecode",
         view_builder="exception_handlers_df_builder",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="symtable_scopes",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=(),
@@ -163,7 +163,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         source_dataset="symtable_scopes",
         role="input",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="symtable_symbols",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=(),
@@ -187,7 +187,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         source_dataset="symtable_symbols",
         role="input",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="symtable_bindings",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
@@ -217,7 +217,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_symtable",
         view_builder="symtable_bindings_df_builder",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="symtable_def_sites",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
@@ -241,7 +241,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_symtable",
         view_builder="symtable_def_sites_df_builder",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="symtable_use_sites",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
@@ -265,7 +265,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         template="normalize_symtable",
         view_builder="symtable_use_sites_df_builder",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="scip_diagnostics",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=(),

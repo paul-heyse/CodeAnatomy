@@ -120,6 +120,7 @@ def test_json_result_custom_exit_code() -> None:
 
     assert result.exit_code == ERROR_EXIT_CODE
     assert result.get_exit_code() == ERROR_EXIT_CODE
+    assert isinstance(result.result, CliTextResult)
     assert '"error": "not found"' in result.result.text
 
 

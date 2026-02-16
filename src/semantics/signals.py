@@ -30,6 +30,10 @@ import pyarrow as pa
 from datafusion import Expr, col, lit
 from datafusion import functions as f
 
+from datafusion_engine.schema.introspection import table_names_snapshot
+from obs.otel.scopes import SCOPE_SEMANTICS
+from obs.otel.tracing import stage_span
+
 if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
@@ -50,22 +54,11 @@ DEFAULT_QUALITY_WEIGHTS: dict[str, int] = {
 BASE_QUALITY_SCORE: int = 1000
 
 
-def _table_exists(ctx: SessionContext, name: str) -> bool:
-    """Check if a table exists in the session context.
-
-    Returns:
-    -------
-    bool
-        True if table exists, False otherwise.
-    """
-    try:
-        ctx.table(name)
-    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
-        return False
-    return True
-
-
-def _build_cst_parse_errors_signals(ctx: SessionContext) -> DataFrame | None:
+def _build_cst_parse_errors_signals(
+    ctx: SessionContext,
+    *,
+    available: set[str],
+) -> DataFrame | None:
     """Build CST parse error signals.
 
     Aggregates cst_parse_errors by file_id to produce:
@@ -77,7 +70,7 @@ def _build_cst_parse_errors_signals(ctx: SessionContext) -> DataFrame | None:
     DataFrame | None
         CST parse error signals DataFrame, or None if table doesn't exist.
     """
-    if not _table_exists(ctx, "cst_parse_errors"):
+    if "cst_parse_errors" not in available:
         return None
 
     return ctx.table("cst_parse_errors").aggregate(
@@ -89,7 +82,11 @@ def _build_cst_parse_errors_signals(ctx: SessionContext) -> DataFrame | None:
     )
 
 
-def _build_tree_sitter_signals(ctx: SessionContext) -> DataFrame | None:
+def _build_tree_sitter_signals(
+    ctx: SessionContext,
+    *,
+    available: set[str],
+) -> DataFrame | None:
     """Build tree-sitter quality signals.
 
     Extracts stats struct fields from tree_sitter_files_v1:
@@ -103,7 +100,7 @@ def _build_tree_sitter_signals(ctx: SessionContext) -> DataFrame | None:
     DataFrame | None
         Tree-sitter signals DataFrame, or None if table doesn't exist.
     """
-    if not _table_exists(ctx, "tree_sitter_files_v1"):
+    if "tree_sitter_files_v1" not in available:
         return None
 
     # Access nested struct fields via [] indexing syntax
@@ -130,7 +127,11 @@ def _build_tree_sitter_signals(ctx: SessionContext) -> DataFrame | None:
     )
 
 
-def _build_scip_diagnostics_signals(ctx: SessionContext) -> DataFrame | None:
+def _build_scip_diagnostics_signals(
+    ctx: SessionContext,
+    *,
+    available: set[str],
+) -> DataFrame | None:
     """Build SCIP diagnostics signals.
 
     Aggregates scip_diagnostics by document_id (aliased to file_id):
@@ -142,7 +143,7 @@ def _build_scip_diagnostics_signals(ctx: SessionContext) -> DataFrame | None:
     DataFrame | None
         SCIP diagnostics signals DataFrame, or None if table doesn't exist.
     """
-    if not _table_exists(ctx, "scip_diagnostics"):
+    if "scip_diagnostics" not in available:
         return None
 
     return (
@@ -162,7 +163,11 @@ def _build_scip_diagnostics_signals(ctx: SessionContext) -> DataFrame | None:
     )
 
 
-def _build_scip_encoding_signals(ctx: SessionContext) -> DataFrame | None:
+def _build_scip_encoding_signals(
+    ctx: SessionContext,
+    *,
+    available: set[str],
+) -> DataFrame | None:
     """Build SCIP position encoding signals.
 
     Extracts position encoding quality from scip_documents:
@@ -176,7 +181,7 @@ def _build_scip_encoding_signals(ctx: SessionContext) -> DataFrame | None:
     DataFrame | None
         SCIP encoding signals DataFrame, or None if table doesn't exist.
     """
-    if not _table_exists(ctx, "scip_documents"):
+    if "scip_documents" not in available:
         return None
 
     return ctx.table("scip_documents").select(
@@ -288,94 +293,103 @@ def build_file_quality_view(
     Raises:
         ValueError: If no compatible base table can be resolved.
     """
-    if not _table_exists(ctx, base_table):
-        for fallback in ("file_index", "repo_files"):
-            if _table_exists(ctx, fallback):
-                base_table = fallback
-                break
+    with stage_span(
+        "semantics.build_file_quality_view",
+        stage="semantics",
+        scope_name=SCOPE_SEMANTICS,
+        attributes={"codeanatomy.view": "file_quality"},
+    ):
+        available = table_names_snapshot(ctx)
+        if base_table not in available:
+            for fallback in ("file_index", "repo_files"):
+                if fallback in available:
+                    base_table = fallback
+                    break
+            else:
+                msg = f"Base table {base_table!r} not found in session context."
+                raise ValueError(msg)
+
+        resolved_weights = weights or DEFAULT_QUALITY_WEIGHTS
+
+        # Start with base file table and check for file_sha256
+        base = ctx.table(base_table)
+        base_columns: list[str] = (
+            list(base.schema().names) if hasattr(base.schema(), "names") else []
+        )
+        has_sha256 = "file_sha256" in base_columns
+
+        # Build base selection
+        base = (
+            base.select(col("file_id"), col("file_sha256"))
+            if has_sha256
+            else base.select(col("file_id"), lit(None).cast(str).alias("file_sha256"))
+        )
+
+        # Join all signal sources (or add defaults when missing)
+        cst_signals = _build_cst_parse_errors_signals(ctx, available=available)
+        if cst_signals is None:
+            base = _with_default_columns(
+                base,
+                {
+                    "has_cst_parse_errors": lit(0),
+                    "cst_error_count": lit(0),
+                },
+            )
         else:
-            msg = f"Base table {base_table!r} not found in session context."
-            raise ValueError(msg)
+            base = _join_if_present(base, cst_signals)
 
-    resolved_weights = weights or DEFAULT_QUALITY_WEIGHTS
+        ts_signals = _build_tree_sitter_signals(ctx, available=available)
+        if ts_signals is None:
+            base = _with_default_columns(
+                base,
+                {
+                    "ts_timed_out": lit(0),
+                    "ts_error_count": lit(0),
+                    "ts_missing_count": lit(0),
+                    "ts_match_limit_exceeded": lit(0),
+                },
+            )
+        else:
+            base = _join_if_present(base, ts_signals)
 
-    # Start with base file table and check for file_sha256
-    base = ctx.table(base_table)
-    base_columns: list[str] = list(base.schema().names) if hasattr(base.schema(), "names") else []
-    has_sha256 = "file_sha256" in base_columns
+        scip_diag_signals = _build_scip_diagnostics_signals(ctx, available=available)
+        if scip_diag_signals is None:
+            base = _with_default_columns(
+                base,
+                {
+                    "has_scip_diagnostics": lit(0),
+                    "scip_diagnostic_count": lit(0),
+                },
+            )
+        else:
+            base = _join_if_present(base, scip_diag_signals)
 
-    # Build base selection
-    base = (
-        base.select(col("file_id"), col("file_sha256"))
-        if has_sha256
-        else base.select(col("file_id"), lit(None).cast(str).alias("file_sha256"))
-    )
+        scip_encoding_signals = _build_scip_encoding_signals(ctx, available=available)
+        if scip_encoding_signals is None:
+            base = _with_default_columns(
+                base,
+                {
+                    "scip_encoding_unspecified": lit(0),
+                },
+            )
+        else:
+            base = _join_if_present(base, scip_encoding_signals)
 
-    # Join all signal sources (or add defaults when missing)
-    cst_signals = _build_cst_parse_errors_signals(ctx)
-    if cst_signals is None:
-        base = _with_default_columns(
-            base,
-            {
-                "has_cst_parse_errors": lit(0),
-                "cst_error_count": lit(0),
-            },
+        # Build final selection with coalesced defaults and computed score
+        return base.select(
+            col("file_id"),
+            col("file_sha256"),
+            _coalesce_col("has_cst_parse_errors").alias("has_cst_parse_errors"),
+            _coalesce_col("cst_error_count").alias("cst_error_count"),
+            _coalesce_col("ts_timed_out").alias("ts_timed_out"),
+            _coalesce_col("ts_error_count").alias("ts_error_count"),
+            _coalesce_col("ts_missing_count").alias("ts_missing_count"),
+            _coalesce_col("ts_match_limit_exceeded").alias("ts_match_limit_exceeded"),
+            _coalesce_col("has_scip_diagnostics").alias("has_scip_diagnostics"),
+            _coalesce_col("scip_diagnostic_count").alias("scip_diagnostic_count"),
+            _coalesce_col("scip_encoding_unspecified").alias("scip_encoding_unspecified"),
+            _compute_quality_score(resolved_weights).alias("file_quality_score"),
         )
-    else:
-        base = _join_if_present(base, cst_signals)
-
-    ts_signals = _build_tree_sitter_signals(ctx)
-    if ts_signals is None:
-        base = _with_default_columns(
-            base,
-            {
-                "ts_timed_out": lit(0),
-                "ts_error_count": lit(0),
-                "ts_missing_count": lit(0),
-                "ts_match_limit_exceeded": lit(0),
-            },
-        )
-    else:
-        base = _join_if_present(base, ts_signals)
-
-    scip_diag_signals = _build_scip_diagnostics_signals(ctx)
-    if scip_diag_signals is None:
-        base = _with_default_columns(
-            base,
-            {
-                "has_scip_diagnostics": lit(0),
-                "scip_diagnostic_count": lit(0),
-            },
-        )
-    else:
-        base = _join_if_present(base, scip_diag_signals)
-
-    scip_encoding_signals = _build_scip_encoding_signals(ctx)
-    if scip_encoding_signals is None:
-        base = _with_default_columns(
-            base,
-            {
-                "scip_encoding_unspecified": lit(0),
-            },
-        )
-    else:
-        base = _join_if_present(base, scip_encoding_signals)
-
-    # Build final selection with coalesced defaults and computed score
-    return base.select(
-        col("file_id"),
-        col("file_sha256"),
-        _coalesce_col("has_cst_parse_errors").alias("has_cst_parse_errors"),
-        _coalesce_col("cst_error_count").alias("cst_error_count"),
-        _coalesce_col("ts_timed_out").alias("ts_timed_out"),
-        _coalesce_col("ts_error_count").alias("ts_error_count"),
-        _coalesce_col("ts_missing_count").alias("ts_missing_count"),
-        _coalesce_col("ts_match_limit_exceeded").alias("ts_match_limit_exceeded"),
-        _coalesce_col("has_scip_diagnostics").alias("has_scip_diagnostics"),
-        _coalesce_col("scip_diagnostic_count").alias("scip_diagnostic_count"),
-        _coalesce_col("scip_encoding_unspecified").alias("scip_encoding_unspecified"),
-        _compute_quality_score(resolved_weights).alias("file_quality_score"),
-    )
 
 
 __all__ = [

@@ -4,7 +4,8 @@
     "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
   ],
   "key_findings": [
-    "reference: compile_target"
+    "reference: compile_target",
+    "Query pack lint failed: 2 errors"
   ],
   "sections": [
     {
@@ -18,7 +19,7 @@
       "count": 4,
       "messages": [
         "Enclosing Context: 1 (top: use corelib::{compile_target, Compiler, Engine, Runnable};)",
-        "Parent Scopes: 1 (top: use corelib::{compile_target, Compiler, Engine, Runnable};\n\npub fn compile_for_app(input: &str) -> String {\n    let e...)",
+        "Parent Scopes: 1 (top: use corelib::{compile_target, Compiler, Engine, Runnable};\n\npub fn compile_for_app(input: &str) -> String {\n    let engine = Engine::new(\"app\");\n    engine.compile(input)\n}\n\npub fn run_pipeline() -> String {\n    let engine = Engine::new(\"app\");\n    format!(\"{}:{}\", compile_target(\"seed\"), engine.run())\n})",
         "Children: 1 (top: corelib::{compile_target, Compiler, Engine, Runnable})",
         "Siblings: 2 (top: compile_for_app)"
       ],
@@ -60,6 +61,13 @@
         "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs: 2 matches"
       ],
       "title": "Hot Files"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Query pack lint failed: 2 errors"
+      ],
+      "title": "Cross-Language Diagnostics"
     }
   ],
   "summary": {

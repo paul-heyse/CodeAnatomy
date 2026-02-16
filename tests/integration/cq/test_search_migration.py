@@ -21,7 +21,8 @@ from tools.cq.search.rg.adapter import (
 class TestSearchAdapterIntegration:
     """Test native rg adapter functions work with real codebase."""
 
-    def test_find_files_with_pattern_in_repo(self) -> None:
+    @staticmethod
+    def test_find_files_with_pattern_in_repo() -> None:
         """Test finding files in the actual repository."""
         repo_root = Path(__file__).parent.parent.parent.parent
 
@@ -39,7 +40,8 @@ class TestSearchAdapterIntegration:
         assert all(f.suffix == ".py" for f in files)
         assert all("tests" in str(f) for f in files)
 
-    def test_find_call_candidates_finds_real_calls(self) -> None:
+    @staticmethod
+    def test_find_call_candidates_finds_real_calls() -> None:
         """Test finding call candidates for a known function."""
         repo_root = Path(__file__).parent.parent.parent.parent
 
@@ -59,7 +61,8 @@ class TestSearchAdapterIntegration:
             assert isinstance(line_num, int)
             assert line_num > 0
 
-    def test_find_callers_matches_call_candidates(self) -> None:
+    @staticmethod
+    def test_find_callers_matches_call_candidates() -> None:
         """Test that find_callers returns same results as find_call_candidates."""
         repo_root = Path(__file__).parent.parent.parent.parent
         limits = SearchLimits(max_total_matches=20)
@@ -79,7 +82,8 @@ class TestSearchAdapterIntegration:
         # They should return the same results (for now they're identical)
         assert len(candidates) == len(callers)
 
-    def test_search_content_returns_line_content(self) -> None:
+    @staticmethod
+    def test_search_content_returns_line_content() -> None:
         """Test that search_content returns actual line content."""
         repo_root = Path(__file__).parent.parent.parent.parent
 
@@ -101,7 +105,8 @@ class TestSearchAdapterIntegration:
 class TestMacroIntegration:
     """Test that macros work with the new search adapter."""
 
-    def test_calls_macro_import(self) -> None:
+    @staticmethod
+    def test_calls_macro_import() -> None:
         """Test that calls macro imports successfully."""
         from tools.cq.macros.calls import _rg_find_candidates, cmd_calls
 
@@ -109,7 +114,8 @@ class TestMacroIntegration:
         assert callable(cmd_calls)
         assert callable(_rg_find_candidates)
 
-    def test_impact_macro_import(self) -> None:
+    @staticmethod
+    def test_impact_macro_import() -> None:
         """Test that impact macro imports successfully."""
         from tools.cq.macros.impact import _find_callers_via_search, cmd_impact
 
@@ -117,7 +123,8 @@ class TestMacroIntegration:
         assert callable(cmd_impact)
         assert callable(_find_callers_via_search)
 
-    def test_sig_impact_macro_import(self) -> None:
+    @staticmethod
+    def test_sig_impact_macro_import() -> None:
         """Test that sig_impact macro imports successfully."""
         from tools.cq.macros.sig_impact import _collect_sites, cmd_sig_impact
 
@@ -125,7 +132,8 @@ class TestMacroIntegration:
         assert callable(cmd_sig_impact)
         assert callable(_collect_sites)
 
-    def test_toolchain_detects_rg(self) -> None:
+    @staticmethod
+    def test_toolchain_detects_rg() -> None:
         """Test that toolchain correctly detects ripgrep."""
         from tools.cq.core.toolchain import Toolchain
 

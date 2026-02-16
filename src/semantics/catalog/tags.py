@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Final
 
 import pyarrow as pa
 
@@ -11,6 +12,13 @@ from semantics.catalog.dataset_rows import SemanticDatasetRow, dataset_row
 from semantics.catalog.dataset_specs import dataset_alias, dataset_name_from_alias, dataset_schema
 from semantics.column_types import ColumnType, TableType, infer_column_type, infer_table_type
 from semantics.types.core import CompatibilityGroup, get_compatibility_groups
+
+_TABLE_TYPE_GRAIN_MAP: Final[dict[TableType, tuple[str, str]]] = {
+    TableType.RELATION: ("edge", "per_edge"),
+    TableType.ENTITY: ("entity", "per_entity"),
+    TableType.EVIDENCE: ("evidence", "per_evidence"),
+    TableType.SYMBOL_SOURCE: ("symbol", "per_symbol"),
+}
 
 
 @dataclass(frozen=True)
@@ -168,25 +176,13 @@ def _infer_entity_from_schema(name: str) -> tuple[str, str] | None:
         infer_column_type(field.name) for field in schema if isinstance(field, pa.Field)
     }
     table_type = infer_table_type(column_types)
-    mapping = {
-        TableType.RELATION: ("edge", "per_edge"),
-        TableType.ENTITY: ("entity", "per_entity"),
-        TableType.EVIDENCE: ("evidence", "per_evidence"),
-        TableType.SYMBOL_SOURCE: ("symbol", "per_symbol"),
-    }
-    return mapping.get(table_type)
+    return _TABLE_TYPE_GRAIN_MAP.get(table_type)
 
 
 def _infer_entity_grain_from_table_type(
     table_type: TableType,
 ) -> tuple[str, str] | None:
-    mapping = {
-        TableType.RELATION: ("edge", "per_edge"),
-        TableType.ENTITY: ("entity", "per_entity"),
-        TableType.EVIDENCE: ("evidence", "per_evidence"),
-        TableType.SYMBOL_SOURCE: ("symbol", "per_symbol"),
-    }
-    return mapping.get(table_type)
+    return _TABLE_TYPE_GRAIN_MAP.get(table_type)
 
 
 def _infer_entity_grain_from_metadata(

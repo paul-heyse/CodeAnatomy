@@ -22,7 +22,8 @@ FOUR_PATTERNS = 4
 class TestCompositeRuleDataclass:
     """Tests for CompositeRule dataclass."""
 
-    def test_composite_rule_all_operator(self) -> None:
+    @staticmethod
+    def test_composite_rule_all_operator() -> None:
         """CompositeRule with 'all' operator."""
         rule = CompositeRule(
             operator="all",
@@ -31,7 +32,8 @@ class TestCompositeRuleDataclass:
         assert rule.operator == "all"
         assert len(rule.patterns) == TWO_PATTERNS
 
-    def test_composite_rule_any_operator(self) -> None:
+    @staticmethod
+    def test_composite_rule_any_operator() -> None:
         """CompositeRule with 'any' operator."""
         rule = CompositeRule(
             operator="any",
@@ -40,7 +42,8 @@ class TestCompositeRuleDataclass:
         assert rule.operator == "any"
         assert len(rule.patterns) == TWO_PATTERNS
 
-    def test_composite_rule_not_operator(self) -> None:
+    @staticmethod
+    def test_composite_rule_not_operator() -> None:
         """CompositeRule with 'not' operator."""
         rule = CompositeRule(
             operator="not",
@@ -49,7 +52,8 @@ class TestCompositeRuleDataclass:
         assert rule.operator == "not"
         assert len(rule.patterns) == 1
 
-    def test_composite_rule_with_metavar_order(self) -> None:
+    @staticmethod
+    def test_composite_rule_with_metavar_order() -> None:
         """CompositeRule preserves metavar order for ordered captures."""
         rule = CompositeRule(
             operator="all",
@@ -62,7 +66,8 @@ class TestCompositeRuleDataclass:
 class TestCompositeRuleToAstGrep:
     """Tests for CompositeRule.to_ast_grep_dict method."""
 
-    def test_all_rule_to_yaml(self) -> None:
+    @staticmethod
+    def test_all_rule_to_yaml() -> None:
         """Convert 'all' rule to ast-grep dict."""
         rule = CompositeRule(
             operator="all",
@@ -73,7 +78,8 @@ class TestCompositeRuleToAstGrep:
         all_rules = cast("list[object]", result["all"])
         assert len(all_rules) == TWO_PATTERNS
 
-    def test_any_rule_to_yaml(self) -> None:
+    @staticmethod
+    def test_any_rule_to_yaml() -> None:
         """Convert 'any' rule to ast-grep dict."""
         rule = CompositeRule(
             operator="any",
@@ -84,7 +90,8 @@ class TestCompositeRuleToAstGrep:
         any_rules = cast("list[object]", result["any"])
         assert len(any_rules) == TWO_PATTERNS
 
-    def test_not_rule_to_yaml(self) -> None:
+    @staticmethod
+    def test_not_rule_to_yaml() -> None:
         """Convert 'not' rule to ast-grep dict."""
         rule = CompositeRule(
             operator="not",
@@ -97,28 +104,32 @@ class TestCompositeRuleToAstGrep:
 class TestCompositeQueryParsing:
     """Tests for composite query parsing from query strings."""
 
-    def test_parse_all_rule(self) -> None:
+    @staticmethod
+    def test_parse_all_rule() -> None:
         """Parse 'all' composite rule from query string."""
         query = parse_query("pattern='$X' all='p1,p2'")
         assert query.composite is not None
         assert query.composite.operator == "all"
         assert len(query.composite.patterns) == TWO_PATTERNS
 
-    def test_parse_any_rule(self) -> None:
+    @staticmethod
+    def test_parse_any_rule() -> None:
         """Parse 'any' composite rule from query string."""
         query = parse_query("pattern='$X' any='logger.$M,print($$$)'")
         assert query.composite is not None
         assert query.composite.operator == "any"
         assert len(query.composite.patterns) == TWO_PATTERNS
 
-    def test_parse_not_rule(self) -> None:
+    @staticmethod
+    def test_parse_not_rule() -> None:
         """Parse 'not' composite rule from query string."""
         query = parse_query("pattern='$X' not='debug'")
         assert query.composite is not None
         assert query.composite.operator == "not"
         assert len(query.composite.patterns) == 1
 
-    def test_no_composite_when_not_specified(self) -> None:
+    @staticmethod
+    def test_no_composite_when_not_specified() -> None:
         """Query without composite rule has None."""
         query = parse_query("pattern='def $F($$$)'")
         assert query.composite is None
@@ -127,7 +138,8 @@ class TestCompositeQueryParsing:
 class TestAllCompositeRule:
     """Tests for 'all' (AND) composite rule semantics."""
 
-    def test_all_requires_all_patterns(self) -> None:
+    @staticmethod
+    def test_all_requires_all_patterns() -> None:
         """All patterns must match for 'all' rule."""
         rule = CompositeRule(
             operator="all",
@@ -145,7 +157,8 @@ class TestAllCompositeRule:
 class TestAnyCompositeRule:
     """Tests for 'any' (OR) composite rule semantics."""
 
-    def test_any_accepts_any_pattern(self) -> None:
+    @staticmethod
+    def test_any_accepts_any_pattern() -> None:
         """Any pattern match satisfies 'any' rule."""
         rule = CompositeRule(
             operator="any",
@@ -161,7 +174,8 @@ class TestAnyCompositeRule:
 class TestNotCompositeRule:
     """Tests for 'not' (negation) composite rule semantics."""
 
-    def test_not_excludes_pattern(self) -> None:
+    @staticmethod
+    def test_not_excludes_pattern() -> None:
         """'not' rule excludes matching results."""
         rule = CompositeRule(
             operator="not",
@@ -174,7 +188,8 @@ class TestNotCompositeRule:
 class TestCompositeWithRelational:
     """Tests for combining composite rules with relational constraints."""
 
-    def test_composite_with_inside(self) -> None:
+    @staticmethod
+    def test_composite_with_inside() -> None:
         """Composite rule combined with inside constraint."""
         query = parse_query("pattern='$X' all='p1,p2' inside='class Config'")
         assert query.composite is not None
@@ -182,7 +197,8 @@ class TestCompositeWithRelational:
         assert len(constraints) == 1
         assert constraints[0].operator == "inside"
 
-    def test_composite_with_has(self) -> None:
+    @staticmethod
+    def test_composite_with_has() -> None:
         """Composite rule combined with has constraint."""
         query = parse_query("pattern='def $F($$$)' any='async,await' has='return'")
         assert query.composite is not None
@@ -194,14 +210,16 @@ class TestCompositeWithRelational:
 class TestNestedComposites:
     """Tests for nested composite rule handling."""
 
-    def test_single_composite_parsing(self) -> None:
+    @staticmethod
+    def test_single_composite_parsing() -> None:
         """Single composite is correctly parsed."""
         query = parse_query("pattern='$X' all='pattern1,pattern2'")
         assert query.composite is not None
         # Only one composite operator per query currently
         assert query.composite.operator == "all"
 
-    def test_composite_patterns_preserved(self) -> None:
+    @staticmethod
+    def test_composite_patterns_preserved() -> None:
         """Composite pattern list is preserved."""
         patterns = "a,b,c,d"
         query = parse_query(f"pattern='$X' any='{patterns}'")

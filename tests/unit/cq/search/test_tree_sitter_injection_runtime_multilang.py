@@ -23,7 +23,8 @@ def test_parse_injected_ranges_reports_combined_count_when_bindings_missing(
         def __init__(self, _language: object | None = None) -> None:
             self.included_ranges: list[object] = []
 
-        def parse(self, _source_bytes: bytes) -> object:
+        @staticmethod
+        def parse(_source_bytes: bytes) -> object:
             msg = "boom"
             raise RuntimeError(msg)
 

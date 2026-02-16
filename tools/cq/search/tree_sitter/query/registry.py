@@ -28,7 +28,6 @@ _DISTRIBUTION_PACKAGES: dict[str, str] = {
 }
 
 
-
 class QueryPackSourceV1(CqStruct, frozen=True):
     """One query-pack source unit."""
 

@@ -181,7 +181,8 @@ def _extend_rust_fact_lists_from_rows(
         Evidence rows from query execution.
     definitions
         Definitions list to extend.
-    references
+
+    References:
         References list to extend.
     calls
         Calls list to extend.
@@ -249,7 +250,8 @@ def _rust_fact_payload(
     ----------
     definitions
         Definition names.
-    references
+
+    References:
         Reference names.
     calls
         Call targets.

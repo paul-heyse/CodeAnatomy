@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Final
 
+from semantics.output_names import RELATION_OUTPUT_NAME
+
 REL_NAME_SYMBOL_OUTPUT: Final[str] = "rel_name_symbol"
 REL_IMPORT_SYMBOL_OUTPUT: Final[str] = "rel_import_symbol"
 REL_DEF_SYMBOL_OUTPUT: Final[str] = "rel_def_symbol"
 REL_CALLSITE_SYMBOL_OUTPUT: Final[str] = "rel_callsite_symbol"
-RELATION_OUTPUT_NAME: Final[str] = "relation_output"
 
 RELATION_VIEW_NAMES: Final[tuple[str, ...]] = (
     REL_NAME_SYMBOL_OUTPUT,

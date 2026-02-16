@@ -60,10 +60,14 @@ class TestCachePolicyHierarchy:
     2. compiled_policy -- topology-derived from CompiledExecutionPolicy
     """
 
-    def test_explicit_policy_takes_precedence_over_compiled(self) -> None:
+    @staticmethod
+    def test_explicit_policy_takes_precedence_over_compiled() -> None:
         """Verify explicit_policy wins over compiled_policy."""
         explicit: dict[str, CachePolicy] = {"cpg_nodes_v1": "none", "cst_refs_norm_v1": "none"}
-        compiled = {"cpg_nodes_v1": "delta_output", "cst_refs_norm_v1": "delta_staging"}
+        compiled: dict[str, CachePolicy] = {
+            "cpg_nodes_v1": "delta_output",
+            "cst_refs_norm_v1": "delta_staging",
+        }
 
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=explicit,
@@ -72,9 +76,13 @@ class TestCachePolicyHierarchy:
 
         assert result is explicit
 
-    def test_compiled_policy_takes_precedence_over_inferred(self) -> None:
+    @staticmethod
+    def test_compiled_policy_takes_precedence_over_inferred() -> None:
         """Verify compiled_policy wins when explicit_policy is None."""
-        compiled = {"cpg_nodes_v1": "delta_output", "cst_refs_norm_v1": "none"}
+        compiled: dict[str, CachePolicy] = {
+            "cpg_nodes_v1": "delta_output",
+            "cst_refs_norm_v1": "none",
+        }
 
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=None,
@@ -83,7 +91,8 @@ class TestCachePolicyHierarchy:
 
         assert result is compiled
 
-    def test_empty_mapping_when_both_none(self) -> None:
+    @staticmethod
+    def test_empty_mapping_when_both_none() -> None:
         """Verify empty mapping when both explicit and compiled are None."""
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=None,
@@ -92,10 +101,11 @@ class TestCachePolicyHierarchy:
 
         assert result == {}
 
-    def test_explicit_overrides_both_compiled_and_inferred(self) -> None:
+    @staticmethod
+    def test_explicit_overrides_both_compiled_and_inferred() -> None:
         """Verify explicit_policy overrides compiled_policy and inferred policy."""
         explicit: dict[str, CachePolicy] = {"cpg_nodes_v1": "delta_output"}
-        compiled = {"cpg_nodes_v1": "none"}
+        compiled: dict[str, CachePolicy] = {"cpg_nodes_v1": "none"}
 
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=explicit,
@@ -116,18 +126,21 @@ class TestEntityRegistryEquivalence:
     the cutover preserves key parity.
     """
 
-    def test_keys_match(self) -> None:
+    @staticmethod
+    def test_keys_match() -> None:
         """Verify SEMANTIC_TABLE_SPECS keys match generated keys."""
         generated = generate_table_specs(ENTITY_DECLARATIONS)
         assert set(SEMANTIC_TABLE_SPECS.keys()) == set(generated.keys())
 
-    def test_spec_count_matches(self) -> None:
+    @staticmethod
+    def test_spec_count_matches() -> None:
         """Verify the number of specs matches the number of declarations."""
         generated = generate_table_specs(ENTITY_DECLARATIONS)
         assert len(SEMANTIC_TABLE_SPECS) == len(generated)
         assert len(SEMANTIC_TABLE_SPECS) == len(ENTITY_DECLARATIONS)
 
-    def test_spec_values_match(self) -> None:
+    @staticmethod
+    def test_spec_values_match() -> None:
         """Verify each generated spec matches the registry spec."""
         generated = generate_table_specs(ENTITY_DECLARATIONS)
         for key, expected_spec in generated.items():
@@ -137,7 +150,8 @@ class TestEntityRegistryEquivalence:
             assert actual_spec.entity_id == expected_spec.entity_id
             assert actual_spec.foreign_keys == expected_spec.foreign_keys
 
-    def test_all_declarations_produce_specs(self) -> None:
+    @staticmethod
+    def test_all_declarations_produce_specs() -> None:
         """Verify every entity declaration produces a table spec."""
         generated = generate_table_specs(ENTITY_DECLARATIONS)
         for decl in ENTITY_DECLARATIONS:
@@ -155,7 +169,8 @@ class TestInferredJoinKeysParity:
     field presence, prioritizing FILE_IDENTITY > SPAN > SYMBOL groups.
     """
 
-    def test_file_identity_fields_produce_keys(self) -> None:
+    @staticmethod
+    def test_file_identity_fields_produce_keys() -> None:
         """Verify FILE_IDENTITY fields (file_id, path) produce join keys."""
         left = frozenset({"file_id", "path", "bstart", "bend"})
         right = frozenset({"file_id", "path", "symbol"})
@@ -168,12 +183,14 @@ class TestInferredJoinKeysParity:
         assert "file_id" in key_names
         assert "path" in key_names
 
-    def test_empty_field_sets_return_none(self) -> None:
+    @staticmethod
+    def test_empty_field_sets_return_none() -> None:
         """Verify empty field sets produce no join keys."""
         result = _infer_join_keys_from_fields(frozenset(), frozenset())
         assert result is None
 
-    def test_disjoint_fields_return_none(self) -> None:
+    @staticmethod
+    def test_disjoint_fields_return_none() -> None:
         """Verify disjoint field sets produce no join keys."""
         left = frozenset({"file_id", "bstart"})
         right = frozenset({"symbol", "qname"})
@@ -181,7 +198,8 @@ class TestInferredJoinKeysParity:
         result = _infer_join_keys_from_fields(left, right)
         assert result is None
 
-    def test_span_fields_produce_keys(self) -> None:
+    @staticmethod
+    def test_span_fields_produce_keys() -> None:
         """Verify span fields (bstart, bend) produce join keys when shared."""
         left = frozenset({"bstart", "bend"})
         right = frozenset({"bstart", "bend"})
@@ -193,7 +211,8 @@ class TestInferredJoinKeysParity:
         assert "bstart" in key_names
         assert "bend" in key_names
 
-    def test_priority_ordering(self) -> None:
+    @staticmethod
+    def test_priority_ordering() -> None:
         """Verify FILE_IDENTITY keys appear before SPAN keys in output."""
         left = frozenset({"file_id", "bstart", "bend", "symbol"})
         right = frozenset({"file_id", "bstart", "bend", "symbol"})
@@ -217,7 +236,8 @@ class TestInferenceConfidenceFlow:
     execution layer vocabulary.
     """
 
-    def test_inferred_view_properties_has_confidence_field(self) -> None:
+    @staticmethod
+    def test_inferred_view_properties_has_confidence_field() -> None:
         """Verify InferredViewProperties accepts inference_confidence."""
         conf = high_confidence("test", "value", ("source",))
         props = InferredViewProperties(inference_confidence=conf)
@@ -225,7 +245,8 @@ class TestInferenceConfidenceFlow:
         assert props.inference_confidence is not None
         assert props.inference_confidence.confidence_score >= HIGH_CONFIDENCE_THRESHOLD
 
-    def test_high_confidence_clamps_score(self) -> None:
+    @staticmethod
+    def test_high_confidence_clamps_score() -> None:
         """Verify high_confidence clamps score to [0.8, 1.0]."""
         conf = high_confidence("test", "value", ("lineage",), score=0.5)
         assert conf.confidence_score >= HIGH_CONFIDENCE_THRESHOLD
@@ -233,7 +254,8 @@ class TestInferenceConfidenceFlow:
         conf_high = high_confidence("test", "value", ("lineage",), score=1.5)
         assert conf_high.confidence_score <= 1.0
 
-    def test_low_confidence_clamps_score(self) -> None:
+    @staticmethod
+    def test_low_confidence_clamps_score() -> None:
         """Verify low_confidence clamps score to [0.0, 0.49]."""
         conf = low_confidence("test", "value", "not enough evidence", ("stats",), score=0.8)
         assert conf.confidence_score <= LOW_CONFIDENCE_MAX
@@ -241,25 +263,30 @@ class TestInferenceConfidenceFlow:
         conf_low = low_confidence("test", "value", "no evidence", (), score=-1.0)
         assert conf_low.confidence_score >= 0.0
 
-    def test_low_confidence_has_fallback_reason(self) -> None:
+    @staticmethod
+    def test_low_confidence_has_fallback_reason() -> None:
         """Verify low_confidence populates fallback_reason."""
         reason = "insufficient evidence"
         conf = low_confidence("test", "value", reason, ())
         assert conf.fallback_reason == reason
 
-    def test_ir_cache_hint_eager_maps_to_delta_staging(self) -> None:
+    @staticmethod
+    def test_ir_cache_hint_eager_maps_to_delta_staging() -> None:
         """Verify 'eager' IR hint maps to 'delta_staging'."""
         assert ir_cache_hint_to_execution_policy("eager") == "delta_staging"
 
-    def test_ir_cache_hint_lazy_maps_to_none(self) -> None:
+    @staticmethod
+    def test_ir_cache_hint_lazy_maps_to_none() -> None:
         """Verify 'lazy' IR hint maps to 'none'."""
         assert ir_cache_hint_to_execution_policy("lazy") == "none"
 
-    def test_ir_cache_hint_none_returns_none(self) -> None:
+    @staticmethod
+    def test_ir_cache_hint_none_returns_none() -> None:
         """Verify None IR hint returns None."""
         assert ir_cache_hint_to_execution_policy(None) is None
 
-    def test_inference_confidence_round_trip(self) -> None:
+    @staticmethod
+    def test_inference_confidence_round_trip() -> None:
         """Verify InferenceConfidence fields are accessible after construction."""
         conf = InferenceConfidence(
             confidence_score=FK_CONFIDENCE,
@@ -282,7 +309,8 @@ class TestCalibrationIntegration:
     and that default bounds validate cleanly.
     """
 
-    def test_apply_mode_produces_adjusted_thresholds(self) -> None:
+    @staticmethod
+    def test_apply_mode_produces_adjusted_thresholds() -> None:
         """Verify 'apply' mode adjusts thresholds from execution metrics."""
         metrics = ExecutionMetricsSummary(
             predicted_cost=100.0,
@@ -303,7 +331,8 @@ class TestCalibrationIntegration:
         assert result.cost_ratio > 1.0
         assert result.calibration_confidence.confidence_score > 0.0
 
-    def test_off_mode_returns_unchanged(self) -> None:
+    @staticmethod
+    def test_off_mode_returns_unchanged() -> None:
         """Verify 'off' mode returns thresholds unchanged."""
         metrics = ExecutionMetricsSummary(
             predicted_cost=100.0,
@@ -327,7 +356,8 @@ class TestCalibrationIntegration:
         assert result.adjusted_thresholds.small_table_row_threshold == CUSTOM_ROW_THRESHOLD_SMALL
         assert result.adjusted_thresholds.large_table_row_threshold == CUSTOM_ROW_THRESHOLD_LARGE
 
-    def test_observe_mode_computes_without_committing(self) -> None:
+    @staticmethod
+    def test_observe_mode_computes_without_committing() -> None:
         """Verify 'observe' mode computes adjustments without side effects."""
         metrics = ExecutionMetricsSummary(
             predicted_cost=100.0,
@@ -345,12 +375,14 @@ class TestCalibrationIntegration:
         assert result.cost_ratio is not None
         assert result.cost_ratio < 1.0
 
-    def test_default_calibration_bounds_validate(self) -> None:
+    @staticmethod
+    def test_default_calibration_bounds_validate() -> None:
         """Verify DEFAULT_CALIBRATION_BOUNDS passes validation."""
         errors = validate_calibration_bounds(DEFAULT_CALIBRATION_BOUNDS)
         assert errors == []
 
-    def test_invalid_bounds_raise_on_calibrate(self) -> None:
+    @staticmethod
+    def test_invalid_bounds_raise_on_calibrate() -> None:
         """Verify invalid bounds cause ValueError on calibrate."""
         bad_bounds = CalibrationBounds(
             min_high_fanout_threshold=10,
@@ -369,7 +401,8 @@ class TestCalibrationIntegration:
                 mode="apply",
             )
 
-    def test_high_observation_count_yields_high_confidence(self) -> None:
+    @staticmethod
+    def test_high_observation_count_yields_high_confidence() -> None:
         """Verify sufficient observations produce high-confidence calibration."""
         metrics = ExecutionMetricsSummary(
             predicted_cost=100.0,

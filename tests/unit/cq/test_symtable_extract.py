@@ -25,7 +25,8 @@ SCOPE_LINE_NUMBER = 5
 class TestExtractScopeGraph:
     """Tests for extract_scope_graph function."""
 
-    def test_simple_function(self) -> None:
+    @staticmethod
+    def test_simple_function() -> None:
         """Extract scope from simple function."""
         source = """
 def foo():
@@ -40,7 +41,8 @@ def foo():
         assert foo_scope is not None
         assert foo_scope.scope_type == ScopeType.FUNCTION
 
-    def test_nested_function_closure(self) -> None:
+    @staticmethod
+    def test_nested_function_closure() -> None:
         """Extract scope from nested function with closure."""
         source = """
 def outer():
@@ -57,7 +59,8 @@ def outer():
         assert inner_scope.has_free_vars
         assert "x" in inner_scope.free_vars
 
-    def test_class_scope(self) -> None:
+    @staticmethod
+    def test_class_scope() -> None:
         """Extract scope from class definition."""
         source = """
 class Foo:
@@ -71,7 +74,8 @@ class Foo:
         assert foo_scope is not None
         assert foo_scope.scope_type == ScopeType.CLASS
 
-    def test_multiple_functions(self) -> None:
+    @staticmethod
+    def test_multiple_functions() -> None:
         """Extract scopes from multiple functions."""
         source = """
 def foo():
@@ -85,13 +89,15 @@ def bar():
         assert "foo" in graph.scope_by_name
         assert "bar" in graph.scope_by_name
 
-    def test_syntax_error_returns_empty(self) -> None:
+    @staticmethod
+    def test_syntax_error_returns_empty() -> None:
         """Syntax error returns empty graph."""
         source = "def foo( invalid syntax"
         graph = extract_scope_graph(source, "test.py")
         assert len(graph.scopes) == 0
 
-    def test_root_scope_is_module(self) -> None:
+    @staticmethod
+    def test_root_scope_is_module() -> None:
         """Root scope is the module."""
         source = """
 x = 1
@@ -107,7 +113,8 @@ def foo():
 class TestScopeFact:
     """Tests for ScopeFact dataclass."""
 
-    def test_scope_fact_creation(self) -> None:
+    @staticmethod
+    def test_scope_fact_creation() -> None:
         """Create ScopeFact instance."""
         scope = ScopeFact(
             name="foo",
@@ -118,7 +125,8 @@ class TestScopeFact:
         assert scope.scope_type == ScopeType.FUNCTION
         assert scope.lineno == SCOPE_LINE_NUMBER
 
-    def test_scope_fact_defaults(self) -> None:
+    @staticmethod
+    def test_scope_fact_defaults() -> None:
         """ScopeFact has correct defaults."""
         scope = ScopeFact(
             name="foo",
@@ -134,7 +142,8 @@ class TestScopeFact:
 class TestSymbolFact:
     """Tests for SymbolFact dataclass."""
 
-    def test_symbol_fact_creation(self) -> None:
+    @staticmethod
+    def test_symbol_fact_creation() -> None:
         """Create SymbolFact instance."""
         symbol = SymbolFact(
             name="x",
@@ -145,7 +154,8 @@ class TestSymbolFact:
         assert symbol.is_local
         assert symbol.is_assigned
 
-    def test_symbol_fact_defaults(self) -> None:
+    @staticmethod
+    def test_symbol_fact_defaults() -> None:
         """SymbolFact has correct defaults."""
         symbol = SymbolFact(name="x")
         assert symbol.is_local is False
@@ -157,7 +167,8 @@ class TestSymbolFact:
 class TestClosureHelpers:
     """Tests for closure helper functions."""
 
-    def test_is_closure_true(self) -> None:
+    @staticmethod
+    def test_is_closure_true() -> None:
         """is_closure returns True for closure scope."""
         scope = ScopeFact(
             name="inner",
@@ -167,7 +178,8 @@ class TestClosureHelpers:
         )
         assert is_closure(scope)
 
-    def test_is_closure_false(self) -> None:
+    @staticmethod
+    def test_is_closure_false() -> None:
         """is_closure returns False for non-closure scope."""
         scope = ScopeFact(
             name="foo",
@@ -176,7 +188,8 @@ class TestClosureHelpers:
         )
         assert not is_closure(scope)
 
-    def test_get_free_vars(self) -> None:
+    @staticmethod
+    def test_get_free_vars() -> None:
         """get_free_vars returns free variables."""
         scope = ScopeFact(
             name="inner",
@@ -186,7 +199,8 @@ class TestClosureHelpers:
         )
         assert get_free_vars(scope) == ("x", "y")
 
-    def test_get_cell_vars(self) -> None:
+    @staticmethod
+    def test_get_cell_vars() -> None:
         """get_cell_vars returns cell variables."""
         scope = ScopeFact(
             name="outer",
@@ -200,7 +214,8 @@ class TestClosureHelpers:
 class TestScopeType:
     """Tests for ScopeType enum."""
 
-    def test_scope_types(self) -> None:
+    @staticmethod
+    def test_scope_types() -> None:
         """All expected scope types exist."""
         assert ScopeType.MODULE.value == "module"
         assert ScopeType.FUNCTION.value == "function"
@@ -211,7 +226,8 @@ class TestScopeType:
 class TestIntegration:
     """Integration tests for scope extraction."""
 
-    def test_closure_chain(self) -> None:
+    @staticmethod
+    def test_closure_chain() -> None:
         """Extract closure chain with multiple levels."""
         source = """
 def level1():
@@ -238,7 +254,8 @@ def level1():
         assert "a" in level3.free_vars
         assert "b" in level3.free_vars
 
-    def test_generator_function(self) -> None:
+    @staticmethod
+    def test_generator_function() -> None:
         """Extract scope from generator function."""
         source = """
 def gen():
@@ -251,7 +268,8 @@ def gen():
         assert gen_scope is not None
         assert gen_scope.scope_type == ScopeType.FUNCTION
 
-    def test_async_function(self) -> None:
+    @staticmethod
+    def test_async_function() -> None:
         """Extract scope from async function."""
         source = """
 async def async_foo():

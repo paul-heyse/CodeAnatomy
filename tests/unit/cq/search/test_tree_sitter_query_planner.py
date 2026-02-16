@@ -75,6 +75,7 @@ def test_build_pack_plan_and_pack_sort() -> None:
 
 def test_build_pattern_plan_handles_invalid_capture_quantifier() -> None:
     """Handle unsupported capture quantifier queries without failing hard."""
+
     class _FakeQuery:
         pattern_count = 1
         capture_count = 2

@@ -6,9 +6,9 @@
       "anchor": {
         "col": 0,
         "end_col": 32,
-        "end_line": 142,
+        "end_line": 168,
         "file": "tools/cq/core/toolchain.py",
-        "line": 48
+        "line": 68
       },
       "category": "definition",
       "details": {
@@ -44,6 +44,7 @@
       "msgspec": "0.20.0",
       "python": "3.13.12",
       "rg": "<ripgrep>",
+      "rg_pcre2": "PCRE2 10.45 is available (JIT is available)",
       "sgpy": "0.40.5"
     }
   },
@@ -55,9 +56,9 @@
           "anchor": {
             "col": 0,
             "end_col": 32,
-            "end_line": 142,
+            "end_line": 168,
             "file": "tools/cq/core/toolchain.py",
-            "line": 48
+            "line": 68
           },
           "category": "entity_neighborhood",
           "details": {
@@ -127,7 +128,7 @@
               "file_path": "tools/cq/core/toolchain.py",
               "kind": "definition",
               "name": "Toolchain",
-              "node_id": "entity:caller:tools/cq/core/toolchain.py:48:Toolchain"
+              "node_id": "entity:caller:tools/cq/core/toolchain.py:68:Toolchain"
             }
           ],
           "source": "heuristic",
@@ -168,7 +169,7 @@
         "location": {
           "col": 0,
           "file": "tools/cq/core/toolchain.py",
-          "line": 48
+          "line": 68
         },
         "qualname": null,
         "selection_reason": "top_entity_result",
@@ -316,7 +317,7 @@
       "counts": {
         "diagnostics": 0,
         "injections": 0,
-        "locals": 4,
+        "locals": 11,
         "semantic_tokens": 2
       },
       "degradation": [],
@@ -325,10 +326,6 @@
         "diagnostics": [],
         "injections": [],
         "locals": [
-          {
-            "kind": "scope",
-            "name": "<module>"
-          },
           {
             "kind": "qualified_name",
             "name": "CqStruct"
@@ -340,6 +337,38 @@
           {
             "kind": "qualified_name",
             "name": "tools.cq.core.structs.CqStruct"
+          },
+          {
+            "kind": "local_definition",
+            "name": "rg_available"
+          },
+          {
+            "kind": "local_definition",
+            "name": "rg_version"
+          },
+          {
+            "kind": "local_definition",
+            "name": "diskcache_available"
+          },
+          {
+            "kind": "local_definition",
+            "name": "msg"
+          },
+          {
+            "kind": "local_definition",
+            "name": "Toolchain"
+          },
+          {
+            "kind": "local_definition",
+            "name": "require_sgpy"
+          },
+          {
+            "kind": "local_definition",
+            "name": "sgpy_available"
+          },
+          {
+            "kind": "local_definition",
+            "name": "msgspec_available"
           }
         ],
         "semantic_tokens": [

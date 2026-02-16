@@ -23,7 +23,8 @@ MIN_SCOPES_WITH_FIXTURE_CLOSURES = 3
 class TestScopeGraphExtraction:
     """Tests for scope graph extraction."""
 
-    def test_extract_simple_module(self) -> None:
+    @staticmethod
+    def test_extract_simple_module() -> None:
         """Extract scope graph from simple module."""
         source = """
 x = 1
@@ -33,7 +34,8 @@ y = 2
         assert graph.root_scope is not None
         assert graph.root_scope.scope_type == ScopeType.MODULE
 
-    def test_extract_function_scope(self) -> None:
+    @staticmethod
+    def test_extract_function_scope() -> None:
         """Extract function scope from module."""
         source = """
 def my_func(a, b):
@@ -47,7 +49,8 @@ def my_func(a, b):
         assert func_scope is not None
         assert func_scope.scope_type == ScopeType.FUNCTION
 
-    def test_extract_class_scope(self) -> None:
+    @staticmethod
+    def test_extract_class_scope() -> None:
         """Extract class scope from module."""
         source = """
 class MyClass:
@@ -65,14 +68,16 @@ class MyClass:
 class TestScopeTypeDetection:
     """Tests for scope type detection."""
 
-    def test_module_scope_type(self) -> None:
+    @staticmethod
+    def test_module_scope_type() -> None:
         """Module scope has MODULE type."""
         source = "x = 1"
         graph = extract_scope_graph(source, "test.py")
         assert graph.root_scope is not None
         assert graph.root_scope.scope_type == ScopeType.MODULE
 
-    def test_function_scope_type(self) -> None:
+    @staticmethod
+    def test_function_scope_type() -> None:
         """Function scope has FUNCTION type."""
         source = """
 def foo():
@@ -83,7 +88,8 @@ def foo():
         assert func is not None
         assert func.scope_type == ScopeType.FUNCTION
 
-    def test_class_scope_type(self) -> None:
+    @staticmethod
+    def test_class_scope_type() -> None:
         """Class scope has CLASS type."""
         source = """
 class Bar:
@@ -94,7 +100,8 @@ class Bar:
         assert cls is not None
         assert cls.scope_type == ScopeType.CLASS
 
-    def test_nested_function_is_nested(self) -> None:
+    @staticmethod
+    def test_nested_function_is_nested() -> None:
         """Nested function has is_nested=True."""
         source = """
 def outer():
@@ -110,7 +117,8 @@ def outer():
 class TestSymbolExtraction:
     """Tests for symbol extraction."""
 
-    def test_extract_local_symbol(self) -> None:
+    @staticmethod
+    def test_extract_local_symbol() -> None:
         """Extract local variable symbol."""
         source = """
 def func():
@@ -127,7 +135,8 @@ def func():
         assert x_sym.is_local is True
         assert x_sym.is_assigned is True
 
-    def test_extract_parameter_symbol(self) -> None:
+    @staticmethod
+    def test_extract_parameter_symbol() -> None:
         """Extract function parameter symbol."""
         source = """
 def func(param):
@@ -142,7 +151,8 @@ def func(param):
         assert param_sym is not None
         assert param_sym.is_parameter is True
 
-    def test_extract_global_symbol(self) -> None:
+    @staticmethod
+    def test_extract_global_symbol() -> None:
         """Extract global variable symbol."""
         source = """
 G = 1
@@ -160,7 +170,8 @@ def func():
         assert g_sym is not None
         assert g_sym.is_global is True
 
-    def test_extract_imported_symbol(self) -> None:
+    @staticmethod
+    def test_extract_imported_symbol() -> None:
         """Extract imported symbol."""
         source = """
 import os
@@ -178,7 +189,8 @@ from sys import path
 class TestClosureDetection:
     """Tests for closure and free variable detection."""
 
-    def test_detect_closure(self) -> None:
+    @staticmethod
+    def test_detect_closure() -> None:
         """Detect closure with free variables."""
         source = """
 def outer():
@@ -193,7 +205,8 @@ def outer():
         assert is_closure(inner) is True
         assert "x" in get_free_vars(inner)
 
-    def test_detect_non_closure(self) -> None:
+    @staticmethod
+    def test_detect_non_closure() -> None:
         """Function without free vars is not closure."""
         source = """
 def func(x):
@@ -204,7 +217,8 @@ def func(x):
         assert func is not None
         assert is_closure(func) is False
 
-    def test_detect_cell_vars(self) -> None:
+    @staticmethod
+    def test_detect_cell_vars() -> None:
         """Detect cell variables captured by inner scope."""
         source = """
 def outer():
@@ -225,7 +239,8 @@ def outer():
 class TestScopePartitions:
     """Tests for scope variable partitions."""
 
-    def test_scope_has_symbols(self) -> None:
+    @staticmethod
+    def test_scope_has_symbols() -> None:
         """Scope contains its symbols."""
         source = """
 def func(a, b):
@@ -237,7 +252,8 @@ def func(a, b):
         assert func is not None
         assert len(func.symbols) >= MIN_FUNCTION_SYMBOLS  # a, b, x
 
-    def test_parameters_are_marked(self) -> None:
+    @staticmethod
+    def test_parameters_are_marked() -> None:
         """Function parameters are marked as is_parameter."""
         source = """
 def func(p1, p2, p3):
@@ -253,7 +269,8 @@ def func(p1, p2, p3):
         assert "p2" in param_names
         assert "p3" in param_names
 
-    def test_locals_are_marked(self) -> None:
+    @staticmethod
+    def test_locals_are_marked() -> None:
         """Local variables are marked as is_local."""
         source = """
 def func():
@@ -272,7 +289,8 @@ def func():
 class TestScopeOptimization:
     """Tests for scope optimization detection."""
 
-    def test_function_is_optimized(self) -> None:
+    @staticmethod
+    def test_function_is_optimized() -> None:
         """Function scopes use fast locals (optimized)."""
         source = """
 def func():
@@ -284,7 +302,8 @@ def func():
         assert func is not None
         assert func.is_optimized is True
 
-    def test_module_not_optimized(self) -> None:
+    @staticmethod
+    def test_module_not_optimized() -> None:
         """Module scopes are not optimized."""
         source = "x = 1"
         graph = extract_scope_graph(source, "test.py")
@@ -295,8 +314,9 @@ def func():
 class TestScopeGraphWithFixtures:
     """Tests using fixture files."""
 
+    @staticmethod
     @pytest.fixture
-    def fixtures_dir(self) -> Path:
+    def fixtures_dir() -> Path:
         """Get fixtures directory.
 
         Returns:
@@ -306,7 +326,8 @@ class TestScopeGraphWithFixtures:
         """
         return Path(__file__).parent / "_fixtures"
 
-    def test_extract_closures_file(self, fixtures_dir: Path) -> None:
+    @staticmethod
+    def test_extract_closures_file(fixtures_dir: Path) -> None:
         """Extract scope graph from closures fixture."""
         closures_path = fixtures_dir / "closures.py"
         if not closures_path.exists():
@@ -322,7 +343,8 @@ class TestScopeGraphWithFixtures:
         closures = [s for s in graph.scopes if is_closure(s)]
         assert len(closures) >= 1
 
-    def test_extract_control_flow_file(self, fixtures_dir: Path) -> None:
+    @staticmethod
+    def test_extract_control_flow_file(fixtures_dir: Path) -> None:
         """Extract scope graph from control flow fixture."""
         control_path = fixtures_dir / "control_flow.py"
         if not control_path.exists():

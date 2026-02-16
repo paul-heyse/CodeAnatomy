@@ -5,15 +5,11 @@ Executes ToolPlans and returns CqResult objects.
 
 from __future__ import annotations
 
-import hashlib
-import re
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import msgspec
-from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
 from tools.cq.core.bootstrap import resolve_runtime_services
@@ -22,7 +18,6 @@ from tools.cq.core.cache import (
     CqCacheBackend,
     FragmentEntryV1,
     FragmentHitV1,
-    FragmentMissV1,
     FragmentPersistRuntimeV1,
     FragmentProbeRuntimeV1,
     FragmentRequestV1,
@@ -43,7 +38,6 @@ from tools.cq.core.cache import (
     snapshot_backend_metrics,
 )
 from tools.cq.core.cache.contracts import (
-    PatternFragmentCacheV1,
     QueryEntityScanCacheV1,
     SgRecordCacheV1,
 )
@@ -53,7 +47,6 @@ from tools.cq.core.cache.telemetry import (
     record_cache_set,
 )
 from tools.cq.core.contracts import SummaryBuildRequest, contract_to_builtins
-from tools.cq.core.locations import SourceSpan
 from tools.cq.core.multilang_orchestrator import (
     execute_by_language_scope,
 )
@@ -69,16 +62,9 @@ from tools.cq.core.schema import (
     CqResult,
     Finding,
     RunMeta,
-    Section,
     assign_result_finding_ids,
     mk_result,
     ms,
-)
-from tools.cq.core.scoring import (
-    ConfidenceSignals,
-    ImpactSignals,
-    build_detail_payload,
-    build_score_details,
 )
 from tools.cq.core.structs import CqStruct
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
@@ -88,83 +74,73 @@ from tools.cq.query.execution_requests import (
     EntityQueryRequest,
     PatternQueryRequest,
 )
+from tools.cq.query.executor_ast_grep import (
+    collect_match_spans as _collect_match_spans,
+)
+from tools.cq.query.executor_ast_grep import (
+    execute_ast_grep_rules as _execute_ast_grep_rules,
+)
+from tools.cq.query.executor_ast_grep import (
+    filter_records_by_spans as _filter_records_by_spans,
+)
+from tools.cq.query.executor_definitions import (
+    def_to_finding as _def_to_finding,
+)
+from tools.cq.query.executor_definitions import (
+    filter_to_matching as _filter_to_matching,
+)
+from tools.cq.query.executor_definitions import (
+    matches_name as _matches_name,
+)
+from tools.cq.query.executor_definitions import (
+    process_def_query as _process_def_query,
+)
+from tools.cq.query.executor_definitions import (
+    process_import_query as _process_import_query,
+)
+from tools.cq.query.finding_builders import (
+    apply_call_evidence as _apply_call_evidence,
+)
+from tools.cq.query.finding_builders import (
+    build_def_evidence_map as _build_def_evidence_map,
+)
+from tools.cq.query.finding_builders import (
+    call_to_finding as _call_to_finding,
+)
+from tools.cq.query.finding_builders import (
+    extract_call_target as _extract_call_target,
+)
+from tools.cq.query.finding_builders import (
+    record_key as _record_key,
+)
 from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE,
     QueryLanguage,
     QueryLanguageScope,
     expand_language_scope,
     file_extensions_for_language,
-    file_extensions_for_scope,
 )
-from tools.cq.query.metavar import (
-    apply_metavar_filters,
-    extract_rule_metavars,
-    extract_rule_variadic_metavars,
-    partition_metavar_filters,
-)
-from tools.cq.query.executor_ast_grep import (
-    AstGrepExecutionContext,
-    AstGrepExecutionState,
-    AstGrepMatchSpan,
-    AstGrepRuleContext,
-    PatternFragmentContext as _PatternFragmentContext,
-    collect_match_spans as _collect_match_spans,
-    execute_ast_grep_rules as _execute_ast_grep_rules,
-    filter_records_by_spans as _filter_records_by_spans,
-)
-from tools.cq.query.executor_definitions import (
-    DefQueryRelationshipPolicyV1,
-    def_to_finding as _def_to_finding,
-    dedupe_import_matches as _dedupe_import_matches,
-    filter_to_matching as _filter_to_matching,
-    import_to_finding as _import_to_finding,
-    matches_entity as _matches_entity,
-    matches_name as _matches_name,
-    process_def_query as _process_def_query,
-    process_import_query as _process_import_query,
-)
-from tools.cq.query.finding_builders import (
-    build_def_evidence_map as _build_def_evidence_map,
-    count_callers_for_definition as _count_callers_for_definition,
-    extract_call_name as _extract_call_name,
-    extract_call_receiver as _extract_call_receiver,
-    extract_call_target as _extract_call_target,
-    find_enclosing_class as _find_enclosing_class,
-    record_key as _record_key,
-    resolve_enclosing_scope as _resolve_enclosing_scope,
-)
-from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
+from tools.cq.query.planner import ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.scan import (
     EntityCandidates,
     ScanContext,
+)
+from tools.cq.query.scan import (
     build_entity_candidates as _build_entity_candidates,
+)
+from tools.cq.query.scan import (
     build_scan_context as _build_scan_context,
 )
-from tools.cq.query.section_builders import (
-    build_bytecode_surface_section as _build_bytecode_surface_section,
-    build_callees_section as _build_callees_section,
-    build_callers_section as _build_callers_section,
-    build_entity_neighborhood_preview_section as _build_entity_neighborhood_preview_section,
-    build_imports_section as _build_imports_section,
-    build_raises_section as _build_raises_section,
-    build_scope_section as _build_scope_section,
-)
-from tools.cq.query.sg_parser import filter_records_by_kind, list_scan_files, sg_scan
+from tools.cq.query.sg_parser import list_scan_files, sg_scan
 from tools.cq.query.shared_utils import count_result_matches, extract_def_name
 from tools.cq.search._shared.types import SearchLimits
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
-from tools.cq.search.rg.prefilter import extract_literal_fragments, rg_prefilter_files
 from tools.cq.search.semantic.diagnostics import (
     build_language_capabilities,
 )
-from tools.cq.utils.interval_index import FileIntervalIndex, IntervalIndex
 from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
-    from ast_grep_py import SgNode
-
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.query.ir import MetaVarCapture, MetaVarFilter
 from tools.cq.index.files import FileTabulationResult, build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.ir import Query, Scope
@@ -1073,8 +1049,6 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     return assign_result_finding_ids(result)
 
 
-
-
 def _process_decorator_query(
     ctx: ScanContext,
     query: Query,
@@ -1231,3 +1205,12 @@ def rg_files_with_matches(
             limits=effective_limits,
         ),
     )
+
+
+__all__ = [
+    "ExecutePlanRequestV1",
+    "execute_entity_query_from_records",
+    "execute_pattern_query_with_files",
+    "execute_plan",
+    "rg_files_with_matches",
+]

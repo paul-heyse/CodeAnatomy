@@ -28,7 +28,6 @@ if TYPE_CHECKING:
         InsightNeighborhoodV1,
     )
     from tools.cq.macros.calls.analysis import CallSite
-    from tools.cq.macros.calls.neighborhood import CallAnalysisSummary
     from tools.cq.query.language import QueryLanguage
 
 _FRONT_DOOR_TOP_CANDIDATES = 3
@@ -46,6 +45,18 @@ class CallsFrontDoorState:
     target_file_path: Path | None
     target_line: int
     target_language: QueryLanguage | None
+
+
+@dataclass(frozen=True)
+class CallsInsightSummary:
+    """Summary counters and identifiers needed to build calls front-door insight."""
+
+    function_name: str
+    signature_info: str
+    files_with_calls: int
+    arg_shape_count: int
+    forwarding_count: int
+    hazard_counts: dict[str, int]
 
 
 def _find_function_signature(
@@ -288,12 +299,7 @@ def _build_calls_confidence(score: ScoreDetails | None) -> InsightConfidenceV1:
 
 def _build_calls_front_door_insight(
     *,
-    function_name: str,
-    signature_info: str,
-    files_with_calls: int,
-    arg_shape_count: int,
-    forwarding_count: int,
-    hazard_counts: dict[str, int],
+    summary: CallsInsightSummary,
     confidence: InsightConfidenceV1,
     state: CallsFrontDoorState,
     used_fallback: bool,
@@ -322,14 +328,14 @@ def _build_calls_front_door_insight(
     )
     return build_calls_insight(
         CallsInsightBuildRequestV1(
-            function_name=function_name,
-            signature=signature_info or None,
+            function_name=summary.function_name,
+            signature=summary.signature_info or None,
             location=location,
             neighborhood=state.neighborhood,
-            files_with_calls=files_with_calls,
-            arg_shape_count=arg_shape_count,
-            forwarding_count=forwarding_count,
-            hazard_counts=hazard_counts,
+            files_with_calls=summary.files_with_calls,
+            arg_shape_count=summary.arg_shape_count,
+            forwarding_count=summary.forwarding_count,
+            hazard_counts=summary.hazard_counts,
             confidence=confidence,
             budget=InsightBudgetV1(
                 top_candidates=_FRONT_DOOR_TOP_CANDIDATES,
@@ -360,13 +366,13 @@ def _finalize_calls_semantic_state(
     top_level_applied: int,
     reasons: tuple[str, ...],
 ) -> FrontDoorInsightV1:
+    import msgspec
+
     from tools.cq.core.semantic_contracts import (
         SemanticContractStateInputV1,
         derive_semantic_contract_state,
     )
     from tools.cq.search.semantic.models import provider_for_language
-
-    import msgspec
 
     telemetry_key = (
         "python_semantic_telemetry" if target_language == "python" else "rust_semantic_telemetry"

@@ -25,7 +25,6 @@ from tools.cq.query.shared_utils import extract_def_name
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
-    from tools.cq.query.executor_definitions import import_to_finding
     from tools.cq.query.ir import Query
     from tools.cq.utils.interval_index import FileIntervalIndex
 
@@ -158,7 +157,7 @@ def build_entity_neighborhood_preview_section(
     findings
         Key findings from query
 
-    Returns
+    Returns:
     -------
     Section
         Section containing bounded neighborhood preview findings
@@ -218,7 +217,7 @@ def build_callers_section(
     root
         Repository root
 
-    Returns
+    Returns:
     -------
     Section
         Callers section for the report
@@ -246,7 +245,7 @@ def build_call_target_context(
     index
         File interval index
 
-    Returns
+    Returns:
     -------
     CallTargetContext
         Target context
@@ -292,7 +291,7 @@ def collect_call_contexts(
     target_ctx
         Target context
 
-    Returns
+    Returns:
     -------
     list[tuple[SgRecord, str, SgRecord | None]]
         Call contexts (call, target, containing)
@@ -334,7 +333,7 @@ def call_matches_target(
     target_ctx
         Target context
 
-    Returns
+    Returns:
     -------
     bool
         True if call matches target
@@ -369,7 +368,7 @@ def build_caller_findings(
     evidence_map
         Evidence map
 
-    Returns
+    Returns:
     -------
     list[Finding]
         Caller findings
@@ -410,7 +409,7 @@ def build_callees_section(
     root
         Repository root
 
-    Returns
+    Returns:
     -------
     Section
         Callees section for the report
@@ -464,7 +463,7 @@ def build_imports_section(
     all_records
         All records
 
-    Returns
+    Returns:
     -------
     Section
         Imports section for the report
@@ -503,7 +502,7 @@ def build_raises_section(
     index
         File interval index
 
-    Returns
+    Returns:
     -------
     Section
         Raises section for the report
@@ -559,7 +558,7 @@ def build_scope_section(
     calls_by_def
         Calls by definition
 
-    Returns
+    Returns:
     -------
     Section
         Scope section for the report
@@ -613,7 +612,7 @@ def build_bytecode_surface_section(
     root
         Repository root
 
-    Returns
+    Returns:
     -------
     Section
         Bytecode surface section for the report
@@ -667,15 +666,15 @@ __all__ = [
     "CallTargetContext",
     "append_def_query_sections",
     "append_expander_sections",
-    "build_entity_neighborhood_preview_section",
-    "build_callers_section",
+    "build_bytecode_surface_section",
     "build_call_target_context",
-    "collect_call_contexts",
-    "call_matches_target",
-    "build_caller_findings",
     "build_callees_section",
+    "build_caller_findings",
+    "build_callers_section",
+    "build_entity_neighborhood_preview_section",
     "build_imports_section",
     "build_raises_section",
     "build_scope_section",
-    "build_bytecode_surface_section",
+    "call_matches_target",
+    "collect_call_contexts",
 ]

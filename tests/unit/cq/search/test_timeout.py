@@ -18,7 +18,8 @@ PRODUCT_WITH_OFFSET = 22
 class TestSyncTimeout:
     """Test synchronous timeout wrapper."""
 
-    def test_completes_within_timeout(self) -> None:
+    @staticmethod
+    def test_completes_within_timeout() -> None:
         """Test function that completes in time returns result."""
 
         def fast_function() -> str:
@@ -27,7 +28,8 @@ class TestSyncTimeout:
         result = search_sync_with_timeout(fast_function, timeout=1.0)
         assert result == "success"
 
-    def test_raises_timeout_error(self) -> None:
+    @staticmethod
+    def test_raises_timeout_error() -> None:
         """Test function that takes too long raises TimeoutError."""
 
         def slow_function() -> str:
@@ -37,7 +39,8 @@ class TestSyncTimeout:
         with pytest.raises(TimeoutError, match="timed out after"):
             search_sync_with_timeout(slow_function, timeout=0.1)
 
-    def test_with_args(self) -> None:
+    @staticmethod
+    def test_with_args() -> None:
         """Test timeout wrapper passes args correctly."""
 
         def add(a: int, b: int) -> int:
@@ -46,7 +49,8 @@ class TestSyncTimeout:
         result = search_sync_with_timeout(add, timeout=1.0, args=(2, 3))
         assert result == SUM_RESULT
 
-    def test_with_kwargs(self) -> None:
+    @staticmethod
+    def test_with_kwargs() -> None:
         """Test timeout wrapper passes kwargs correctly."""
 
         def greet(name: str, greeting: str = "Hello") -> str:
@@ -59,7 +63,8 @@ class TestSyncTimeout:
         )
         assert result == "Hi, World"
 
-    def test_with_args_and_kwargs(self) -> None:
+    @staticmethod
+    def test_with_args_and_kwargs() -> None:
         """Test timeout wrapper passes both args and kwargs."""
 
         def multiply_and_add(x: int, y: int, offset: int = 0) -> int:
@@ -73,7 +78,8 @@ class TestSyncTimeout:
         )
         assert result == PRODUCT_WITH_OFFSET
 
-    def test_preserves_exceptions(self) -> None:
+    @staticmethod
+    def test_preserves_exceptions() -> None:
         """Test timeout wrapper preserves function exceptions."""
 
         def failing_function() -> None:
@@ -87,8 +93,9 @@ class TestSyncTimeout:
 class TestAsyncTimeout:
     """Test asynchronous timeout wrapper."""
 
+    @staticmethod
     @pytest.mark.asyncio
-    async def test_completes_within_timeout(self) -> None:
+    async def test_completes_within_timeout() -> None:
         """Test coroutine that completes in time returns result."""
 
         async def fast_coroutine() -> str:
@@ -98,8 +105,9 @@ class TestAsyncTimeout:
         result = await search_async_with_timeout(fast_coroutine(), timeout_seconds=1.0)
         assert result == "success"
 
+    @staticmethod
     @pytest.mark.asyncio
-    async def test_raises_timeout_error(self) -> None:
+    async def test_raises_timeout_error() -> None:
         """Test coroutine that takes too long raises TimeoutError."""
 
         async def slow_coroutine() -> str:
@@ -109,8 +117,9 @@ class TestAsyncTimeout:
         with pytest.raises(TimeoutError, match="timed out after"):
             await search_async_with_timeout(slow_coroutine(), timeout_seconds=0.1)
 
+    @staticmethod
     @pytest.mark.asyncio
-    async def test_preserves_exceptions(self) -> None:
+    async def test_preserves_exceptions() -> None:
         """Test timeout wrapper preserves coroutine exceptions."""
 
         async def failing_coroutine() -> None:
@@ -121,8 +130,9 @@ class TestAsyncTimeout:
         with pytest.raises(ValueError, match="async error"):
             await search_async_with_timeout(failing_coroutine(), timeout_seconds=1.0)
 
+    @staticmethod
     @pytest.mark.asyncio
-    async def test_cancellation_cleanup(self) -> None:
+    async def test_cancellation_cleanup() -> None:
         """Test timeout properly cancels long-running coroutine."""
         cancelled = False
 
@@ -147,7 +157,8 @@ class TestAsyncTimeout:
 class TestTimeoutEdgeCases:
     """Test edge cases for timeout handling."""
 
-    def test_zero_timeout_sync(self) -> None:
+    @staticmethod
+    def test_zero_timeout_sync() -> None:
         """Test zero timeout behavior (may complete or timeout depending on timing)."""
 
         def instant_function() -> str:
@@ -161,8 +172,9 @@ class TestTimeoutEdgeCases:
         except TimeoutError:
             pass  # Also acceptable
 
+    @staticmethod
     @pytest.mark.asyncio
-    async def test_zero_timeout_async(self) -> None:
+    async def test_zero_timeout_async() -> None:
         """Test zero timeout behavior for async."""
 
         async def instant_coroutine() -> str:
@@ -176,7 +188,8 @@ class TestTimeoutEdgeCases:
         except TimeoutError:
             pass  # Also acceptable
 
-    def test_negative_timeout_sync(self) -> None:
+    @staticmethod
+    def test_negative_timeout_sync() -> None:
         """Test negative timeout raises ValueError."""
 
         def any_function() -> str:
@@ -185,8 +198,9 @@ class TestTimeoutEdgeCases:
         with pytest.raises(ValueError, match="Timeout must be positive"):
             search_sync_with_timeout(any_function, timeout=-1.0)
 
+    @staticmethod
     @pytest.mark.asyncio
-    async def test_negative_timeout_async(self) -> None:
+    async def test_negative_timeout_async() -> None:
         """Test negative timeout raises ValueError."""
 
         async def any_coroutine() -> str:
@@ -200,8 +214,9 @@ class TestTimeoutEdgeCases:
         finally:
             coro.close()
 
+    @staticmethod
     @pytest.mark.parametrize("timeout", [0.1, 0.5, 1.0, 5.0])
-    def test_various_timeouts_sync(self, timeout: float) -> None:
+    def test_various_timeouts_sync(timeout: float) -> None:
         """Test timeout wrapper with various timeout values."""
 
         def quick_function() -> float:
@@ -210,9 +225,10 @@ class TestTimeoutEdgeCases:
         result = search_sync_with_timeout(quick_function, timeout=timeout)
         assert result == timeout
 
+    @staticmethod
     @pytest.mark.parametrize("timeout_seconds", [0.1, 0.5, 1.0, 5.0])
     @pytest.mark.asyncio
-    async def test_various_timeouts_async(self, timeout_seconds: float) -> None:
+    async def test_various_timeouts_async(timeout_seconds: float) -> None:
         """Test timeout wrapper with various timeout values."""
 
         async def quick_coroutine() -> float:

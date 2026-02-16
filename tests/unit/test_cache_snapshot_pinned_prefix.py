@@ -25,7 +25,6 @@ def test_cache_prefix_for_delta_snapshot() -> None:
     assert prefix.startswith(profile.context_cache_key())
 
 
-
 def test_named_cache_profile_applies_settings_and_telemetry() -> None:
     """Validate profile settings and telemetry payload alignment for presets."""
     profile = DataFusionRuntimeProfile(

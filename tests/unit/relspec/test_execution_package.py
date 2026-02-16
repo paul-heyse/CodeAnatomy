@@ -22,7 +22,8 @@ SCHEMA_FINGERPRINT_LENGTH = 32
 class TestExecutionPackageArtifactConstruction:
     """Test that ExecutionPackageArtifact can be constructed with all fields."""
 
-    def test_construct_with_all_fields(self) -> None:
+    @staticmethod
+    def test_construct_with_all_fields() -> None:
         """Construct an artifact with all required fields."""
         pkg = ExecutionPackageArtifact(
             package_fingerprint="abc123",
@@ -41,7 +42,8 @@ class TestExecutionPackageArtifactConstruction:
         assert pkg.session_config_hash == "sh_001"
         assert pkg.created_at_unix_ms == FIXED_CREATED_AT_UNIX_MS
 
-    def test_frozen_immutability(self) -> None:
+    @staticmethod
+    def test_frozen_immutability() -> None:
         """Verify the artifact is frozen and immutable."""
         pkg = ExecutionPackageArtifact(
             package_fingerprint="abc",
@@ -63,7 +65,8 @@ class TestExecutionPackageArtifactConstruction:
 class TestBuildExecutionPackageDeterminism:
     """Test that build_execution_package produces deterministic fingerprints."""
 
-    def test_same_inputs_same_fingerprint(self) -> None:
+    @staticmethod
+    def test_same_inputs_same_fingerprint() -> None:
         """Identical inputs produce identical package fingerprints."""
         manifest = SimpleNamespace(model_hash="hash_abc")
         policy = SimpleNamespace(policy_fingerprint="policy_xyz")
@@ -89,7 +92,8 @@ class TestBuildExecutionPackageDeterminism:
         assert pkg1.policy_artifact_hash == pkg2.policy_artifact_hash
         assert pkg1.capability_snapshot_hash == pkg2.capability_snapshot_hash
 
-    def test_different_manifest_different_fingerprint(self) -> None:
+    @staticmethod
+    def test_different_manifest_different_fingerprint() -> None:
         """Different manifest produces a different package fingerprint."""
         manifest_a = SimpleNamespace(model_hash="hash_a")
         manifest_b = SimpleNamespace(model_hash="hash_b")
@@ -99,7 +103,8 @@ class TestBuildExecutionPackageDeterminism:
         assert pkg_a.package_fingerprint != pkg_b.package_fingerprint
         assert pkg_a.manifest_hash != pkg_b.manifest_hash
 
-    def test_different_policy_different_fingerprint(self) -> None:
+    @staticmethod
+    def test_different_policy_different_fingerprint() -> None:
         """Different compiled policy produces a different fingerprint."""
         policy_a = SimpleNamespace(policy_fingerprint="fp_a")
         policy_b = SimpleNamespace(policy_fingerprint="fp_b")
@@ -108,7 +113,8 @@ class TestBuildExecutionPackageDeterminism:
         pkg_b = build_execution_package(compiled_policy=policy_b)
         assert pkg_a.package_fingerprint != pkg_b.package_fingerprint
 
-    def test_different_capability_different_fingerprint(self) -> None:
+    @staticmethod
+    def test_different_capability_different_fingerprint() -> None:
         """Different capability snapshot produces a different fingerprint."""
         cap_a = SimpleNamespace(settings_hash="cap_a")
         cap_b = SimpleNamespace(settings_hash="cap_b")
@@ -117,7 +123,8 @@ class TestBuildExecutionPackageDeterminism:
         pkg_b = build_execution_package(capability_snapshot=cap_b)
         assert pkg_a.package_fingerprint != pkg_b.package_fingerprint
 
-    def test_different_plan_bundles_different_fingerprint(self) -> None:
+    @staticmethod
+    def test_different_plan_bundles_different_fingerprint() -> None:
         """Different plan bundle fingerprints produce a different fingerprint."""
         pkg_a = build_execution_package(
             plan_bundle_fingerprints={"view_a": "fp_1"},
@@ -127,7 +134,8 @@ class TestBuildExecutionPackageDeterminism:
         )
         assert pkg_a.package_fingerprint != pkg_b.package_fingerprint
 
-    def test_different_session_config_different_fingerprint(self) -> None:
+    @staticmethod
+    def test_different_session_config_different_fingerprint() -> None:
         """Different session config produces a different fingerprint."""
         pkg_a = build_execution_package(session_config="config_a")
         pkg_b = build_execution_package(session_config="config_b")
@@ -137,7 +145,8 @@ class TestBuildExecutionPackageDeterminism:
 class TestBuildExecutionPackageTimestamp:
     """Test that created_at_unix_ms is populated correctly."""
 
-    def test_timestamp_is_populated(self) -> None:
+    @staticmethod
+    def test_timestamp_is_populated() -> None:
         """Verify the timestamp is a reasonable value."""
         before_ms = int(time.time() * 1000)
         pkg = build_execution_package()
@@ -145,7 +154,8 @@ class TestBuildExecutionPackageTimestamp:
 
         assert before_ms <= pkg.created_at_unix_ms <= after_ms
 
-    def test_timestamp_is_positive(self) -> None:
+    @staticmethod
+    def test_timestamp_is_positive() -> None:
         """Verify the timestamp is a positive integer."""
         pkg = build_execution_package()
         assert pkg.created_at_unix_ms > 0
@@ -154,19 +164,22 @@ class TestBuildExecutionPackageTimestamp:
 class TestBuildExecutionPackagePlanBundleFingerprints:
     """Test plan_bundle_fingerprints handling."""
 
-    def test_none_plan_bundles_produce_empty_dict(self) -> None:
+    @staticmethod
+    def test_none_plan_bundles_produce_empty_dict() -> None:
         """None plan bundles normalize to an empty dict."""
         pkg = build_execution_package(plan_bundle_fingerprints=None)
         assert pkg.plan_bundle_fingerprints == {}
 
-    def test_plan_bundles_are_sorted(self) -> None:
+    @staticmethod
+    def test_plan_bundles_are_sorted() -> None:
         """Plan bundle fingerprints are sorted by key."""
         bundles = {"z_view": "fp_z", "a_view": "fp_a", "m_view": "fp_m"}
         pkg = build_execution_package(plan_bundle_fingerprints=bundles)
         keys = list(pkg.plan_bundle_fingerprints.keys())
         assert keys == sorted(keys)
 
-    def test_plan_bundles_preserved_correctly(self) -> None:
+    @staticmethod
+    def test_plan_bundles_preserved_correctly() -> None:
         """All plan bundle entries are preserved in the output."""
         bundles = {"view_1": "fp_1", "view_2": "fp_2", "view_3": "fp_3"}
         pkg = build_execution_package(plan_bundle_fingerprints=bundles)
@@ -178,32 +191,36 @@ class TestBuildExecutionPackagePlanBundleFingerprints:
 class TestBuildExecutionPackageGracefulDegradation:
     """Test graceful handling of missing or None inputs."""
 
-    def test_all_none_inputs(self) -> None:
+    @staticmethod
+    def test_all_none_inputs() -> None:
         """All None inputs produce a valid package with empty hash strings."""
         pkg = build_execution_package()
-        assert pkg.manifest_hash == ""
-        assert pkg.policy_artifact_hash == ""
-        assert pkg.capability_snapshot_hash == ""
-        assert pkg.session_config_hash == ""
+        assert not pkg.manifest_hash
+        assert not pkg.policy_artifact_hash
+        assert not pkg.capability_snapshot_hash
+        assert not pkg.session_config_hash
         assert pkg.plan_bundle_fingerprints == {}
         assert isinstance(pkg.package_fingerprint, str)
         assert len(pkg.package_fingerprint) > 0
 
-    def test_manifest_fallback_to_ir_hash(self) -> None:
+    @staticmethod
+    def test_manifest_fallback_to_ir_hash() -> None:
         """Manifest without model_hash falls back to ir_hash."""
         ir = SimpleNamespace(ir_hash="ir_hash_value")
         manifest = SimpleNamespace(model_hash=None, semantic_ir=ir)
         pkg = build_execution_package(manifest=manifest)
         assert pkg.manifest_hash == "ir_hash_value"
 
-    def test_session_config_callable_settings_hash(self) -> None:
+    @staticmethod
+    def test_session_config_callable_settings_hash() -> None:
         """Session config with callable settings_hash is handled correctly."""
         mock_profile = MagicMock()
         mock_profile.settings_hash.return_value = "callable_hash_result"
         pkg = build_execution_package(session_config=mock_profile)
         assert pkg.session_config_hash == "callable_hash_result"
 
-    def test_session_config_string_passthrough(self) -> None:
+    @staticmethod
+    def test_session_config_string_passthrough() -> None:
         """String session config is used directly as the hash."""
         pkg = build_execution_package(session_config="direct_hash_string")
         assert pkg.session_config_hash == "direct_hash_string"
@@ -212,7 +229,8 @@ class TestBuildExecutionPackageGracefulDegradation:
 class TestExecutionPackageMsgspecRoundTrip:
     """Test msgspec serialization round-trip for ExecutionPackageArtifact."""
 
-    def test_json_roundtrip(self) -> None:
+    @staticmethod
+    def test_json_roundtrip() -> None:
         """JSON encode and decode produce an equivalent artifact."""
         original = ExecutionPackageArtifact(
             package_fingerprint="fp_test",
@@ -233,7 +251,8 @@ class TestExecutionPackageMsgspecRoundTrip:
         assert decoded.session_config_hash == original.session_config_hash
         assert decoded.created_at_unix_ms == original.created_at_unix_ms
 
-    def test_msgpack_roundtrip(self) -> None:
+    @staticmethod
+    def test_msgpack_roundtrip() -> None:
         """Msgpack encode and decode produce an equivalent artifact."""
         original = ExecutionPackageArtifact(
             package_fingerprint="fp_msgpack",
@@ -249,7 +268,8 @@ class TestExecutionPackageMsgspecRoundTrip:
         assert decoded.package_fingerprint == original.package_fingerprint
         assert decoded.plan_bundle_fingerprints == original.plan_bundle_fingerprints
 
-    def test_empty_plan_bundles_roundtrip(self) -> None:
+    @staticmethod
+    def test_empty_plan_bundles_roundtrip() -> None:
         """Empty plan_bundle_fingerprints survives serialization."""
         original = ExecutionPackageArtifact(
             package_fingerprint="fp_empty",
@@ -268,25 +288,29 @@ class TestExecutionPackageMsgspecRoundTrip:
 class TestExecutionPackageSpecRegistration:
     """Test that the artifact spec is properly registered."""
 
-    def test_spec_is_registered(self) -> None:
+    @staticmethod
+    def test_spec_is_registered() -> None:
         """EXECUTION_PACKAGE_SPEC is available in the global registry."""
         from serde_artifact_specs import EXECUTION_PACKAGE_SPEC
 
         assert EXECUTION_PACKAGE_SPEC.canonical_name == "execution_package_v1"
 
-    def test_spec_has_payload_type(self) -> None:
+    @staticmethod
+    def test_spec_has_payload_type() -> None:
         """EXECUTION_PACKAGE_SPEC has the correct payload type."""
         from serde_artifact_specs import EXECUTION_PACKAGE_SPEC
 
         assert EXECUTION_PACKAGE_SPEC.payload_type is ExecutionPackageArtifact
 
-    def test_spec_has_fingerprint(self) -> None:
+    @staticmethod
+    def test_spec_has_fingerprint() -> None:
         """EXECUTION_PACKAGE_SPEC has a 32-char schema fingerprint."""
         from serde_artifact_specs import EXECUTION_PACKAGE_SPEC
 
         assert len(EXECUTION_PACKAGE_SPEC.schema_fingerprint) == SCHEMA_FINGERPRINT_LENGTH
 
-    def test_spec_in_global_registry(self) -> None:
+    @staticmethod
+    def test_spec_in_global_registry() -> None:
         """Verify the spec appears in the global artifact spec registry."""
         from serde_schema_registry import artifact_spec_registry
 

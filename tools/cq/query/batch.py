@@ -11,17 +11,17 @@ from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import RecordType, SgRecord, filter_records_by_type, scan_files
 from tools.cq.core.pathing import is_relative_to, match_ordered_globs, normalize_repo_relative_path
 from tools.cq.query.enrichment import SymtableEnricher
+from tools.cq.query.language import (
+    DEFAULT_QUERY_LANGUAGE,
+    QueryLanguage,
+)
+from tools.cq.query.planner import scope_to_globs, scope_to_paths
 from tools.cq.query.scan import (
     EntityCandidates,
     ScanContext,
     build_entity_candidates,
     build_scan_context,
 )
-from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE,
-    QueryLanguage,
-)
-from tools.cq.query.planner import scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import list_scan_files, normalize_record_types
 
 if TYPE_CHECKING:

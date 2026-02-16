@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import cast
 
 import msgspec
@@ -66,7 +65,7 @@ def _python_semantic_anchor_key(
     match_text
         Matched text string.
 
-    Returns
+    Returns:
     -------
     _PythonSemanticAnchorKey
         Tuple key for anchor-based lookups.
@@ -82,7 +81,7 @@ def _python_semantic_anchor_key_from_raw(raw: RawMatch) -> _PythonSemanticAnchor
     raw
         Raw match from candidate collection.
 
-    Returns
+    Returns:
     -------
     _PythonSemanticAnchorKey
         Tuple key for anchor-based lookups.
@@ -103,7 +102,7 @@ def _python_semantic_anchor_key_from_match(match: EnrichedMatch) -> _PythonSeman
     match
         Enriched match from classification.
 
-    Returns
+    Returns:
     -------
     _PythonSemanticAnchorKey
         Tuple key for anchor-based lookups.
@@ -127,7 +126,7 @@ def _python_semantic_failure_diagnostic(
     reason
         Failure reason string.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Diagnostic payload dictionary.
@@ -154,7 +153,7 @@ def _python_semantic_no_signal_diagnostic(
     coverage_reason
         Optional coverage-specific reason.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Diagnostic payload dictionary.
@@ -185,7 +184,7 @@ def _python_semantic_partial_signal_diagnostic(
     coverage_reason
         Optional coverage-specific reason.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Diagnostic payload dictionary.
@@ -216,7 +215,7 @@ def _normalize_python_semantic_degradation_reason(
     coverage_reason
         Optional coverage-specific reason.
 
-    Returns
+    Returns:
     -------
     str
         Normalized reason string.
@@ -263,7 +262,7 @@ def _python_semantic_coverage_reason(payload: dict[str, object]) -> str | None:
     payload
         Python semantic enrichment payload.
 
-    Returns
+    Returns:
     -------
     str | None
         Coverage reason if present, otherwise None.
@@ -294,7 +293,7 @@ def _prefetch_python_semantic_for_raw_matches(
     raw_matches
         Raw matches from candidate collection.
 
-    Returns
+    Returns:
     -------
     _PythonSemanticPrefetchResult
         Prefetch result with payloads and telemetry.
@@ -395,7 +394,7 @@ def run_prefetch_python_semantic_for_raw_matches(
     raw_matches
         Raw matches from candidate collection.
 
-    Returns
+    Returns:
     -------
     _PythonSemanticPrefetchResult
         Prefetch payloads and telemetry.
@@ -416,7 +415,7 @@ def _python_semantic_enrich_match(
     match
         Enriched match to enrich further.
 
-    Returns
+    Returns:
     -------
     LanguageSemanticEnrichmentOutcome
         Semantic enrichment outcome.
@@ -452,7 +451,7 @@ def _seed_python_semantic_state(
     prefetched
         Prefetch result or None.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, int], list[dict[str, object]]]
         Seeded telemetry and diagnostics.
@@ -481,7 +480,7 @@ def _python_semantic_payload_from_prefetch(
     key
         Anchor key to look up.
 
-    Returns
+    Returns:
     -------
     dict[str, object] | None
         Cached payload if present, otherwise None.
@@ -511,7 +510,7 @@ def _fetch_python_semantic_payload(
     telemetry
         Telemetry counters to update.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, object] | None, bool, str | None]
         Payload, attempted_in_place flag, and failure reason.
@@ -559,7 +558,7 @@ def _merge_match_with_python_semantic_payload(
     diagnostics
         Diagnostics list to append to.
 
-    Returns
+    Returns:
     -------
     EnrichedMatch
         Match with merged python_semantic_enrichment field.
@@ -610,7 +609,7 @@ def _python_semantic_summary_payload(
     diagnostics
         Diagnostics list.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, object], dict[str, object], list[dict[str, object]]]
         Coerced overview, telemetry, and diagnostics.
@@ -632,7 +631,7 @@ def _first_string(*values: object) -> str | None:
     values
         Variable number of potential string values.
 
-    Returns
+    Returns:
     -------
     str | None
         First non-empty string or None.
@@ -651,7 +650,7 @@ def _count_mapping_rows(value: object) -> int:
     value
         Value to count rows in.
 
-    Returns
+    Returns:
     -------
     int
         Number of dictionary rows.
@@ -712,7 +711,7 @@ def _build_python_semantic_overview(matches: list[EnrichedMatch]) -> dict[str, o
     matches
         Enriched matches with python semantic enrichment.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Overview summary dictionary.
@@ -752,7 +751,7 @@ def attach_python_semantic_enrichment(
     prefetched
         Optional prefetch result for cache lookups.
 
-    Returns
+    Returns:
     -------
     tuple[list[EnrichedMatch], dict[str, object], dict[str, object], list[dict[str, object]]]
         Enriched matches, overview, telemetry, and diagnostics.
@@ -826,7 +825,7 @@ def merge_matches_and_python_semantic(
     partition_results
         Language partition results.
 
-    Returns
+    Returns:
     -------
     tuple[list[EnrichedMatch], dict[str, object], dict[str, object], list[dict[str, object]]]
         Merged enriched matches, python semantic overview, telemetry, and diagnostics.

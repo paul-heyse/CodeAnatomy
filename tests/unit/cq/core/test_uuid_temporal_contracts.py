@@ -23,7 +23,6 @@ def test_resolve_run_identity_contract_uses_uuid7_temporal_fields() -> None:
     assert row.run_created_ms >= 0
 
 
-
 def test_temporal_uuid_info_extracts_uuid7_timestamp() -> None:
     """Parse UUID7 timestamp fields into temporal metadata."""
     row = resolve_run_identity_contract()
@@ -31,7 +30,6 @@ def test_temporal_uuid_info_extracts_uuid7_timestamp() -> None:
     assert parsed.version == UUID7_VERSION
     assert parsed.time_ms is not None
     assert parsed.time_ms >= 0
-
 
 
 def test_normalize_external_identity_handles_uuid1_input() -> None:
@@ -42,12 +40,10 @@ def test_normalize_external_identity_handles_uuid1_input() -> None:
     assert normalized.version in {1, 6}
 
 
-
 def test_gated_uuid8_falls_back_when_disabled() -> None:
     """When gated UUID8 disabled, generation should return UUID7."""
     generated = gated_uuid8(enable_v8=False)
     assert generated.version == UUID7_VERSION
-
 
 
 def test_legacy_event_uuid_returns_uuid() -> None:

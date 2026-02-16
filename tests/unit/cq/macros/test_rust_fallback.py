@@ -12,7 +12,8 @@ MIN_RUST_MATCHES = 2
 class TestRustFallbackSearch:
     """Tests for the shared Rust fallback helper."""
 
-    def test_returns_empty_for_no_rust_files(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_returns_empty_for_no_rust_files(tmp_path: Path) -> None:
         """Test that search returns empty when no Rust files exist."""
         findings, _diags, stats = rust_fallback_search(
             root=tmp_path,
@@ -22,7 +23,8 @@ class TestRustFallbackSearch:
         assert findings == []
         assert stats["matches"] == 0
 
-    def test_returns_findings_for_rust_matches(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_returns_findings_for_rust_matches(tmp_path: Path) -> None:
         """Test that search returns findings when Rust files match."""
         rust_dir = tmp_path / "src"
         rust_dir.mkdir()
@@ -39,7 +41,8 @@ class TestRustFallbackSearch:
         assert isinstance(matches, int)
         assert matches >= 1
 
-    def test_capability_diagnostics_present(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_capability_diagnostics_present(tmp_path: Path) -> None:
         """Test that capability diagnostics are generated."""
         _findings, diags, _stats = rust_fallback_search(
             root=tmp_path,
@@ -50,7 +53,8 @@ class TestRustFallbackSearch:
         assert len(diags) >= 1
         assert diags[0].category == "capability_limitation"
 
-    def test_fail_open_on_error(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_fail_open_on_error(tmp_path: Path) -> None:
         """Test that errors don't propagate."""
         # Use a non-existent root path
         findings, _diags, _stats = rust_fallback_search(
@@ -60,7 +64,8 @@ class TestRustFallbackSearch:
         )
         assert findings == []
 
-    def test_finding_anchor_uses_relative_path(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_finding_anchor_uses_relative_path(tmp_path: Path) -> None:
         """Test that finding anchors use relative paths from root."""
         rust_dir = tmp_path / "src"
         rust_dir.mkdir()
@@ -78,7 +83,8 @@ class TestRustFallbackSearch:
         assert not anchor.file.startswith("/")
         assert "lib.rs" in anchor.file
 
-    def test_finding_detail_payload_has_language(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_finding_detail_payload_has_language(tmp_path: Path) -> None:
         """Test that finding detail payloads include language metadata."""
         rust_dir = tmp_path / "src"
         rust_dir.mkdir()
@@ -96,7 +102,8 @@ class TestRustFallbackSearch:
         assert details.data["language"] == "rust"
         assert details.data["evidence_kind"] == "rg_only"
 
-    def test_partition_stats_structure(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_partition_stats_structure(tmp_path: Path) -> None:
         """Test that partition stats have expected keys."""
         _findings, _diags, stats = rust_fallback_search(
             root=tmp_path,
@@ -108,7 +115,8 @@ class TestRustFallbackSearch:
         assert "matched_files" in stats
         assert "total_matches" in stats
 
-    def test_multiple_matches_in_same_file(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_multiple_matches_in_same_file(tmp_path: Path) -> None:
         """Test that multiple matches in one file are counted correctly."""
         rust_dir = tmp_path / "src"
         rust_dir.mkdir()

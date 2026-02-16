@@ -63,6 +63,22 @@ class JoinStrategy:
     filter_expr: str | None = None
     confidence: float = 1.0
 
+    def __post_init__(self) -> None:
+        """Validate join key presence and confidence bounds.
+
+        Raises:
+            ValueError: If keys are empty or confidence is outside ``[0.0, 1.0]``.
+        """
+        if not self.left_keys:
+            msg = "JoinStrategy requires non-empty left_keys."
+            raise ValueError(msg)
+        if not self.right_keys:
+            msg = "JoinStrategy requires non-empty right_keys."
+            raise ValueError(msg)
+        if not 0.0 <= self.confidence <= 1.0:
+            msg = f"JoinStrategy confidence must be in [0.0, 1.0], got {self.confidence}."
+            raise ValueError(msg)
+
     def describe(self) -> str:
         """Generate human-readable description of the strategy.
 

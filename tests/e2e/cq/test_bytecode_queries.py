@@ -24,7 +24,8 @@ MULTI_RETURN_FIRST_BRANCH_THRESHOLD = 10
 class TestInstructionFactExtraction:
     """Tests for instruction fact extraction."""
 
-    def test_extract_simple_function(self) -> None:
+    @staticmethod
+    def test_extract_simple_function() -> None:
         """Extract instruction facts from simple function."""
 
         def simple_func(x: int) -> int:
@@ -34,7 +35,8 @@ class TestInstructionFactExtraction:
         assert len(facts) > 0
         assert all(isinstance(f, InstructionFact) for f in facts)
 
-    def test_instruction_fact_fields(self) -> None:
+    @staticmethod
+    def test_instruction_fact_fields() -> None:
         """Verify instruction fact has all expected fields."""
 
         def add(a: int, b: int) -> int:
@@ -49,7 +51,8 @@ class TestInstructionFactExtraction:
         assert hasattr(first, "is_jump_target")
         assert hasattr(first, "stack_effect")
 
-    def test_opname_is_valid(self) -> None:
+    @staticmethod
+    def test_opname_is_valid() -> None:
         """Instruction opnames are valid Python opcodes."""
 
         def noop() -> None:
@@ -64,7 +67,8 @@ class TestInstructionFactExtraction:
 class TestBytecodeIndex:
     """Tests for BytecodeIndex class."""
 
-    def test_create_from_code(self) -> None:
+    @staticmethod
+    def test_create_from_code() -> None:
         """Create BytecodeIndex from code object."""
 
         def sample() -> int:
@@ -75,7 +79,8 @@ class TestBytecodeIndex:
         index = BytecodeIndex.from_code(sample.__code__)
         assert len(index.instructions) > 0
 
-    def test_filter_by_opname_exact(self) -> None:
+    @staticmethod
+    def test_filter_by_opname_exact() -> None:
         """Filter instructions by exact opname."""
 
         def with_return() -> int:
@@ -88,7 +93,8 @@ class TestBytecodeIndex:
             returns = index.filter_by_opname("RETURN_CONST")
         assert len(returns) >= 1
 
-    def test_filter_by_opname_regex(self) -> None:
+    @staticmethod
+    def test_filter_by_opname_regex() -> None:
         """Filter instructions by regex pattern."""
 
         def with_load(value: int) -> int:
@@ -98,7 +104,8 @@ class TestBytecodeIndex:
         loads = index.filter_by_opname("^LOAD", regex=True)
         assert len(loads) >= 1
 
-    def test_filter_by_stack_effect(self) -> None:
+    @staticmethod
+    def test_filter_by_stack_effect() -> None:
         """Filter instructions by stack effect."""
 
         def with_stack_ops(a: int, b: int) -> int:
@@ -111,7 +118,8 @@ class TestBytecodeIndex:
         all_with_effect = [i for i in index.instructions if i.stack_effect != 0]
         assert len(all_with_effect) >= 1
 
-    def test_jump_targets(self) -> None:
+    @staticmethod
+    def test_jump_targets() -> None:
         """Get instructions that are jump targets."""
 
         def with_branch(x: int) -> int:
@@ -128,7 +136,8 @@ class TestBytecodeIndex:
 class TestExceptionTableParsing:
     """Tests for exception table parsing."""
 
-    def test_parse_try_except(self) -> None:
+    @staticmethod
+    def test_parse_try_except() -> None:
         """Parse exception table from try-except function."""
 
         def with_try() -> float:
@@ -142,7 +151,8 @@ class TestExceptionTableParsing:
         # Just verify no crash for now
         assert isinstance(entries, list)
 
-    def test_function_without_try(self) -> None:
+    @staticmethod
+    def test_function_without_try() -> None:
         """Function without try has empty exception table."""
 
         def no_try() -> int:
@@ -156,7 +166,8 @@ class TestExceptionTableParsing:
 class TestCFGBuilder:
     """Tests for CFG construction."""
 
-    def test_build_cfg_simple(self) -> None:
+    @staticmethod
+    def test_build_cfg_simple() -> None:
         """Build CFG for simple function."""
 
         def simple() -> int:
@@ -166,7 +177,8 @@ class TestCFGBuilder:
         assert cfg.block_count >= 1
         assert cfg.entry_block == 0
 
-    def test_build_cfg_with_branch(self) -> None:
+    @staticmethod
+    def test_build_cfg_with_branch() -> None:
         """Build CFG for function with branching."""
 
         def with_branch(x: int) -> str:
@@ -178,7 +190,8 @@ class TestCFGBuilder:
         assert cfg.block_count >= MIN_CFG_BLOCKS_FOR_BRANCH  # At least 2 paths
         assert len(cfg.exit_blocks) >= 1
 
-    def test_build_cfg_with_loop(self) -> None:
+    @staticmethod
+    def test_build_cfg_with_loop() -> None:
         """Build CFG for function with loop."""
 
         def with_loop(n: int) -> int:
@@ -190,7 +203,8 @@ class TestCFGBuilder:
         cfg = build_cfg(with_loop.__code__)
         assert cfg.block_count >= MIN_CFG_BLOCKS_FOR_LOOP  # Loop creates multiple blocks
 
-    def test_cfg_mermaid_output(self) -> None:
+    @staticmethod
+    def test_cfg_mermaid_output() -> None:
         """Generate Mermaid output for CFG."""
 
         def branching(x: int) -> int:
@@ -203,7 +217,8 @@ class TestCFGBuilder:
         assert "graph TD" in mermaid
         assert "B0" in mermaid
 
-    def test_cfg_exit_blocks(self) -> None:
+    @staticmethod
+    def test_cfg_exit_blocks() -> None:
         """CFG identifies exit blocks correctly."""
 
         def multi_return(x: int) -> int:
@@ -221,8 +236,9 @@ class TestCFGBuilder:
 class TestBytecodeWithFixtures:
     """Tests using fixture files."""
 
+    @staticmethod
     @pytest.fixture
-    def fixtures_dir(self) -> Path:
+    def fixtures_dir() -> Path:
         """Get fixtures directory.
 
         Returns:
@@ -232,7 +248,8 @@ class TestBytecodeWithFixtures:
         """
         return Path(__file__).parent / "_fixtures"
 
-    def test_extract_from_control_flow_file(self, fixtures_dir: Path) -> None:
+    @staticmethod
+    def test_extract_from_control_flow_file(fixtures_dir: Path) -> None:
         """Extract bytecode from control flow fixture file."""
         control_flow_path = fixtures_dir / "control_flow.py"
         if not control_flow_path.exists():
@@ -249,7 +266,8 @@ class TestBytecodeWithFixtures:
         facts = extract_instruction_facts(code)
         assert len(facts) > 0
 
-    def test_build_cfg_from_dynamic_dispatch(self, fixtures_dir: Path) -> None:
+    @staticmethod
+    def test_build_cfg_from_dynamic_dispatch(fixtures_dir: Path) -> None:
         """Build CFG from dynamic dispatch fixture."""
         dispatch_path = fixtures_dir / "dynamic_dispatch.py"
         if not dispatch_path.exists():

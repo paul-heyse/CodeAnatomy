@@ -34,6 +34,7 @@
       "msgspec": "0.20.0",
       "python": "3.13.12",
       "rg": "<ripgrep>",
+      "rg_pcre2": "PCRE2 10.45 is available (JIT is available)",
       "sgpy": "0.40.5"
     }
   },

@@ -20,7 +20,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.macros.contracts import MacroRequestBase
+from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import macro_scoring_details, resolve_target_files
 
@@ -177,7 +177,7 @@ def _collect_scopes(root: Path, files: list[Path]) -> list[ScopeInfo]:
 def _append_scope_section(
     result: CqResult,
     all_scopes: list[ScopeInfo],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     if not all_scopes:
         return
@@ -217,7 +217,7 @@ def _append_scope_section(
 def _append_scope_evidence(
     result: CqResult,
     all_scopes: list[ScopeInfo],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     for scope in all_scopes:
         evidence_details: dict[str, object] = {}

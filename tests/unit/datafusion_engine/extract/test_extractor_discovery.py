@@ -42,23 +42,27 @@ _EXPECTED_CONFIG_KEYS: frozenset[str] = frozenset(
 class TestTemplateDiscovery:
     """Verify template discovery via public accessors."""
 
-    def test_templates_count(self) -> None:
+    @staticmethod
+    def test_templates_count() -> None:
         """Verify all expected template names resolve."""
         resolved = {key: template(key) for key in _EXPECTED_TEMPLATE_KEYS}
         assert len(resolved) == EXPECTED_TEMPLATE_COUNT
 
-    def test_templates_keys(self) -> None:
+    @staticmethod
+    def test_templates_keys() -> None:
         """Verify every expected template key resolves."""
         resolved = {key: template(key) for key in _EXPECTED_TEMPLATE_KEYS}
         assert set(resolved.keys()) == _EXPECTED_TEMPLATE_KEYS
 
-    def test_templates_types(self) -> None:
+    @staticmethod
+    def test_templates_types() -> None:
         """Verify every resolved value is an ExtractorTemplate."""
         for key in _EXPECTED_TEMPLATE_KEYS:
             tmpl = template(key)
             assert isinstance(tmpl, ExtractorTemplate), f"{key} is not ExtractorTemplate"
 
-    def test_template_name_matches_key(self) -> None:
+    @staticmethod
+    def test_template_name_matches_key() -> None:
         """Verify each template's extractor_name matches its key."""
         for key in _EXPECTED_TEMPLATE_KEYS:
             tmpl = template(key)
@@ -66,17 +70,20 @@ class TestTemplateDiscovery:
                 f"Key {key!r} != extractor_name {tmpl.extractor_name!r}"
             )
 
-    def test_template_accessor(self) -> None:
+    @staticmethod
+    def test_template_accessor() -> None:
         """Verify template() returns the correct entry."""
         for key in _EXPECTED_TEMPLATE_KEYS:
             assert template(key).extractor_name == key
 
-    def test_template_accessor_unknown_raises(self) -> None:
+    @staticmethod
+    def test_template_accessor_unknown_raises() -> None:
         """Verify template() raises KeyError for unknown names."""
         with pytest.raises(KeyError):
             template("nonexistent_extractor")
 
-    def test_evidence_ranks_unique(self) -> None:
+    @staticmethod
+    def test_evidence_ranks_unique() -> None:
         """Verify no two templates share the same evidence rank."""
         ranks = [template(key).evidence_rank for key in _EXPECTED_TEMPLATE_KEYS]
         # python_imports and python_external both have rank 7, so allow that
@@ -90,7 +97,8 @@ class TestTemplateDiscovery:
             else:
                 assert count == 1, f"Rank {rank} has {count} extractors (expected 1)"
 
-    def test_metadata_extra_populated(self) -> None:
+    @staticmethod
+    def test_metadata_extra_populated() -> None:
         """Verify all templates have non-empty metadata_extra."""
         for key in _EXPECTED_TEMPLATE_KEYS:
             tmpl = template(key)
@@ -100,23 +108,27 @@ class TestTemplateDiscovery:
 class TestConfigDiscovery:
     """Verify config discovery via public accessors."""
 
-    def test_configs_count(self) -> None:
+    @staticmethod
+    def test_configs_count() -> None:
         """Verify all expected config names resolve."""
         resolved = {key: config(key) for key in _EXPECTED_CONFIG_KEYS}
         assert len(resolved) == EXPECTED_CONFIG_COUNT
 
-    def test_configs_keys(self) -> None:
+    @staticmethod
+    def test_configs_keys() -> None:
         """Verify all expected config keys resolve."""
         resolved = {key: config(key) for key in _EXPECTED_CONFIG_KEYS}
         assert set(resolved.keys()) == _EXPECTED_CONFIG_KEYS
 
-    def test_configs_types(self) -> None:
+    @staticmethod
+    def test_configs_types() -> None:
         """Verify every resolved value is an ExtractorConfigSpec."""
         for key in _EXPECTED_CONFIG_KEYS:
             cfg = config(key)
             assert isinstance(cfg, ExtractorConfigSpec), f"{key} is not ExtractorConfigSpec"
 
-    def test_config_name_matches_key(self) -> None:
+    @staticmethod
+    def test_config_name_matches_key() -> None:
         """Verify each config's extractor_name matches its key."""
         for key in _EXPECTED_CONFIG_KEYS:
             cfg = config(key)
@@ -124,21 +136,25 @@ class TestConfigDiscovery:
                 f"Key {key!r} != extractor_name {cfg.extractor_name!r}"
             )
 
-    def test_config_accessor(self) -> None:
+    @staticmethod
+    def test_config_accessor() -> None:
         """Verify config() returns the correct entry."""
         for key in _EXPECTED_CONFIG_KEYS:
             assert config(key).extractor_name == key
 
-    def test_config_accessor_unknown_raises(self) -> None:
+    @staticmethod
+    def test_config_accessor_unknown_raises() -> None:
         """Verify config() raises KeyError for unknown names."""
         with pytest.raises(KeyError):
             config("nonexistent_extractor")
 
-    def test_configs_superset_of_templates(self) -> None:
+    @staticmethod
+    def test_configs_superset_of_templates() -> None:
         """Verify every template key has a corresponding config."""
         assert _EXPECTED_TEMPLATE_KEYS.issubset(_EXPECTED_CONFIG_KEYS)
 
-    def test_extra_config_entries(self) -> None:
+    @staticmethod
+    def test_extra_config_entries() -> None:
         """Verify the config-only entries (no template) exist."""
         config_only = _EXPECTED_CONFIG_KEYS - _EXPECTED_TEMPLATE_KEYS
         assert config_only == {"repo_blobs", "file_line_index_v1"}

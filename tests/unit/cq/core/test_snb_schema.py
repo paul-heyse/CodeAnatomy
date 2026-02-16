@@ -43,8 +43,8 @@ def test_degrade_event_v1_construction() -> None:
     event = DegradeEventV1(stage="semantic.rust")
     assert event.stage == "semantic.rust"
     assert event.severity == "warning"
-    assert event.category == ""
-    assert event.message == ""
+    assert not event.category
+    assert not event.message
     assert event.correlation_key is None
 
 
@@ -69,8 +69,8 @@ def test_semantic_node_ref_v1_construction() -> None:
     assert node.node_id == "node-123"
     assert node.kind == "function"
     assert node.name == "build_graph"
-    assert node.display_label == ""
-    assert node.file_path == ""
+    assert not node.display_label
+    assert not node.file_path
     assert node.byte_span is None
     assert node.signature is None
     assert node.qualname is None
@@ -106,7 +106,7 @@ def test_semantic_edge_v1_construction() -> None:
     assert edge.target_node_id == "node-2"
     assert edge.edge_kind == "calls"
     assert edge.weight == 1.0
-    assert edge.evidence_source == ""
+    assert not edge.evidence_source
     assert edge.metadata is None
 
 
@@ -177,8 +177,8 @@ def test_semantic_neighborhood_bundle_ref_v1_construction() -> None:
     assert bundle_ref.byte_size == 0
     assert bundle_ref.artifact_path is None
     assert bundle_ref.preview_slices == ()
-    assert bundle_ref.subject_node_id == ""
-    assert bundle_ref.subject_label == ""
+    assert not bundle_ref.subject_node_id
+    assert not bundle_ref.subject_label
 
 
 def test_bundle_meta_v1_construction() -> None:
@@ -245,7 +245,7 @@ def test_semantic_neighborhood_bundle_v1_canonical_fields() -> None:
     # Canonical fields must exist
     assert bundle.bundle_id == "bundle-123"
     assert bundle.subject is None
-    assert bundle.subject_label == ""
+    assert not bundle.subject_label
     assert bundle.meta is None
     assert bundle.slices == ()
     assert bundle.graph is None

@@ -37,7 +37,8 @@ def _assert_no_panic_leak(exc: Exception) -> None:
 class TestDeltaProviderPanicContainment:
     """Verify Delta provider construction contains FFI failures."""
 
-    def test_bad_uri_yields_structured_error(self) -> None:
+    @staticmethod
+    def test_bad_uri_yields_structured_error() -> None:
         """Verify invalid Delta URI produces structured error, not panic.
 
         Given an invalid Delta table URI, delta_provider_from_session()
@@ -67,7 +68,8 @@ class TestDeltaProviderPanicContainment:
         else:
             pytest.fail("Expected structured provider error for invalid Delta URI.")
 
-    def test_corrupt_metadata_yields_structured_error(self, tmp_path: object) -> None:
+    @staticmethod
+    def test_corrupt_metadata_yields_structured_error(tmp_path: object) -> None:
         """Verify corrupt Delta metadata produces structured error.
 
         Creating a directory that looks like a Delta table but has
@@ -105,7 +107,8 @@ class TestDeltaProviderPanicContainment:
         else:
             pytest.fail("Expected structured provider error for corrupt Delta metadata.")
 
-    def test_provider_request_is_frozen(self) -> None:
+    @staticmethod
+    def test_provider_request_is_frozen() -> None:
         """Verify DeltaProviderRequest is immutable."""
         from datafusion_engine.delta.control_plane import DeltaProviderRequest
 

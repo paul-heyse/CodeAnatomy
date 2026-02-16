@@ -18,14 +18,16 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
+from tools.cq.core.structs import CqStruct
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.scan import ScanContext
 from tools.cq.query.shared_utils import extract_def_name
 
 if TYPE_CHECKING:
-    from tools.cq.core.structs import CqStruct
     from tools.cq.query.execution_requests import DefQueryContext
     from tools.cq.query.ir import Query
+
+MAX_RELATIONSHIP_DETAIL_RECORDS = 50
 
 
 class DefQueryRelationshipPolicyV1(CqStruct, frozen=True):  # type: ignore[misc]
@@ -147,14 +149,14 @@ def build_def_relationship_policy(
     matching_records
         Matching definition records
 
-    Returns
+    Returns:
     -------
     DefQueryRelationshipPolicyV1
         Relationship policy
     """
     has_scope_constraints = bool(query.scope.in_dir or query.scope.exclude or query.scope.globs)
     compute_relationship_details = (
-        len(matching_records) <= 50
+        len(matching_records) <= MAX_RELATIONSHIP_DETAIL_RECORDS
         or query.name is not None
         or has_scope_constraints
         or "callers" in query.fields
@@ -216,7 +218,7 @@ def definition_relationship_detail(
     policy
         Relationship policy
 
-    Returns
+    Returns:
     -------
     tuple[list[SgRecord], int, str]
         Calls within, caller count, enclosing scope
@@ -266,7 +268,7 @@ def filter_to_matching(
     query
         Query with filters
 
-    Returns
+    Returns:
     -------
     list[SgRecord]
         Records that match the query filters
@@ -297,7 +299,7 @@ def matches_entity(record: SgRecord, entity: str | None) -> bool:
     entity
         Entity type filter
 
-    Returns
+    Returns:
     -------
     bool
         True if the record matches the entity type
@@ -361,7 +363,7 @@ def matches_name(record: SgRecord, name: str) -> bool:
     name
         Name pattern (supports ~regex)
 
-    Returns
+    Returns:
     -------
     bool
         True if the record matches the name pattern
@@ -396,7 +398,7 @@ def import_match_key(import_record: SgRecord) -> tuple[str, int, int, int, int, 
     import_record
         Import record
 
-    Returns
+    Returns:
     -------
     tuple[str, int, int, int, int, str]
         Dedupe key
@@ -419,7 +421,7 @@ def dedupe_import_matches(import_records: list[SgRecord]) -> list[SgRecord]:
     import_records
         Import records to dedupe
 
-    Returns
+    Returns:
     -------
     list[SgRecord]
         Deduped records
@@ -443,7 +445,7 @@ def extract_import_name(record: SgRecord) -> str | None:
     record
         Import record
 
-    Returns
+    Returns:
     -------
     str | None
         Imported name or module name when extractable
@@ -474,7 +476,7 @@ def extract_simple_import(text: str) -> str | None:
     text
         Import statement text
 
-    Returns
+    Returns:
     -------
     str | None
         Imported module name when found
@@ -494,7 +496,7 @@ def extract_import_alias(text: str) -> str | None:
     text
         Import statement text
 
-    Returns
+    Returns:
     -------
     str | None
         Alias name when found
@@ -512,7 +514,7 @@ def extract_from_import(text: str) -> str | None:
     text
         Import statement text
 
-    Returns
+    Returns:
     -------
     str | None
         Imported name or module name when extractable
@@ -534,7 +536,7 @@ def extract_from_import_alias(text: str) -> str | None:
     text
         Import statement text
 
-    Returns
+    Returns:
     -------
     str | None
         Alias name when found
@@ -552,7 +554,7 @@ def extract_from_module(text: str) -> str | None:
     text
         Import statement text
 
-    Returns
+    Returns:
     -------
     str | None
         Module name when found
@@ -570,7 +572,7 @@ def extract_rust_use_name(text: str) -> str | None:
     text
         Use declaration text
 
-    Returns
+    Returns:
     -------
     str | None
         Imported Rust symbol name or alias when extractable
@@ -608,7 +610,7 @@ def def_to_finding(
     enclosing_scope
         Enclosing scope name
 
-    Returns
+    Returns:
     -------
     Finding
         Finding describing the definition record
@@ -662,7 +664,7 @@ def import_to_finding(import_record: SgRecord) -> Finding:
     import_record
         Import record
 
-    Returns
+    Returns:
     -------
     Finding
         Finding describing the import record
@@ -705,24 +707,24 @@ def import_to_finding(import_record: SgRecord) -> Finding:
 
 __all__ = [
     "DefQueryRelationshipPolicyV1",
-    "process_import_query",
-    "process_def_query",
-    "build_def_relationship_policy",
     "append_definition_findings",
-    "definition_relationship_detail",
-    "finalize_def_query_summary",
-    "filter_to_matching",
-    "matches_entity",
-    "matches_name",
-    "import_match_key",
+    "build_def_relationship_policy",
     "dedupe_import_matches",
-    "extract_import_name",
-    "extract_simple_import",
-    "extract_import_alias",
+    "def_to_finding",
+    "definition_relationship_detail",
     "extract_from_import",
     "extract_from_import_alias",
     "extract_from_module",
+    "extract_import_alias",
+    "extract_import_name",
     "extract_rust_use_name",
-    "def_to_finding",
+    "extract_simple_import",
+    "filter_to_matching",
+    "finalize_def_query_summary",
+    "import_match_key",
     "import_to_finding",
+    "matches_entity",
+    "matches_name",
+    "process_def_query",
+    "process_import_query",
 ]

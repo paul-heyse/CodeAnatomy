@@ -22,7 +22,7 @@ from schema_spec.contracts import (
     dataset_spec_delta_write_policy,
 )
 from semantics.catalog.dataset_specs import dataset_spec
-from semantics.pipeline import SemanticOutputWriteContext, _write_semantic_output
+from semantics.output_materialization import SemanticOutputWriteContext, write_semantic_output
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -122,7 +122,7 @@ def test_write_semantic_output_applies_write_policy_and_schema_policy(
         schema_policy=SchemaEvolutionPolicy(),
     )
 
-    _write_semantic_output(
+    write_semantic_output(
         view_name=view_name,
         output_location=location,
         write_context=write_context,
@@ -192,7 +192,7 @@ def test_write_semantic_output_disables_schema_evolution(
         schema_policy=SchemaEvolutionPolicy(),
     )
 
-    _write_semantic_output(
+    write_semantic_output(
         view_name=view_name,
         output_location=location,
         write_context=write_context,

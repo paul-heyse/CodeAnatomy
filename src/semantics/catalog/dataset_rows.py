@@ -268,10 +268,17 @@ def dataset_names_by_category(category: DatasetCategory) -> tuple[str, ...]:
     return tuple(row.name for row in _get_semantic_dataset_rows() if row.category == category)
 
 
+def _reset_cache() -> None:
+    """Reset module-level dataset row caches. For testing only."""
+    _SEMANTIC_DATASET_ROWS_CACHE.rows = None
+    _SEMANTIC_DATASET_ROWS_CACHE.rows_by_name = None
+
+
 __all__ = [
     "SEMANTIC_SCHEMA_VERSION",
     "DatasetCategory",
     "SemanticDatasetRow",
+    "_reset_cache",
     "dataset_names",
     "dataset_names_by_category",
     "dataset_row",

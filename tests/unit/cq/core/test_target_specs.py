@@ -56,7 +56,7 @@ def test_parse_symbol_form() -> None:
 def test_parse_empty_string() -> None:
     """Test parsing empty string."""
     spec = parse_target_spec("")
-    assert spec.raw == ""
+    assert not spec.raw
     assert spec.target_name is None
     assert spec.target_file is None
 

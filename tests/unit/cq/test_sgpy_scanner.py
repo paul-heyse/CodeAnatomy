@@ -29,7 +29,8 @@ TWO_RECORDS = 2
 class TestRuleSpec:
     """Tests for RuleSpec dataclass."""
 
-    def test_to_config_returns_rule_dict(self) -> None:
+    @staticmethod
+    def test_to_config_returns_rule_dict() -> None:
         """to_config should return the rule portion of config."""
         spec = RuleSpec(
             rule_id="test_rule",
@@ -40,7 +41,8 @@ class TestRuleSpec:
         config = spec.to_config()
         assert config == {"kind": "function_definition"}
 
-    def test_to_config_empty_config(self) -> None:
+    @staticmethod
+    def test_to_config_empty_config() -> None:
         """to_config should handle empty config."""
         spec = RuleSpec(
             rule_id="test_rule",
@@ -55,7 +57,8 @@ class TestRuleSpec:
 class TestSgRecord:
     """Tests for SgRecord dataclass."""
 
-    def test_location_property(self) -> None:
+    @staticmethod
+    def test_location_property() -> None:
         """Location property should return file:line:col format."""
         record = SgRecord(
             record="def",
@@ -74,7 +77,8 @@ class TestSgRecord:
 class TestScanFiles:
     """Tests for scan_files function."""
 
-    def test_scan_empty_file(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_scan_empty_file(tmp_path: Path) -> None:
         """Scanning an empty file should return empty list."""
         test_file = tmp_path / "empty.py"
         test_file.write_text("", encoding="utf-8")
@@ -82,7 +86,8 @@ class TestScanFiles:
         records = scan_files([test_file], (PY_DEF_FUNCTION,), tmp_path)
         assert records == []
 
-    def test_scan_function_definition(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_scan_function_definition(tmp_path: Path) -> None:
         """Scanning should find function definitions."""
         test_file = tmp_path / "funcs.py"
         test_file.write_text("def foo():\n    pass\n", encoding="utf-8")
@@ -93,7 +98,8 @@ class TestScanFiles:
         assert records[0].record == "def"
         assert records[0].start_line == 1
 
-    def test_scan_class_definition(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_scan_class_definition(tmp_path: Path) -> None:
         """Scanning should find class definitions."""
         test_file = tmp_path / "classes.py"
         test_file.write_text("class Foo:\n    pass\n", encoding="utf-8")
@@ -103,7 +109,8 @@ class TestScanFiles:
         assert records[0].kind == "class"
         assert records[0].record == "def"
 
-    def test_scan_imports(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_scan_imports(tmp_path: Path) -> None:
         """Scanning should find import statements."""
         test_file = tmp_path / "imports.py"
         test_file.write_text("import os\n", encoding="utf-8")
@@ -112,7 +119,8 @@ class TestScanFiles:
         assert len(records) == 1
         assert records[0].record == "import"
 
-    def test_scan_calls(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_scan_calls(tmp_path: Path) -> None:
         """Scanning should find function calls."""
         test_file = tmp_path / "calls.py"
         test_file.write_text("print('hello')\n", encoding="utf-8")
@@ -121,7 +129,8 @@ class TestScanFiles:
         assert len(records) == 1
         assert records[0].record == "call"
 
-    def test_scan_line_number_conversion(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_scan_line_number_conversion(tmp_path: Path) -> None:
         """Line numbers should be 1-indexed."""
         test_file = tmp_path / "lines.py"
         test_file.write_text("\n\ndef foo():\n    pass\n", encoding="utf-8")
@@ -131,7 +140,8 @@ class TestScanFiles:
         # Function is on line 3 (1-indexed)
         assert records[0].start_line == FUNCTION_LINE_NUMBER
 
-    def test_scan_unicode_file(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_scan_unicode_file(tmp_path: Path) -> None:
         """Scanning should handle unicode content."""
         test_file = tmp_path / "unicode.py"
         test_file.write_text("def greet():\n    return '\u4f60\u597d'\n", encoding="utf-8")
@@ -139,13 +149,15 @@ class TestScanFiles:
         records = scan_files([test_file], (PY_DEF_FUNCTION,), tmp_path)
         assert len(records) == 1
 
-    def test_scan_malformed_file_skip(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_scan_malformed_file_skip(tmp_path: Path) -> None:
         """Scanning should skip files that can't be read."""
         nonexistent = tmp_path / "nonexistent.py"
         records = scan_files([nonexistent], (PY_DEF_FUNCTION,), tmp_path)
         assert records == []
 
-    def test_scan_multiple_files(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_scan_multiple_files(tmp_path: Path) -> None:
         """Scanning should process multiple files."""
         file1 = tmp_path / "a.py"
         file1.write_text("def foo(): pass\n", encoding="utf-8")
@@ -159,7 +171,8 @@ class TestScanFiles:
 class TestScanWithPattern:
     """Tests for scan_with_pattern function."""
 
-    def test_simple_pattern_match(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_simple_pattern_match(tmp_path: Path) -> None:
         """scan_with_pattern should find pattern matches."""
         test_file = tmp_path / "test.py"
         test_file.write_text("print('hello')\n", encoding="utf-8")
@@ -169,7 +182,8 @@ class TestScanWithPattern:
         assert "range" in matches[0]
         assert "text" in matches[0]
 
-    def test_pattern_with_metavar(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_pattern_with_metavar(tmp_path: Path) -> None:
         """scan_with_pattern should capture metavariables."""
         test_file = tmp_path / "test.py"
         test_file.write_text("print('hello')\n", encoding="utf-8")
@@ -180,7 +194,8 @@ class TestScanWithPattern:
         assert "metaVariables" in matches[0]
         assert "$A" in matches[0]["metaVariables"]
 
-    def test_pattern_with_variadic_metavar(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_pattern_with_variadic_metavar(tmp_path: Path) -> None:
         """scan_with_pattern should capture variadic metavariables."""
         test_file = tmp_path / "test.py"
         test_file.write_text("print(1, 2)\n", encoding="utf-8")
@@ -197,7 +212,8 @@ class TestScanWithPattern:
 class TestFilterRecordsByType:
     """Tests for filter_records_by_type function."""
 
-    def test_filter_none_returns_all(self) -> None:
+    @staticmethod
+    def test_filter_none_returns_all() -> None:
         """None filter should return all records."""
         records = [
             SgRecord("def", "function", "test.py", 1, 0, 2, 0, "def f(): pass", "py_def_function"),
@@ -206,7 +222,8 @@ class TestFilterRecordsByType:
         filtered = filter_records_by_type(records, None)
         assert len(filtered) == TWO_RECORDS
 
-    def test_filter_by_type(self) -> None:
+    @staticmethod
+    def test_filter_by_type() -> None:
         """Should filter to specified types."""
         records = [
             SgRecord("def", "function", "test.py", 1, 0, 2, 0, "def f(): pass", "py_def_function"),
@@ -221,7 +238,8 @@ class TestFilterRecordsByType:
 class TestGroupRecordsByFile:
     """Tests for group_records_by_file function."""
 
-    def test_group_by_file(self) -> None:
+    @staticmethod
+    def test_group_by_file() -> None:
         """Should group records by file path."""
         records = [
             SgRecord("def", "function", "a.py", 1, 0, 2, 0, "def f(): pass", "py_def_function"),

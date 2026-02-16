@@ -20,7 +20,8 @@ SECTIONS_WITH_PREVIEW = 3
 class TestInsertTargetCandidates:
     """Tests for insert_target_candidates."""
 
-    def test_inserts_at_top_when_candidates_exist(self) -> None:
+    @staticmethod
+    def test_inserts_at_top_when_candidates_exist() -> None:
         """Verify section is inserted at position 0."""
         sections: list[Section] = [Section(title="Existing", findings=[])]
         candidates = [Finding(category="definition", message="candidate")]
@@ -28,7 +29,8 @@ class TestInsertTargetCandidates:
         assert sections[0].title == "Target Candidates"
         assert len(sections) == SECTIONS_WITH_CANDIDATES
 
-    def test_noop_when_no_candidates(self) -> None:
+    @staticmethod
+    def test_noop_when_no_candidates() -> None:
         """Verify no insertion when candidates list is empty."""
         sections: list[Section] = [Section(title="Existing", findings=[])]
         insert_target_candidates(sections, candidates=[])
@@ -38,7 +40,8 @@ class TestInsertTargetCandidates:
 class TestInsertNeighborhoodPreview:
     """Tests for insert_neighborhood_preview."""
 
-    def test_inserts_after_candidates(self) -> None:
+    @staticmethod
+    def test_inserts_after_candidates() -> None:
         """Verify insertion at index 1 when target candidates present."""
         sections: list[Section] = [
             Section(title="Target Candidates", findings=[]),
@@ -52,7 +55,8 @@ class TestInsertNeighborhoodPreview:
         assert sections[1].title == "Neighborhood Preview"
         assert len(sections) == SECTIONS_WITH_PREVIEW
 
-    def test_inserts_at_top_when_no_candidates(self) -> None:
+    @staticmethod
+    def test_inserts_at_top_when_no_candidates() -> None:
         """Verify insertion at index 0 when no target candidates."""
         sections: list[Section] = [Section(title="Other", findings=[])]
         insert_neighborhood_preview(
@@ -62,7 +66,8 @@ class TestInsertNeighborhoodPreview:
         )
         assert sections[0].title == "Neighborhood Preview"
 
-    def test_noop_when_no_findings(self) -> None:
+    @staticmethod
+    def test_noop_when_no_findings() -> None:
         """Verify no insertion when findings list is empty."""
         sections: list[Section] = [Section(title="Other", findings=[])]
         insert_neighborhood_preview(
@@ -76,7 +81,8 @@ class TestInsertNeighborhoodPreview:
 class TestSearchPipeline:
     """Tests for SearchPipeline facade."""
 
-    def test_execute_runs_partition_then_assembly(self) -> None:
+    @staticmethod
+    def test_execute_runs_partition_then_assembly() -> None:
         """Verify execute composes run_partitions and assemble."""
         context = cast("SearchConfig", object())
         pipeline = SearchPipeline(context=context)
@@ -110,7 +116,8 @@ class TestSearchPipeline:
 class TestAssembleResult:
     """Tests for assemble_result bridge function."""
 
-    def test_delegates_to_legacy_pipeline(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @staticmethod
+    def test_delegates_to_legacy_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
         """Verify assemble_result wires through SearchPipeline."""
         from tools.cq.search.pipeline import orchestration as orch_module
         from tools.cq.search.pipeline.smart_search import SearchResultAssembly

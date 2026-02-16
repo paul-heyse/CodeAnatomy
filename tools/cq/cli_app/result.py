@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.artifacts import (
     save_artifact_json,
@@ -168,7 +168,7 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
         return non_cq_exit
 
     ctx = cli_result.context
-    result = cli_result.result
+    result = cast("CqResult", cli_result.result)
 
     # Use context settings or defaults
     output_format = ctx.output_format if ctx.output_format else OutputFormat.md

@@ -101,6 +101,16 @@ class SemanticIncrementalConfig:
     git_head_ref: str | None = None
     git_changed_only: bool = False
 
+    def __post_init__(self) -> None:
+        """Validate required state when incremental mode is enabled.
+
+        Raises:
+            ValueError: If ``enabled`` is true and ``state_dir`` is missing.
+        """
+        if self.enabled and self.state_dir is None:
+            msg = "SemanticIncrementalConfig: state_dir is required when enabled=True."
+            raise ValueError(msg)
+
     @property
     def cursor_store_path(self) -> Path | None:
         """Return the path to the cursor store directory.

@@ -24,7 +24,8 @@ class _StubDataFrame:
 
 
 class _ExplodingContext:
-    def table(self, _name: str) -> _StubDataFrame:
+    @staticmethod
+    def table(_name: str) -> _StubDataFrame:
         msg = "table() should not be called for non-nested datasets"
         raise AssertionError(msg)
 

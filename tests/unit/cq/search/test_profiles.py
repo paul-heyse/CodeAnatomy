@@ -32,7 +32,8 @@ PARTIAL_OVERRIDE_MAX_FILES = 500
 class TestSearchLimitsDataclass:
     """Test SearchLimits dataclass behavior."""
 
-    def test_defaults(self) -> None:
+    @staticmethod
+    def test_defaults() -> None:
         """Test SearchLimits creates with expected defaults."""
         limits = SearchLimits()
         assert limits.max_files == DEFAULT_MAX_FILES
@@ -40,7 +41,8 @@ class TestSearchLimitsDataclass:
         assert limits.max_total_matches == DEFAULT_MAX_TOTAL_MATCHES
         assert limits.timeout_seconds == DEFAULT_TIMEOUT_SECONDS
 
-    def test_custom_values(self) -> None:
+    @staticmethod
+    def test_custom_values() -> None:
         """Test creating SearchLimits with custom values."""
         limits = SearchLimits(
             max_files=CUSTOM_MAX_FILES,
@@ -53,7 +55,8 @@ class TestSearchLimitsDataclass:
         assert limits.max_total_matches == CUSTOM_MAX_TOTAL_MATCHES
         assert limits.timeout_seconds == CUSTOM_TIMEOUT_SECONDS
 
-    def test_partial_override(self) -> None:
+    @staticmethod
+    def test_partial_override() -> None:
         """Test overriding only some fields."""
         limits = SearchLimits(max_files=PARTIAL_OVERRIDE_MAX_FILES)
         assert limits.max_files == PARTIAL_OVERRIDE_MAX_FILES
@@ -66,7 +69,8 @@ class TestSearchLimitsDataclass:
 class TestPresetProfiles:
     """Test predefined search limit presets."""
 
-    def test_default_preset(self) -> None:
+    @staticmethod
+    def test_default_preset() -> None:
         """Test DEFAULT has expected values."""
         assert isinstance(DEFAULT, SearchLimits)
         assert DEFAULT.max_files == DEFAULT_MAX_FILES
@@ -74,7 +78,8 @@ class TestPresetProfiles:
         assert DEFAULT.max_total_matches == DEFAULT_MAX_TOTAL_MATCHES
         assert DEFAULT.timeout_seconds == DEFAULT_TIMEOUT_SECONDS
 
-    def test_interactive_preset(self) -> None:
+    @staticmethod
+    def test_interactive_preset() -> None:
         """Test INTERACTIVE is optimized for quick response."""
         assert isinstance(INTERACTIVE, SearchLimits)
         assert INTERACTIVE.max_files == INTERACTIVE_MAX_FILES
@@ -82,7 +87,8 @@ class TestPresetProfiles:
         # Should be faster than default
         assert INTERACTIVE.timeout_seconds <= DEFAULT.timeout_seconds
 
-    def test_audit_preset(self) -> None:
+    @staticmethod
+    def test_audit_preset() -> None:
         """Test AUDIT allows comprehensive searches."""
         assert isinstance(AUDIT, SearchLimits)
         assert AUDIT.max_files == AUDIT_MAX_FILES
@@ -92,13 +98,15 @@ class TestPresetProfiles:
         assert AUDIT.max_files >= DEFAULT.max_files
         assert AUDIT.timeout_seconds >= DEFAULT.timeout_seconds
 
-    def test_literal_preset(self) -> None:
+    @staticmethod
+    def test_literal_preset() -> None:
         """Test LITERAL is optimized for literal searches."""
         assert isinstance(LITERAL, SearchLimits)
         assert LITERAL.max_files == LITERAL_MAX_FILES
         assert LITERAL.max_matches_per_file == LITERAL_MAX_MATCHES_PER_FILE
 
-    def test_all_presets_valid(self) -> None:
+    @staticmethod
+    def test_all_presets_valid() -> None:
         """Test all presets have valid positive values."""
         presets = [DEFAULT, INTERACTIVE, AUDIT, LITERAL]
         for preset in presets:
@@ -111,16 +119,19 @@ class TestPresetProfiles:
 class TestPresetComparison:
     """Test relationships between different presets."""
 
-    def test_interactive_faster_than_default(self) -> None:
+    @staticmethod
+    def test_interactive_faster_than_default() -> None:
         """Test INTERACTIVE has tighter timeout than DEFAULT."""
         assert INTERACTIVE.timeout_seconds <= DEFAULT.timeout_seconds
 
-    def test_audit_more_permissive_than_default(self) -> None:
+    @staticmethod
+    def test_audit_more_permissive_than_default() -> None:
         """Test AUDIT allows more results and time than DEFAULT."""
         assert AUDIT.max_total_matches >= DEFAULT.max_total_matches
         assert AUDIT.timeout_seconds >= DEFAULT.timeout_seconds
 
-    def test_presets_are_distinct(self) -> None:
+    @staticmethod
+    def test_presets_are_distinct() -> None:
         """Test each preset is a separate instance."""
         assert DEFAULT is not INTERACTIVE
         assert DEFAULT is not AUDIT

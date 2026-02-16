@@ -57,25 +57,29 @@ _BASE_DATASET_NAMES: tuple[str, ...] = (
 class TestMetadataEnrichment:
     """Verify that field_types and nested_shapes are present after template expansion."""
 
+    @staticmethod
     @pytest.mark.parametrize("dataset_name", _BASE_DATASET_NAMES)
-    def test_field_types_populated(self, dataset_name: str) -> None:
+    def test_field_types_populated(dataset_name: str) -> None:
         """Verify field_types mapping is non-empty for base datasets."""
         metadata = extract_metadata_by_name()[dataset_name]
         assert metadata.field_types, f"{dataset_name}: field_types is empty"
 
+    @staticmethod
     @pytest.mark.parametrize("dataset_name", _BASE_DATASET_NAMES)
-    def test_fields_populated(self, dataset_name: str) -> None:
+    def test_fields_populated(dataset_name: str) -> None:
         """Verify fields tuple is non-empty for base datasets."""
         metadata = extract_metadata_by_name()[dataset_name]
         assert metadata.fields, f"{dataset_name}: fields is empty"
 
+    @staticmethod
     @pytest.mark.parametrize("dataset_name", _BASE_DATASET_NAMES)
-    def test_field_types_cover_fields(self, dataset_name: str) -> None:
+    def test_field_types_cover_fields(dataset_name: str) -> None:
         """Verify every field name has a corresponding field_type entry."""
         metadata = extract_metadata_by_name()[dataset_name]
         missing = set(metadata.fields) - set(metadata.field_types)
         assert not missing, f"{dataset_name}: fields without field_types: {sorted(missing)}"
 
+    @staticmethod
     @pytest.mark.parametrize(
         "dataset_name",
         [
@@ -87,12 +91,13 @@ class TestMetadataEnrichment:
             "scip_index_v1",
         ],
     )
-    def test_nested_shapes_populated(self, dataset_name: str) -> None:
+    def test_nested_shapes_populated(dataset_name: str) -> None:
         """Verify nested_shapes is non-empty for datasets with nested columns."""
         metadata = extract_metadata_by_name()[dataset_name]
         assert metadata.nested_shapes, f"{dataset_name}: nested_shapes is empty"
 
-    def test_repo_files_no_nested_shapes(self) -> None:
+    @staticmethod
+    def test_repo_files_no_nested_shapes() -> None:
         """Verify repo_files_v1 has empty nested_shapes (all scalar columns)."""
         metadata = extract_metadata_by_name()["repo_files_v1"]
         assert not metadata.nested_shapes
@@ -106,8 +111,9 @@ class TestMetadataEnrichment:
 class TestSchemaDerivationParity:
     """Compare derived schemas against canonical registry schemas."""
 
+    @staticmethod
     @pytest.mark.parametrize("dataset_name", _BASE_DATASET_NAMES)
-    def test_field_names_match(self, dataset_name: str) -> None:
+    def test_field_names_match(dataset_name: str) -> None:
         """Verify derived schema field names match canonical schema field names."""
         metadata = extract_metadata_by_name()[dataset_name]
         static_schema = extract_schema_for(dataset_name)
@@ -120,8 +126,9 @@ class TestSchemaDerivationParity:
             f"  Static:  {static_schema.names}"
         )
 
+    @staticmethod
     @pytest.mark.parametrize("dataset_name", _BASE_DATASET_NAMES)
-    def test_field_count_match(self, dataset_name: str) -> None:
+    def test_field_count_match(dataset_name: str) -> None:
         """Verify derived schema has same number of fields as canonical schema."""
         metadata = extract_metadata_by_name()[dataset_name]
         static_schema = extract_schema_for(dataset_name)
@@ -133,8 +140,9 @@ class TestSchemaDerivationParity:
             f"Derived={len(derived_schema)}, Static={len(static_schema)}"
         )
 
+    @staticmethod
     @pytest.mark.parametrize("dataset_name", _BASE_DATASET_NAMES)
-    def test_type_categories_match(self, dataset_name: str) -> None:
+    def test_type_categories_match(dataset_name: str) -> None:
         """Verify each field's top-level type category matches."""
         metadata = extract_metadata_by_name()[dataset_name]
         static_schema = extract_schema_for(dataset_name)
@@ -164,8 +172,9 @@ class TestSchemaDerivationParity:
 class TestNestedShapesParity:
     """Verify nested_shapes child field names match static schema struct fields."""
 
+    @staticmethod
     @pytest.mark.parametrize("dataset_name", _BASE_DATASET_NAMES)
-    def test_nested_shapes_field_names(self, dataset_name: str) -> None:
+    def test_nested_shapes_field_names(dataset_name: str) -> None:
         """Verify nested shape child names match struct field names in schema."""
         metadata = extract_metadata_by_name()[dataset_name]
         static_schema = extract_schema_for(dataset_name)

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from ast_grep_py import SgNode, SgRoot
-from tools.cq.search.python.extractors import (
-    _classify_function_role_by_parent,
+from tools.cq.search.python.extractors_classification import (
     _unwrap_decorated,
+)
+from tools.cq.search.python.extractors_classification import (
+    classify_function_role_by_parent as _classify_function_role_by_parent,
 )
 
 

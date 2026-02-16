@@ -29,7 +29,6 @@ def _cache_env(tmp_path: Path) -> Generator[None]:
     os.environ.pop("CQ_CACHE_DIR", None)
 
 
-
 def test_pattern_fragment_cache_uses_content_hash_for_freshness(tmp_path: Path) -> None:
     """Use content hash changes to drive cache misses for pattern fragments."""
     root = tmp_path / "repo"

@@ -8,7 +8,7 @@ from pathlib import Path
 from tools.cq.cli_app.commands.ldmd import get as ldmd_get
 from tools.cq.cli_app.commands.ldmd import neighbors as ldmd_neighbors
 from tools.cq.cli_app.context import CliContext, CliTextResult
-from tools.cq.cli_app.types import OutputFormat
+from tools.cq.cli_app.types import LdmdSliceMode, OutputFormat
 
 
 def _write_ldmd(path: Path) -> None:
@@ -36,7 +36,7 @@ def test_ldmd_get_json_returns_structured_payload(tmp_path: Path) -> None:
     cli_result = ldmd_get(
         str(ldmd_path),
         section_id="root",
-        mode="preview",
+        mode=LdmdSliceMode.preview,
         depth=1,
         ctx=ctx,
     )

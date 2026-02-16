@@ -44,7 +44,8 @@ def _make_result(
 class TestMermaidFlowchart:
     """Tests for Mermaid flowchart rendering."""
 
-    def test_empty_result(self) -> None:
+    @staticmethod
+    def test_empty_result() -> None:
         """Render empty result produces valid Mermaid."""
         result = _make_result()
         output = render_mermaid_flowchart(result)
@@ -53,7 +54,8 @@ class TestMermaidFlowchart:
         assert "flowchart TD" in output
         assert "```" in output
 
-    def test_single_function(self) -> None:
+    @staticmethod
+    def test_single_function() -> None:
         """Render single function definition."""
         finding = Finding(
             category="definition",
@@ -66,7 +68,8 @@ class TestMermaidFlowchart:
 
         assert "foo[foo]" in output
 
-    def test_caller_callee_edge(self) -> None:
+    @staticmethod
+    def test_caller_callee_edge() -> None:
         """Render caller-callee edge into DOT when callers section is present."""
         definition = Finding(
             category="definition",
@@ -86,7 +89,8 @@ class TestMermaidFlowchart:
 
         assert "bar --> foo" in output
 
-    def test_sanitizes_special_chars(self) -> None:
+    @staticmethod
+    def test_sanitizes_special_chars() -> None:
         """Sanitize special characters in node IDs."""
         finding = Finding(
             category="definition",
@@ -104,7 +108,8 @@ class TestMermaidFlowchart:
 class TestMermaidClassDiagram:
     """Tests for Mermaid class diagram rendering."""
 
-    def test_empty_result(self) -> None:
+    @staticmethod
+    def test_empty_result() -> None:
         """Render empty result produces valid Mermaid."""
         result = _make_result()
         output = render_mermaid_class_diagram(result)
@@ -113,7 +118,8 @@ class TestMermaidClassDiagram:
         assert "classDiagram" in output
         assert "```" in output
 
-    def test_single_class(self) -> None:
+    @staticmethod
+    def test_single_class() -> None:
         """Render single class definition."""
         finding = Finding(
             category="definition",
@@ -126,7 +132,8 @@ class TestMermaidClassDiagram:
 
         assert "class MyClass" in output
 
-    def test_function_as_stereotype(self) -> None:
+    @staticmethod
+    def test_function_as_stereotype() -> None:
         """Render function with stereotype when no classes."""
         finding = Finding(
             category="definition",
@@ -143,7 +150,8 @@ class TestMermaidClassDiagram:
 class TestDotRenderer:
     """Tests for DOT graph rendering."""
 
-    def test_empty_result(self) -> None:
+    @staticmethod
+    def test_empty_result() -> None:
         """Render empty result produces valid DOT."""
         result = _make_result()
         output = render_dot(result)
@@ -153,14 +161,16 @@ class TestDotRenderer:
         assert "{" in output
         assert "}" in output
 
-    def test_custom_graph_name(self) -> None:
+    @staticmethod
+    def test_custom_graph_name() -> None:
         """Render with custom graph name."""
         result = _make_result()
         output = render_dot(result, graph_name="my_graph")
 
         assert 'digraph "my_graph"' in output
 
-    def test_single_function(self) -> None:
+    @staticmethod
+    def test_single_function() -> None:
         """Render single function definition."""
         finding = Finding(
             category="definition",
@@ -174,7 +184,8 @@ class TestDotRenderer:
         assert 'foo [label="foo"' in output
         assert "shape=box" in output
 
-    def test_class_shape(self) -> None:
+    @staticmethod
+    def test_class_shape() -> None:
         """Render class with ellipse shape."""
         finding = Finding(
             category="definition",
@@ -187,7 +198,8 @@ class TestDotRenderer:
 
         assert "shape=ellipse" in output
 
-    def test_caller_callee_edge(self) -> None:
+    @staticmethod
+    def test_caller_callee_edge() -> None:
         """Render caller-callee edge into DOT when callers section is present."""
         definition = Finding(
             category="definition",
@@ -207,7 +219,8 @@ class TestDotRenderer:
 
         assert "bar -> foo" in output
 
-    def test_escapes_special_chars(self) -> None:
+    @staticmethod
+    def test_escapes_special_chars() -> None:
         """Escape special characters in labels."""
         finding = Finding(
             category="definition",

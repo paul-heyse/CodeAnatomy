@@ -23,7 +23,7 @@ from tools.cq.core.schema import (
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.macros.calls import collect_call_sites, group_candidates, rg_find_candidates
-from tools.cq.macros.contracts import MacroRequestBase
+from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import macro_scoring_details
 from tools.cq.search._shared.types import SearchLimits
@@ -253,7 +253,7 @@ def _append_bucket_sections(
     result: CqResult,
     buckets: dict[str, list[tuple[CallSite, str]]],
     symbol: str,
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     severity_map: dict[str, Literal["info", "warning", "error"]] = {
         "would_break": "error",
@@ -292,7 +292,7 @@ def _append_evidence(
     all_sites: list[CallSite],
     new_params: list[SigParam],
     symbol: str,
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     for site in all_sites:
         bucket_name, reason = _classify_call(site, new_params)

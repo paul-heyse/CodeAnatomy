@@ -24,7 +24,7 @@ from tools.cq.core.schema import (
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.graph_utils import find_sccs
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.macros.contracts import ScopedMacroRequestBase
+from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
 
@@ -339,7 +339,7 @@ def _partition_dependencies(
 def _append_cycle_section(
     result: CqResult,
     cycles: list[list[str]],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     if not cycles:
         result.key_findings.append(
@@ -378,7 +378,7 @@ def _append_external_section(
     result: CqResult,
     all_imports: list[ImportInfo],
     external_deps: set[str],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     if not external_deps:
         return
@@ -399,7 +399,7 @@ def _append_external_section(
 def _append_relative_section(
     result: CqResult,
     relative_imports: list[ImportInfo],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     if not relative_imports:
         return
@@ -422,7 +422,7 @@ def _append_module_focus(
     result: CqResult,
     deps: dict[str, ModuleDeps],
     module: str,
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     focus_section = Section(title=f"Imports in {module}")
     for file, mod_deps in deps.items():
@@ -443,7 +443,7 @@ def _append_module_focus(
 def _append_import_evidence(
     result: CqResult,
     all_imports: list[ImportInfo],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     for imp_info in all_imports:
         what = (

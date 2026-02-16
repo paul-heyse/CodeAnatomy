@@ -13,12 +13,14 @@ from cli.context import RunContext
 class TestRunContextOtelOptions:
     """Test RunContext otel_options field."""
 
-    def test_default_otel_options_is_none(self) -> None:
+    @staticmethod
+    def test_default_otel_options_is_none() -> None:
         """Default otel_options should be None."""
         ctx = RunContext(run_id="test", log_level="INFO")
         assert ctx.otel_options is None
 
-    def test_can_set_otel_options(self) -> None:
+    @staticmethod
+    def test_can_set_otel_options() -> None:
         """Should be able to set otel_options."""
         from obs.otel import OtelBootstrapOptions
 
@@ -31,7 +33,8 @@ class TestRunContextOtelOptions:
         assert ctx.otel_options is not None
         assert ctx.otel_options.enable_traces is True
 
-    def test_context_is_frozen(self) -> None:
+    @staticmethod
+    def test_context_is_frozen() -> None:
         """RunContext should be immutable."""
         ctx = RunContext(run_id="test", log_level="INFO")
         ctx_any: Any = ctx
@@ -42,7 +45,8 @@ class TestRunContextOtelOptions:
 class TestOtelBootstrapOptions:
     """Test OtelBootstrapOptions configuration."""
 
-    def test_all_signals_none_by_default(self) -> None:
+    @staticmethod
+    def test_all_signals_none_by_default() -> None:
         """All signal flags should be None by default."""
         from obs.otel import OtelBootstrapOptions
 
@@ -52,7 +56,8 @@ class TestOtelBootstrapOptions:
         assert options.enable_logs is None
         assert options.test_mode is None
 
-    def test_can_enable_individual_signals(self) -> None:
+    @staticmethod
+    def test_can_enable_individual_signals() -> None:
         """Should be able to enable individual signals."""
         from obs.otel import OtelBootstrapOptions
 
@@ -65,7 +70,8 @@ class TestOtelBootstrapOptions:
         assert options.enable_metrics is False
         assert options.enable_logs is True
 
-    def test_test_mode_flag(self) -> None:
+    @staticmethod
+    def test_test_mode_flag() -> None:
         """Should support test_mode flag."""
         from obs.otel import OtelBootstrapOptions
 

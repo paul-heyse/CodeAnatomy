@@ -8,6 +8,7 @@ checkpoints.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,8 +17,10 @@ from typing import Annotated
 import msgspec
 
 from serde_msgspec import StructBaseStrict, dumps_json, loads_json
+from storage.cdf_cursor_protocol import CdfCursorLike
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
+logger = logging.getLogger(__name__)
 
 
 class CdfCursor(
@@ -136,7 +139,7 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
         safe_name = dataset_name.replace("/", "_").replace("\\", "_")
         return self.cursors_path / f"{safe_name}.cursor.json"
 
-    def save_cursor(self, cursor: CdfCursor) -> None:
+    def save_cursor(self, cursor: CdfCursorLike) -> None:
         """Save a cursor to persistent storage.
 
         Serializes the cursor to JSON and writes it to the cursor file.
@@ -148,8 +151,17 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
             Cursor to save.
         """
         self.ensure_dir()
-        cursor_file = self._cursor_file(cursor.dataset_name)
-        cursor_file.write_bytes(dumps_json(cursor, pretty=True))
+        resolved_cursor = (
+            cursor
+            if isinstance(cursor, CdfCursor)
+            else CdfCursor(
+                dataset_name=cursor.dataset_name,
+                last_version=cursor.last_version,
+                last_timestamp=cursor.last_timestamp,
+            )
+        )
+        cursor_file = self._cursor_file(resolved_cursor.dataset_name)
+        cursor_file.write_bytes(dumps_json(resolved_cursor, pretty=True))
 
     def load_cursor(self, dataset_name: str) -> CdfCursor | None:
         """Load a cursor from persistent storage.
@@ -172,7 +184,8 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
             return None
         try:
             return loads_json(cursor_file.read_bytes(), target_type=CdfCursor, strict=False)
-        except (msgspec.DecodeError, OSError):
+        except (msgspec.DecodeError, OSError) as exc:
+            logger.warning("Failed to load CDF cursor for %r: %s", dataset_name, exc)
             return None
 
     def has_cursor(self, dataset_name: str) -> bool:
@@ -227,7 +240,8 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
                     strict=False,
                 )
                 cursors.append(cursor)
-            except (msgspec.DecodeError, OSError):
+            except (msgspec.DecodeError, OSError) as exc:
+                logger.debug("Skipping invalid CDF cursor file %s: %s", cursor_file, exc)
                 continue
         return cursors
 

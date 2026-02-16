@@ -20,14 +20,16 @@ from tools.cq.query.parser import parse_query
 class TestDecoratorFilter:
     """Tests for DecoratorFilter dataclass."""
 
-    def test_basic_decorator_filter(self) -> None:
+    @staticmethod
+    def test_basic_decorator_filter() -> None:
         """Create basic decorator filter."""
         filt = DecoratorFilter(decorated_by="property")
         assert filt.decorated_by == "property"
         assert filt.decorator_count_min is None
         assert filt.decorator_count_max is None
 
-    def test_decorator_filter_count_range(self) -> None:
+    @staticmethod
+    def test_decorator_filter_count_range() -> None:
         """Create decorator filter with count constraints."""
         filt = DecoratorFilter(
             decorator_count_min=1,
@@ -40,24 +42,28 @@ class TestDecoratorFilter:
 class TestDecoratorQueryParsing:
     """Tests for parsing decorator queries."""
 
-    def test_decorator_entity(self) -> None:
+    @staticmethod
+    def test_decorator_entity() -> None:
         """Parse decorator entity query."""
         query = parse_query("entity=decorator")
         assert query.entity == "decorator"
 
-    def test_decorated_by_filter(self) -> None:
+    @staticmethod
+    def test_decorated_by_filter() -> None:
         """Parse query with decorated_by filter."""
         query = parse_query("entity=function decorated_by=property")
         assert query.decorator_filter is not None
         assert query.decorator_filter.decorated_by == "property"
 
-    def test_decorator_count_filter(self) -> None:
+    @staticmethod
+    def test_decorator_count_filter() -> None:
         """Parse query with decorator count filter."""
         query = parse_query(f"entity=function decorator_count_min={MIN_DECORATOR_COUNT}")
         assert query.decorator_filter is not None
         assert query.decorator_filter.decorator_count_min == MIN_DECORATOR_COUNT
 
-    def test_decorator_filter_with_scope(self) -> None:
+    @staticmethod
+    def test_decorator_filter_with_scope() -> None:
         """Parse decorator filter with scope constraint."""
         query = parse_query("entity=function decorated_by=staticmethod in=src/")
         assert query.decorator_filter is not None
@@ -67,7 +73,8 @@ class TestDecoratorQueryParsing:
 class TestDecoratorQueryIR:
     """Tests for decorator query IR construction."""
 
-    def test_query_with_decorator_filter(self) -> None:
+    @staticmethod
+    def test_query_with_decorator_filter() -> None:
         """Create query with decorator filter."""
         query = Query(
             entity="function",
@@ -80,7 +87,8 @@ class TestDecoratorQueryIR:
 class TestDecoratorExtraction:
     """Tests for decorator extraction from source."""
 
-    def test_extract_simple_decorator(self) -> None:
+    @staticmethod
+    def test_extract_simple_decorator() -> None:
         """Extract simple decorator from function."""
         from tools.cq.query.enrichment import extract_decorators_from_function
 
@@ -92,7 +100,8 @@ def foo(self):
         decorators = extract_decorators_from_function(source, 3)
         assert "property" in decorators
 
-    def test_extract_dotted_decorator(self) -> None:
+    @staticmethod
+    def test_extract_dotted_decorator() -> None:
         """Extract dotted decorator from function."""
         from tools.cq.query.enrichment import extract_decorators_from_function
 
@@ -104,7 +113,8 @@ def expensive(x):
         decorators = extract_decorators_from_function(source, 3)
         assert "functools.cache" in decorators
 
-    def test_extract_decorator_with_args(self) -> None:
+    @staticmethod
+    def test_extract_decorator_with_args() -> None:
         """Extract decorator with arguments from function."""
         from tools.cq.query.enrichment import extract_decorators_from_function
 
@@ -117,7 +127,8 @@ class Point:
         decorators = extract_decorators_from_function(source, 3)
         assert "dataclass" in decorators
 
-    def test_extract_multiple_decorators(self) -> None:
+    @staticmethod
+    def test_extract_multiple_decorators() -> None:
         """Extract multiple decorators from function."""
         from tools.cq.query.enrichment import extract_decorators_from_function
 
@@ -132,7 +143,8 @@ def helper():
         assert "staticmethod" in decorators
         assert "deprecated" in decorators
 
-    def test_extract_no_decorators(self) -> None:
+    @staticmethod
+    def test_extract_no_decorators() -> None:
         """Extract decorators from undecorated function."""
         from tools.cq.query.enrichment import extract_decorators_from_function
 
@@ -143,7 +155,8 @@ def plain_function():
         decorators = extract_decorators_from_function(source, 2)
         assert len(decorators) == 0
 
-    def test_extract_class_decorators(self) -> None:
+    @staticmethod
+    def test_extract_class_decorators() -> None:
         """Extract decorators from class definition."""
         from tools.cq.query.enrichment import extract_decorators_from_function
 
@@ -159,7 +172,8 @@ class Point:
 class TestDecoratorEnrichment:
     """Tests for decorator enrichment of findings."""
 
-    def test_enrich_with_decorators(self) -> None:
+    @staticmethod
+    def test_enrich_with_decorators() -> None:
         """Enrich finding with decorator information."""
         from tools.cq.core.schema import Anchor, Finding
         from tools.cq.query.enrichment import enrich_with_decorators
@@ -181,7 +195,8 @@ def foo(self):
         assert "property" in decorators
         assert enrichment["decorator_count"] == 1
 
-    def test_enrich_undecorated(self) -> None:
+    @staticmethod
+    def test_enrich_undecorated() -> None:
         """Enrich undecorated finding returns empty."""
         from tools.cq.core.schema import Anchor, Finding
         from tools.cq.query.enrichment import enrich_with_decorators

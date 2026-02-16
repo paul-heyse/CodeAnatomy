@@ -22,7 +22,8 @@ LOW_CONFIDENCE_MAX = 0.49
 class TestInferenceConfidence:
     """Test InferenceConfidence struct construction and field access."""
 
-    def test_construction_with_all_fields(self) -> None:
+    @staticmethod
+    def test_construction_with_all_fields() -> None:
         """Construct with every field populated."""
         conf = InferenceConfidence(
             confidence_score=CONFIDENCE_SCORE_FULL,
@@ -37,16 +38,18 @@ class TestInferenceConfidence:
         assert conf.decision_type == "scan_policy"
         assert conf.decision_value == "small_table"
 
-    def test_construction_minimal(self) -> None:
+    @staticmethod
+    def test_construction_minimal() -> None:
         """Construct with only required fields uses defaults."""
         conf = InferenceConfidence(confidence_score=CONFIDENCE_SCORE_MINIMAL)
         assert conf.confidence_score == CONFIDENCE_SCORE_MINIMAL
         assert conf.evidence_sources == ()
         assert conf.fallback_reason is None
-        assert conf.decision_type == ""
-        assert conf.decision_value == ""
+        assert not conf.decision_type
+        assert not conf.decision_value
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """Verify struct is immutable."""
         conf = InferenceConfidence(confidence_score=CONFIDENCE_SCORE_MINIMAL)
         assert_immutable_assignment(
@@ -56,7 +59,8 @@ class TestInferenceConfidence:
             expected_exception=AttributeError,
         )
 
-    def test_confidence_boundary_values(self) -> None:
+    @staticmethod
+    def test_confidence_boundary_values() -> None:
         """Construct at boundary values of 0 and 1."""
         low = InferenceConfidence(confidence_score=0.0)
         assert low.confidence_score == 0.0
@@ -67,7 +71,8 @@ class TestInferenceConfidence:
 class TestHighConfidence:
     """Test the high_confidence helper."""
 
-    def test_default_score(self) -> None:
+    @staticmethod
+    def test_default_score() -> None:
         """Default score is 0.9."""
         conf = high_confidence(
             "scan_policy",
@@ -80,7 +85,8 @@ class TestHighConfidence:
         assert conf.evidence_sources == ("stats", "capabilities")
         assert conf.fallback_reason is None
 
-    def test_custom_score_above_threshold(self) -> None:
+    @staticmethod
+    def test_custom_score_above_threshold() -> None:
         """Custom score >= 0.8 is preserved."""
         conf = high_confidence(
             "join_strategy",
@@ -90,7 +96,8 @@ class TestHighConfidence:
         )
         assert conf.confidence_score == HIGH_CONFIDENCE_CUSTOM
 
-    def test_score_clamped_to_minimum(self) -> None:
+    @staticmethod
+    def test_score_clamped_to_minimum() -> None:
         """Score below 0.8 is clamped up to 0.8."""
         conf = high_confidence(
             "cache_policy",
@@ -100,7 +107,8 @@ class TestHighConfidence:
         )
         assert conf.confidence_score == HIGH_CONFIDENCE_MIN
 
-    def test_score_clamped_to_maximum(self) -> None:
+    @staticmethod
+    def test_score_clamped_to_maximum() -> None:
         """Score above 1.0 is clamped to 1.0."""
         conf = high_confidence(
             "cache_policy",
@@ -114,7 +122,8 @@ class TestHighConfidence:
 class TestLowConfidence:
     """Test the low_confidence helper."""
 
-    def test_default_score(self) -> None:
+    @staticmethod
+    def test_default_score() -> None:
         """Default score is 0.4."""
         conf = low_confidence(
             "scan_policy",
@@ -128,7 +137,8 @@ class TestLowConfidence:
         assert conf.fallback_reason == "insufficient_stats"
         assert conf.evidence_sources == ("lineage",)
 
-    def test_custom_score_below_threshold(self) -> None:
+    @staticmethod
+    def test_custom_score_below_threshold() -> None:
         """Custom score < 0.5 is preserved."""
         conf = low_confidence(
             "join_strategy",
@@ -139,7 +149,8 @@ class TestLowConfidence:
         )
         assert conf.confidence_score == LOW_CONFIDENCE_CUSTOM
 
-    def test_score_clamped_to_maximum(self) -> None:
+    @staticmethod
+    def test_score_clamped_to_maximum() -> None:
         """Score >= 0.5 is clamped to 0.49."""
         conf = low_confidence(
             "scan_policy",
@@ -150,7 +161,8 @@ class TestLowConfidence:
         )
         assert conf.confidence_score == LOW_CONFIDENCE_MAX
 
-    def test_score_clamped_to_minimum(self) -> None:
+    @staticmethod
+    def test_score_clamped_to_minimum() -> None:
         """Score below 0.0 is clamped to 0.0."""
         conf = low_confidence(
             "scan_policy",

@@ -56,11 +56,11 @@ def write_incremental_metadata(
     state_store.ensure_dirs()
     runtime_snapshot = runtime_profile_snapshot(
         runtime.profile,
-        name=runtime.profile.policies.config_policy_name,
+        name=runtime.config_policy_name(),
         determinism_tier=runtime.determinism_tier,
     )
     payload = IncrementalMetadataSnapshot(
-        datafusion_settings_hash=runtime.profile.settings_hash(),
+        datafusion_settings_hash=runtime.settings_hash(),
         runtime_profile_hash=runtime_snapshot.profile_hash,
         runtime_profile=runtime_snapshot,
     )
@@ -153,7 +153,7 @@ class ArtifactWriteContext:
         """
         storage, log_storage = resolve_delta_store_policy(
             table_uri=table_uri,
-            policy=self.runtime.profile.policies.delta_store_policy,
+            policy=self.runtime.delta_store_policy(),
             storage_options=self.storage_options,
             log_storage_options=self.log_storage_options,
         )
@@ -267,21 +267,7 @@ def _write_artifact_rows(
     if not rows:
         return None
     table = _artifacts_to_table(rows)
-    storage_options, log_storage_options = context.resolve_storage(table_uri=str(path))
-    write_delta_table_via_pipeline(
-        runtime=context.runtime,
-        table=table,
-        request=IncrementalDeltaWriteRequest(
-            destination=str(path),
-            mode=WriteMode.OVERWRITE,
-            schema_mode="overwrite",
-            commit_metadata={"artifact_name": name},
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            operation_id=f"incremental_artifact::{name}",
-        ),
-    )
-    return str(path)
+    return _write_named_artifact(name=name, path=path, table=table, context=context)
 
 
 def _write_view_artifact_rows(
@@ -294,21 +280,13 @@ def _write_view_artifact_rows(
     if not rows:
         return None
     table = view_artifact_payload_table(rows)
-    storage_options, log_storage_options = context.resolve_storage(table_uri=str(path))
-    write_delta_table_via_pipeline(
-        runtime=context.runtime,
+    return _write_named_artifact(
+        name=name,
+        path=path,
         table=table,
-        request=IncrementalDeltaWriteRequest(
-            destination=str(path),
-            mode=WriteMode.OVERWRITE,
-            schema_mode="overwrite",
-            commit_metadata={"artifact_name": name},
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            operation_id=f"incremental_view_artifacts::{name}",
-        ),
+        context=context,
+        operation_prefix="incremental_view_artifacts",
     )
-    return str(path)
 
 
 def _write_artifact_table(
@@ -317,13 +295,29 @@ def _write_artifact_table(
     path: Path,
     context: ArtifactWriteContext,
 ) -> str | None:
-    sink = context.runtime.profile.diagnostics.diagnostics_sink
+    sink = context.runtime.diagnostics_sink()
     if sink is None:
         return None
     artifacts = sink.artifacts_snapshot().get(name)
     if not artifacts:
         return None
     table = _artifacts_to_table(artifacts)
+    return _write_named_artifact(name=name, path=path, table=table, context=context)
+
+
+def _write_named_artifact(
+    *,
+    name: str,
+    path: Path,
+    table: pa.Table,
+    context: ArtifactWriteContext,
+    operation_prefix: str = "incremental_artifact",
+) -> str:
+    """Write a named incremental artifact as an overwrite Delta table.
+
+    Returns:
+        str: Written artifact URI/path.
+    """
     storage_options, log_storage_options = context.resolve_storage(table_uri=str(path))
     write_delta_table_via_pipeline(
         runtime=context.runtime,
@@ -335,7 +329,7 @@ def _write_artifact_table(
             commit_metadata={"artifact_name": name},
             storage_options=storage_options,
             log_storage_options=log_storage_options,
-            operation_id=f"incremental_artifact::{name}",
+            operation_id=f"{operation_prefix}::{name}",
         ),
     )
     return str(path)

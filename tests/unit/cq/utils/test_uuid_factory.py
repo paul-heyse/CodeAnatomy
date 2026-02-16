@@ -26,13 +26,11 @@ def test_uuid_factory_run_and_artifact_ids_are_sortable() -> None:
     assert len(artifact_hex) == ARTIFACT_HEX_LENGTH
 
 
-
 def test_normalize_legacy_identity_is_safe_for_non_v1() -> None:
     """Legacy non-v1 UUIDs should be returned unchanged by normalize helper."""
     value = uuid.uuid4()
     normalized = normalize_legacy_identity(value)
     assert normalized == value
-
 
 
 def test_normalize_legacy_identity_handles_v1() -> None:
@@ -43,13 +41,11 @@ def test_normalize_legacy_identity_handles_v1() -> None:
     assert normalized.version in {1, 6}
 
 
-
 def test_legacy_compatible_event_id_falls_back_safely() -> None:
     """Compatibility helper should produce a valid UUID for event id defaults."""
     value = legacy_compatible_event_id()
     assert isinstance(value, uuid.UUID)
     assert value.version in {6, 7}
-
 
 
 def test_new_uuid7_alias() -> None:

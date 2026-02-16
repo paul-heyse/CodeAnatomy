@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import Final
 
-from semantics.catalog.dataset_registry import DatasetRegistrySpec
-from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION
+from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
 
-EXPORT_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
-    DatasetRegistrySpec(
+EXPORT_DATASETS: Final[tuple[SemanticDatasetRow, ...]] = (
+    SemanticDatasetRow(
         name="dim_exported_defs",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),

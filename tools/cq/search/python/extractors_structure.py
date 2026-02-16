@@ -6,6 +6,7 @@ class kind classification, and API shape summaries.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -79,7 +80,7 @@ def find_enclosing_class(node: SgNode) -> SgNode | None:
 def extract_base_classes(
     class_node: SgNode,
     *,
-    truncate: callable[[str, int, str | None], str],
+    truncate: Callable[[str, int, str | None], str],
 ) -> list[str]:
     """Extract base class names from a class definition.
 

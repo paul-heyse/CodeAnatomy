@@ -85,7 +85,7 @@ from tools.cq.search.tree_sitter.structural.exports import collect_diagnostic_ro
 from tools.cq.search.tree_sitter.tags import RustTagEventV1, build_tag_events
 
 if TYPE_CHECKING:
-    from tree_sitter import Node, Tree
+    from tree_sitter import Node
 
 try:
     from tree_sitter import Point as _TreeSitterPoint

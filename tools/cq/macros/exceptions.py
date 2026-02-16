@@ -24,7 +24,7 @@ from tools.cq.core.schema import (
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.macros.contracts import ScopedMacroRequestBase
+from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
 
@@ -321,7 +321,7 @@ def _append_exception_sections(
     *,
     raise_types: dict[str, int],
     catch_types: dict[str, int],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     raise_section = Section(title="Raised Exception Types")
     for exc_type, count in sorted(raise_types.items(), key=lambda item: -item[1])[
@@ -370,7 +370,7 @@ def _append_uncaught_section(
     *,
     all_raises: list[RaiseSite],
     all_catches: list[CatchSite],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     uncaught_section = Section(title="Potentially Uncaught Exceptions")
     for raised in all_raises:
@@ -397,7 +397,7 @@ def _append_bare_except_section(
     result: CqResult,
     *,
     bare_excepts: list[CatchSite],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     if not bare_excepts:
         return
@@ -421,7 +421,7 @@ def _append_exception_evidence(
     *,
     all_raises: list[RaiseSite],
     all_catches: list[CatchSite],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     for raised in all_raises:
         message = f"raise {raised.exception_type}"

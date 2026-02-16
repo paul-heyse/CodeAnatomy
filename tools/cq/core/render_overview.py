@@ -54,7 +54,7 @@ def _collect_top_symbols(findings: list[Finding]) -> str:
     findings : list[Finding]
         Findings to extract symbols from.
 
-    Returns
+    Returns:
     -------
     str
         Formatted symbol list or N/A message.
@@ -86,7 +86,7 @@ def _collect_top_files(findings: list[Finding]) -> str:
     findings : list[Finding]
         Findings to extract files from.
 
-    Returns
+    Returns:
     -------
     str
         Formatted file list or N/A message.
@@ -114,7 +114,7 @@ def _summarize_categories(findings: list[Finding]) -> str:
     findings : list[Finding]
         Findings to summarize.
 
-    Returns
+    Returns:
     -------
     str
         Formatted category summary or N/A message.
@@ -139,7 +139,7 @@ def _format_python_semantic_overview(summary: dict[str, object]) -> str:
     summary : dict[str, object]
         Result summary dict.
 
-    Returns
+    Returns:
     -------
     str
         Formatted overview or N/A message.
@@ -189,7 +189,7 @@ def _scope_from_step_summaries(step_summaries: dict[str, object]) -> str | None:
     step_summaries : dict[str, object]
         Step summaries dict.
 
-    Returns
+    Returns:
     -------
     str | None
         Inferred scope or None.
@@ -220,7 +220,7 @@ def _format_language_scope(summary: dict[str, object]) -> str:
     summary : dict[str, object]
         Result summary dict.
 
-    Returns
+    Returns:
     -------
     str
         Formatted language scope or N/A message.
@@ -247,7 +247,7 @@ def _iter_result_findings(result: CqResult) -> list[Finding]:
     result : CqResult
         Analysis result.
 
-    Returns
+    Returns:
     -------
     list[Finding]
         All findings.
@@ -268,7 +268,7 @@ def render_code_overview(result: CqResult) -> list[str]:
     result : CqResult
         Analysis result to render.
 
-    Returns
+    Returns:
     -------
     list[str]
         Overview section lines.

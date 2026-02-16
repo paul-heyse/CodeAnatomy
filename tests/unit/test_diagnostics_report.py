@@ -79,8 +79,14 @@ def test_runtime_capability_summary_includes_execution_metrics() -> None:
     assert report.runtime_capabilities["execution_memory_reserved_bytes"] == MEMORY_RESERVED_BYTES
     assert report.runtime_capabilities["execution_metadata_cache_entries"] == METADATA_CACHE_ENTRIES
     assert report.runtime_capabilities["execution_metadata_cache_hits"] == METADATA_CACHE_HITS
-    assert report.runtime_capabilities["execution_list_files_cache_entries"] == LIST_FILES_CACHE_ENTRIES
-    assert report.runtime_capabilities["execution_statistics_cache_entries"] == STATISTICS_CACHE_ENTRIES
+    assert (
+        report.runtime_capabilities["execution_list_files_cache_entries"]
+        == LIST_FILES_CACHE_ENTRIES
+    )
+    assert (
+        report.runtime_capabilities["execution_statistics_cache_entries"]
+        == STATISTICS_CACHE_ENTRIES
+    )
 
 
 def test_runtime_capability_summary_includes_runtime_policy_bridge_fields() -> None:

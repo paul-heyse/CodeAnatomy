@@ -34,7 +34,6 @@ def test_runtime_services_are_workspace_scoped(tmp_path: Path) -> None:
     clear_runtime_services()
 
 
-
 def test_service_request_contracts_are_constructible(tmp_path: Path) -> None:
     """Build runtime service request payloads for search and call workflows."""
     toolchain = Toolchain.detect()

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
 import pyarrow as pa
 
-from datafusion_engine.arrow.coercion import coerce_table_to_storage, to_arrow_table
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
@@ -18,9 +17,11 @@ from datafusion_engine.dataset.registry import (
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
 from schema_spec.contracts import DeltaScanOptions
+from semantics.incremental.cdf_core import CanonicalCdfReadRequest, read_cdf_table
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_types import CdfFilterPolicy
 from semantics.incremental.delta_context import DeltaAccessContext
+from semantics.incremental.delta_port import DeltaServiceCdfPort
 from semantics.incremental.plan_bundle_exec import execute_df_to_table
 from semantics.incremental.runtime import TempTableRegistry
 from storage.deltalake import DeltaCdfOptions, StorageOptions
@@ -32,8 +33,11 @@ if TYPE_CHECKING:
     from semantics.incremental.runtime import IncrementalRuntime
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
-class CdfReadResult:
+class RuntimeCdfReadResult:
     """Result for a Delta CDF read."""
 
     table: pa.Table
@@ -44,7 +48,7 @@ class CdfReadResult:
 class CdfReadInputs:
     """Resolved inputs for a Delta CDF read."""
 
-    path: Path
+    path: str
     current_version: int
     storage_options: StorageOptions
     log_storage_options: StorageOptions
@@ -87,12 +91,9 @@ def _resolve_cdf_inputs(
     dataset_path: str,
     dataset_name: str,
 ) -> CdfReadInputs | None:
-    path = Path(dataset_path)
-    if not path.exists():
-        return None
     runtime = context.runtime
     profile_location = _profile_dataset_location(context, dataset_name)
-    resolved_store = context.resolve_storage(table_uri=str(path))
+    resolved_store = context.resolve_storage(table_uri=dataset_path)
     resolved_storage = resolved_store.storage_options or {}
     resolved_log_storage = resolved_store.log_storage_options or {}
     resolved_scan = None
@@ -105,18 +106,18 @@ def _resolve_cdf_inputs(
         )
         resolved_scan = resolve_delta_scan_options(
             profile_location,
-            scan_policy=runtime.profile.policies.scan_policy,
+            scan_policy=runtime.scan_policy(),
         )
         cdf_policy = profile_location.resolved.delta_cdf_policy
-    current_version = runtime.profile.delta_ops.delta_service().table_version(
-        path=str(path),
+    current_version = runtime.delta_service().table_version(
+        path=dataset_path,
         storage_options=resolved_storage,
         log_storage_options=resolved_log_storage,
     )
     if current_version is None:
         return None
     return CdfReadInputs(
-        path=path,
+        path=dataset_path,
         current_version=current_version,
         storage_options=resolved_storage,
         log_storage_options=resolved_log_storage,
@@ -129,13 +130,9 @@ def _read_cdf_table(
     runtime: IncrementalRuntime,
     *,
     table_name: str,
-    filter_policy: CdfFilterPolicy | None,
 ) -> pa.Table:
     ctx = runtime.session_runtime().ctx
     df = ctx.table(table_name)
-    predicate = (filter_policy or CdfFilterPolicy.include_all()).to_datafusion_predicate()
-    if predicate is not None:
-        df = df.filter(predicate)
     return execute_df_to_table(runtime, df, view_name=f"incremental_cdf::{table_name}")
 
 
@@ -146,56 +143,28 @@ def _is_cdf_start_version_error(exc: Exception) -> bool:
 
 def _read_cdf_table_fallback(
     state: _CdfReadState,
-    *,
-    filter_policy: CdfFilterPolicy | None,
 ) -> pa.Table:
-    from deltalake import DeltaTable
-
-    storage_options = dict(state.inputs.storage_options) if state.inputs.storage_options else None
-    table = DeltaTable(str(state.inputs.path), storage_options=storage_options)
-    reader = table.load_cdf(
-        starting_version=state.cdf_options.starting_version,
-        ending_version=state.cdf_options.ending_version,
-        starting_timestamp=state.cdf_options.starting_timestamp,
-        ending_timestamp=state.cdf_options.ending_timestamp,
-        columns=state.cdf_options.columns,
-        predicate=state.cdf_options.predicate,
-        allow_out_of_range=state.cdf_options.allow_out_of_range,
+    start_version = state.cdf_options.starting_version
+    if start_version is None:
+        msg = "CDF fallback requires starting_version."
+        raise ValueError(msg)
+    canonical = read_cdf_table(
+        request=CanonicalCdfReadRequest(
+            table_path=state.inputs.path,
+            start_version=start_version,
+            end_version=state.cdf_options.ending_version,
+            storage_options=state.inputs.storage_options,
+            log_storage_options=state.inputs.log_storage_options,
+            columns=state.cdf_options.columns,
+            predicate=state.cdf_options.predicate,
+            allow_out_of_range=state.cdf_options.allow_out_of_range,
+        ),
+        port=DeltaServiceCdfPort(state.runtime.delta_service()),
     )
-    # deltalake may return arro3-backed table/array objects; normalize to
-    # pyarrow to keep downstream compute/filter code deterministic.
-    resolved = coerce_table_to_storage(to_arrow_table(reader.read_all()))
-    policy = filter_policy or CdfFilterPolicy.include_all()
-    if "_change_type" not in resolved.column_names:
-        return resolved
-    allowed_types: list[str] = []
-    if policy.include_insert:
-        allowed_types.append("insert")
-    if policy.include_update_postimage:
-        allowed_types.append("update_postimage")
-    if policy.include_delete:
-        allowed_types.append("delete")
-    if not allowed_types:
-        return resolved.slice(0, 0)
-    change_type_column = resolved["_change_type"]
-    try:
-        import pyarrow.compute as pc
-
-        normalized_change_type = pc.cast(change_type_column, pa.string())
-    except (pa.ArrowInvalid, pa.ArrowTypeError, NotImplementedError):
-        normalized_change_type = pa.array(
-            [None if value is None else str(value) for value in change_type_column.to_pylist()],
-            type=pa.string(),
-        )
-    allowed_type_set = set(allowed_types)
-    mask = pa.array(
-        [
-            value is not None and str(value) in allowed_type_set
-            for value in normalized_change_type.to_pylist()
-        ],
-        type=pa.bool_(),
-    )
-    return resolved.filter(mask)
+    if canonical is None:
+        msg = f"Delta CDF fallback read failed for {state.inputs.path!r}."
+        raise ValueError(msg)
+    return canonical.table
 
 
 def _prepare_cdf_read_state(
@@ -204,6 +173,7 @@ def _prepare_cdf_read_state(
     dataset_name: str,
     inputs: CdfReadInputs,
     cursor_store: CdfCursorStore,
+    filter_policy: CdfFilterPolicy | None,
 ) -> _CdfReadState | None:
     runtime = context.runtime
     current_version = inputs.current_version
@@ -214,9 +184,11 @@ def _prepare_cdf_read_state(
     if cursor.last_version >= current_version:
         return None
     starting_version = cursor.last_version + 1
+    policy = filter_policy or CdfFilterPolicy.include_all()
     cdf_options = DeltaCdfOptions(
         starting_version=starting_version,
         ending_version=current_version,
+        predicate=policy.to_sql_predicate(),
         allow_out_of_range=inputs.cdf_policy.allow_out_of_range
         if inputs.cdf_policy is not None
         else False,
@@ -300,28 +272,33 @@ def _load_cdf_table(
     state: _CdfReadState,
     *,
     registry: TempTableRegistry,
-    filter_policy: CdfFilterPolicy | None,
 ) -> pa.Table:
     cdf_name = _register_cdf_dataset(state, registry=registry)
     try:
         table = _read_cdf_table(
             state.runtime,
             table_name=cdf_name,
-            filter_policy=filter_policy,
         )
         if "_change_type" not in table.column_names:
             # Degraded provider registration can return a base Delta dataset
             # without CDF virtual columns. Fall back to direct load_cdf().
+            logger.debug(
+                "DataFusion CDF read returned no _change_type for %s; falling back to DeltaTable.load_cdf.",
+                state.inputs.path,
+            )
             table = _read_cdf_table_fallback(
                 state,
-                filter_policy=filter_policy,
             )
     except (RuntimeError, ValueError) as exc:
         if not _is_cdf_start_version_error(exc):
             _raise_non_cdf_start_error(exc)
+        logger.debug(
+            "DataFusion CDF read failed for %s (%s); falling back to DeltaTable.load_cdf.",
+            state.inputs.path,
+            exc,
+        )
         table = _read_cdf_table_fallback(
             state,
-            filter_policy=filter_policy,
         )
     return table
 
@@ -333,7 +310,7 @@ def read_cdf_changes(
     dataset_name: str,
     cursor_store: CdfCursorStore,
     filter_policy: CdfFilterPolicy | None = None,
-) -> CdfReadResult | None:
+) -> RuntimeCdfReadResult | None:
     """Read Delta CDF changes using the shared incremental runtime.
 
     Args:
@@ -344,7 +321,7 @@ def read_cdf_changes(
         filter_policy: Optional CDF filter policy.
 
     Returns:
-        CdfReadResult | None: Result.
+        RuntimeCdfReadResult | None: Result.
 
     Raises:
         ValueError: If CDF state cannot be initialized.
@@ -369,6 +346,7 @@ def read_cdf_changes(
         dataset_name=dataset_name,
         inputs=inputs,
         cursor_store=cursor_store,
+        filter_policy=filter_policy,
     )
     if state is None:
         _record_cdf_read(
@@ -390,7 +368,6 @@ def read_cdf_changes(
             table = _load_cdf_table(
                 state,
                 registry=registry,
-                filter_policy=filter_policy,
             )
         except ValueError as exc:
             if state.inputs.cdf_policy is not None and state.inputs.cdf_policy.required:
@@ -441,7 +418,7 @@ def read_cdf_changes(
             filter_policy=filter_policy,
         ),
     )
-    return CdfReadResult(table=table, updated_version=state.current_version)
+    return RuntimeCdfReadResult(table=table, updated_version=state.current_version)
 
 
 def _record_cdf_read(
@@ -497,4 +474,4 @@ def _cdf_change_counts(table: pa.Table) -> dict[str, int]:
     return {str(key): int(value) for key, value in counts.items()}
 
 
-__all__ = ["CdfReadResult", "read_cdf_changes"]
+__all__ = ["RuntimeCdfReadResult", "read_cdf_changes"]

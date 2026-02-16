@@ -15,8 +15,6 @@ from tools.cq.search.tree_sitter.core.lane_support import make_parser
 from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
 from tools.cq.search.tree_sitter.query.compiler import compile_query
-from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
-from tools.cq.search.tree_sitter.rust_lane.bundle import load_rust_query_sources
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Tree
@@ -42,9 +40,7 @@ def _rust_language() -> Language:
         The tree-sitter Rust language binding.
 
     Raises:
-    ------
-    RuntimeError
-        When language bindings are unavailable.
+        RuntimeError: When Rust language bindings are unavailable.
     """
     resolved = load_tree_sitter_language("rust")
     if resolved is None:
@@ -65,22 +61,24 @@ def _rust_field_ids() -> dict[str, int]:
     return cached_field_ids("rust")
 
 
-def _touch_tree_cache(session: object, cache_key: str | None) -> None:
+def _touch_tree_cache(_session: object, cache_key: str | None) -> None:
     """Touch cache entry to update LRU ordering.
 
     Parameters
     ----------
-    session
+    _session
         The parse session (unused, retained for signature compatibility).
     cache_key
         The cache key to touch.
     """
     if not cache_key:
         return
-    old_len = len(_TREE_CACHE)
+    if cache_key in _TREE_CACHE:
+        _TREE_CACHE.put(cache_key, None)
+        return
+    at_capacity = len(_TREE_CACHE) >= _MAX_TREE_CACHE_ENTRIES
     _TREE_CACHE.put(cache_key, None)
-    new_len = len(_TREE_CACHE)
-    if new_len < old_len:
+    if at_capacity:
         _TREE_CACHE_EVICTIONS["value"] += 1
 
 
@@ -109,7 +107,7 @@ def _parse_with_session(
     session = get_parse_session(
         language="rust", parser_factory=lambda: make_parser(_rust_language())
     )
-    _touch_tree_cache(session=session, cache_key=cache_key)
+    _touch_tree_cache(_session=session, cache_key=cache_key)
     tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
     return tree, source_bytes, tuple(changed_ranges) if changed_ranges is not None else ()
 

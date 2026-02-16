@@ -16,28 +16,31 @@ from tests.test_helpers.immutability import assert_immutable_assignment
 class TestTableSizeThresholdsDefaults:
     """Verify canonical default threshold values."""
 
-    def test_small_threshold_default(self) -> None:
+    @staticmethod
+    def test_small_threshold_default() -> None:
         """Default small threshold is 10,000."""
         assert TableSizeThresholds().small_threshold == _DEFAULT_THRESHOLDS.small_threshold
 
-    def test_large_threshold_default(self) -> None:
+    @staticmethod
+    def test_large_threshold_default() -> None:
         """Default large threshold is 1,000,000."""
         assert TableSizeThresholds().large_threshold == _DEFAULT_THRESHOLDS.large_threshold
 
-    def test_streaming_threshold_default(self) -> None:
+    @staticmethod
+    def test_streaming_threshold_default() -> None:
         """Default streaming threshold is 100,000."""
-        assert (
-            TableSizeThresholds().streaming_threshold == _DEFAULT_THRESHOLDS.streaming_threshold
-        )
+        assert TableSizeThresholds().streaming_threshold == _DEFAULT_THRESHOLDS.streaming_threshold
 
-    def test_module_level_default_matches(self) -> None:
+    @staticmethod
+    def test_module_level_default_matches() -> None:
         """Module-level _DEFAULT_THRESHOLDS matches fresh instance."""
         fresh = TableSizeThresholds()
         assert _DEFAULT_THRESHOLDS.small_threshold == fresh.small_threshold
         assert _DEFAULT_THRESHOLDS.large_threshold == fresh.large_threshold
         assert _DEFAULT_THRESHOLDS.streaming_threshold == fresh.streaming_threshold
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """Thresholds struct is frozen (immutable)."""
         t = TableSizeThresholds()
         assert_immutable_assignment(
@@ -51,7 +54,8 @@ class TestTableSizeThresholdsDefaults:
 class TestClassifyTableSizeNone:
     """Verify behaviour when row_count is None."""
 
-    def test_none_returns_medium(self) -> None:
+    @staticmethod
+    def test_none_returns_medium() -> None:
         """None row_count conservatively classifies as MEDIUM."""
         assert classify_table_size(None) == TableSizeTier.MEDIUM
 
@@ -59,6 +63,7 @@ class TestClassifyTableSizeNone:
 class TestClassifyTableSizeBoundaries:
     """Verify boundary conditions around small and large thresholds."""
 
+    @staticmethod
     @pytest.mark.parametrize(
         ("row_count", "expected"),
         [
@@ -75,7 +80,6 @@ class TestClassifyTableSizeBoundaries:
         ],
     )
     def test_boundary_classification(
-        self,
         row_count: int,
         expected: TableSizeTier,
     ) -> None:
@@ -86,13 +90,15 @@ class TestClassifyTableSizeBoundaries:
 class TestClassifyTableSizeCustomThresholds:
     """Verify that custom thresholds override defaults."""
 
-    def test_custom_small_threshold(self) -> None:
+    @staticmethod
+    def test_custom_small_threshold() -> None:
         """Custom small threshold shifts the boundary."""
         custom = TableSizeThresholds(small_threshold=100, large_threshold=1_000)
         assert classify_table_size(99, custom) == TableSizeTier.SMALL
         assert classify_table_size(100, custom) == TableSizeTier.MEDIUM
 
-    def test_custom_large_threshold(self) -> None:
+    @staticmethod
+    def test_custom_large_threshold() -> None:
         """Custom large threshold shifts the boundary."""
         custom = TableSizeThresholds(small_threshold=100, large_threshold=1_000)
         assert classify_table_size(1_000, custom) == TableSizeTier.MEDIUM
@@ -102,12 +108,14 @@ class TestClassifyTableSizeCustomThresholds:
 class TestTableSizeTierValues:
     """Verify TableSizeTier enum values are stable strings."""
 
-    def test_tier_values(self) -> None:
+    @staticmethod
+    def test_tier_values() -> None:
         """Tier string values match expected labels."""
         assert TableSizeTier.SMALL == "small"
         assert TableSizeTier.MEDIUM == "medium"
         assert TableSizeTier.LARGE == "large"
 
-    def test_tier_is_str(self) -> None:
+    @staticmethod
+    def test_tier_is_str() -> None:
         """Tiers are usable as plain strings (StrEnum)."""
         assert isinstance(TableSizeTier.SMALL, str)

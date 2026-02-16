@@ -30,8 +30,9 @@ UPDATED_VALUE_DEFAULT = 10
 class TestCDFMergeStrategy:
     """Tests for CDFMergeStrategy enum."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_strategy_values(self) -> None:
+    def test_strategy_values() -> None:
         """CDFMergeStrategy has expected values."""
         assert set(CDFMergeStrategy) == {
             CDFMergeStrategy.APPEND,
@@ -40,13 +41,15 @@ class TestCDFMergeStrategy:
             CDFMergeStrategy.DELETE_INSERT,
         }
 
-    def test_strategy_is_str_enum(self) -> None:
+    @staticmethod
+    def test_strategy_is_str_enum() -> None:
         """CDFMergeStrategy is a string enum."""
         for strategy in CDFMergeStrategy:
             assert isinstance(strategy, str)
             assert isinstance(strategy.value, str)
 
-    def test_all_strategies_enumerated(self) -> None:
+    @staticmethod
+    def test_all_strategies_enumerated() -> None:
         """All expected strategies are enumerated."""
         strategies = list(CDFMergeStrategy)
         assert len(strategies) == STRATEGY_COUNT
@@ -57,8 +60,9 @@ class TestCDFMergeStrategy:
 class TestCDFJoinSpec:
     """Tests for CDFJoinSpec dataclass."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_create_minimal_spec(self) -> None:
+    def test_create_minimal_spec() -> None:
         """CDFJoinSpec can be created with minimal fields."""
         spec = CDFJoinSpec(
             left_table="left",
@@ -71,7 +75,8 @@ class TestCDFJoinSpec:
         assert spec.output_name == "output"
         assert spec.key_columns == ("id",)
 
-    def test_default_merge_strategy(self) -> None:
+    @staticmethod
+    def test_default_merge_strategy() -> None:
         """CDFJoinSpec defaults to UPSERT strategy."""
         spec = CDFJoinSpec(
             left_table="left",
@@ -81,7 +86,8 @@ class TestCDFJoinSpec:
         )
         assert spec.merge_strategy == CDFMergeStrategy.UPSERT
 
-    def test_default_cdf_column(self) -> None:
+    @staticmethod
+    def test_default_cdf_column() -> None:
         """CDFJoinSpec defaults to _change_type cdf column."""
         spec = CDFJoinSpec(
             left_table="left",
@@ -92,7 +98,8 @@ class TestCDFJoinSpec:
         assert spec.cdf_column == DEFAULT_CDF_COLUMN
         assert spec.cdf_column == "_change_type"
 
-    def test_effective_filter_policy_default(self) -> None:
+    @staticmethod
+    def test_effective_filter_policy_default() -> None:
         """effective_filter_policy returns default when not specified."""
         spec = CDFJoinSpec(
             left_table="left",
@@ -106,7 +113,8 @@ class TestCDFJoinSpec:
         assert policy.include_update_postimage is True
         assert policy.include_delete is False
 
-    def test_custom_filter_policy(self) -> None:
+    @staticmethod
+    def test_custom_filter_policy() -> None:
         """CDFJoinSpec respects custom filter policy."""
         from semantics.incremental.cdf_types import CdfFilterPolicy
 
@@ -125,8 +133,9 @@ class TestCDFJoinSpec:
 class TestIsCdfEnabled:
     """Tests for is_cdf_enabled function."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_detects_cdf_column(self) -> None:
+    def test_detects_cdf_column() -> None:
         """is_cdf_enabled returns True when CDF column present."""
         ctx = SessionContext()
         schema = pa.schema(
@@ -141,7 +150,8 @@ class TestIsCdfEnabled:
 
         assert is_cdf_enabled(df) is True
 
-    def test_returns_false_without_cdf_column(self) -> None:
+    @staticmethod
+    def test_returns_false_without_cdf_column() -> None:
         """is_cdf_enabled returns False when CDF column absent."""
         ctx = SessionContext()
         schema = pa.schema([pa.field("id", pa.string())])
@@ -151,7 +161,8 @@ class TestIsCdfEnabled:
 
         assert is_cdf_enabled(df) is False
 
-    def test_custom_cdf_column_name(self) -> None:
+    @staticmethod
+    def test_custom_cdf_column_name() -> None:
         """is_cdf_enabled respects custom column name."""
         ctx = SessionContext()
         schema = pa.schema(
@@ -171,8 +182,8 @@ class TestIsCdfEnabled:
 class TestApplyCdfMerge:
     """Tests for apply_cdf_merge function."""
 
+    @staticmethod
     def _create_df(
-        self,
         ctx: SessionContext,
         name: str,
         data: Mapping[str, Sequence[object]],
@@ -181,7 +192,8 @@ class TestApplyCdfMerge:
         ctx.register_record_batches(name, [table.to_batches()])
         return ctx.table(name)
 
-    def _collect_all_rows(self, df: DataFrame) -> dict[str, list[object]]:
+    @staticmethod
+    def _collect_all_rows(df: DataFrame) -> dict[str, list[object]]:
         collected = df.collect()
         if not collected:
             return {}
@@ -294,8 +306,8 @@ class TestApplyCdfMerge:
 class TestMergeIncrementalResults:
     """Tests for merge_incremental_results function."""
 
+    @staticmethod
     def _create_df(
-        self,
         ctx: SessionContext,
         name: str,
         data: Mapping[str, Sequence[object]],
@@ -304,7 +316,8 @@ class TestMergeIncrementalResults:
         ctx.register_record_batches(name, [table.to_batches()])
         return ctx.table(name)
 
-    def _collect_all_rows(self, df: DataFrame) -> dict[str, list[object]]:
+    @staticmethod
+    def _collect_all_rows(df: DataFrame) -> dict[str, list[object]]:
         collected = df.collect()
         if not collected:
             return {}
@@ -387,6 +400,7 @@ class TestMergeIncrementalResults:
 class TestDefaultCdfColumn:
     """Tests for DEFAULT_CDF_COLUMN constant."""
 
-    def test_default_cdf_column_value(self) -> None:
+    @staticmethod
+    def test_default_cdf_column_value() -> None:
         """DEFAULT_CDF_COLUMN has expected value."""
         assert DEFAULT_CDF_COLUMN == "_change_type"

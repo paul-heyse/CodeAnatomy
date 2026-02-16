@@ -30,7 +30,6 @@ class _FakeCache:
         self.tag_index_created = True
 
 
-
 def test_resolve_cache_runtime_tuning_uses_policy_defaults() -> None:
     """Resolve tuning knobs from explicit policy values and defaults."""
     policy = CqCachePolicyV1(
@@ -48,7 +47,6 @@ def test_resolve_cache_runtime_tuning_uses_policy_defaults() -> None:
     assert tuning.eviction_policy == "least-recently-used"
     assert tuning.statistics_enabled is True
     assert tuning.transaction_batch_size == TRANSACTION_BATCH_SIZE_DEFAULT
-
 
 
 def test_apply_cache_runtime_tuning_resets_cache_runtime_knobs() -> None:
@@ -69,7 +67,6 @@ def test_apply_cache_runtime_tuning_resets_cache_runtime_knobs() -> None:
     assert ("sqlite_mmap_size", 8192) in cache.reset_calls
     assert ("sqlite_cache_size", 4096) in cache.reset_calls
     assert cache.tag_index_created is True
-
 
 
 def test_resolve_cache_runtime_tuning_env_overrides() -> None:

@@ -3,7 +3,8 @@
     "./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs"
   ],
   "key_findings": [
-    "reference: compile_target"
+    "reference: compile_target",
+    "Query pack lint failed: 2 errors"
   ],
   "sections": [
     {
@@ -17,9 +18,9 @@
       "count": 4,
       "messages": [
         "Enclosing Context: 1 (top: compile_target(input))",
-        "Parent Scopes: 3 (top: {\n    compile_target(input)\n}, invoke_compile, pub trait Compiler {\n    fn compile(&self, input: &str) -> String;\n}\n\npub struct CoreCompiler;\n\nimpl Compiler for Cor...)",
+        "Parent Scopes: 3 (top: {\n    compile_target(input)\n}, invoke_compile, pub trait Compiler {\n    fn compile(&self, input: &str) -> String;\n}\n\npub struct CoreCompiler;\n\nimpl Compiler for CoreCompiler {\n    fn compile(&self, input: &str) -> String {\n        format!(\"core:{input}\")\n    }\n}\n\npub(crate) fn compile_target(input: &str) -> String {\n    CoreCompiler.compile(input)\n}\n\n#[macro_export]\nmacro_rules! forward_compile {\n    ($value:expr) => {\n        crate::compile_target($value)\n    };\n}\n\npub fn invoke_compile(input: &str) -> String {\n    compile_target(input)\n})",
         "Children: 2 (top: compile_target, (input))",
-        "Callees: 1 (top: compile_target)"
+        "Callees: 1 (top: compile_target(input))"
       ],
       "title": "Neighborhood Preview"
     },
@@ -54,6 +55,13 @@
         "./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs: 3 matches"
       ],
       "title": "Hot Files"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Query pack lint failed: 2 errors"
+      ],
+      "title": "Cross-Language Diagnostics"
     }
   ],
   "summary": {

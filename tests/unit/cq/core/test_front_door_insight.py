@@ -25,11 +25,11 @@ from tools.cq.core.front_door_insight import (
     to_public_front_door_insight_dict,
 )
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails
-from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
-from tools.cq.search.semantic.models import (
+from tools.cq.core.semantic_contracts import (
     SemanticContractStateInputV1,
     derive_semantic_contract_state,
 )
+from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
 
 CALLER_TOTAL = 3
 CALLEE_TOTAL = 2

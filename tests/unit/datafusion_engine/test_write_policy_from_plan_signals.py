@@ -32,27 +32,32 @@ else:
 class TestComputeAdaptiveFileSize:
     """Test adaptive file size computation for small, mid, and large tables."""
 
-    def test_small_table_caps_file_size(self) -> None:
+    @staticmethod
+    def test_small_table_caps_file_size() -> None:
         """Row count below threshold caps file size at 32 MB."""
         result = compute_adaptive_file_size(100, 64 * 1024 * 1024)
         assert result == 32 * 1024 * 1024
 
-    def test_small_table_keeps_smaller_base(self) -> None:
+    @staticmethod
+    def test_small_table_keeps_smaller_base() -> None:
         """Small base target below 32 MB cap is preserved."""
         result = compute_adaptive_file_size(100, 16 * 1024 * 1024)
         assert result == 16 * 1024 * 1024
 
-    def test_large_table_floors_file_size(self) -> None:
+    @staticmethod
+    def test_large_table_floors_file_size() -> None:
         """Row count above threshold raises file size to 128 MB minimum."""
         result = compute_adaptive_file_size(2_000_000, 64 * 1024 * 1024)
         assert result == 128 * 1024 * 1024
 
-    def test_large_table_keeps_larger_base(self) -> None:
+    @staticmethod
+    def test_large_table_keeps_larger_base() -> None:
         """Large base target above 128 MB floor is preserved."""
         result = compute_adaptive_file_size(2_000_000, 256 * 1024 * 1024)
         assert result == 256 * 1024 * 1024
 
-    def test_mid_range_unchanged(self) -> None:
+    @staticmethod
+    def test_mid_range_unchanged() -> None:
         """Row count in the mid range returns the base target unchanged."""
         base = 64 * 1024 * 1024
         result = compute_adaptive_file_size(500_000, base)
@@ -67,8 +72,8 @@ class TestComputeAdaptiveFileSize:
 class TestAdaptiveFileSizeFromBundle:
     """Test the plan bundle adaptive file size extraction helper."""
 
+    @staticmethod
     def test_returns_decision_for_small_table(
-        self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Return a decision when row count triggers small-table cap."""
@@ -85,8 +90,8 @@ class TestAdaptiveFileSizeFromBundle:
         assert decision.reason == "small_table"
         assert decision.estimated_rows == SMALL_TABLE_ROWS
 
+    @staticmethod
     def test_returns_decision_for_large_table(
-        self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Return a decision when row count triggers large-table floor."""
@@ -103,8 +108,8 @@ class TestAdaptiveFileSizeFromBundle:
         assert decision.reason == "large_table"
         assert decision.estimated_rows == LARGE_TABLE_ROWS
 
+    @staticmethod
     def test_returns_none_decision_when_no_change(
-        self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Return None decision when row count does not alter file size."""
@@ -120,8 +125,8 @@ class TestAdaptiveFileSizeFromBundle:
         assert target == base
         assert decision is None
 
+    @staticmethod
     def test_returns_none_decision_when_stats_unavailable(
-        self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Return None decision when plan statistics are unavailable."""

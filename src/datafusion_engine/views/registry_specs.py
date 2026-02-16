@@ -435,14 +435,14 @@ def _semantic_view_specs_for_registration(
     semantic_ir: SemanticIR,
     manifest: SemanticProgramManifest,
 ) -> list[tuple[str, DataFrameBuilder]]:
-    from semantics.pipeline import CpgViewSpecsRequest, _cpg_view_specs
+    from semantics.pipeline import CpgViewSpecsRequest, cpg_view_specs
 
     input_mapping, use_cdf = _validated_semantic_inputs(
         ctx,
         runtime_profile=runtime_profile,
         manifest=manifest,
     )
-    return _cpg_view_specs(
+    return cpg_view_specs(
         CpgViewSpecsRequest(
             input_mapping=input_mapping,
             config=None,

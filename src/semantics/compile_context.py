@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.facade import DataFusionExecutionFacade
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.ir import SemanticIR
+    from semantics.registry import SemanticModel
     from semantics.validation.policy import SemanticInputValidationPolicy
 
 
@@ -28,11 +29,15 @@ def _resolved_outputs(outputs: Collection[str] | None) -> tuple[str, ...] | None
     return tuple(canonical_output_name(name) for name in outputs)
 
 
-def semantic_ir_for_outputs(outputs: Collection[str] | None = None) -> SemanticIR:
+def semantic_ir_for_outputs(
+    outputs: Collection[str] | None = None,
+    *,
+    model: SemanticModel | None = None,
+) -> SemanticIR:
     """Return semantic IR for canonicalized output names."""
     from semantics.ir_pipeline import build_semantic_ir
 
-    return build_semantic_ir(outputs=_resolved_outputs(outputs))
+    return build_semantic_ir(outputs=_resolved_outputs(outputs), model=model)
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,7 @@ class SemanticExecutionContext:
     dataset_resolver: ManifestDatasetResolver
     runtime_profile: DataFusionRuntimeProfile
     ctx: SessionContext
+    model: SemanticModel
     facade: DataFusionExecutionFacade | None = None
 
 
@@ -50,10 +56,10 @@ def build_semantic_execution_context(
     *,
     runtime_profile: DataFusionRuntimeProfile,
     outputs: Collection[str] | None = None,
+    model: SemanticModel | None = None,
     policy: SemanticInputValidationPolicy = "schema_only",
     ctx: SessionContext | None = None,
     input_mapping: Mapping[str, str] | None = None,
-    facade: DataFusionExecutionFacade | None = None,
 ) -> SemanticExecutionContext:
     """Compile semantic artifacts and return a shared execution context.
 
@@ -62,6 +68,7 @@ def build_semantic_execution_context(
     """
     from datafusion_engine.dataset.registry import dataset_catalog_from_profile
     from semantics.compile_invariants import record_compile_if_tracking
+    from semantics.registry import SEMANTIC_MODEL
     from semantics.validation.policy import (
         resolve_semantic_input_mapping,
         validate_semantic_inputs,
@@ -75,7 +82,8 @@ def build_semantic_execution_context(
         if input_mapping is not None
         else resolve_semantic_input_mapping(active_ctx)
     )
-    semantic_ir = semantic_ir_for_outputs(outputs)
+    resolved_model = SEMANTIC_MODEL if model is None else model
+    semantic_ir = semantic_ir_for_outputs(outputs, model=resolved_model)
     catalog = dataset_catalog_from_profile(runtime_profile)
     dataset_bindings = ManifestDatasetBindings(
         locations={name: catalog.get(name) for name in catalog.names()}
@@ -99,7 +107,8 @@ def build_semantic_execution_context(
         dataset_resolver=compiled_manifest.dataset_bindings,
         runtime_profile=runtime_profile,
         ctx=active_ctx,
-        facade=facade,
+        model=resolved_model,
+        facade=None,
     )
 
 

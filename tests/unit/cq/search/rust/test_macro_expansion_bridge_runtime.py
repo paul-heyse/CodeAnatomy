@@ -7,7 +7,8 @@ from tools.cq.search.rust.extensions import expand_macro
 
 
 class _FakeClient:
-    def request(self, method: str, payload: dict[str, object]) -> dict[str, object]:
+    @staticmethod
+    def request(method: str, payload: dict[str, object]) -> dict[str, object]:
         assert method == "rust-analyzer/expandMacro"
         assert "textDocument" in payload
         return {

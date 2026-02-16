@@ -31,7 +31,8 @@ LOW_CONFIDENCE_THRESHOLD = 0.5
 class TestJoinStrategyType:
     """Test JoinStrategyType enum."""
 
-    def test_strategy_types_are_strings(self) -> None:
+    @staticmethod
+    def test_strategy_types_are_strings() -> None:
         """Verify strategy types are StrEnum members."""
         assert JoinStrategyType.EQUI_JOIN == "equi_join"
         assert JoinStrategyType.SPAN_OVERLAP == "span_overlap"
@@ -43,33 +44,39 @@ class TestJoinStrategyType:
 class TestJoinStrategy:
     """Test JoinStrategy dataclass."""
 
-    def test_describe_equi_join(self) -> None:
+    @staticmethod
+    def test_describe_equi_join() -> None:
         """Verify equi-join description."""
         strategy = FILE_EQUI_JOIN
         assert "EquiJoin" in strategy.describe()
         assert "file_id=file_id" in strategy.describe()
 
-    def test_describe_span_overlap(self) -> None:
+    @staticmethod
+    def test_describe_span_overlap() -> None:
         """Verify span overlap description."""
         strategy = SPAN_OVERLAP_STRATEGY
         assert "SpanOverlap" in strategy.describe()
 
-    def test_describe_span_contains(self) -> None:
+    @staticmethod
+    def test_describe_span_contains() -> None:
         """Verify span contains description."""
         strategy = SPAN_CONTAINS_STRATEGY
         assert "SpanContains" in strategy.describe()
 
-    def test_describe_fk(self) -> None:
+    @staticmethod
+    def test_describe_fk() -> None:
         """Verify foreign key description."""
         strategy = make_fk_strategy("def_id", "entity_id")
         assert "ForeignKey" in strategy.describe()
 
-    def test_describe_symbol_match(self) -> None:
+    @staticmethod
+    def test_describe_symbol_match() -> None:
         """Verify symbol match description."""
         strategy = make_symbol_match_strategy()
         assert "SymbolMatch" in strategy.describe()
 
-    def test_with_filter(self) -> None:
+    @staticmethod
+    def test_with_filter() -> None:
         """Verify filter expression chaining."""
         strategy = FILE_EQUI_JOIN.with_filter("is_read = true")
         assert strategy.filter_expr == "is_read = true"
@@ -83,7 +90,8 @@ class TestJoinStrategy:
 class TestJoinCapabilities:
     """Test JoinCapabilities extraction."""
 
-    def test_extract_file_identity(self) -> None:
+    @staticmethod
+    def test_extract_file_identity() -> None:
         """Verify file identity detection."""
         schema = pa.schema([("file_id", pa.string()), ("data", pa.int64())])
         annotated = AnnotatedSchema.from_arrow_schema(schema)
@@ -92,7 +100,8 @@ class TestJoinCapabilities:
         assert caps.has_file_identity is True
         assert caps.has_spans is False
 
-    def test_extract_spans(self) -> None:
+    @staticmethod
+    def test_extract_spans() -> None:
         """Verify span detection."""
         schema = pa.schema(
             [
@@ -107,7 +116,8 @@ class TestJoinCapabilities:
         assert caps.has_file_identity is True
         assert caps.has_spans is True
 
-    def test_extract_entity_id(self) -> None:
+    @staticmethod
+    def test_extract_entity_id() -> None:
         """Verify entity_id detection."""
         schema = pa.schema([("entity_id", pa.string()), ("value", pa.string())])
         annotated = AnnotatedSchema.from_arrow_schema(schema)
@@ -115,7 +125,8 @@ class TestJoinCapabilities:
 
         assert caps.has_entity_id is True
 
-    def test_extract_fk_columns(self) -> None:
+    @staticmethod
+    def test_extract_fk_columns() -> None:
         """Verify FK column detection."""
         schema = pa.schema(
             [
@@ -132,7 +143,8 @@ class TestJoinCapabilities:
         assert "ref_id" in caps.fk_columns
         assert "entity_id" not in caps.fk_columns
 
-    def test_extract_symbol(self) -> None:
+    @staticmethod
+    def test_extract_symbol() -> None:
         """Verify symbol detection."""
         schema = pa.schema([("symbol", pa.string()), ("data", pa.int64())])
         annotated = AnnotatedSchema.from_arrow_schema(schema)
@@ -144,7 +156,8 @@ class TestJoinCapabilities:
 class TestInferJoinStrategy:
     """Test infer_join_strategy function."""
 
-    def test_infer_span_overlap(self) -> None:
+    @staticmethod
+    def test_infer_span_overlap() -> None:
         """Infer span overlap when both schemas have file + spans."""
         left = pa.schema(
             [
@@ -169,7 +182,8 @@ class TestInferJoinStrategy:
         assert strategy.strategy_type == JoinStrategyType.SPAN_OVERLAP
         assert strategy.confidence == SPAN_CONFIDENCE
 
-    def test_infer_span_contains_with_hint(self) -> None:
+    @staticmethod
+    def test_infer_span_contains_with_hint() -> None:
         """Force span contains with hint."""
         left = pa.schema(
             [
@@ -196,7 +210,8 @@ class TestInferJoinStrategy:
         assert strategy.strategy_type == JoinStrategyType.SPAN_CONTAINS
         assert strategy.confidence == SPAN_CONFIDENCE
 
-    def test_infer_fk_join(self) -> None:
+    @staticmethod
+    def test_infer_fk_join() -> None:
         """Infer FK join when left has FK and right has entity_id."""
         left = pa.schema([("def_id", pa.string()), ("name", pa.string())])
         right = pa.schema([("entity_id", pa.string()), ("path", pa.string())])
@@ -212,7 +227,8 @@ class TestInferJoinStrategy:
         assert strategy.right_keys == ("entity_id",)
         assert strategy.confidence == FK_CONFIDENCE
 
-    def test_infer_symbol_join(self) -> None:
+    @staticmethod
+    def test_infer_symbol_join() -> None:
         """Infer symbol join when both have symbols."""
         left = pa.schema([("symbol", pa.string()), ("file_id", pa.string())])
         right = pa.schema([("symbol", pa.string()), ("definition", pa.string())])
@@ -229,7 +245,8 @@ class TestInferJoinStrategy:
         assert strategy.strategy_type == JoinStrategyType.SYMBOL_MATCH
         assert strategy.confidence == SYMBOL_CONFIDENCE
 
-    def test_infer_file_equi_join(self) -> None:
+    @staticmethod
+    def test_infer_file_equi_join() -> None:
         """Infer file equi-join when both have file_id but no spans."""
         left = pa.schema([("file_id", pa.string()), ("name", pa.string())])
         right = pa.schema([("file_id", pa.string()), ("value", pa.int64())])
@@ -243,7 +260,8 @@ class TestInferJoinStrategy:
         assert strategy.strategy_type == JoinStrategyType.EQUI_JOIN
         assert strategy.confidence == EQUI_JOIN_CONFIDENCE
 
-    def test_infer_none_no_common(self) -> None:
+    @staticmethod
+    def test_infer_none_no_common() -> None:
         """Return None when no common join capability."""
         left = pa.schema([("name", pa.string())])
         right = pa.schema([("value", pa.int64())])
@@ -255,7 +273,8 @@ class TestInferJoinStrategy:
 
         assert strategy is None
 
-    def test_hint_unsatisfied_returns_none(self) -> None:
+    @staticmethod
+    def test_hint_unsatisfied_returns_none() -> None:
         """Return None when hint cannot be satisfied."""
         left = pa.schema([("file_id", pa.string())])
         right = pa.schema([("file_id", pa.string())])
@@ -274,7 +293,8 @@ class TestInferJoinStrategy:
 class TestRequireJoinStrategy:
     """Test require_join_strategy function."""
 
-    def test_returns_strategy_on_success(self) -> None:
+    @staticmethod
+    def test_returns_strategy_on_success() -> None:
         """Return strategy when inference succeeds."""
         left = pa.schema(
             [
@@ -297,7 +317,8 @@ class TestRequireJoinStrategy:
 
         assert strategy.strategy_type == JoinStrategyType.SPAN_OVERLAP
 
-    def test_raises_on_failure(self) -> None:
+    @staticmethod
+    def test_raises_on_failure() -> None:
         """Raise JoinInferenceError when inference fails."""
         left = pa.schema([("name", pa.string())])
         right = pa.schema([("value", pa.int64())])
@@ -314,7 +335,8 @@ class TestRequireJoinStrategy:
         assert "defs" in str(exc_info.value)
         assert "file_identity=False" in str(exc_info.value)
 
-    def test_error_includes_hint(self) -> None:
+    @staticmethod
+    def test_error_includes_hint() -> None:
         """Error message includes unsatisfied hint."""
         left = pa.schema([("file_id", pa.string())])
         right = pa.schema([("file_id", pa.string())])
@@ -333,12 +355,14 @@ class TestRequireJoinStrategy:
 class TestBuildJoinInferenceConfidence:
     """Test build_join_inference_confidence helper."""
 
-    def test_none_strategy_returns_none(self) -> None:
+    @staticmethod
+    def test_none_strategy_returns_none() -> None:
         """Return None when strategy is None."""
         result = build_join_inference_confidence(None)
         assert result is None
 
-    def test_high_confidence_for_span_overlap(self) -> None:
+    @staticmethod
+    def test_high_confidence_for_span_overlap() -> None:
         """Span overlap strategy should produce high confidence."""
         strategy = SPAN_OVERLAP_STRATEGY
         confidence = build_join_inference_confidence(strategy)
@@ -350,7 +374,8 @@ class TestBuildJoinInferenceConfidence:
         assert confidence.fallback_reason is None
         assert "schema" in confidence.evidence_sources
 
-    def test_high_confidence_for_fk(self) -> None:
+    @staticmethod
+    def test_high_confidence_for_fk() -> None:
         """FK strategy should produce high confidence."""
         strategy = make_fk_strategy("def_id", "entity_id")
         # FK confidence is 0.85 in the inference module
@@ -364,7 +389,8 @@ class TestBuildJoinInferenceConfidence:
         assert confidence.decision_type == "join_strategy"
         assert confidence.decision_value == "foreign_key"
 
-    def test_low_confidence_for_equi_join(self) -> None:
+    @staticmethod
+    def test_low_confidence_for_equi_join() -> None:
         """Equi-join strategy should produce low confidence (0.6 < 0.8 threshold)."""
         from dataclasses import replace
 
@@ -377,7 +403,8 @@ class TestBuildJoinInferenceConfidence:
         assert confidence.decision_value == "equi_join"
         assert confidence.fallback_reason == "weak_schema_evidence"
 
-    def test_evidence_sources_vary_by_strategy_type(self) -> None:
+    @staticmethod
+    def test_evidence_sources_vary_by_strategy_type() -> None:
         """Evidence sources differ by strategy type."""
         from dataclasses import replace
 
@@ -396,7 +423,8 @@ class TestBuildJoinInferenceConfidence:
 class TestInferJoinStrategyWithConfidence:
     """Test infer_join_strategy_with_confidence function."""
 
-    def test_returns_result_for_span_overlap(self) -> None:
+    @staticmethod
+    def test_returns_result_for_span_overlap() -> None:
         """Return JoinStrategyResult with confidence for span schemas."""
         left = pa.schema(
             [
@@ -423,7 +451,8 @@ class TestInferJoinStrategyWithConfidence:
         assert result.confidence.confidence_score >= HIGH_CONFIDENCE_THRESHOLD
         assert result.confidence.decision_type == "join_strategy"
 
-    def test_returns_none_when_no_strategy(self) -> None:
+    @staticmethod
+    def test_returns_none_when_no_strategy() -> None:
         """Return None when no join strategy can be inferred."""
         left = pa.schema([("name", pa.string())])
         right = pa.schema([("value", pa.int64())])
@@ -435,7 +464,8 @@ class TestInferJoinStrategyWithConfidence:
 
         assert result is None
 
-    def test_result_is_frozen(self) -> None:
+    @staticmethod
+    def test_result_is_frozen() -> None:
         """JoinStrategyResult should be immutable."""
         left = pa.schema(
             [

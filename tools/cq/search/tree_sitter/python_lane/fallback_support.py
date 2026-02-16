@@ -15,7 +15,11 @@ _MAX_CAPTURE_TEXT_LEN = 120
 
 
 def get_python_field_ids() -> dict[str, int]:
-    """Delegate to cached_field_ids; avoids circular import with runtime.py."""
+    """Return cached Python tree-sitter field IDs.
+
+    Returns:
+        dict[str, int]: Field-name to field-id mapping for Python grammar nodes.
+    """
     return cached_field_ids("python")
 
 

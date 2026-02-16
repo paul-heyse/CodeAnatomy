@@ -27,7 +27,8 @@ _VIEW_NAME = "__missing_semantic_dataset__"
 
 @dataclass
 class _Adapter:
-    def register_view(self, *_args: object, **_kwargs: object) -> None:
+    @staticmethod
+    def register_view(*_args: object, **_kwargs: object) -> None:
         return None
 
 

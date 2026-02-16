@@ -30,12 +30,14 @@ class OtherStruct(msgspec.Struct, frozen=True):
 class TestStructFieldNames:
     """Test struct_field_names function."""
 
-    def test_returns_field_names(self) -> None:
+    @staticmethod
+    def test_returns_field_names() -> None:
         """Verify field names are returned in declaration order."""
         names = struct_field_names(SampleStruct)
         assert names == ("name", "value", "tags")
 
-    def test_empty_struct(self) -> None:
+    @staticmethod
+    def test_empty_struct() -> None:
         """Verify empty struct returns empty tuple."""
 
         class Empty(msgspec.Struct, frozen=True):
@@ -48,12 +50,14 @@ class TestStructFieldNames:
 class TestUnionSchemaSummary:
     """Test union_schema_summary function."""
 
-    def test_summary_variant_count(self) -> None:
+    @staticmethod
+    def test_summary_variant_count() -> None:
         """Verify variant count matches number of types."""
         summary = union_schema_summary((SampleStruct, OtherStruct))
         assert summary["variant_count"] == UNION_VARIANT_COUNT
 
-    def test_summary_has_variants_key(self) -> None:
+    @staticmethod
+    def test_summary_has_variants_key() -> None:
         """Verify summary includes variants list."""
         summary = union_schema_summary((SampleStruct,))
         assert "variants" in summary
@@ -63,13 +67,15 @@ class TestUnionSchemaSummary:
 class TestDecodeRawJsonBlob:
     """Test decode_raw_json_blob function."""
 
-    def test_decode_returns_raw(self) -> None:
+    @staticmethod
+    def test_decode_returns_raw() -> None:
         """Verify valid JSON decodes to Raw type."""
         data = b'{"key": "value"}'
         result = decode_raw_json_blob(data)
         assert isinstance(result, msgspec.Raw)
 
-    def test_decode_invalid_json_raises(self) -> None:
+    @staticmethod
+    def test_decode_invalid_json_raises() -> None:
         """Verify invalid JSON raises DecodeError."""
         with pytest.raises(msgspec.DecodeError):
             decode_raw_json_blob(b"not json{{{")

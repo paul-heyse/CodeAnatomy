@@ -115,7 +115,7 @@ def summary_string(
     missing_reason : str
         Reason code for N/A message.
 
-    Returns
+    Returns:
     -------
     str
         Formatted summary value or N/A message.
@@ -142,7 +142,7 @@ def _ordered_summary_payload(summary: dict[str, object]) -> dict[str, object]:
     summary : dict[str, object]
         Summary dict.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Ordered summary dict.
@@ -168,7 +168,7 @@ def render_summary(summary: dict[str, object]) -> list[str]:
     summary : dict[str, object]
         Summary dict.
 
-    Returns
+    Returns:
     -------
     list[str]
         Summary section lines.
@@ -191,7 +191,7 @@ def render_insight_card_from_summary(summary: dict[str, object]) -> list[str]:
     summary : dict[str, object]
         Summary dict.
 
-    Returns
+    Returns:
     -------
     list[str]
         Insight card markdown lines, or empty list if not present.
@@ -218,7 +218,7 @@ def _derive_enrichment_status(value: object) -> str:
     value : object
         Enrichment telemetry payload.
 
-    Returns
+    Returns:
     -------
     str
         Compact status line.
@@ -250,7 +250,7 @@ def _derive_python_semantic_telemetry_status(value: object) -> str:
     value : object
         Python semantic telemetry payload.
 
-    Returns
+    Returns:
     -------
     str
         Compact status line.
@@ -272,7 +272,7 @@ def _derive_rust_semantic_telemetry_status(value: object) -> str:
     value : object
         Rust semantic telemetry payload.
 
-    Returns
+    Returns:
     -------
     str
         Compact status line.
@@ -294,7 +294,7 @@ def _derive_semantic_advanced_status(value: object) -> str:
     value : object
         Semantic planes payload.
 
-    Returns
+    Returns:
     -------
     str
         Compact status line.
@@ -318,7 +318,7 @@ def _derive_python_semantic_diagnostics_status(value: object) -> str:
     value : object
         Python semantic diagnostics payload.
 
-    Returns
+    Returns:
     -------
     str
         Compact status line.
@@ -337,7 +337,7 @@ def _derive_capabilities_status(value: object) -> str:
     value : object
         Language capabilities payload.
 
-    Returns
+    Returns:
     -------
     str
         Compact status line.
@@ -356,7 +356,7 @@ def _derive_cross_lang_status(value: object) -> str:
     value : object
         Cross-language diagnostics payload.
 
-    Returns
+    Returns:
     -------
     str
         Compact status line.
@@ -395,7 +395,7 @@ def _derive_compact_status(key: str, value: object) -> str | None:
     value : object
         Diagnostic payload.
 
-    Returns
+    Returns:
     -------
     str | None
         Compact status string or None if no deriver available.
@@ -420,7 +420,7 @@ def compact_summary_for_rendering(
     summary : dict[str, object]
         Full summary dict.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, object], list[tuple[str, object]]]
         (compact display dict, offloaded (key, payload) pairs).
@@ -446,7 +446,7 @@ def get_impact_confidence_summary(findings: list[Finding]) -> tuple[str, str]:
     findings : list[Finding]
         Findings to analyze.
 
-    Returns
+    Returns:
     -------
     tuple[str, str]
         (impact_bucket, confidence_bucket) based on findings.
@@ -479,7 +479,7 @@ def render_summary_condensed(result: CqResult) -> str:
     result : CqResult
         Analysis result to render.
 
-    Returns
+    Returns:
     -------
     str
         Condensed summary output.

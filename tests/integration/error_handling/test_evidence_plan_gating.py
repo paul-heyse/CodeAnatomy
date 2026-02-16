@@ -79,8 +79,8 @@ class TestEvidencePlanGating:
     required_columns_for, plan_feature_flags, enabled_when).
     """
 
+    @staticmethod
     def test_gated_dataset_excluded_from_plan(
-        self,
         evidence_plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify gated datasets are excluded via requires_dataset()."""
@@ -92,8 +92,8 @@ class TestEvidencePlanGating:
         assert plan.requires_dataset("ast_files") is False
         assert plan.requires_dataset("bytecode_ops") is False
 
+    @staticmethod
     def test_required_columns_for_returns_projection(
-        self,
         evidence_plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify required_columns_for() returns column subset."""
@@ -104,8 +104,8 @@ class TestEvidencePlanGating:
         assert "bend" in cols
         assert "qualified_name" in cols
 
+    @staticmethod
     def test_required_columns_for_returns_empty_for_unrestricted(
-        self,
         evidence_plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify required_columns_for() returns empty for datasets without column restrictions."""
@@ -114,8 +114,8 @@ class TestEvidencePlanGating:
         cols = plan.required_columns_for("cst_defs")
         assert cols == ()
 
+    @staticmethod
     def test_required_columns_for_returns_empty_for_excluded(
-        self,
         evidence_plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify required_columns_for() returns empty for excluded datasets."""
@@ -123,8 +123,8 @@ class TestEvidencePlanGating:
         cols = plan.required_columns_for("ast_files")
         assert cols == ()
 
+    @staticmethod
     def test_compile_evidence_plan_includes_extra_sources(
-        self,
         evidence_plan_compiled: EvidencePlan,
     ) -> None:
         """Verify compile_evidence_plan() includes extra_sources."""
@@ -132,8 +132,8 @@ class TestEvidencePlanGating:
         # ast_files was in extra_sources
         assert plan.requires_dataset("ast_files") is True
 
+    @staticmethod
     def test_compile_evidence_plan_required_columns_as_tuple(
-        self,
         evidence_plan_compiled: EvidencePlan,
     ) -> None:
         """Verify compiled plan converts column sequences to tuples."""
@@ -142,8 +142,8 @@ class TestEvidencePlanGating:
         assert isinstance(cols, tuple)
         assert "file_id" in cols
 
+    @staticmethod
     def test_plan_feature_flags_returns_dict(
-        self,
         evidence_plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify plan_feature_flags() returns a dict of bool flags.
@@ -157,13 +157,14 @@ class TestEvidencePlanGating:
             assert isinstance(key, str)
             assert isinstance(value, bool)
 
-    def test_plan_feature_flags_none_plan_returns_empty(self) -> None:
+    @staticmethod
+    def test_plan_feature_flags_none_plan_returns_empty() -> None:
         """Verify plan_feature_flags() returns empty dict for None plan."""
         flags = plan_feature_flags("cst", None)
         assert flags == {}
 
+    @staticmethod
     def test_rule_execution_options_returns_execution_options(
-        self,
         evidence_plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify rule_execution_options() returns ExtractExecutionOptions."""
@@ -171,8 +172,8 @@ class TestEvidencePlanGating:
         assert isinstance(options, ExtractExecutionOptions)
         assert isinstance(options.feature_flags, dict)
 
+    @staticmethod
     def test_rule_execution_options_with_overrides(
-        self,
         evidence_plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify rule_execution_options() applies overrides."""
@@ -185,7 +186,8 @@ class TestEvidencePlanGating:
         # Override should appear in feature_flags
         assert options.feature_flags.get("include_refs") is False
 
-    def test_plan_requires_row_checks_output_name(self) -> None:
+    @staticmethod
+    def test_plan_requires_row_checks_output_name() -> None:
         """Verify plan_requires_row() checks both name and output_name.
 
         plan_requires_row(plan, row: ExtractMetadata) returns True
@@ -205,8 +207,8 @@ class TestEvidencePlanGating:
             row = matching_rows[0]
             assert plan_requires_row(plan, row) is True
 
+    @staticmethod
     def test_evidence_plan_requires_template(
-        self,
         evidence_plan_cst_only: EvidencePlan,
     ) -> None:
         """Verify requires_template() identifies required templates."""
@@ -217,7 +219,8 @@ class TestEvidencePlanGating:
         result = plan.requires_template("cst")
         assert isinstance(result, bool)
 
-    def test_empty_plan_requires_nothing(self) -> None:
+    @staticmethod
+    def test_empty_plan_requires_nothing() -> None:
         """Verify empty evidence plan gates all datasets."""
         plan = EvidencePlan(sources=())
         assert plan.requires_dataset("cst_refs") is False

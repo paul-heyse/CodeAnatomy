@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from tools.cq.cli_app.commands.artifact import get, list_artifacts
-from tools.cq.cli_app.context import CliContext
+from tools.cq.cli_app.context import CliContext, CliTextResult
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.artifacts import save_search_artifact_bundle_cache
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
@@ -43,9 +43,11 @@ def test_artifact_list_and_get_json(tmp_path: Path) -> None:
     )
 
     listed = list_artifacts(run_id="run-artifact", ctx=ctx)
+    assert isinstance(listed.result, CliTextResult)
     listed_payload = json.loads(listed.result.text)
     assert listed_payload["count"] >= 1
 
     fetched = get(run_id="run-artifact", kind="summary", ctx=ctx)
+    assert isinstance(fetched.result, CliTextResult)
     fetched_payload = json.loads(fetched.result.text)
     assert fetched_payload["query"] == "stable_id"

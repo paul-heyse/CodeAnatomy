@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from tools.cq.search.pipeline import smart_search as enrichment_module
+from tools.cq.search.pipeline import python_semantic as enrichment_module
 from tools.cq.search.pipeline.contracts import SearchConfig
-from tools.cq.search.pipeline.smart_search import RawMatch
+from tools.cq.search.pipeline.smart_search_types import RawMatch
 
 
 def test_run_enrichment_prefetch_delegates(monkeypatch: pytest.MonkeyPatch) -> None:

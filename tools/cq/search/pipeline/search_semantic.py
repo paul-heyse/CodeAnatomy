@@ -37,7 +37,7 @@ def _count_mapping_rows(value: object) -> int:
     value
         Value to count rows in.
 
-    Returns
+    Returns:
     -------
     int
         Number of dictionary rows.
@@ -55,7 +55,7 @@ def _payload_coverage_status(payload: dict[str, object]) -> tuple[str | None, st
     payload
         Semantic enrichment payload.
 
-    Returns
+    Returns:
     -------
     tuple[str | None, str | None]
         Coverage status and reason (if present).
@@ -83,7 +83,7 @@ def _rust_payload_has_signal(payload: dict[str, object]) -> bool:
     payload
         Rust semantic enrichment payload.
 
-    Returns
+    Returns:
     -------
     bool
         True if payload contains actionable signal.
@@ -118,7 +118,7 @@ def _rust_payload_reason(payload: dict[str, object]) -> str | None:
     payload
         Rust semantic enrichment payload.
 
-    Returns
+    Returns:
     -------
     str | None
         Degradation reason if present.
@@ -161,7 +161,7 @@ def _resolve_search_semantic_target(
     primary_target_match
         Primary target match (if available).
 
-    Returns
+    Returns:
     -------
     tuple[Path, QueryLanguage, Anchor, str] | None
         Target file path, language, anchor, and symbol hint (if resolved).
@@ -208,7 +208,7 @@ def _normalize_python_semantic_degradation_reason(
     coverage_reason
         Optional coverage-specific reason.
 
-    Returns
+    Returns:
     -------
     str
         Normalized reason string.
@@ -264,7 +264,7 @@ def _apply_prefetched_search_semantic_outcome(
     primary_target_match
         Primary target match (may have prefetched payload).
 
-    Returns
+    Returns:
     -------
     bool
         True if prefetched payload was applied.
@@ -383,7 +383,7 @@ def collect_search_semantic_outcome(
     primary_target_match
         Primary target match (if available).
 
-    Returns
+    Returns:
     -------
     _SearchSemanticOutcome
         Semantic enrichment outcome with payload and telemetry.
@@ -480,7 +480,7 @@ def read_semantic_telemetry(
     language
         Language to read telemetry for (or None for all).
 
-    Returns
+    Returns:
     -------
     tuple[int, int, int, int]
         Attempted, applied, failed, and timed_out counts.
@@ -523,7 +523,7 @@ def derive_semantic_provider_from_summary(summary: dict[str, object]) -> Semanti
     summary
         Summary dictionary with telemetry.
 
-    Returns
+    Returns:
     -------
     SemanticProvider
         Derived semantic provider identifier.
@@ -556,7 +556,7 @@ def derive_search_semantic_state(
     outcome
         Semantic enrichment outcome.
 
-    Returns
+    Returns:
     -------
     SemanticContractStateV1
         Derived semantic contract state.
@@ -615,7 +615,7 @@ def apply_search_semantic_insight(
     primary_target_match
         Primary target match (if available).
 
-    Returns
+    Returns:
     -------
     FrontDoorInsightV1
         Augmented insight with semantic contract state.

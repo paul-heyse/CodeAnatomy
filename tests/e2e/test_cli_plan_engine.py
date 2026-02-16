@@ -92,14 +92,17 @@ def _wire_plan_command_stubs(
             return "feedbeef"
 
     class _FakeSemanticPlanCompiler:
-        def build_spec_json(self, _semantic_ir_json: str, _request_json: str) -> str:
+        @staticmethod
+        def build_spec_json(_semantic_ir_json: str, _request_json: str) -> str:
             spec = _spec_fixture(repo_root, "Default")
             return msgspec.json.encode(spec).decode()
 
-        def compile(self, _spec_json: str) -> object:
+        @staticmethod
+        def compile(_spec_json: str) -> object:
             return _FakeCompiledPlan()
 
-        def compile_metadata_json(self, _session_factory: object, _spec_json: str) -> str:
+        @staticmethod
+        def compile_metadata_json(_session_factory: object, _spec_json: str) -> str:
             return json.dumps(
                 {
                     "spec_hash": "feedbeef",

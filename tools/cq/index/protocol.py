@@ -20,7 +20,7 @@ class SymbolIndex(Protocol):
     def all_functions(self) -> Iterator[FnDecl]:
         """Iterate over all function declarations.
 
-        Yields
+        Yields:
         ------
         FnDecl
             Function declarations.
@@ -30,7 +30,7 @@ class SymbolIndex(Protocol):
     def all_classes(self) -> Iterator[ClassDecl]:
         """Iterate over all class declarations.
 
-        Yields
+        Yields:
         ------
         ClassDecl
             Class declarations.
@@ -45,7 +45,7 @@ class SymbolIndex(Protocol):
         name : str
             Function name (not qualified).
 
-        Returns
+        Returns:
         -------
         list[FnDecl]
             Matching declarations.
@@ -60,7 +60,7 @@ class SymbolIndex(Protocol):
         qname : str
             Qualified name.
 
-        Returns
+        Returns:
         -------
         list[FnDecl]
             Matching declarations.
@@ -75,7 +75,7 @@ class SymbolIndex(Protocol):
         symbol : str
             Function or qualified name.
 
-        Returns
+        Returns:
         -------
         list[str]
             Matching function keys.
@@ -90,7 +90,7 @@ class SymbolIndex(Protocol):
         name : str
             Class name.
 
-        Returns
+        Returns:
         -------
         list[ClassDecl]
             Matching declarations.
@@ -105,7 +105,7 @@ class SymbolIndex(Protocol):
         name : str
             Class name.
 
-        Returns
+        Returns:
         -------
         list[str]
             Matching class keys.
@@ -120,7 +120,7 @@ class SymbolIndex(Protocol):
         file : str
             Relative file path.
 
-        Returns
+        Returns:
         -------
         ModuleInfo | None
             Module info if indexed.
@@ -137,7 +137,7 @@ class SymbolIndex(Protocol):
         name : str
             Name or dotted name to resolve.
 
-        Returns
+        Returns:
         -------
         tuple[str | None, str | None]
             (module, symbol) if resolved, else (None, None).

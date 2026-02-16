@@ -14,6 +14,7 @@ ASYNC_OUTPUT_VALUE = 8
 
 def test_dispatch_bound_command_sync() -> None:
     """Dispatch sync command should pass bound positional args unchanged."""
+
     def command(name: str) -> str:
         return f"hello {name}"
 
@@ -23,6 +24,7 @@ def test_dispatch_bound_command_sync() -> None:
 
 def test_dispatch_bound_command_async_without_running_loop() -> None:
     """Test dispatch bound command async without running loop."""
+
     async def command(value: int) -> int:
         await asyncio.sleep(0)
         return value + 1
@@ -33,6 +35,7 @@ def test_dispatch_bound_command_async_without_running_loop() -> None:
 
 def test_dispatch_bound_command_async_with_running_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test dispatch bound command async with running loop."""
+
     async def command(value: int) -> int:
         await asyncio.sleep(0)
         return value + 1

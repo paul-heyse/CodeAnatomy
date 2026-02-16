@@ -26,7 +26,7 @@ def summary_with_render_enrichment_metrics(
     skipped : int
         Number of enrichment tasks skipped.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Summary dict with enrichment metrics.

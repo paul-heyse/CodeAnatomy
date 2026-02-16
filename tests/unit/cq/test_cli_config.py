@@ -18,7 +18,8 @@ DEFAULT_PROVIDER_COUNT = 2
 class TestBuildConfigChain:
     """Tests for build_config_chain function."""
 
-    def test_default_config_chain(self) -> None:
+    @staticmethod
+    def test_default_config_chain() -> None:
         """Test default config chain includes Env and Toml providers."""
         providers = build_config_chain()
         assert len(providers) == DEFAULT_PROVIDER_COUNT
@@ -27,13 +28,15 @@ class TestBuildConfigChain:
         # Second provider should be Toml
         assert providers[1].__class__.__name__ == "Toml"
 
-    def test_use_config_false_keeps_env_only(self) -> None:
+    @staticmethod
+    def test_use_config_false_keeps_env_only() -> None:
         """Test that use_config=False returns only the env provider."""
         providers = build_config_chain(use_config=False)
         assert len(providers) == 1
         assert providers[0].__class__.__name__ == "Env"
 
-    def test_explicit_config_file(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_explicit_config_file(tmp_path: Path) -> None:
         """Test that explicit config file is added to chain."""
         config_file = tmp_path / "test.toml"
         config_file.write_text("[cq]\nformat = 'json'\n")
@@ -45,7 +48,8 @@ class TestBuildConfigChain:
         # Second should be Toml with our file
         assert providers[1].__class__.__name__ == "Toml"
 
-    def test_explicit_config_file_must_exist(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_explicit_config_file_must_exist(tmp_path: Path) -> None:
         """Test that explicit config file must exist when specified."""
         config_file = tmp_path / "nonexistent.toml"
         # The provider is created, but will fail when trying to read
@@ -56,7 +60,8 @@ class TestBuildConfigChain:
 class TestEnvVarPrefix:
     """Tests for environment variable prefix."""
 
-    def test_env_provider_uses_cq_prefix(self) -> None:
+    @staticmethod
+    def test_env_provider_uses_cq_prefix() -> None:
         """Test that Env provider is configured with CQ_ prefix."""
         providers = build_config_chain()
         env_provider = providers[0]

@@ -22,7 +22,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.macros.contracts import MacroRequestBase
+from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import macro_scoring_details, resolve_target_files
 
@@ -203,7 +203,7 @@ def _append_surface_section(
     result: CqResult,
     all_surfaces: list[BytecodeSurface],
     show_set: set[str],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     if not all_surfaces:
         return
@@ -260,7 +260,7 @@ def _append_global_summary(
     all_globals: set[str],
     all_surfaces: list[BytecodeSurface],
     show_set: set[str],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     if "globals" not in show_set or not all_globals:
         return
@@ -291,7 +291,7 @@ def _append_opcode_summary(
     result: CqResult,
     total_opcodes: dict[str, int],
     show_set: set[str],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     if "opcodes" not in show_set or not total_opcodes:
         return
@@ -311,7 +311,7 @@ def _append_opcode_summary(
 def _append_evidence(
     result: CqResult,
     all_surfaces: list[BytecodeSurface],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     for surface in all_surfaces:
         details = {

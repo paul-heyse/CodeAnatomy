@@ -7,7 +7,8 @@
   "key_findings": [
     "module: AsyncService",
     "module: AsyncService",
-    "class: AsyncService"
+    "class: AsyncService",
+    "Query pack lint failed: 2 errors"
   ],
   "sections": [
     {
@@ -20,13 +21,12 @@
       "title": "Target Candidates"
     },
     {
-      "count": 5,
+      "count": 4,
       "messages": [
         "Enclosing Context: 1 (top: AsyncService)",
-        "Parent Scopes: 1 (top: # ruff: noqa: DOC201, TID252\n\"\"\"Public API surface for hermetic Python fixture.\"\"\"\n\nfrom __future__ import annotation...)",
+        "Parent Scopes: 1 (top: # ruff: noqa: DOC201, TID252\n\"\"\"Public API surface for hermetic Python fixture.\"\"\"\n\nfrom __future__ import annotations\n\nfrom .dispatch import DynamicRouter\nfrom .models import BuildContext\nfrom .services import AsyncService, ServiceRegistry\nfrom .services import resolve as service_resolve\n\n\n# Intentional name collision with app.services.resolve.\ndef resolve(ctx: BuildContext) -> str:\n    \"\"\"Top-level resolver used for target ambiguity tests.\"\"\"\n    return f\"api:{ctx.module_name}:{ctx.symbol_name}:{ctx.line}\"\n\n\ndef build_pipeline() -> tuple[ServiceRegistry, DynamicRouter, AsyncService]:\n    \"\"\"Build fixture pipeline components.\"\"\"\n    events: list[str] = []\n\n    def recorder(message: str) -> None:\n        events.append(message)\n\n    registry = ServiceRegistry()\n    registry.register(\"direct\", service_resolve)\n\n    router = DynamicRouter(registry)\n    service = AsyncService(name=\"alpha\", value=\"resolved\", on_emit=recorder)\n    service.handle(\"payload\")\n\n    ctx = BuildContext(module_name=\"app.api\", symbol_name=\"resolve\", line=27)\n    _ = resolve(ctx)\n    _ = service_resolve(ctx)\n    return registry, router, service)",
         "Children: 3 (top: .services, AsyncService, ServiceRegistry)",
-        "Siblings: 4 (top: BuildContext, resolve as service_resolve)",
-        "Callers: 1 (top: AsyncService(name=\"alpha\", value=\"resolved\", on_emit=recorder))"
+        "Siblings: 4 (top: BuildContext, resolve as service_resolve)"
       ],
       "title": "Neighborhood Preview"
     },
@@ -77,6 +77,13 @@
         "./tests/e2e/cq/_golden_workspace/python_project/app/services.py: 1 matches"
       ],
       "title": "Hot Files"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Query pack lint failed: 2 errors"
+      ],
+      "title": "Cross-Language Diagnostics"
     }
   ],
   "summary": {
@@ -102,8 +109,8 @@
           "total": 0
         },
         "callers": {
-          "availability": "full",
-          "total": 1
+          "availability": "unavailable",
+          "total": 0
         },
         "hierarchy_or_scope": {
           "availability": "full",
@@ -117,7 +124,7 @@
       "risk": {
         "counters": {
           "callees": 0,
-          "callers": 1,
+          "callers": 0,
           "forwarding_count": 0,
           "hazard_count": 0
         },

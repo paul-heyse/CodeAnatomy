@@ -89,7 +89,8 @@ def _configure_plan_test_doubles(
             return "abc123"
 
     class _FakeSemanticPlanCompiler:
-        def build_spec_json(self, _semantic_ir_json: str, _request_json: str) -> str:
+        @staticmethod
+        def build_spec_json(_semantic_ir_json: str, _request_json: str) -> str:
             targets = ("cpg_nodes", "cpg_edges", "cpg_symbols", "cpg_spans", "cpg_diagnostics")
             spec = _spec_fixture(
                 output_targets=targets,
@@ -98,11 +99,13 @@ def _configure_plan_test_doubles(
             )
             return msgspec.json.encode(spec).decode()
 
-        def compile(self, spec_json: str) -> object:
+        @staticmethod
+        def compile(spec_json: str) -> object:
             _ = spec_json
             return _FakeCompiledPlan()
 
-        def compile_metadata_json(self, _session_factory: object, _spec_json: str) -> str:
+        @staticmethod
+        def compile_metadata_json(_session_factory: object, _spec_json: str) -> str:
             return json.dumps(
                 {
                     "spec_hash": "abc123",

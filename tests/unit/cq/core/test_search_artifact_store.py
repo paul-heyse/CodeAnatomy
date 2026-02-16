@@ -25,7 +25,6 @@ def _sample_bundle(run_id: str) -> SearchArtifactBundleV1:
     )
 
 
-
 def test_search_artifact_store_roundtrip(tmp_path: Path) -> None:
     """Persist and load a tiny search artifact bundle end-to-end."""
     close_cq_cache_backend()
@@ -57,7 +56,6 @@ def test_search_artifact_store_roundtrip(tmp_path: Path) -> None:
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_ENABLED", None)
     os.environ.pop("CQ_CACHE_DIR", None)
-
 
 
 def test_search_artifact_store_large_bundle_roundtrip(tmp_path: Path) -> None:

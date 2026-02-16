@@ -19,20 +19,23 @@ NEXT_VERSION_AFTER_FIVE = 6
 class TestCdfCursor:
     """Tests for CdfCursor dataclass."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_create_factory_method(self) -> None:
+    def test_create_factory_method() -> None:
         """CdfCursor.create factory method creates cursor."""
         cursor = CdfCursor.create("my_dataset", START_VERSION)
         assert cursor.dataset_name == "my_dataset"
         assert cursor.last_version == START_VERSION
         assert cursor.last_timestamp is None
 
-    def test_create_with_zero_version(self) -> None:
+    @staticmethod
+    def test_create_with_zero_version() -> None:
         """CdfCursor.create works with version 0."""
         cursor = CdfCursor.create("dataset", 0)
         assert cursor.last_version == 0
 
-    def test_direct_construction(self) -> None:
+    @staticmethod
+    def test_direct_construction() -> None:
         """CdfCursor can be constructed directly."""
         cursor = CdfCursor(
             dataset_name="direct_dataset",
@@ -43,14 +46,16 @@ class TestCdfCursor:
         assert cursor.last_version == UPDATED_VERSION
         assert cursor.last_timestamp == "2024-01-01T00:00:00Z"
 
-    def test_cursor_is_frozen(self) -> None:
+    @staticmethod
+    def test_cursor_is_frozen() -> None:
         """CdfCursor is immutable."""
         cursor = CdfCursor.create("dataset", START_VERSION)
         attr_name = "last_version"
         with pytest.raises(FrozenInstanceError):
             setattr(cursor, attr_name, UPDATED_VERSION)
 
-    def test_cursor_with_timestamp(self) -> None:
+    @staticmethod
+    def test_cursor_with_timestamp() -> None:
         """CdfCursor can store timestamp."""
         cursor = CdfCursor(
             dataset_name="dataset",
@@ -63,14 +68,16 @@ class TestCdfCursor:
 class TestCdfCursorStore:
     """Tests for CdfCursorStore class."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_store_creation(self, tmp_path: Path) -> None:
+    def test_store_creation(tmp_path: Path) -> None:
         """CdfCursorStore can be created with path."""
         cursors_path = tmp_path / "cursors"
         store = CdfCursorStore(cursors_path=cursors_path)
         assert store.cursors_path == cursors_path
 
-    def test_ensure_dir_creates_directory(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_ensure_dir_creates_directory(tmp_path: Path) -> None:
         """ensure_dir creates the cursors directory."""
         cursors_path = tmp_path / "new_cursors"
         store = CdfCursorStore(cursors_path=cursors_path)
@@ -80,7 +87,8 @@ class TestCdfCursorStore:
         assert cursors_path.exists()
         assert cursors_path.is_dir()
 
-    def test_ensure_dir_idempotent(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_ensure_dir_idempotent(tmp_path: Path) -> None:
         """ensure_dir is idempotent."""
         cursors_path = tmp_path / "cursors"
         store = CdfCursorStore(cursors_path=cursors_path)
@@ -93,8 +101,9 @@ class TestCdfCursorStore:
 class TestCdfCursorStoreSaveLoad:
     """Tests for CdfCursorStore save/load operations."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_save_and_load_cursor(self, tmp_path: Path) -> None:
+    def test_save_and_load_cursor(tmp_path: Path) -> None:
         """save_cursor and load_cursor work correctly."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
         cursor = CdfCursor.create("test_dataset", UPDATED_VERSION)
@@ -106,7 +115,8 @@ class TestCdfCursorStoreSaveLoad:
         assert loaded.dataset_name == "test_dataset"
         assert loaded.last_version == UPDATED_VERSION
 
-    def test_load_nonexistent_cursor(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_load_nonexistent_cursor(tmp_path: Path) -> None:
         """load_cursor returns None for nonexistent cursor."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
         store.ensure_dir()
@@ -114,7 +124,8 @@ class TestCdfCursorStoreSaveLoad:
         loaded = store.load_cursor("nonexistent_dataset")
         assert loaded is None
 
-    def test_save_overwrites_existing(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_save_overwrites_existing(tmp_path: Path) -> None:
         """save_cursor overwrites existing cursor."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
@@ -128,7 +139,8 @@ class TestCdfCursorStoreSaveLoad:
         assert loaded is not None
         assert loaded.last_version == OVERWRITE_VERSION
 
-    def test_save_multiple_cursors(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_save_multiple_cursors(tmp_path: Path) -> None:
         """Multiple cursors can be saved independently."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
@@ -147,8 +159,9 @@ class TestCdfCursorStoreSaveLoad:
 class TestCdfCursorStoreDelete:
     """Tests for CdfCursorStore delete operations."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_delete_cursor(self, tmp_path: Path) -> None:
+    def test_delete_cursor(tmp_path: Path) -> None:
         """delete_cursor removes cursor file."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
         cursor = CdfCursor.create("to_delete", START_VERSION)
@@ -159,7 +172,8 @@ class TestCdfCursorStoreDelete:
         store.delete_cursor("to_delete")
         assert store.load_cursor("to_delete") is None
 
-    def test_delete_nonexistent_cursor(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_delete_nonexistent_cursor(tmp_path: Path) -> None:
         """delete_cursor does nothing for nonexistent cursor."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
         store.ensure_dir()
@@ -167,7 +181,8 @@ class TestCdfCursorStoreDelete:
         # Should not raise
         store.delete_cursor("nonexistent")
 
-    def test_has_cursor(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_has_cursor(tmp_path: Path) -> None:
         """has_cursor returns correct status."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
@@ -183,7 +198,8 @@ class TestCdfCursorStoreDelete:
 class TestCdfCursorStoreList:
     """Tests for CdfCursorStore list operations."""
 
-    def test_list_empty_store(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_list_empty_store(tmp_path: Path) -> None:
         """list_cursors returns empty list for empty store."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
         store.ensure_dir()
@@ -191,7 +207,8 @@ class TestCdfCursorStoreList:
         result = store.list_cursors()
         assert result == []
 
-    def test_list_all_cursors(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_list_all_cursors(tmp_path: Path) -> None:
         """list_cursors returns all saved cursors."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
@@ -205,7 +222,8 @@ class TestCdfCursorStoreList:
         names = {c.dataset_name for c in result}
         assert names == {"dataset_a", "dataset_b", "dataset_c"}
 
-    def test_list_cursors_nonexistent_directory(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_list_cursors_nonexistent_directory(tmp_path: Path) -> None:
         """list_cursors returns empty for nonexistent directory."""
         store = CdfCursorStore(cursors_path=tmp_path / "nonexistent")
 
@@ -216,8 +234,9 @@ class TestCdfCursorStoreList:
 class TestCdfCursorStoreUpdateVersion:
     """Tests for CdfCursorStore update_version method."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_update_version(self, tmp_path: Path) -> None:
+    def test_update_version(tmp_path: Path) -> None:
         """update_version creates and saves cursor."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
@@ -230,7 +249,8 @@ class TestCdfCursorStoreUpdateVersion:
         assert loaded is not None
         assert loaded.last_version == UPDATED_VERSION
 
-    def test_update_version_overwrites(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_update_version_overwrites(tmp_path: Path) -> None:
         """update_version overwrites existing cursor."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
@@ -245,8 +265,9 @@ class TestCdfCursorStoreUpdateVersion:
 class TestCdfCursorStoreGetStartVersion:
     """Tests for CdfCursorStore get_start_version method."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_get_start_version_returns_next_version(self, tmp_path: Path) -> None:
+    def test_get_start_version_returns_next_version(tmp_path: Path) -> None:
         """get_start_version returns last_version + 1."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
         store.update_version("dataset", START_VERSION)
@@ -254,7 +275,8 @@ class TestCdfCursorStoreGetStartVersion:
         start = store.get_start_version("dataset")
         assert start == NEXT_VERSION_AFTER_FIVE
 
-    def test_get_start_version_returns_none_for_missing(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_get_start_version_returns_none_for_missing(tmp_path: Path) -> None:
         """get_start_version returns None for missing cursor."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
         store.ensure_dir()
@@ -262,7 +284,8 @@ class TestCdfCursorStoreGetStartVersion:
         start = store.get_start_version("nonexistent")
         assert start is None
 
-    def test_get_start_version_zero_based(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_get_start_version_zero_based(tmp_path: Path) -> None:
         """get_start_version handles version 0 correctly."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
         store.update_version("dataset", 0)
@@ -274,7 +297,8 @@ class TestCdfCursorStoreGetStartVersion:
 class TestCdfCursorStoreSanitization:
     """Tests for dataset name sanitization."""
 
-    def test_sanitizes_slashes_in_name(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_sanitizes_slashes_in_name(tmp_path: Path) -> None:
         """Dataset names with slashes are sanitized."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 
@@ -285,7 +309,8 @@ class TestCdfCursorStoreSanitization:
         assert loaded is not None
         assert loaded.dataset_name == "path/to/dataset"
 
-    def test_sanitizes_backslashes_in_name(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_sanitizes_backslashes_in_name(tmp_path: Path) -> None:
         """Dataset names with backslashes are sanitized."""
         store = CdfCursorStore(cursors_path=tmp_path / "cursors")
 

@@ -54,22 +54,26 @@ _EXPECTED_KINDS: frozenset[str] = frozenset(
 class TestViewKind:
     """Verify ``ViewKind`` enum completeness and StrEnum behavior."""
 
-    def test_has_all_14_values(self) -> None:
+    @staticmethod
+    def test_has_all_14_values() -> None:
         """Enum must contain exactly the 14 canonical kind values."""
         assert {str(k) for k in ViewKind} == _EXPECTED_KINDS
 
-    def test_count(self) -> None:
+    @staticmethod
+    def test_count() -> None:
         """Enum member count must be 14."""
         assert len(ViewKind) == VIEW_KIND_TOTAL
 
+    @staticmethod
     @pytest.mark.parametrize("value", sorted(_EXPECTED_KINDS))
-    def test_str_equality(self, value: str) -> None:
+    def test_str_equality(value: str) -> None:
         """Each enum member must compare equal to its plain string value."""
         member = ViewKind(value)
         assert member == value
         assert str(member) == value
 
-    def test_is_str_subclass(self) -> None:
+    @staticmethod
+    def test_is_str_subclass() -> None:
         """``ViewKind`` members must be ``str`` instances (StrEnum contract)."""
         for member in ViewKind:
             assert isinstance(member, str)
@@ -83,29 +87,35 @@ class TestViewKind:
 class TestViewKindOrder:
     """Verify ``VIEW_KIND_ORDER`` completeness and structure."""
 
-    def test_covers_all_kinds(self) -> None:
+    @staticmethod
+    def test_covers_all_kinds() -> None:
         """Order dict must have an entry for every ``ViewKind`` member."""
         assert set(VIEW_KIND_ORDER.keys()) == set(ViewKind)
 
-    def test_count(self) -> None:
+    @staticmethod
+    def test_count() -> None:
         """Order dict must have exactly 14 entries."""
         assert len(VIEW_KIND_ORDER) == VIEW_KIND_TOTAL
 
-    def test_values_are_non_negative_ints(self) -> None:
+    @staticmethod
+    def test_values_are_non_negative_ints() -> None:
         """All order values must be non-negative integers."""
         for kind, order in VIEW_KIND_ORDER.items():
             assert isinstance(order, int), f"{kind}: expected int, got {type(order)}"
             assert order >= 0, f"{kind}: negative order {order}"
 
-    def test_normalize_is_first(self) -> None:
+    @staticmethod
+    def test_normalize_is_first() -> None:
         """The ``normalize`` kind must have the lowest order value (0)."""
         assert VIEW_KIND_ORDER[ViewKind.NORMALIZE] == 0
 
-    def test_artifact_is_last(self) -> None:
+    @staticmethod
+    def test_artifact_is_last() -> None:
         """The ``artifact`` kind must have the highest order value (11)."""
         assert VIEW_KIND_ORDER[ViewKind.ARTIFACT] == ARTIFACT_ORDER_INDEX
 
-    def test_matches_legacy_kind_order(self) -> None:
+    @staticmethod
+    def test_matches_legacy_kind_order() -> None:
         """Order dict must match the values from the former ``_KIND_ORDER`` dict."""
         legacy: dict[str, int] = {
             "normalize": 0,
@@ -138,21 +148,25 @@ class TestViewKindOrder:
 class TestConsolidatedKind:
     """Verify the future 14 -> 6 consolidation mapping."""
 
-    def test_covers_all_kinds(self) -> None:
+    @staticmethod
+    def test_covers_all_kinds() -> None:
         """Mapping must have an entry for every ``ViewKind`` member."""
         assert set(CONSOLIDATED_KIND.keys()) == set(ViewKind)
 
-    def test_target_values_are_valid(self) -> None:
+    @staticmethod
+    def test_target_values_are_valid() -> None:
         """All target values must be one of the six consolidated kinds."""
         valid_targets = {"normalize", "derive", "relate", "union", "project", "diagnostic"}
         for kind, target in CONSOLIDATED_KIND.items():
             assert target in valid_targets, f"{kind} -> {target!r} is not a valid target"
 
-    def test_exactly_six_unique_targets(self) -> None:
+    @staticmethod
+    def test_exactly_six_unique_targets() -> None:
         """Consolidation must produce exactly 6 unique target kinds."""
         assert len(set(CONSOLIDATED_KIND.values())) == CONSOLIDATED_KIND_TOTAL
 
-    def test_normalize_group(self) -> None:
+    @staticmethod
+    def test_normalize_group() -> None:
         """Normalize-category kinds must all map to 'normalize'."""
         normalize_kinds = {
             ViewKind.NORMALIZE,
@@ -172,7 +186,8 @@ class TestConsolidatedKind:
 class TestSingleAuthorityConsumers:
     """Verify downstream modules consume ``ViewKindStr`` directly."""
 
-    def test_semantic_ir_view_kind_annotation_uses_view_kind_str(self) -> None:
+    @staticmethod
+    def test_semantic_ir_view_kind_annotation_uses_view_kind_str() -> None:
         """``SemanticIRView.kind`` should resolve to ``ViewKindStr``."""
         from typing import get_type_hints
 
@@ -180,7 +195,8 @@ class TestSingleAuthorityConsumers:
 
         assert get_type_hints(SemanticIRView)["kind"] == ViewKindStr
 
-    def test_semantic_spec_index_kind_annotation_uses_view_kind_str(self) -> None:
+    @staticmethod
+    def test_semantic_spec_index_kind_annotation_uses_view_kind_str() -> None:
         """``SemanticSpecIndex.kind`` should resolve to ``ViewKindStr``."""
         from typing import get_type_hints
 
@@ -188,7 +204,8 @@ class TestSingleAuthorityConsumers:
 
         assert get_type_hints(SemanticSpecIndex)["kind"] == ViewKindStr
 
-    def test_semantic_ir_view_accepts_string_kind(self) -> None:
+    @staticmethod
+    def test_semantic_ir_view_accepts_string_kind() -> None:
         """``SemanticIRView`` must accept string literals for ``kind``."""
         from semantics.ir import SemanticIRView
 
@@ -201,7 +218,8 @@ class TestSingleAuthorityConsumers:
         assert view.kind == "normalize"
         assert view.kind == ViewKind.NORMALIZE
 
-    def test_view_kind_enum_equals_string(self) -> None:
+    @staticmethod
+    def test_view_kind_enum_equals_string() -> None:
         """``ViewKind`` enum members must equal their plain string values."""
         from semantics.ir import SemanticIRView
 
@@ -214,7 +232,8 @@ class TestSingleAuthorityConsumers:
         # StrEnum values compare equal to plain strings.
         assert view.kind == ViewKind.NORMALIZE
 
-    def test_semantic_spec_index_accepts_string_kind(self) -> None:
+    @staticmethod
+    def test_semantic_spec_index_accepts_string_kind() -> None:
         """``SemanticSpecIndex`` must accept string literals for ``kind``."""
         from semantics.spec_registry import SemanticSpecIndex
 
@@ -236,7 +255,8 @@ class TestSingleAuthorityConsumers:
 class TestViewKindParams:
     """Verify ``ViewKindParams`` default construction and field values."""
 
-    def test_default_construction(self) -> None:
+    @staticmethod
+    def test_default_construction() -> None:
         """Default construction must succeed with expected field values."""
         params = ViewKindParams()
         assert params.span_unit == "byte"
@@ -245,7 +265,8 @@ class TestViewKindParams:
         assert params.union_target is None
         assert params.output_contract is None
 
-    def test_custom_construction(self) -> None:
+    @staticmethod
+    def test_custom_construction() -> None:
         """Custom construction must accept all field overrides."""
         params = ViewKindParams(
             span_unit="byte",
@@ -259,7 +280,8 @@ class TestViewKindParams:
         assert params.union_target == "nodes"
         assert params.output_contract == "cpg_v1"
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """Instances must be immutable (frozen)."""
         params = ViewKindParams()
         assert_immutable_assignment(

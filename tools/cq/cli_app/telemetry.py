@@ -17,6 +17,8 @@ from tools.cq.cli_app.result_action import (
 )
 from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
 
+_INVOCATION_RUNTIME_ERRORS = (OSError, RuntimeError, TypeError, ValueError)
+
 
 @dataclass(frozen=True, slots=True)
 class CqInvokeEvent:
@@ -136,7 +138,7 @@ def invoke_with_telemetry(
                 event_created_ms=event_identity.run_created_ms,
             )
             return 2, event
-        except Exception as exc:
+        except _INVOCATION_RUNTIME_ERRORS as exc:
             exec_ms = (time.perf_counter() - t0) * 1000.0
             event = CqInvokeEvent(
                 ok=False,

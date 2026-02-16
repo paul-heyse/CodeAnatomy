@@ -11,63 +11,47 @@ The entire pipeline in ~50 lines:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, cast
 
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from datafusion_engine.identity import schema_identity_hash
-from datafusion_engine.io.write import WritePipeline
 from datafusion_engine.views.artifacts import CachePolicy
 from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
-from obs.diagnostics import (
-    SemanticQualityArtifact,
-    record_semantic_quality_artifact,
-    record_semantic_quality_events,
-)
-from obs.metrics import record_quality_issue_counts
-from obs.otel.run_context import get_run_id, reset_run_id, set_run_id
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
-from semantics.diagnostics import (
-    DEFAULT_MAX_ISSUE_ROWS,
-    SEMANTIC_DIAGNOSTIC_VIEW_NAMES,
-    dataframe_row_count,
-    semantic_diagnostic_view_builders,
-    semantic_quality_issue_batches,
+from semantics.cdf_resolution import cdf_changed_inputs, outputs_from_changed_inputs
+from semantics.diagnostics import dataframe_row_count, semantic_diagnostic_view_builders
+from semantics.diagnostics_emission import (
+    SemanticQualityDiagnosticsRequest,
+    emit_semantic_quality_diagnostics,
 )
-from semantics.incremental.metadata import (
-    SemanticDiagnosticsSnapshot,
-    write_semantic_diagnostics_snapshots,
-)
-from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
-from semantics.incremental.state_store import StateStore
 from semantics.naming import canonical_output_name
+from semantics.output_materialization import (
+    SemanticOutputWriteContext,
+    materialize_semantic_outputs,
+)
 from semantics.quality import QualityRelationshipSpec
-from semantics.registry import SEMANTIC_MODEL
 from semantics.specs import RelationshipSpec
 from semantics.view_kinds import CONSOLIDATED_KIND, ViewKind
-from utils.env_utils import env_value
 from utils.hashing import hash_msgpack_canonical
-from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.plan.bundle_artifact import DataFrameBuilder, DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
     from semantics.compile_context import SemanticExecutionContext
     from semantics.config import SemanticConfig
-    from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
+    from semantics.ir import SemanticIR, SemanticIRJoinGroup
     from semantics.program_manifest import (
         ManifestDatasetResolver,
         SemanticProgramManifest,
     )
+    from semantics.registry import SemanticModel
     from semantics.spec_registry import SemanticNormalizationSpec, SemanticSpecIndex
 
 
@@ -115,7 +99,7 @@ class CpgBuildOptions:
     """
 
     cache_policy: Mapping[str, CachePolicy] | None = None
-    compiled_cache_policy: Mapping[str, str] | None = None
+    compiled_cache_policy: Mapping[str, CachePolicy] | None = None
     validate_schema: bool = True
     config: SemanticConfig | None = None
     use_cdf: bool | None = None
@@ -123,6 +107,16 @@ class CpgBuildOptions:
     materialize_outputs: bool = True
     requested_outputs: Collection[str] | None = None
     schema_policy: SchemaEvolutionPolicy = field(default_factory=SchemaEvolutionPolicy)
+
+    def __post_init__(self) -> None:
+        """Normalize compiled cache policy values to canonical cache-policy strings."""
+        if self.compiled_cache_policy is None:
+            return
+        normalized = {
+            name: _normalize_cache_policy(str(value))
+            for name, value in self.compiled_cache_policy.items()
+        }
+        object.__setattr__(self, "compiled_cache_policy", normalized)
 
 
 @dataclass(frozen=True)
@@ -133,7 +127,7 @@ class CpgViewNodesRequest:
     runtime_profile: DataFusionRuntimeProfile
     output_locations: Mapping[str, DatasetLocation]
     cache_policy: Mapping[str, CachePolicy] | None
-    compiled_cache_policy: Mapping[str, str] | None
+    compiled_cache_policy: Mapping[str, CachePolicy] | None
     config: SemanticConfig | None
     input_mapping: Mapping[str, str]
     use_cdf: bool
@@ -162,6 +156,7 @@ class _IncrementalOutputRequest:
     input_mapping: Mapping[str, str]
     use_cdf: bool
     requested_outputs: Collection[str] | None
+    model: SemanticModel
     dataset_resolver: ManifestDatasetResolver | None = None
 
 
@@ -174,6 +169,17 @@ class _CpgCompileResolution:
     input_mapping: Mapping[str, str]
     use_cdf: bool
     resolved_outputs: Collection[str] | None
+
+
+@dataclass(frozen=True)
+class _CpgBuildExecutionResult:
+    """Execution outputs from a single semantic CPG build pass."""
+
+    nodes: tuple[ViewNode, ...]
+    semantic_ir: SemanticIR
+    requested_outputs: Collection[str] | None
+    manifest: SemanticProgramManifest
+    dataset_resolver: ManifestDatasetResolver
 
 
 def _resolve_cpg_compile_artifacts(
@@ -197,6 +203,7 @@ def _resolve_cpg_compile_artifacts(
     """
     early_resolver = execution_context.dataset_resolver
     manifest = execution_context.manifest
+    model = execution_context.model
     input_mapping, use_cdf = _resolve_semantic_input_mapping(
         ctx,
         runtime_profile=runtime_profile,
@@ -206,6 +213,7 @@ def _resolve_cpg_compile_artifacts(
     )
     resolved_outputs = _resolve_requested_outputs(
         resolved.requested_outputs,
+        model=model,
         manifest=manifest,
     )
     incremental_outputs = _incremental_requested_outputs(
@@ -215,6 +223,7 @@ def _resolve_cpg_compile_artifacts(
             input_mapping=input_mapping,
             use_cdf=use_cdf,
             requested_outputs=resolved.requested_outputs,
+            model=model,
             dataset_resolver=early_resolver,
         )
     )
@@ -227,42 +236,6 @@ def _resolve_cpg_compile_artifacts(
         use_cdf=use_cdf,
         resolved_outputs=resolved_outputs,
     )
-
-
-class _CdfCursorLike(Protocol):
-    last_version: int
-
-
-class _CdfCursorStoreLike(Protocol):
-    def load_cursor(self, name: str) -> _CdfCursorLike | None: ...
-
-
-class _DeltaServiceLike(Protocol):
-    def cdf_enabled(
-        self,
-        path: str,
-        *,
-        storage_options: Mapping[str, str],
-        log_storage_options: Mapping[str, str],
-    ) -> bool: ...
-
-    def table_version(
-        self,
-        *,
-        path: str,
-        storage_options: Mapping[str, str],
-        log_storage_options: Mapping[str, str],
-    ) -> int | None: ...
-
-
-@dataclass(frozen=True)
-class SemanticOutputWriteContext:
-    """Inputs required to materialize semantic outputs."""
-
-    ctx: SessionContext
-    pipeline: WritePipeline
-    runtime_profile: DataFusionRuntimeProfile
-    schema_policy: SchemaEvolutionPolicy
 
 
 def _cache_policy_for(
@@ -280,12 +253,6 @@ def _normalize_cache_policy(policy: str) -> CachePolicy:
         return cast("CachePolicy", policy)
     msg = f"Unsupported cache policy: {policy!r}."
     raise ValueError(msg)
-
-
-def _normalize_cache_policy_mapping(
-    policy: Mapping[str, str],
-) -> dict[str, CachePolicy]:
-    return {name: _normalize_cache_policy(value) for name, value in policy.items()}
 
 
 def _bundle_for_builder(
@@ -339,6 +306,8 @@ def _normalize_builder(
     prefix: str,
     config: SemanticConfig | None,
 ) -> DataFrameBuilder:
+    """Return a builder that normalizes one evidence table."""
+
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import SemanticCompiler
 
@@ -353,6 +322,8 @@ def _normalize_spec_builder(
     input_mapping: Mapping[str, str],
     config: SemanticConfig | None,
 ) -> DataFrameBuilder:
+    """Return a builder that applies one declarative normalization spec."""
+
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         import msgspec
 
@@ -436,6 +407,8 @@ def _relation_output_builder(
     relationship_names: Sequence[str],
     relationship_by_name: Mapping[str, QualityRelationshipSpec],
 ) -> DataFrameBuilder:
+    """Return a builder that unions relationship views into relation output."""
+
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.catalog.projections import RelationOutputSpec, relation_output_projection
 
@@ -496,6 +469,8 @@ def _finalize_output_builder(
     view_name: str,
     builder: DataFrameBuilder,
 ) -> DataFrameBuilder:
+    """Return a builder that casts/selects output rows to dataset contract."""
+
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         df = builder(inner_ctx)
         return _finalize_df_to_contract(inner_ctx, df=df, view_name=view_name)
@@ -508,6 +483,8 @@ def _join_group_builder(
     *,
     config: SemanticConfig | None,
 ) -> DataFrameBuilder:
+    """Return a builder that computes one fused join-group view."""
+
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import SemanticCompiler
 
@@ -521,6 +498,8 @@ def _union_nodes_builder(
     *,
     config: SemanticConfig | None,
 ) -> DataFrameBuilder:
+    """Return a builder that unions node-like semantic views."""
+
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import SemanticCompiler
 
@@ -537,6 +516,8 @@ def _union_edges_builder(
     *,
     config: SemanticConfig | None,
 ) -> DataFrameBuilder:
+    """Return a builder that unions edge-like semantic views."""
+
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import SemanticCompiler
 
@@ -553,6 +534,8 @@ def _scip_norm_builder(
     *,
     line_index_table: str,
 ) -> DataFrameBuilder:
+    """Return a builder that converts SCIP locations to byte spans."""
+
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.scip_normalize import scip_to_byte_offsets
 
@@ -570,6 +553,8 @@ def _bytecode_line_table_builder(
     *,
     line_index_table: str,
 ) -> DataFrameBuilder:
+    """Return a builder that enriches bytecode line-table spans."""
+
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.bytecode_line_table import py_bc_line_table_with_bytes
 
@@ -621,10 +606,11 @@ def _ordered_semantic_specs(
 def _resolve_requested_outputs(
     requested_outputs: Collection[str] | None,
     *,
+    model: SemanticModel,
     manifest: SemanticProgramManifest,
 ) -> set[str] | None:
     if requested_outputs is None:
-        return {spec.name for spec in SEMANTIC_MODEL.outputs if spec.kind == "table"}
+        return {spec.name for spec in model.outputs if spec.kind == "table"}
     return {canonical_output_name(name, manifest=manifest) for name in requested_outputs}
 
 
@@ -633,7 +619,7 @@ def _incremental_requested_outputs(
 ) -> set[str] | None:
     if request.requested_outputs is not None or not request.use_cdf:
         return None
-    changed_inputs = _cdf_changed_inputs(
+    changed_inputs = cdf_changed_inputs(
         request.ctx,
         runtime_profile=request.runtime_profile,
         input_mapping=request.input_mapping,
@@ -643,139 +629,10 @@ def _incremental_requested_outputs(
         return None
     if not changed_inputs:
         return set()
-    return _outputs_from_changed_inputs(changed_inputs)
+    return outputs_from_changed_inputs(changed_inputs, model=request.model)
 
 
-def _cdf_changed_inputs(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-    input_mapping: Mapping[str, str],
-    dataset_resolver: ManifestDatasetResolver | None = None,
-) -> set[str] | None:
-    from semantics.incremental.cdf_cursors import CdfCursorStore
-
-    _ = ctx
-    if dataset_resolver is None:
-        msg = "dataset_resolver is required for _cdf_changed_inputs."
-        raise ValueError(msg)
-    cursor_store = runtime_profile.data_sources.cdf_cursor_store
-    if cursor_store is None:
-        return None
-    if not isinstance(cursor_store, CdfCursorStore):
-        return None
-    typed_cursor_store = cast("_CdfCursorStoreLike", cursor_store)
-    delta_service = cast("_DeltaServiceLike", runtime_profile.delta_ops.delta_service())
-    return {
-        canonical
-        for canonical, source in input_mapping.items()
-        if _input_has_cdf_changes(
-            canonical=canonical,
-            source=source,
-            dataset_resolver=dataset_resolver,
-            cursor_store=typed_cursor_store,
-            delta_service=delta_service,
-        )
-    }
-
-
-def _resolve_cdf_location(
-    *,
-    canonical: str,
-    source: str,
-    dataset_resolver: ManifestDatasetResolver,
-) -> DatasetLocation | None:
-    if canonical == "file_line_index_v1":
-        return None
-    location = dataset_resolver.location(canonical)
-    if location is not None:
-        return location
-    return dataset_resolver.location(source)
-
-
-def _input_has_cdf_changes(
-    *,
-    canonical: str,
-    source: str,
-    dataset_resolver: ManifestDatasetResolver,
-    cursor_store: _CdfCursorStoreLike,
-    delta_service: _DeltaServiceLike,
-) -> bool:
-    location = _resolve_cdf_location(
-        canonical=canonical,
-        source=source,
-        dataset_resolver=dataset_resolver,
-    )
-    if location is None:
-        return False
-    storage_options = dict(location.storage_options)
-    log_options = dict(location.delta_log_storage_options)
-    if not _cdf_enabled_for_location(
-        location,
-        storage_options=storage_options,
-        log_storage_options=log_options,
-        cdf_enabled_fn=delta_service.cdf_enabled,
-    ):
-        return False
-    latest_version = delta_service.table_version(
-        path=str(location.path),
-        storage_options=storage_options,
-        log_storage_options=log_options,
-    )
-    if latest_version is None:
-        return False
-    cursor = cursor_store.load_cursor(canonical)
-    return cursor is None or latest_version > cursor.last_version
-
-
-def _cdf_enabled_for_location(
-    location: DatasetLocation,
-    *,
-    storage_options: Mapping[str, str],
-    log_storage_options: Mapping[str, str],
-    cdf_enabled_fn: Callable[..., bool],
-) -> bool:
-    if location.delta_cdf_options is not None:
-        return True
-    if location.datafusion_provider == "delta_cdf":
-        return True
-    return cdf_enabled_fn(
-        str(location.path),
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
-    )
-
-
-def _outputs_from_changed_inputs(changed_inputs: Collection[str]) -> set[str]:
-    from semantics.ir_pipeline import compile_semantics
-
-    compiled = compile_semantics(SEMANTIC_MODEL)
-    impacted_views = _views_downstream_of_inputs(compiled.views, changed_inputs)
-    output_names = {spec.name for spec in SEMANTIC_MODEL.outputs}
-    return {name for name in impacted_views if name in output_names}
-
-
-def _views_downstream_of_inputs(
-    views: Sequence[SemanticIRView],
-    seeds: Collection[str],
-) -> set[str]:
-    dependents: dict[str, list[str]] = {}
-    for view in views:
-        for dep in view.inputs:
-            dependents.setdefault(dep, []).append(view.name)
-    impacted: set[str] = set()
-    stack = list(seeds)
-    while stack:
-        current = stack.pop()
-        for view_name in dependents.get(current, ()):
-            if view_name in impacted:
-                continue
-            impacted.add(view_name)
-            stack.append(view_name)
-    return impacted
-
-
-def _cpg_view_specs(
+def cpg_view_specs(
     request: CpgViewSpecsRequest,
 ) -> list[tuple[str, DataFrameBuilder]]:
     """Build view specs for the CPG pipeline.
@@ -1066,15 +923,6 @@ def _builder_for_export_spec(
     raise ValueError(msg)
 
 
-def _builder_for_artifact_spec(
-    spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
-) -> DataFrameBuilder:
-    _ = context
-    msg = f"Unsupported artifact spec output: {spec.name!r}."
-    raise ValueError(msg)
-
-
 def _builder_for_normalize_kind(
     spec: SemanticSpecIndex,
     context: _SemanticSpecContext,
@@ -1140,7 +988,8 @@ def _builder_for_project_kind(
         )
         raise ValueError(msg)
     if spec.kind == ViewKind.ARTIFACT:
-        return _builder_for_artifact_spec(spec, context)
+        msg = f"Unsupported artifact output {spec.name!r}."
+        raise ValueError(msg)
     msg = f"Unsupported project-kind spec kind: {spec.kind!r}."
     raise ValueError(msg)
 
@@ -1193,8 +1042,8 @@ def _input_table(input_mapping: Mapping[str, str], name: str) -> str:
 def _resolve_cache_policy_hierarchy(
     *,
     explicit_policy: Mapping[str, CachePolicy] | None,
-    compiled_policy: Mapping[str, str] | None,
-) -> Mapping[str, str]:
+    compiled_policy: Mapping[str, CachePolicy] | None,
+) -> Mapping[str, CachePolicy]:
     """Resolve cache policy through explicit and compiled layers.
 
     Resolution order (highest priority first):
@@ -1212,7 +1061,7 @@ def _resolve_cache_policy_hierarchy(
 
     Returns:
     -------
-    Mapping[str, str]
+    Mapping[str, CachePolicy]
         Resolved cache policy mapping. Returns an empty mapping when no
         explicit or compiled mapping is available.
     """
@@ -1226,7 +1075,7 @@ def _resolve_cache_policy_hierarchy(
 def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
     from datafusion_engine.views.graph import ViewNode
 
-    view_specs = _cpg_view_specs(
+    view_specs = cpg_view_specs(
         CpgViewSpecsRequest(
             input_mapping=request.input_mapping,
             config=request.config,
@@ -1237,14 +1086,18 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
             semantic_ir=request.semantic_ir,
         )
     )
-    resolved_cache = _resolve_cache_policy_hierarchy(
-        explicit_policy=request.cache_policy,
-        compiled_policy=request.compiled_cache_policy,
+    resolved_cache: dict[str, CachePolicy] = dict(
+        _resolve_cache_policy_hierarchy(
+            explicit_policy=request.cache_policy,
+            compiled_policy=request.compiled_cache_policy,
+        )
     )
     cache_overrides = request.runtime_profile.data_sources.semantic_output.cache_overrides
     if cache_overrides:
-        resolved_cache = {**resolved_cache, **cache_overrides}
-    normalized_cache = _normalize_cache_policy_mapping(resolved_cache)
+        normalized_overrides: dict[str, CachePolicy] = {
+            name: _normalize_cache_policy(value) for name, value in cache_overrides.items()
+        }
+        resolved_cache.update(normalized_overrides)
     nodes: list[ViewNode] = []
 
     for name, builder in view_specs:
@@ -1260,7 +1113,7 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
                     view_name=name,
                     semantic_ir=request.semantic_ir,
                 ),
-                cache_policy=_cache_policy_for(name, normalized_cache),
+                cache_policy=_cache_policy_for(name, resolved_cache),
             )
         )
     return nodes
@@ -1474,6 +1327,121 @@ def _semantic_explain_markdown(
     return "\n".join(lines)
 
 
+def _execute_cpg_build(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    resolved: CpgBuildOptions,
+    effective_use_cdf: bool,
+    execution_context: SemanticExecutionContext,
+) -> _CpgBuildExecutionResult:
+    """Run one semantic CPG build pass and return resolved build artifacts.
+
+    Returns:
+        _CpgBuildExecutionResult: Materialized execution artifacts for this build pass.
+
+    Raises:
+        ValueError: If compiled semantic manifest is missing validation details.
+        SemanticInputValidationError: If semantic input validation fails.
+    """
+    compile_resolution = _resolve_cpg_compile_artifacts(
+        ctx,
+        runtime_profile=runtime_profile,
+        effective_use_cdf=effective_use_cdf,
+        resolved=resolved,
+        execution_context=execution_context,
+    )
+    early_resolver = compile_resolution.resolver
+    manifest = compile_resolution.manifest
+    input_mapping = compile_resolution.input_mapping
+    use_cdf = compile_resolution.use_cdf
+    resolved_outputs = compile_resolution.resolved_outputs
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
+    from datafusion_engine.views.graph import (
+        ViewGraphOptions,
+        ViewGraphRuntimeOptions,
+        register_view_graph,
+    )
+    from semantics.validation import SemanticInputValidationError
+
+    snapshot = rust_udf_snapshot(ctx)
+    validation = manifest.validation
+    if validation is None:
+        msg = "Semantic manifest compile must include input validation results."
+        raise ValueError(msg)
+    if not validation.valid:
+        raise SemanticInputValidationError(validation)
+    semantic_ir = manifest.semantic_ir
+    from datafusion_engine.session.runtime import semantic_output_locations_for_profile
+
+    nodes = _view_nodes_for_cpg(
+        CpgViewNodesRequest(
+            ctx=ctx,
+            runtime_profile=runtime_profile,
+            output_locations=semantic_output_locations_for_profile(runtime_profile),
+            cache_policy=resolved.cache_policy,
+            compiled_cache_policy=resolved.compiled_cache_policy,
+            config=resolved.config,
+            input_mapping=input_mapping,
+            use_cdf=use_cdf,
+            requested_outputs=resolved_outputs,
+            manifest=manifest,
+            semantic_ir=semantic_ir,
+        )
+    )
+    register_view_graph(
+        ctx,
+        nodes=nodes,
+        snapshot=snapshot,
+        runtime_options=ViewGraphRuntimeOptions(
+            runtime_profile=runtime_profile,
+            dataset_resolver=early_resolver,
+        ),
+        options=ViewGraphOptions(
+            overwrite=True,
+            temporary=False,
+            validate_schema=resolved.validate_schema,
+        ),
+    )
+    plan_bundles: dict[str, DataFusionPlanArtifact] = {
+        node.name: node.plan_bundle for node in nodes if node.plan_bundle is not None
+    }
+    _record_semantic_compile_artifacts(
+        ctx,
+        runtime_profile=runtime_profile,
+        semantic_ir=semantic_ir,
+        requested_outputs=resolved_outputs,
+        plan_bundles=plan_bundles,
+    )
+    if resolved.materialize_outputs:
+        materialize_semantic_outputs(
+            ctx,
+            runtime_profile=runtime_profile,
+            schema_policy=resolved.schema_policy,
+            model=execution_context.model,
+            requested_outputs=resolved_outputs,
+            manifest=manifest,
+        )
+    emit_semantic_quality_diagnostics(
+        SemanticQualityDiagnosticsRequest(
+            ctx=ctx,
+            runtime_profile=runtime_profile,
+            dataset_resolver=early_resolver,
+            schema_policy=resolved.schema_policy,
+            requested_outputs=resolved_outputs,
+            manifest=manifest,
+            finalize_builder=_finalize_output_builder,
+        )
+    )
+    return _CpgBuildExecutionResult(
+        nodes=tuple(nodes),
+        semantic_ir=semantic_ir,
+        requested_outputs=resolved_outputs,
+        manifest=manifest,
+        dataset_resolver=early_resolver,
+    )
+
+
 def build_cpg(
     ctx: SessionContext,
     *,
@@ -1496,7 +1464,6 @@ def build_cpg(
         dataset resolver authority.
 
     Raises:
-        SemanticInputValidationError: If required semantic inputs fail validation.
         ValueError: If runtime profile is missing.
     """
     resolved = options or CpgBuildOptions()
@@ -1521,531 +1488,12 @@ def build_cpg(
             "codeanatomy.has_config": resolved.config is not None,
         },
     ):
-        compile_resolution = _resolve_cpg_compile_artifacts(
+        _execute_cpg_build(
             ctx,
             runtime_profile=runtime_profile,
-            effective_use_cdf=effective_use_cdf,
             resolved=resolved,
+            effective_use_cdf=effective_use_cdf,
             execution_context=execution_context,
-        )
-        early_resolver = compile_resolution.resolver
-        manifest = compile_resolution.manifest
-        input_mapping = compile_resolution.input_mapping
-        use_cdf = compile_resolution.use_cdf
-        resolved_outputs = compile_resolution.resolved_outputs
-        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
-        from datafusion_engine.views.graph import (
-            ViewGraphOptions,
-            ViewGraphRuntimeOptions,
-            register_view_graph,
-        )
-        from semantics.validation import SemanticInputValidationError
-
-        snapshot = rust_udf_snapshot(ctx)
-        validation = manifest.validation
-        if validation is None:
-            msg = "Semantic manifest compile must include input validation results."
-            raise ValueError(msg)
-        if not validation.valid:
-            raise SemanticInputValidationError(validation)
-        semantic_ir = manifest.semantic_ir
-        from datafusion_engine.session.runtime import semantic_output_locations_for_profile
-
-        nodes = _view_nodes_for_cpg(
-            CpgViewNodesRequest(
-                ctx=ctx,
-                runtime_profile=runtime_profile,
-                output_locations=semantic_output_locations_for_profile(runtime_profile),
-                cache_policy=resolved.cache_policy,
-                compiled_cache_policy=resolved.compiled_cache_policy,
-                config=resolved.config,
-                input_mapping=input_mapping,
-                use_cdf=use_cdf,
-                requested_outputs=resolved_outputs,
-                manifest=manifest,
-                semantic_ir=semantic_ir,
-            )
-        )
-        register_view_graph(
-            ctx,
-            nodes=nodes,
-            snapshot=snapshot,
-            runtime_options=ViewGraphRuntimeOptions(
-                runtime_profile=runtime_profile,
-                dataset_resolver=early_resolver,
-            ),
-            options=ViewGraphOptions(
-                overwrite=True,
-                temporary=False,
-                validate_schema=resolved.validate_schema,
-            ),
-        )
-        plan_bundles: dict[str, DataFusionPlanArtifact] = {
-            node.name: node.plan_bundle for node in nodes if node.plan_bundle is not None
-        }
-        _record_semantic_compile_artifacts(
-            ctx,
-            runtime_profile=runtime_profile,
-            semantic_ir=semantic_ir,
-            requested_outputs=resolved_outputs,
-            plan_bundles=plan_bundles,
-        )
-        if resolved.materialize_outputs:
-            _materialize_semantic_outputs(
-                ctx,
-                runtime_profile=runtime_profile,
-                schema_policy=resolved.schema_policy,
-                requested_outputs=resolved_outputs,
-                manifest=manifest,
-            )
-        _emit_semantic_quality_diagnostics(
-            ctx,
-            runtime_profile=runtime_profile,
-            dataset_resolver=early_resolver,
-            schema_policy=resolved.schema_policy,
-            requested_outputs=resolved_outputs,
-            manifest=manifest,
-        )
-
-
-def _semantic_output_view_names(
-    *,
-    requested_outputs: Collection[str] | None = None,
-    manifest: SemanticProgramManifest,
-) -> list[str]:
-    """Return semantic output view names.
-
-    Returns:
-    -------
-    list[str]
-        Semantic output view names, including the relation output.
-    """
-    from relspec.view_defs import RELATION_OUTPUT_NAME
-
-    if requested_outputs is None:
-        view_names = [spec.name for spec in SEMANTIC_MODEL.outputs]
-        if RELATION_OUTPUT_NAME not in view_names:
-            view_names.append(RELATION_OUTPUT_NAME)
-        return view_names
-
-    resolved = {canonical_output_name(name, manifest=manifest) for name in requested_outputs}
-    return [spec.name for spec in SEMANTIC_MODEL.outputs if spec.name in resolved]
-
-
-def _ensure_canonical_output_locations(
-    output_locations: Mapping[str, DatasetLocation],
-    *,
-    manifest: SemanticProgramManifest,
-) -> None:
-    """Validate that semantic output locations use canonical names.
-
-    Args:
-        output_locations: Description.
-        manifest: Compiled semantic manifest with canonical output name map.
-
-    Raises:
-        ValueError: If the operation cannot be completed.
-    """
-    from semantics.naming import canonical_output_name
-
-    non_canonical = {
-        name: canonical_output_name(name, manifest=manifest)
-        for name in output_locations
-        if canonical_output_name(name, manifest=manifest) != name
-    }
-    if non_canonical:
-        msg = f"Semantic outputs must use canonical names: {non_canonical!r}."
-        raise ValueError(msg)
-
-
-def _semantic_output_locations(
-    view_names: Sequence[str],
-    runtime_profile: DataFusionRuntimeProfile,
-) -> dict[str, DatasetLocation]:
-    """Resolve dataset locations for semantic outputs.
-
-    Parameters
-    ----------
-    view_names
-        Semantic view names to materialize.
-    runtime_profile
-        Runtime profile providing semantic output locations.
-
-    Returns:
-    -------
-    dict[str, DatasetLocation]
-        Mapping of view name to dataset location.
-    """
-    import msgspec
-
-    from datafusion_engine.dataset.registry import DatasetLocationOverrides
-    from datafusion_engine.session.runtime import semantic_output_locations_for_profile
-    from schema_spec.contracts import (
-        DeltaPolicyBundle,
-        dataset_spec_delta_feature_gate,
-        dataset_spec_delta_maintenance_policy,
-        dataset_spec_delta_schema_policy,
-        dataset_spec_delta_write_policy,
-    )
-    from semantics.catalog.dataset_specs import dataset_spec
-
-    base_locations = semantic_output_locations_for_profile(runtime_profile)
-    output_locations: dict[str, DatasetLocation] = {}
-    for name in view_names:
-        base = base_locations.get(name)
-        if base is None:
-            continue
-        spec = dataset_spec(name)
-        delta_bundle = DeltaPolicyBundle(
-            write_policy=dataset_spec_delta_write_policy(spec),
-            schema_policy=dataset_spec_delta_schema_policy(spec),
-            maintenance_policy=dataset_spec_delta_maintenance_policy(spec),
-            feature_gate=dataset_spec_delta_feature_gate(spec),
-        )
-        existing_overrides = base.overrides
-        if existing_overrides is not None:
-            enriched_overrides = msgspec.structs.replace(existing_overrides, delta=delta_bundle)
-        else:
-            enriched_overrides = DatasetLocationOverrides(delta=delta_bundle)
-        output_locations[name] = msgspec.structs.replace(
-            base,
-            dataset_spec=spec,
-            overrides=enriched_overrides,
-        )
-    return output_locations
-
-
-def _ensure_semantic_output_locations(
-    view_names: Sequence[str],
-    output_locations: Mapping[str, DatasetLocation],
-) -> None:
-    """Ensure all semantic outputs have explicit dataset locations.
-
-    Args:
-        view_names: Description.
-        output_locations: Description.
-
-    Raises:
-        ValueError: If the operation cannot be completed.
-    """
-    missing_outputs = [name for name in view_names if name not in output_locations]
-    if missing_outputs:
-        missing = ", ".join(sorted(missing_outputs))
-        msg = (
-            "Semantic outputs require explicit dataset locations. "
-            f"Missing locations for: {missing}."
-        )
-        raise ValueError(msg)
-
-
-def _write_semantic_output(
-    *,
-    view_name: str,
-    output_location: DatasetLocation,
-    write_context: SemanticOutputWriteContext,
-) -> None:
-    """Materialize a single semantic output view.
-
-    Args:
-        view_name: Description.
-        output_location: Description.
-        write_context: Description.
-
-    Raises:
-        ValueError: If the operation cannot be completed.
-    """
-    from datafusion_engine.delta.schema_guard import enforce_schema_policy
-    from datafusion_engine.delta.store_policy import apply_delta_store_policy
-    from datafusion_engine.io.write import WriteFormat, WriteMode, WriteViewRequest
-    from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
-    from schema_spec.contracts import (
-        dataset_spec_delta_maintenance_policy,
-        dataset_spec_delta_schema_policy,
-        dataset_spec_delta_write_policy,
-    )
-    from semantics.catalog.dataset_specs import dataset_spec
-
-    spec = dataset_spec(view_name)
-    location = apply_delta_store_policy(
-        output_location,
-        policy=write_context.runtime_profile.policies.delta_store_policy,
-    )
-    if location.format != "delta":
-        msg = f"Semantic output {view_name!r} must be stored as Delta."
-        raise ValueError(msg)
-    schema = arrow_schema_from_df(write_context.ctx.table(view_name))
-    resolved_schema_policy = write_context.schema_policy
-    delta_schema_policy = dataset_spec_delta_schema_policy(spec)
-    if delta_schema_policy is not None and delta_schema_policy.schema_mode == "merge":
-        resolved_schema_policy = SchemaEvolutionPolicy(mode="additive")
-    if not write_context.runtime_profile.features.enable_schema_evolution_adapter:
-        resolved_schema_policy = SchemaEvolutionPolicy(mode="strict")
-    schema_hash = enforce_schema_policy(
-        expected_schema=schema,
-        dataset_location=location,
-        policy=resolved_schema_policy,
-    )
-    commit_metadata: dict[str, object] = {
-        "semantic_schema_hash": schema_hash,
-        "semantic_view": view_name,
-    }
-    from semantics.diagnostics import SEMANTIC_DIAGNOSTIC_VIEW_NAMES
-
-    if view_name in SEMANTIC_DIAGNOSTIC_VIEW_NAMES:
-        commit_metadata["snapshot_kind"] = view_name
-    delta_write_policy = dataset_spec_delta_write_policy(spec)
-    format_options: dict[str, object] = {
-        "delta_commit_metadata": commit_metadata,
-        "delta_write_policy": delta_write_policy,
-        "delta_schema_policy": delta_schema_policy,
-        "delta_maintenance_policy": dataset_spec_delta_maintenance_policy(spec),
-    }
-    partition_by = tuple(delta_write_policy.partition_by) if delta_write_policy is not None else ()
-    write_context.pipeline.write_view(
-        WriteViewRequest(
-            view_name=view_name,
-            destination=str(location.path),
-            format=WriteFormat.DELTA,
-            mode=WriteMode.OVERWRITE,
-            partition_by=partition_by,
-            format_options=format_options,
-        )
-    )
-
-
-def _materialize_semantic_outputs(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-    schema_policy: SchemaEvolutionPolicy,
-    requested_outputs: Collection[str] | None,
-    manifest: SemanticProgramManifest,
-) -> None:
-    from datafusion_engine.io.write import WritePipeline
-    from datafusion_engine.session.runtime import semantic_output_locations_for_profile
-
-    view_names = _semantic_output_view_names(
-        requested_outputs=requested_outputs,
-        manifest=manifest,
-    )
-    base_locations = semantic_output_locations_for_profile(runtime_profile)
-    _ensure_canonical_output_locations(base_locations, manifest=manifest)
-    output_locations = _semantic_output_locations(view_names, runtime_profile)
-    _ensure_semantic_output_locations(view_names, output_locations)
-
-    pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
-    write_context = SemanticOutputWriteContext(
-        ctx=ctx,
-        pipeline=pipeline,
-        runtime_profile=runtime_profile,
-        schema_policy=schema_policy,
-    )
-    for view_name in view_names:
-        _write_semantic_output(
-            view_name=view_name,
-            output_location=output_locations[view_name],
-            write_context=write_context,
-        )
-
-
-@dataclass
-class _SemanticDiagnosticsContext:
-    ctx: SessionContext
-    runtime_profile: DataFusionRuntimeProfile
-    dataset_resolver: ManifestDatasetResolver
-    schema_policy: SchemaEvolutionPolicy
-    diagnostics_sink: DiagnosticsSink | None
-    output_locations: dict[str, DatasetLocation]
-    write_context: SemanticOutputWriteContext | None
-    state_store: StateStore | None
-    storage_options: Mapping[str, str] | None
-    incremental_runtime: IncrementalRuntime | None = None
-
-    def ensure_incremental_runtime(self) -> IncrementalRuntime | None:
-        if self.incremental_runtime is not None:
-            return self.incremental_runtime
-        self.incremental_runtime = IncrementalRuntime.build(
-            IncrementalRuntimeBuildRequest(
-                profile=self.runtime_profile,
-                dataset_resolver=self.dataset_resolver,
-            )
-        )
-        return self.incremental_runtime
-
-    def write_snapshot(self, view_name: str, df: DataFrame) -> str | None:
-        if view_name in self.output_locations and self.write_context is not None:
-            _write_semantic_output(
-                view_name=view_name,
-                output_location=self.output_locations[view_name],
-                write_context=self.write_context,
-            )
-            return str(self.output_locations[view_name].path)
-        if self.state_store is None:
-            return None
-        runtime = self.ensure_incremental_runtime()
-        if runtime is None:
-            return None
-        snapshot = SemanticDiagnosticsSnapshot(
-            name=view_name,
-            table=df.to_arrow_table(),
-            destination=self.state_store.semantic_diagnostics_path(view_name),
-        )
-        updated = write_semantic_diagnostics_snapshots(
-            runtime=runtime,
-            snapshots={view_name: snapshot},
-            storage_options=self.storage_options,
-        )
-        return updated.get(view_name)
-
-
-@contextmanager
-def _run_context_guard() -> Iterator[None]:
-    token = None
-    if get_run_id() is None:
-        token = set_run_id(uuid7_str())
-    try:
-        yield
-    finally:
-        if token is not None:
-            reset_run_id(token)
-
-
-def _resolve_semantic_diagnostics_state_store() -> StateStore | None:
-    state_dir_value = env_value("CODEANATOMY_STATE_DIR")
-    if not state_dir_value:
-        return None
-    store = StateStore(root=Path(state_dir_value).expanduser())
-    store.ensure_dirs()
-    return store
-
-
-def _build_semantic_diagnostics_context(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-    dataset_resolver: ManifestDatasetResolver,
-    schema_policy: SchemaEvolutionPolicy,
-) -> _SemanticDiagnosticsContext | None:
-    diagnostics_sink = runtime_profile.diagnostics.diagnostics_sink
-    output_locations = _semantic_output_locations(
-        view_names=SEMANTIC_DIAGNOSTIC_VIEW_NAMES,
-        runtime_profile=runtime_profile,
-    )
-    state_store = _resolve_semantic_diagnostics_state_store()
-    if diagnostics_sink is None and not output_locations and state_store is None:
-        return None
-    write_context = None
-    if output_locations:
-        pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
-        write_context = SemanticOutputWriteContext(
-            ctx=ctx,
-            pipeline=pipeline,
-            runtime_profile=runtime_profile,
-            schema_policy=schema_policy,
-        )
-    storage_options: Mapping[str, str] | None = None
-    if output_locations:
-        first_loc = next(iter(output_locations.values()))
-        loc_opts = first_loc.storage_options
-        if loc_opts:
-            storage_options = dict(loc_opts)
-    return _SemanticDiagnosticsContext(
-        ctx=ctx,
-        runtime_profile=runtime_profile,
-        dataset_resolver=dataset_resolver,
-        schema_policy=schema_policy,
-        diagnostics_sink=diagnostics_sink,
-        output_locations=output_locations,
-        write_context=write_context,
-        state_store=state_store,
-        storage_options=storage_options,
-    )
-
-
-def _emit_semantic_quality_view(
-    context: _SemanticDiagnosticsContext,
-    *,
-    view_name: str,
-    builder: Callable[[SessionContext], DataFrame],
-) -> None:
-    try:
-        df = builder(context.ctx)
-    except ValueError:
-        return
-    schema_hash = schema_identity_hash(arrow_schema_from_df(df))
-    row_count = dataframe_row_count(df)
-    artifact_uri = context.write_snapshot(view_name, df)
-    if context.diagnostics_sink is None:
-        return
-    record_semantic_quality_artifact(
-        context.diagnostics_sink,
-        artifact=SemanticQualityArtifact(
-            name=view_name,
-            row_count=row_count,
-            schema_hash=schema_hash,
-            artifact_uri=artifact_uri,
-            run_id=get_run_id(),
-        ),
-    )
-    for batch in semantic_quality_issue_batches(
-        view_name=view_name,
-        df=df,
-        max_rows=DEFAULT_MAX_ISSUE_ROWS,
-    ):
-        record_quality_issue_counts(
-            issue_kind=batch.issue_kind,
-            count=len(batch.rows),
-        )
-        record_semantic_quality_events(
-            context.diagnostics_sink,
-            name="semantic_quality_issues_v1",
-            rows=batch.rows,
-        )
-
-
-def _emit_semantic_quality_views(
-    context: _SemanticDiagnosticsContext,
-    *,
-    requested_outputs: Collection[str] | None,
-    manifest: SemanticProgramManifest,
-) -> None:
-    builders = semantic_diagnostic_view_builders()
-    view_names = SEMANTIC_DIAGNOSTIC_VIEW_NAMES
-    if requested_outputs is not None:
-        resolved = {canonical_output_name(name, manifest=manifest) for name in requested_outputs}
-        view_names = tuple(name for name in view_names if name in resolved)
-    for view_name in view_names:
-        builder = builders.get(view_name)
-        if builder is None:
-            continue
-        finalized = _finalize_output_builder(view_name, builder)
-        _emit_semantic_quality_view(context, view_name=view_name, builder=finalized)
-
-
-def _emit_semantic_quality_diagnostics(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-    dataset_resolver: ManifestDatasetResolver,
-    schema_policy: SchemaEvolutionPolicy,
-    requested_outputs: Collection[str] | None,
-    manifest: SemanticProgramManifest,
-) -> None:
-    if not runtime_profile.diagnostics.emit_semantic_quality_diagnostics:
-        return
-    context = _build_semantic_diagnostics_context(
-        ctx,
-        runtime_profile=runtime_profile,
-        dataset_resolver=dataset_resolver,
-        schema_policy=schema_policy,
-    )
-    if context is None:
-        return
-    with _run_context_guard():
-        _emit_semantic_quality_views(
-            context,
-            requested_outputs=requested_outputs,
-            manifest=manifest,
         )
 
 
@@ -2077,12 +1525,8 @@ def build_cpg_from_inferred_deps(
     dict[str, object]
         Mapping of view names to dependency information.
 
-    Raises:
-        SemanticInputValidationError: If required semantic inputs fail validation.
-        ValueError: If runtime profile or semantic configuration is invalid.
     """
     from datafusion_engine.views.bundle_extraction import extract_lineage_from_bundle
-    from semantics.validation import SemanticInputValidationError
 
     resolved = options or CpgBuildOptions()
     effective_use_cdf = (
@@ -2101,49 +1545,16 @@ def build_cpg_from_inferred_deps(
             "codeanatomy.has_cache_policy": resolved.cache_policy is not None,
         },
     ):
-        build_cpg(
+        build_result = _execute_cpg_build(
             ctx,
             runtime_profile=runtime_profile,
-            options=resolved,
+            resolved=resolved,
+            effective_use_cdf=effective_use_cdf,
             execution_context=execution_context,
         )
 
         deps: dict[str, object] = {}
-        # Reuse the same compile resolution helper that build_cpg uses,
-        # eliminating redundant semantic-context reconstruction.
-        compile_resolution = _resolve_cpg_compile_artifacts(
-            ctx,
-            runtime_profile=runtime_profile,
-            effective_use_cdf=effective_use_cdf,
-            resolved=resolved,
-            execution_context=execution_context,
-        )
-        manifest = compile_resolution.manifest
-        validation = manifest.validation
-        if validation is None:
-            msg = "Semantic manifest compile must include input validation results."
-            raise ValueError(msg)
-        if not validation.valid:
-            raise SemanticInputValidationError(validation)
-        semantic_ir = manifest.semantic_ir
-        from datafusion_engine.session.runtime import semantic_output_locations_for_profile
-
-        nodes = _view_nodes_for_cpg(
-            CpgViewNodesRequest(
-                ctx=ctx,
-                runtime_profile=runtime_profile,
-                output_locations=semantic_output_locations_for_profile(runtime_profile),
-                cache_policy=resolved.cache_policy,
-                compiled_cache_policy=resolved.compiled_cache_policy,
-                config=resolved.config,
-                input_mapping=compile_resolution.input_mapping,
-                use_cdf=compile_resolution.use_cdf,
-                requested_outputs=compile_resolution.resolved_outputs,
-                manifest=manifest,
-                semantic_ir=semantic_ir,
-            )
-        )
-        for node in nodes:
+        for node in build_result.nodes:
             bundle = node.plan_bundle
             if bundle is None:
                 continue
@@ -2250,7 +1661,11 @@ __all__ = [
     "CPG_INPUT_TABLES",
     "CachePolicy",
     "CpgBuildOptions",
+    "CpgViewNodesRequest",
+    "CpgViewSpecsRequest",
     "RelationshipSpec",
+    "SemanticOutputWriteContext",
     "build_cpg",
     "build_cpg_from_inferred_deps",
+    "cpg_view_specs",
 ]

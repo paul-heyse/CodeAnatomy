@@ -49,7 +49,8 @@ class _OtherPayload(msgspec.Struct, frozen=True):
 class TestArtifactSpecCreation:
     """Test ArtifactSpec construction and schema fingerprinting."""
 
-    def test_create_spec_with_payload_type(self) -> None:
+    @staticmethod
+    def test_create_spec_with_payload_type() -> None:
         """Create spec with a payload type and verify fingerprint is computed."""
         spec = ArtifactSpec(
             canonical_name="test_artifact_v1",
@@ -62,17 +63,19 @@ class TestArtifactSpecCreation:
         assert spec.version == 1
         assert len(spec.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
-    def test_create_spec_without_payload_type(self) -> None:
+    @staticmethod
+    def test_create_spec_without_payload_type() -> None:
         """Create spec without a payload type (untyped artifact)."""
         spec = ArtifactSpec(
             canonical_name="untyped_v1",
             description="Untyped artifact.",
         )
         assert spec.payload_type is None
-        assert spec.schema_fingerprint == ""
+        assert not spec.schema_fingerprint
         assert spec.version == 1
 
-    def test_fingerprint_deterministic(self) -> None:
+    @staticmethod
+    def test_fingerprint_deterministic() -> None:
         """Schema fingerprint is deterministic across instances."""
         spec_a = ArtifactSpec(
             canonical_name="a_v1",
@@ -86,7 +89,8 @@ class TestArtifactSpecCreation:
         )
         assert spec_a.schema_fingerprint == spec_b.schema_fingerprint
 
-    def test_fingerprint_differs_for_different_types(self) -> None:
+    @staticmethod
+    def test_fingerprint_differs_for_different_types() -> None:
         """Different payload types produce different fingerprints."""
         spec_a = ArtifactSpec(
             canonical_name="a_v1",
@@ -100,7 +104,8 @@ class TestArtifactSpecCreation:
         )
         assert spec_a.schema_fingerprint != spec_b.schema_fingerprint
 
-    def test_custom_version(self) -> None:
+    @staticmethod
+    def test_custom_version() -> None:
         """Spec version defaults to 1 but can be overridden."""
         spec = ArtifactSpec(
             canonical_name="versioned_v2",
@@ -109,7 +114,8 @@ class TestArtifactSpecCreation:
         )
         assert spec.version == CUSTOM_VERSION
 
-    def test_fingerprint_is_hex_string(self) -> None:
+    @staticmethod
+    def test_fingerprint_is_hex_string() -> None:
         """Schema fingerprint is a valid hex string."""
         spec = ArtifactSpec(
             canonical_name="hex_v1",
@@ -118,7 +124,8 @@ class TestArtifactSpecCreation:
         )
         int(spec.schema_fingerprint, FINGERPRINT_HEX_BASE)  # Should not raise
 
-    def test_fingerprint_length_is_32(self) -> None:
+    @staticmethod
+    def test_fingerprint_length_is_32() -> None:
         """Schema fingerprint is always 32 characters (128-bit truncation)."""
         spec = ArtifactSpec(
             canonical_name="len_v1",
@@ -136,7 +143,8 @@ class TestArtifactSpecCreation:
 class TestArtifactSpecValidation:
     """Test ArtifactSpec payload validation."""
 
-    def test_validate_valid_payload(self) -> None:
+    @staticmethod
+    def test_validate_valid_payload() -> None:
         """Valid payload passes validation without error."""
         spec = ArtifactSpec(
             canonical_name="test_v1",
@@ -145,7 +153,8 @@ class TestArtifactSpecValidation:
         )
         spec.validate({"name": "hello", "value": 42})
 
-    def test_validate_valid_payload_with_optional(self) -> None:
+    @staticmethod
+    def test_validate_valid_payload_with_optional() -> None:
         """Valid payload with optional fields passes validation."""
         spec = ArtifactSpec(
             canonical_name="test_v1",
@@ -154,7 +163,8 @@ class TestArtifactSpecValidation:
         )
         spec.validate({"name": "hello", "value": 42, "optional_field": "extra"})
 
-    def test_validate_invalid_payload_raises(self) -> None:
+    @staticmethod
+    def test_validate_invalid_payload_raises() -> None:
         """Invalid payload raises ValidationError."""
         spec = ArtifactSpec(
             canonical_name="test_v1",
@@ -164,7 +174,8 @@ class TestArtifactSpecValidation:
         with pytest.raises(msgspec.ValidationError):
             spec.validate({"name": "hello", "value": "not_an_int"})
 
-    def test_validate_missing_required_field_raises(self) -> None:
+    @staticmethod
+    def test_validate_missing_required_field_raises() -> None:
         """Payload missing a required field raises ValidationError."""
         spec = ArtifactSpec(
             canonical_name="test_v1",
@@ -174,7 +185,8 @@ class TestArtifactSpecValidation:
         with pytest.raises(msgspec.ValidationError):
             spec.validate({"name": "hello"})
 
-    def test_validate_untyped_is_noop(self) -> None:
+    @staticmethod
+    def test_validate_untyped_is_noop() -> None:
         """Untyped spec validation is a no-op (accepts anything)."""
         spec = ArtifactSpec(
             canonical_name="untyped_v1",
@@ -183,7 +195,8 @@ class TestArtifactSpecValidation:
         spec.validate({"anything": "goes"})
         spec.validate({})
 
-    def test_validate_untyped_accepts_empty_mapping(self) -> None:
+    @staticmethod
+    def test_validate_untyped_accepts_empty_mapping() -> None:
         """Untyped spec accepts an empty mapping without error."""
         spec = ArtifactSpec(
             canonical_name="untyped_empty_v1",
@@ -191,7 +204,8 @@ class TestArtifactSpecValidation:
         )
         spec.validate({})
 
-    def test_validate_untyped_accepts_arbitrary_keys(self) -> None:
+    @staticmethod
+    def test_validate_untyped_accepts_arbitrary_keys() -> None:
         """Untyped spec silently accepts any key structure."""
         spec = ArtifactSpec(
             canonical_name="untyped_keys_v1",
@@ -208,7 +222,8 @@ class TestArtifactSpecValidation:
 class TestArtifactSpecRegistry:
     """Test ArtifactSpecRegistry operations."""
 
-    def test_register_and_get(self) -> None:
+    @staticmethod
+    def test_register_and_get() -> None:
         """Register and retrieve an artifact spec."""
         registry = ArtifactSpecRegistry()
         spec = ArtifactSpec(
@@ -218,12 +233,14 @@ class TestArtifactSpecRegistry:
         registry.register("my_artifact_v1", spec)
         assert registry.get("my_artifact_v1") is spec
 
-    def test_get_missing_returns_none(self) -> None:
+    @staticmethod
+    def test_get_missing_returns_none() -> None:
         """Get on missing key returns None."""
         registry = ArtifactSpecRegistry()
         assert registry.get("nonexistent") is None
 
-    def test_contains(self) -> None:
+    @staticmethod
+    def test_contains() -> None:
         """Check __contains__ works."""
         registry = ArtifactSpecRegistry()
         spec = ArtifactSpec(canonical_name="x_v1", description="X.")
@@ -231,7 +248,8 @@ class TestArtifactSpecRegistry:
         assert "x_v1" in registry
         assert "y_v1" not in registry
 
-    def test_len(self) -> None:
+    @staticmethod
+    def test_len() -> None:
         """Check __len__ reflects registered count."""
         registry = ArtifactSpecRegistry()
         assert len(registry) == 0
@@ -240,14 +258,16 @@ class TestArtifactSpecRegistry:
         registry.register("b_v1", ArtifactSpec(canonical_name="b_v1", description="B."))
         assert len(registry) == REGISTRY_TWO_ITEMS
 
-    def test_iter(self) -> None:
+    @staticmethod
+    def test_iter() -> None:
         """Check __iter__ yields registered keys."""
         registry = ArtifactSpecRegistry()
         registry.register("a_v1", ArtifactSpec(canonical_name="a_v1", description="A."))
         registry.register("b_v1", ArtifactSpec(canonical_name="b_v1", description="B."))
         assert sorted(registry) == ["a_v1", "b_v1"]
 
-    def test_snapshot(self) -> None:
+    @staticmethod
+    def test_snapshot() -> None:
         """Snapshot returns a copy of registry state."""
         registry = ArtifactSpecRegistry()
         spec = ArtifactSpec(canonical_name="s_v1", description="S.")
@@ -257,7 +277,8 @@ class TestArtifactSpecRegistry:
         assert "s_v1" in snap
         assert snap["s_v1"] is spec
 
-    def test_restore(self) -> None:
+    @staticmethod
+    def test_restore() -> None:
         """Restore replaces registry state from a snapshot."""
         registry = ArtifactSpecRegistry()
         spec = ArtifactSpec(canonical_name="r_v1", description="R.")
@@ -279,7 +300,8 @@ class TestArtifactSpecRegistry:
 class TestGlobalRegistry:
     """Test the global artifact spec registry and helper."""
 
-    def test_global_registry_is_populated(self) -> None:
+    @staticmethod
+    def test_global_registry_is_populated() -> None:
         """Global registry should have specs after importing serde_artifact_specs."""
         import serde_artifact_specs
 
@@ -287,7 +309,8 @@ class TestGlobalRegistry:
         assert len(registry) > 0
         assert len(serde_artifact_specs.__all__) > 0
 
-    def test_known_specs_registered(self) -> None:
+    @staticmethod
+    def test_known_specs_registered() -> None:
         """Verify known spec canonical names are registered."""
         import serde_artifact_specs
 
@@ -317,7 +340,8 @@ class TestGlobalRegistry:
         for name in expected_names:
             assert name in registry, f"Expected {name!r} in artifact spec registry"
 
-    def test_register_artifact_spec_returns_spec(self) -> None:
+    @staticmethod
+    def test_register_artifact_spec_returns_spec() -> None:
         """register_artifact_spec returns the registered spec."""
         spec = ArtifactSpec(
             canonical_name="test_global_v1",
@@ -327,13 +351,15 @@ class TestGlobalRegistry:
         assert result is spec
         assert artifact_spec_registry().get("test_global_v1") is spec
 
-    def test_get_artifact_spec_helper(self) -> None:
+    @staticmethod
+    def test_get_artifact_spec_helper() -> None:
         """get_artifact_spec returns spec by canonical name."""
         spec = get_artifact_spec("view_cache_artifact_v1")
         assert spec is not None
         assert spec.canonical_name == "view_cache_artifact_v1"
 
-    def test_get_artifact_spec_missing(self) -> None:
+    @staticmethod
+    def test_get_artifact_spec_missing() -> None:
         """get_artifact_spec returns None for unknown names."""
         assert get_artifact_spec("nonexistent_artifact_v99") is None
 
@@ -346,7 +372,8 @@ class TestGlobalRegistry:
 class TestSerdeArtifactSpecs:
     """Test that the spec constants from serde_artifacts are well-formed."""
 
-    def test_view_cache_artifact_spec(self) -> None:
+    @staticmethod
+    def test_view_cache_artifact_spec() -> None:
         """VIEW_CACHE_ARTIFACT_SPEC has expected properties."""
         from serde_artifact_specs import VIEW_CACHE_ARTIFACT_SPEC
         from serde_artifacts import ViewCacheArtifact
@@ -355,7 +382,8 @@ class TestSerdeArtifactSpecs:
         assert VIEW_CACHE_ARTIFACT_SPEC.payload_type is ViewCacheArtifact
         assert len(VIEW_CACHE_ARTIFACT_SPEC.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
-    def test_run_manifest_spec(self) -> None:
+    @staticmethod
+    def test_run_manifest_spec() -> None:
         """RUN_MANIFEST_SPEC has expected properties."""
         from serde_artifact_specs import RUN_MANIFEST_SPEC
         from serde_artifacts import RunManifest
@@ -364,7 +392,8 @@ class TestSerdeArtifactSpecs:
         assert RUN_MANIFEST_SPEC.payload_type is RunManifest
         assert len(RUN_MANIFEST_SPEC.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
-    def test_plan_schedule_spec(self) -> None:
+    @staticmethod
+    def test_plan_schedule_spec() -> None:
         """PLAN_SCHEDULE_SPEC has expected properties."""
         from serde_artifact_specs import PLAN_SCHEDULE_SPEC
         from serde_artifacts import PlanScheduleArtifact
@@ -372,7 +401,8 @@ class TestSerdeArtifactSpecs:
         assert PLAN_SCHEDULE_SPEC.canonical_name == "plan_schedule_v1"
         assert PLAN_SCHEDULE_SPEC.payload_type is PlanScheduleArtifact
 
-    def test_write_artifact_spec(self) -> None:
+    @staticmethod
+    def test_write_artifact_spec() -> None:
         """WRITE_ARTIFACT_SPEC links to WriteArtifactRow."""
         from serde_artifact_specs import WRITE_ARTIFACT_SPEC
         from serde_artifacts import WriteArtifactRow
@@ -381,17 +411,15 @@ class TestSerdeArtifactSpecs:
         assert WRITE_ARTIFACT_SPEC.payload_type is WriteArtifactRow
         assert len(WRITE_ARTIFACT_SPEC.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
-    def test_datafusion_view_artifacts_spec(self) -> None:
+    @staticmethod
+    def test_datafusion_view_artifacts_spec() -> None:
         """DATAFUSION_VIEW_ARTIFACTS_SPEC links to ViewArtifactPayload."""
         from serde_artifact_specs import DATAFUSION_VIEW_ARTIFACTS_SPEC
         from serde_artifacts import ViewArtifactPayload
 
         assert DATAFUSION_VIEW_ARTIFACTS_SPEC.canonical_name == "datafusion_view_artifacts_v4"
         assert DATAFUSION_VIEW_ARTIFACTS_SPEC.payload_type is ViewArtifactPayload
-        assert (
-            len(DATAFUSION_VIEW_ARTIFACTS_SPEC.schema_fingerprint)
-            == FINGERPRINT_EXPECTED_LENGTH
-        )
+        assert len(DATAFUSION_VIEW_ARTIFACTS_SPEC.schema_fingerprint) == FINGERPRINT_EXPECTED_LENGTH
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +430,8 @@ class TestSerdeArtifactSpecs:
 class TestNewArtifactSpecs:
     """Test the new artifact spec constants added in the wave-5 expansion."""
 
-    def test_all_new_specs_are_registered(self) -> None:
+    @staticmethod
+    def test_all_new_specs_are_registered() -> None:
         """Every spec exported from serde_artifact_specs is in the global registry."""
         import serde_artifact_specs
 
@@ -415,7 +444,8 @@ class TestNewArtifactSpecs:
             )
             assert registry.get(spec.canonical_name) is spec
 
-    def test_all_new_specs_have_descriptions(self) -> None:
+    @staticmethod
+    def test_all_new_specs_have_descriptions() -> None:
         """Every spec has a non-empty description."""
         import serde_artifact_specs
 
@@ -424,7 +454,8 @@ class TestNewArtifactSpecs:
             assert isinstance(spec, ArtifactSpec)
             assert spec.description, f"{attr_name} has empty description"
 
-    def test_all_new_specs_have_canonical_names(self) -> None:
+    @staticmethod
+    def test_all_new_specs_have_canonical_names() -> None:
         """Every spec has a non-empty canonical_name."""
         import serde_artifact_specs
 
@@ -433,7 +464,8 @@ class TestNewArtifactSpecs:
             assert isinstance(spec, ArtifactSpec)
             assert spec.canonical_name, f"{attr_name} has empty canonical_name"
 
-    def test_typed_specs_have_fingerprints(self) -> None:
+    @staticmethod
+    def test_typed_specs_have_fingerprints() -> None:
         """Specs with payload_type have 32-char fingerprints."""
         import serde_artifact_specs
 
@@ -447,7 +479,8 @@ class TestNewArtifactSpecs:
                     f"{len(spec.schema_fingerprint)}, expected {FINGERPRINT_EXPECTED_LENGTH}"
                 )
 
-    def test_untyped_specs_have_no_fingerprint(self) -> None:
+    @staticmethod
+    def test_untyped_specs_have_no_fingerprint() -> None:
         """Specs without payload_type have an empty fingerprint."""
         import serde_artifact_specs
 
@@ -456,11 +489,12 @@ class TestNewArtifactSpecs:
             if not isinstance(spec, ArtifactSpec):
                 continue
             if spec.payload_type is None:
-                assert spec.schema_fingerprint == "", (
+                assert not spec.schema_fingerprint, (
                     f"{attr_name} has non-empty fingerprint but no payload_type"
                 )
 
-    def test_untyped_spec_validates_anything(self) -> None:
+    @staticmethod
+    def test_untyped_spec_validates_anything() -> None:
         """Untyped specs accept any payload without raising."""
         from serde_artifact_specs import DELTA_MAINTENANCE_SPEC
 
@@ -468,7 +502,8 @@ class TestNewArtifactSpecs:
         DELTA_MAINTENANCE_SPEC.validate({"table_uri": "/tmp/test", "operation": "optimize"})
         DELTA_MAINTENANCE_SPEC.validate({})
 
-    def test_new_canonical_names_registered(self) -> None:
+    @staticmethod
+    def test_new_canonical_names_registered() -> None:
         """Verify the 14 new canonical names are registered."""
         registry = artifact_spec_registry()
         new_names = [
@@ -490,7 +525,8 @@ class TestNewArtifactSpecs:
         for name in new_names:
             assert name in registry, f"Expected {name!r} in artifact spec registry"
 
-    def test_no_duplicate_canonical_names(self) -> None:
+    @staticmethod
+    def test_no_duplicate_canonical_names() -> None:
         """All spec constants use unique canonical names."""
         import serde_artifact_specs
 
@@ -506,7 +542,8 @@ class TestNewArtifactSpecs:
                 )
             seen[spec.canonical_name] = attr_name
 
-    def test_total_spec_count(self) -> None:
+    @staticmethod
+    def test_total_spec_count() -> None:
         """Verify the total number of registered specs is at least 145."""
         registry = artifact_spec_registry()
         assert len(registry) >= MIN_EXPECTED_SPEC_COUNT, (
@@ -522,7 +559,8 @@ class TestNewArtifactSpecs:
 class TestRecordArtifactTypedContract:
     """Test that record_artifact requires typed ArtifactSpec inputs."""
 
-    def test_record_artifact_with_spec(self) -> None:
+    @staticmethod
+    def test_record_artifact_with_spec() -> None:
         """Recording with an ArtifactSpec resolves canonical name via recorder."""
         from datafusion_engine.lineage.diagnostics import (
             DiagnosticsContext,
@@ -542,7 +580,8 @@ class TestRecordArtifactTypedContract:
         assert len(artifacts) == 1
         assert artifacts[0]["key"] == "value"
 
-    def test_record_artifact_spec_in_snapshot(self) -> None:
+    @staticmethod
+    def test_record_artifact_spec_in_snapshot() -> None:
         """Artifacts recorded via spec appear in snapshot by canonical name."""
         from datafusion_engine.lineage.diagnostics import (
             DiagnosticsContext,
@@ -561,7 +600,8 @@ class TestRecordArtifactTypedContract:
         snapshot = sink.artifacts_snapshot()
         assert "snap_test_v1" in snapshot
 
-    def test_diagnostics_recorder_with_spec(self) -> None:
+    @staticmethod
+    def test_diagnostics_recorder_with_spec() -> None:
         """DiagnosticsRecorder accepts ArtifactSpec for record_artifact."""
         from datafusion_engine.lineage.diagnostics import (
             DiagnosticsContext,
@@ -580,7 +620,8 @@ class TestRecordArtifactTypedContract:
         artifacts = sink.get_artifacts("recorder_test_v1")
         assert len(artifacts) == 1
 
-    def test_diagnostics_recorder_adapter_with_spec(self) -> None:
+    @staticmethod
+    def test_diagnostics_recorder_adapter_with_spec() -> None:
         """DiagnosticsRecorderAdapter works with typed ArtifactSpec values."""
         from datafusion_engine.lineage.diagnostics import (
             DiagnosticsRecorderAdapter,
@@ -600,7 +641,8 @@ class TestRecordArtifactTypedContract:
         artifacts = sink.get_artifacts("adapter_test_v1")
         assert len(artifacts) == 1
 
-    def test_runtime_record_artifact_rejects_non_artifact_spec(self) -> None:
+    @staticmethod
+    def test_runtime_record_artifact_rejects_non_artifact_spec() -> None:
         """Runtime record_artifact rejects non-ArtifactSpec name values."""
         from datafusion_engine.session.runtime import record_artifact
 
@@ -611,7 +653,8 @@ class TestRecordArtifactTypedContract:
                 {"x": 1},
             )
 
-    def test_lineage_record_artifact_rejects_non_artifact_spec(self) -> None:
+    @staticmethod
+    def test_lineage_record_artifact_rejects_non_artifact_spec() -> None:
         """Lineage record_artifact rejects non-ArtifactSpec name values."""
         from datafusion_engine.lineage.diagnostics import record_artifact
 

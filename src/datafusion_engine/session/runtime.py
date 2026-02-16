@@ -169,7 +169,7 @@ from schema_spec.contracts import (
     dataset_spec_from_schema,
 )
 from schema_spec.policies import DataFusionWritePolicy
-from semantics.incremental.cdf_cursors import CdfCursorStore
+from storage.cdf_cursor_protocol import CdfCursorStoreLike
 
 if TYPE_CHECKING:
     ExplainRows = TableLike | RecordBatchReaderLike
@@ -900,7 +900,7 @@ def datasource_config_from_manifest(
     runtime_profile: DataFusionRuntimeProfile,
     extract_output: ExtractOutputConfig | None = None,
     semantic_output: SemanticOutputConfig | None = None,
-    cdf_cursor_store: CdfCursorStore | None = None,
+    cdf_cursor_store: CdfCursorStoreLike | None = None,
 ) -> DataSourceConfig:
     """Build DataSourceConfig in post-compile semantic-authority mode.
 
@@ -948,7 +948,7 @@ def datasource_config_from_profile(
     extract_output: ExtractOutputConfig | None = None,
     semantic_output: SemanticOutputConfig | None = None,
     dataset_templates: Mapping[str, DatasetLocation] | None = None,
-    cdf_cursor_store: CdfCursorStore | None = None,
+    cdf_cursor_store: CdfCursorStoreLike | None = None,
 ) -> DataSourceConfig:
     """Build DataSourceConfig in pre-compile runtime-bootstrap mode.
 
@@ -3839,7 +3839,7 @@ class DataSourceConfig(StructBaseStrict, frozen=True):
     dataset_templates: Mapping[str, DatasetLocation] = msgspec.field(default_factory=dict)
     extract_output: ExtractOutputConfig = msgspec.field(default_factory=ExtractOutputConfig)
     semantic_output: SemanticOutputConfig = msgspec.field(default_factory=SemanticOutputConfig)
-    cdf_cursor_store: CdfCursorStore | None = None
+    cdf_cursor_store: CdfCursorStoreLike | None = None
 
 
 class ZeroRowBootstrapConfig(StructBaseStrict, frozen=True):

@@ -23,7 +23,8 @@ def test_register_cache_tables_uses_direct_extension_path(
     captured: dict[str, object] = {"ctx": None, "payload": None}
 
     class _Module:
-        def register_cache_tables(self, ctx: object, payload: dict[str, str]) -> None:
+        @staticmethod
+        def register_cache_tables(ctx: object, payload: dict[str, str]) -> None:
             captured["ctx"] = ctx
             captured["payload"] = payload
 
@@ -56,8 +57,10 @@ def test_register_cache_tables_raises_abi_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Raise an ABI mismatch when extension registers with incompatible SessionContext."""
+
     class _Module:
-        def register_cache_tables(self, _ctx: object, _payload: dict[str, str]) -> None:
+        @staticmethod
+        def register_cache_tables(_ctx: object, _payload: dict[str, str]) -> None:
             msg = "argument 'ctx': cannot be converted"
             raise RuntimeError(msg)
 

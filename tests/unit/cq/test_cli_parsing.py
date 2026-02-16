@@ -17,13 +17,15 @@ CALLS_LIMIT = 50
 class TestImpactCommandParsing:
     """Tests for impact command argument parsing."""
 
-    def test_impact_required_args(self) -> None:
+    @staticmethod
+    def test_impact_required_args() -> None:
         """Test parsing impact command with required arguments."""
         _cmd, bound, _extra = app.parse_args(["impact", "build_graph", "--param", "root"])
         assert bound.args[0] == "build_graph"  # positional arg
         assert bound.kwargs["opts"].param == "root"
 
-    def test_impact_with_depth(self) -> None:
+    @staticmethod
+    def test_impact_with_depth() -> None:
         """Test parsing impact command with depth option."""
         _cmd, bound, _extra = app.parse_args(
             ["impact", "foo", "--param", "bar", "--depth", str(IMPACT_DEPTH)]
@@ -32,7 +34,8 @@ class TestImpactCommandParsing:
         assert bound.kwargs["opts"].param == "bar"
         assert bound.kwargs["opts"].depth == IMPACT_DEPTH
 
-    def test_impact_with_format(self) -> None:
+    @staticmethod
+    def test_impact_with_format() -> None:
         """Test parsing impact command with format option (global option via meta app)."""
         # --format is a global option handled by the meta launcher
         _cmd, bound, _extra = app.meta.parse_args(
@@ -40,7 +43,8 @@ class TestImpactCommandParsing:
         )
         assert bound.kwargs["global_opts"].output_format == OutputFormat.json
 
-    def test_impact_missing_param_fails(self) -> None:
+    @staticmethod
+    def test_impact_missing_param_fails() -> None:
         """Test that impact command fails without --param."""
         with pytest.raises(SystemExit):
             app.parse_args(["impact", "foo"], exit_on_error=True, print_error=False)
@@ -49,12 +53,14 @@ class TestImpactCommandParsing:
 class TestCallsCommandParsing:
     """Tests for calls command argument parsing."""
 
-    def test_calls_basic(self) -> None:
+    @staticmethod
+    def test_calls_basic() -> None:
         """Test parsing calls command."""
         _cmd, bound, _extra = app.parse_args(["calls", "my_function"])
         assert bound.args[0] == "my_function"  # positional arg
 
-    def test_calls_with_filters(self) -> None:
+    @staticmethod
+    def test_calls_with_filters() -> None:
         """Test parsing calls command with filter options."""
         _cmd, bound, _extra = app.parse_args(
             [
@@ -74,7 +80,8 @@ class TestCallsCommandParsing:
         assert opts.exclude == ["tests/"]
         assert opts.limit == CALLS_LIMIT
 
-    def test_calls_empty_include_flag_rejected(self) -> None:
+    @staticmethod
+    def test_calls_empty_include_flag_rejected() -> None:
         """Test that deprecated iterable empty flags are not exposed."""
         with pytest.raises(SystemExit):
             app.parse_args(
@@ -87,12 +94,14 @@ class TestCallsCommandParsing:
 class TestQueryCommandParsing:
     """Tests for q (query) command argument parsing."""
 
-    def test_query_basic(self) -> None:
+    @staticmethod
+    def test_query_basic() -> None:
         """Test parsing query command with query string."""
         _cmd, bound, _extra = app.parse_args(["q", "entity=function name=main"])
         assert bound.args[0] == "entity=function name=main"  # positional arg
 
-    def test_query_with_explain(self) -> None:
+    @staticmethod
+    def test_query_with_explain() -> None:
         """Test parsing query command with explain option."""
         _cmd, bound, _extra = app.parse_args(["q", "entity=function", "--explain-files"])
         assert bound.kwargs["opts"].explain_files is True
@@ -101,7 +110,8 @@ class TestQueryCommandParsing:
 class TestSigImpactCommandParsing:
     """Tests for sig-impact command argument parsing."""
 
-    def test_sig_impact_basic(self) -> None:
+    @staticmethod
+    def test_sig_impact_basic() -> None:
         """Test parsing sig-impact command."""
         _cmd, bound, _extra = app.parse_args(
             [
@@ -121,7 +131,8 @@ class TestIndexCommandParsing:
     Note: index command is deprecated and no longer has options.
     """
 
-    def test_index_basic(self) -> None:
+    @staticmethod
+    def test_index_basic() -> None:
         """Test parsing deprecated index command."""
         _cmd, _bound, _extra = app.parse_args(["index"])
         # Deprecated command just prints a message
@@ -133,7 +144,8 @@ class TestCacheCommandParsing:
     Note: cache command is deprecated and no longer has options.
     """
 
-    def test_cache_basic(self) -> None:
+    @staticmethod
+    def test_cache_basic() -> None:
         """Test parsing deprecated cache command."""
         _cmd, _bound, _extra = app.parse_args(["cache"])
         # Deprecated command just prints a message
@@ -146,6 +158,7 @@ class TestOutputFormatParsing:
     so we use app.meta.parse_args() for these tests.
     """
 
+    @staticmethod
     @pytest.mark.parametrize(
         ("format_arg", "expected"),
         [
@@ -158,7 +171,7 @@ class TestOutputFormatParsing:
             ("dot", OutputFormat.dot),
         ],
     )
-    def test_format_options(self, format_arg: str, expected: OutputFormat) -> None:
+    def test_format_options(format_arg: str, expected: OutputFormat) -> None:
         """Test parsing all format options."""
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--format", format_arg])
         assert bound.kwargs["global_opts"].output_format == expected
@@ -167,7 +180,8 @@ class TestOutputFormatParsing:
 class TestReportCommandParsing:
     """Tests for report command argument parsing."""
 
-    def test_report_basic(self) -> None:
+    @staticmethod
+    def test_report_basic() -> None:
         """Test parsing report command."""
         _cmd, bound, _extra = app.parse_args(
             [
@@ -180,7 +194,8 @@ class TestReportCommandParsing:
         assert bound.args[0] == "refactor-impact"  # positional arg
         assert bound.kwargs["opts"].target == "function:build_graph"
 
-    def test_report_with_options(self) -> None:
+    @staticmethod
+    def test_report_with_options() -> None:
         """Test parsing report command with various options."""
         _cmd, bound, _extra = app.parse_args(
             [
@@ -203,7 +218,8 @@ class TestReportCommandParsing:
         assert opts.param == "config"
         assert opts.signature == "foo(a, b)"
 
-    def test_report_invalid_preset_fails_parse(self) -> None:
+    @staticmethod
+    def test_report_invalid_preset_fails_parse() -> None:
         """Test that invalid preset is rejected at parse time."""
         with pytest.raises(SystemExit):
             app.parse_args(
@@ -216,7 +232,8 @@ class TestReportCommandParsing:
 class TestRunCommandParsing:
     """Tests for run command parsing."""
 
-    def test_run_with_step(self) -> None:
+    @staticmethod
+    def test_run_with_step() -> None:
         """Test parsing run command with --step."""
         _cmd, bound, _extra = app.parse_args(
             ["run", "--step", '{"type":"q","query":"entity=function name=main"}'],
@@ -226,7 +243,8 @@ class TestRunCommandParsing:
         opts = bound.kwargs["opts"]
         assert opts.step
 
-    def test_run_with_neighborhood_step(self) -> None:
+    @staticmethod
+    def test_run_with_neighborhood_step() -> None:
         """Test parsing run command with a neighborhood --step payload."""
         _cmd, bound, _extra = app.parse_args(
             [
@@ -240,7 +258,8 @@ class TestRunCommandParsing:
         opts = bound.kwargs["opts"]
         assert opts.step
 
-    def test_run_empty_step_flag_rejected(self) -> None:
+    @staticmethod
+    def test_run_empty_step_flag_rejected() -> None:
         """Test that run input iterable empty flags are not exposed."""
         with pytest.raises(SystemExit):
             app.parse_args(
@@ -253,7 +272,8 @@ class TestRunCommandParsing:
 class TestChainCommandParsing:
     """Tests for chain command parsing."""
 
-    def test_chain_basic(self) -> None:
+    @staticmethod
+    def test_chain_basic() -> None:
         """Test parsing chain command tokens."""
         _cmd, bound, _extra = app.parse_args(
             ["chain", "q", "entity=function name=main", "AND", "calls", "main"],
@@ -266,7 +286,8 @@ class TestChainCommandParsing:
 class TestNeighborhoodCommandParsing:
     """Tests for neighborhood command parsing."""
 
-    def test_neighborhood_alias_nb(self) -> None:
+    @staticmethod
+    def test_neighborhood_alias_nb() -> None:
         """Test that nb alias resolves neighborhood command."""
         _cmd, bound, _extra = app.parse_args(
             ["nb", "tools/cq/cli_app/app.py:1", "--lang", "python"]
@@ -274,7 +295,8 @@ class TestNeighborhoodCommandParsing:
         assert bound.args[0] == "tools/cq/cli_app/app.py:1"
         assert str(bound.kwargs["lang"]) == "python"
 
-    def test_neighborhood_invalid_lang_fails(self) -> None:
+    @staticmethod
+    def test_neighborhood_invalid_lang_fails() -> None:
         """Test that invalid neighborhood language fails at parse time."""
         with pytest.raises(SystemExit):
             app.parse_args(
@@ -287,14 +309,17 @@ class TestNeighborhoodCommandParsing:
 class TestSetupCommandParsing:
     """Tests for setup commands."""
 
-    def test_install_completion_parses(self) -> None:
+    @staticmethod
+    def test_install_completion_parses() -> None:
         """Test parsing --install-completion root command."""
         _cmd, _bound, _extra = app.parse_args(["--install-completion"])
 
-    def test_repl_command_parses(self) -> None:
+    @staticmethod
+    def test_repl_command_parses() -> None:
         """Test parsing repl command."""
         _cmd, _bound, _extra = app.parse_args(["repl"])
 
-    def test_help_command_parses(self) -> None:
+    @staticmethod
+    def test_help_command_parses() -> None:
         """Test parsing hidden help command used by REPL."""
         _cmd, _bound, _extra = app.parse_args(["help"])

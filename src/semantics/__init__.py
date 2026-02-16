@@ -32,11 +32,13 @@ from semantics.joins import (
     JoinStrategyType,
     infer_join_strategy,
 )
+from semantics.pipeline import CpgBuildOptions, build_cpg, build_cpg_from_inferred_deps
 from semantics.schema import SemanticSchema
 from semantics.scip_normalize import scip_to_byte_offsets
 
 __all__ = [
     "ColumnType",
+    "CpgBuildOptions",
     "JoinInferenceError",
     "JoinStrategy",
     "JoinStrategyType",
@@ -46,6 +48,8 @@ __all__ = [
     "SemanticSchema",
     "TableInfo",
     "TableType",
+    "build_cpg",
+    "build_cpg_from_inferred_deps",
     "infer_column_type",
     "infer_join_strategy",
     "infer_table_type",

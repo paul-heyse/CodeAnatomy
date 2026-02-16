@@ -8,7 +8,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 
-from tools.cq.index.def_index import FnDecl, ParamInfo, _SELF_CLS
+from tools.cq.index.def_index import _SELF_CLS, FnDecl, ParamInfo
 
 
 @dataclass

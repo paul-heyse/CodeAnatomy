@@ -127,9 +127,7 @@ def test_index_build_time(toolchain: Toolchain, repo_root: Path) -> None:
 
     # Index build should be reasonable - adjust threshold based on repo size
     # For CodeAnatomy (~100k LOC), expect <60s on typical hardware
-    assert elapsed < INDEX_BUILD_MAX_SECONDS, (
-        f"Index build took {elapsed:.2f}s, expected <60s"
-    )
+    assert elapsed < INDEX_BUILD_MAX_SECONDS, f"Index build took {elapsed:.2f}s, expected <60s"
 
 
 @pytest.mark.benchmark
@@ -163,6 +161,4 @@ def test_query_scaling_simple(toolchain: Toolchain, repo_root: Path) -> None:
 
     # All simple queries should complete quickly while tolerating CI variance.
     for i, elapsed in enumerate(timings):
-        assert elapsed < SCALING_QUERY_MAX_SECONDS, (
-            f"Query {i} took {elapsed:.2f}s, expected <12s"
-        )
+        assert elapsed < SCALING_QUERY_MAX_SECONDS, f"Query {i} took {elapsed:.2f}s, expected <12s"

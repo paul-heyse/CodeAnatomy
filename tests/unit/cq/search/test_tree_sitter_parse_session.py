@@ -31,15 +31,16 @@ class _FakeTree:
     ) -> None:
         self.edits.append((start_byte, old_end_byte, new_end_byte))
 
-    def changed_ranges(self, _new_tree: object) -> tuple[tuple[int, int], ...]:
+    @staticmethod
+    def changed_ranges(_new_tree: object) -> tuple[tuple[int, int], ...]:
         return ((0, 1),)
 
 
 class _FakeParser:
-    def parse(self, source_bytes: bytes, old_tree: object | None = None) -> _FakeTree | None:
+    @staticmethod
+    def parse(source_bytes: bytes, old_tree: object | None = None) -> _FakeTree | None:
         _ = old_tree
         return _FakeTree(source_bytes)
-
 
 
 def test_parse_session_reuses_and_reparses_incrementally() -> None:

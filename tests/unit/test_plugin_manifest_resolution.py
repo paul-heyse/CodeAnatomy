@@ -32,7 +32,8 @@ class _FailingModule(ModuleType):
     def __init__(self) -> None:
         super().__init__("datafusion_ext")
 
-    def plugin_manifest(self, path: str | None = None) -> dict[str, object]:
+    @staticmethod
+    def plugin_manifest(path: str | None = None) -> dict[str, object]:
         _ = path
         msg = "manifest unavailable"
         raise RuntimeError(msg)

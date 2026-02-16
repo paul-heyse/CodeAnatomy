@@ -26,7 +26,6 @@ def _close_cache_backends() -> Generator[None]:
     close_cq_cache_backend()
 
 
-
 def test_resolve_write_cache_tag_uses_run_tag_for_ephemeral_namespace() -> None:
     """Use run-id tag when namespace is marked ephemeral."""
     policy = CqCachePolicyV1(namespace_ephemeral={"search_candidates": True})
@@ -47,7 +46,6 @@ def test_resolve_write_cache_tag_uses_run_tag_for_ephemeral_namespace() -> None:
     assert "ns:search_candidates" not in tag
     assert "scope:scope123" not in tag
     assert "snap:snap123" not in tag
-
 
 
 def test_resolve_write_cache_tag_uses_namespace_tag_for_persistent_namespace() -> None:

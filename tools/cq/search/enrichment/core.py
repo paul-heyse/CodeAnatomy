@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from tools.cq.search._shared.core import encode_mapping
 from tools.cq.search.enrichment.contracts import (
     EnrichmentMeta,
+    EnrichmentStatus,
     PythonEnrichmentPayload,
     RustEnrichmentPayload,
 )
@@ -111,7 +113,11 @@ def enforce_payload_budget(
 
 def _meta_from_flat(payload: Mapping[str, object], *, language: str) -> EnrichmentMeta:
     status_raw = payload.get("enrichment_status")
-    status = status_raw if isinstance(status_raw, str) else "applied"
+    status: EnrichmentStatus = (
+        cast("EnrichmentStatus", status_raw)
+        if isinstance(status_raw, str) and status_raw in {"applied", "degraded", "skipped"}
+        else "applied"
+    )
     sources_raw = payload.get("enrichment_sources")
     sources = (
         [item for item in sources_raw if isinstance(item, str)]

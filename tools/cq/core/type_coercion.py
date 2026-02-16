@@ -11,19 +11,17 @@ def coerce_float(value: object) -> float:
     value : object
         Value to coerce.
 
-    Returns
+    Returns:
     -------
     float
         Coerced float value.
 
-    Raises
-    ------
-    TypeError
-        If value cannot be coerced to float.
+    Raises:
+        TypeError: If ``value`` is not an ``int`` or ``float``.
     """
     if isinstance(value, (int, float)):
         return float(value)
-    raise TypeError(f"Expected numeric value, got {type(value)}")
+    raise TypeError
 
 
 def coerce_str(value: object) -> str:
@@ -34,19 +32,17 @@ def coerce_str(value: object) -> str:
     value : object
         Value to coerce.
 
-    Returns
+    Returns:
     -------
     str
         Coerced string value.
 
-    Raises
-    ------
-    TypeError
-        If value is not a string.
+    Raises:
+        TypeError: If ``value`` is not a string.
     """
     if isinstance(value, str):
         return value
-    raise TypeError(f"Expected str, got {type(value)}")
+    raise TypeError
 
 
 __all__ = ["coerce_float", "coerce_str"]

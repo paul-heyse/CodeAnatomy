@@ -16,6 +16,7 @@ DECLARATION_SUPERTYPE_ID = 10
 
 def test_build_supertype_index_from_runtime_language() -> None:
     """Construct supertype index from runtime supertypes and subtype relations."""
+
     def _subtypes(supertype_id: int) -> tuple[int, ...]:
         return (11, 12) if supertype_id == DECLARATION_SUPERTYPE_ID else ()
 

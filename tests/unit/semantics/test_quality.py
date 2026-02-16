@@ -39,7 +39,8 @@ TOP_K_ALL = 3
 class TestSignalsSpec:
     """Tests for SignalsSpec dataclass."""
 
-    def test_default_values(self) -> None:
+    @staticmethod
+    def test_default_values() -> None:
         """SignalsSpec has sensible defaults."""
         spec = SignalsSpec()
         assert spec.base_score == DEFAULT_BASE_SCORE
@@ -49,7 +50,8 @@ class TestSignalsSpec:
         assert spec.quality_score_column == "file_quality_score"
         assert spec.quality_weight == DEFAULT_QUALITY_WEIGHT
 
-    def test_custom_values(self) -> None:
+    @staticmethod
+    def test_custom_values() -> None:
         """SignalsSpec accepts custom values."""
         spec = SignalsSpec(
             base_score=CUSTOM_BASE_SCORE,
@@ -60,14 +62,16 @@ class TestSignalsSpec:
         assert spec.base_confidence == CUSTOM_BASE_CONFIDENCE
         assert spec.quality_weight == CUSTOM_QUALITY_WEIGHT
 
-    def test_frozen_immutable(self) -> None:
+    @staticmethod
+    def test_frozen_immutable() -> None:
         """SignalsSpec is immutable (frozen)."""
         spec = SignalsSpec()
         attr_name = "base_score"
         with pytest.raises(FrozenInstanceError):
             setattr(spec, attr_name, 100.0)
 
-    def test_with_hard_predicates(self) -> None:
+    @staticmethod
+    def test_with_hard_predicates() -> None:
         """SignalsSpec can contain hard predicates."""
         spec = SignalsSpec(
             hard=[
@@ -77,7 +81,8 @@ class TestSignalsSpec:
         )
         assert len(spec.hard) == HARD_PREDICATE_COUNT
 
-    def test_with_features(self) -> None:
+    @staticmethod
+    def test_with_features() -> None:
         """SignalsSpec can contain features."""
         from semantics.exprs import case_eq
 
@@ -94,7 +99,8 @@ class TestSignalsSpec:
 class TestFeature:
     """Tests for Feature dataclass."""
 
-    def test_default_weight(self) -> None:
+    @staticmethod
+    def test_default_weight() -> None:
         """Feature has default weight of 1.0."""
         from semantics.exprs import case_eq
 
@@ -102,21 +108,24 @@ class TestFeature:
         assert feature.weight == 1.0
         assert feature.kind == "evidence"
 
-    def test_custom_weight(self) -> None:
+    @staticmethod
+    def test_custom_weight() -> None:
         """Feature accepts custom weight."""
         from semantics.exprs import case_eq
 
         feature = Feature("test", case_eq("a", "b"), weight=CUSTOM_FEATURE_WEIGHT)
         assert feature.weight == CUSTOM_FEATURE_WEIGHT
 
-    def test_quality_kind(self) -> None:
+    @staticmethod
+    def test_quality_kind() -> None:
         """Feature can be quality kind."""
         from semantics.exprs import case_eq
 
         feature = Feature("test", case_eq("a", "b"), kind="quality")
         assert feature.kind == "quality"
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """Feature is immutable."""
         from semantics.exprs import case_eq
 
@@ -129,12 +138,14 @@ class TestFeature:
 class TestHardPredicate:
     """Tests for HardPredicate dataclass."""
 
-    def test_contains_predicate(self) -> None:
+    @staticmethod
+    def test_contains_predicate() -> None:
         """HardPredicate wraps an ExprSpec predicate."""
         pred = HardPredicate(is_not_null("column"))
         assert pred.predicate is not None
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """HardPredicate is immutable."""
         pred = HardPredicate(is_not_null("column"))
         attr_name = "predicate"
@@ -145,17 +156,20 @@ class TestHardPredicate:
 class TestOrderSpec:
     """Tests for OrderSpec dataclass."""
 
-    def test_default_direction(self) -> None:
+    @staticmethod
+    def test_default_direction() -> None:
         """OrderSpec defaults to descending."""
         order = OrderSpec(c("score"))
         assert order.direction == "desc"
 
-    def test_ascending(self) -> None:
+    @staticmethod
+    def test_ascending() -> None:
         """OrderSpec can be ascending."""
         order = OrderSpec(c("bstart"), direction="asc")
         assert order.direction == "asc"
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """OrderSpec is immutable."""
         order = OrderSpec(c("score"))
         attr_name = "direction"
@@ -166,17 +180,20 @@ class TestOrderSpec:
 class TestSelectExpr:
     """Tests for SelectExpr dataclass."""
 
-    def test_has_expr_and_alias(self) -> None:
+    @staticmethod
+    def test_has_expr_and_alias() -> None:
         """SelectExpr has expression and alias."""
         select = SelectExpr(c("entity_id"), "src")
         assert select.alias == "src"
 
-    def test_literal_value(self) -> None:
+    @staticmethod
+    def test_literal_value() -> None:
         """SelectExpr can use literal values."""
         select = SelectExpr(v("has_docstring"), "kind")
         assert select.alias == "kind"
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """SelectExpr is immutable."""
         select = SelectExpr(c("entity_id"), "src")
         attr_name = "alias"
@@ -187,7 +204,8 @@ class TestSelectExpr:
 class TestRankSpec:
     """Tests for RankSpec dataclass."""
 
-    def test_default_values(self) -> None:
+    @staticmethod
+    def test_default_values() -> None:
         """RankSpec has sensible defaults."""
         rank = RankSpec(ambiguity_key_expr=c("entity_id"))
         assert rank.keep == "best"
@@ -195,7 +213,8 @@ class TestRankSpec:
         assert rank.order_by == ()
         assert rank.ambiguity_group_id_expr is None
 
-    def test_custom_values(self) -> None:
+    @staticmethod
+    def test_custom_values() -> None:
         """RankSpec accepts custom values."""
         rank = RankSpec(
             ambiguity_key_expr=c("entity_id"),
@@ -211,7 +230,8 @@ class TestRankSpec:
         assert rank.keep == "all"
         assert rank.top_k == TOP_K_ALL
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """RankSpec is immutable."""
         rank = RankSpec(ambiguity_key_expr=c("entity_id"))
         attr_name = "top_k"
@@ -222,7 +242,8 @@ class TestRankSpec:
 class TestQualityRelationshipSpec:
     """Tests for QualityRelationshipSpec dataclass."""
 
-    def test_minimal_spec(self) -> None:
+    @staticmethod
+    def test_minimal_spec() -> None:
         """QualityRelationshipSpec requires minimal fields."""
         spec = QualityRelationshipSpec(
             name="test_rel_v1",
@@ -235,7 +256,8 @@ class TestQualityRelationshipSpec:
         assert spec.how == "inner"
         assert spec.origin == "semantic_compiler"
 
-    def test_full_spec(self) -> None:
+    @staticmethod
+    def test_full_spec() -> None:
         """QualityRelationshipSpec with all fields."""
         from semantics.exprs import case_eq
 
@@ -257,7 +279,9 @@ class TestQualityRelationshipSpec:
                     HardPredicate(eq("l__owner_def_id", "r__entity_id")),
                 ],
                 features=[
-                    Feature("kind_match", case_eq("l__owner_kind", "r__kind"), weight=FEATURE_WEIGHT),
+                    Feature(
+                        "kind_match", case_eq("l__owner_kind", "r__kind"), weight=FEATURE_WEIGHT
+                    ),
                 ],
             ),
             rank=RankSpec(
@@ -278,7 +302,8 @@ class TestQualityRelationshipSpec:
         assert spec.rank is not None
         assert len(spec.select_exprs) == SELECT_EXPR_COUNT
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """QualityRelationshipSpec is immutable."""
         spec = QualityRelationshipSpec(
             name="test_rel_v1",
@@ -289,7 +314,8 @@ class TestQualityRelationshipSpec:
         with pytest.raises(FrozenInstanceError):
             setattr(spec, attr_name, "other")
 
-    def test_default_file_quality_settings(self) -> None:
+    @staticmethod
+    def test_default_file_quality_settings() -> None:
         """QualityRelationshipSpec has file quality defaults."""
         spec = QualityRelationshipSpec(
             name="test_rel_v1",
@@ -299,7 +325,8 @@ class TestQualityRelationshipSpec:
         assert spec.join_file_quality is True
         assert spec.file_quality_view == "file_quality"
 
-    def test_disabled_file_quality(self) -> None:
+    @staticmethod
+    def test_disabled_file_quality() -> None:
         """QualityRelationshipSpec can disable file quality join."""
         spec = QualityRelationshipSpec(
             name="test_rel_v1",
@@ -313,7 +340,8 @@ class TestQualityRelationshipSpec:
 class TestQualitySpecsRegistry:
     """Tests for the quality specs registry."""
 
-    def test_registry_contains_expected_specs(self) -> None:
+    @staticmethod
+    def test_registry_contains_expected_specs() -> None:
         """QUALITY_RELATIONSHIP_SPECS contains all defined specs."""
         from semantics.quality_specs import QUALITY_RELATIONSHIP_SPECS
 
@@ -331,7 +359,8 @@ class TestQualitySpecsRegistry:
         for name in expected_names:
             assert name in QUALITY_RELATIONSHIP_SPECS
 
-    def test_each_spec_has_required_fields(self) -> None:
+    @staticmethod
+    def test_each_spec_has_required_fields() -> None:
         """Each spec in registry has required fields populated."""
         from semantics.quality_specs import QUALITY_RELATIONSHIP_SPECS
 
@@ -343,7 +372,8 @@ class TestQualitySpecsRegistry:
             assert spec.origin
             assert spec.signals is not None
 
-    def test_docstring_owner_by_id_spec(self) -> None:
+    @staticmethod
+    def test_docstring_owner_by_id_spec() -> None:
         """REL_CST_DOCSTRING_OWNER_BY_ID has correct configuration."""
         from semantics.quality_specs import REL_CST_DOCSTRING_OWNER_BY_ID
 

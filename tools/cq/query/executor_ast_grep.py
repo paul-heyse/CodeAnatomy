@@ -62,9 +62,9 @@ from tools.cq.search.rg.prefilter import extract_literal_fragments, rg_prefilter
 if TYPE_CHECKING:
     from ast_grep_py import SgNode
 
-    from tools.cq.query.ir import MetaVarCapture, MetaVarFilter, Query, Scope
+    from tools.cq.query.ir import MetaVarCapture, MetaVarFilter, Query
 
-from tools.cq.index.files import FileTabulationResult, build_repo_file_index, tabulate_files
+from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.language import file_extensions_for_scope
 
@@ -166,7 +166,7 @@ def execute_ast_grep_rules(
     run_id
         Optional run ID for cache tagging
 
-    Returns
+    Returns:
     -------
     tuple[list[Finding], list[SgRecord], list[dict[str, object]]]
         Findings, underlying records, and raw match data.
@@ -187,7 +187,7 @@ def execute_ast_grep_rules(
         namespace=fragment_ctx.namespace,
         workspace=str(fragment_ctx.root),
         language=fragment_ctx.language,
-        ttl_seconds=fragment_ctx.ttl_seconds,
+        ttl_seconds=fragment_ctx.ttl_seconds or 0,
         tag=fragment_ctx.tag,
         run_id=run_id,
     )
@@ -268,7 +268,11 @@ def build_pattern_fragment_context(
     globs: list[str] | None,
     run_id: str | None,
 ) -> PatternFragmentContext:
-    """Build context for pattern fragment caching."""
+    """Build context for pattern fragment caching.
+
+    Returns:
+        PatternFragmentContext: Cache/runtime context for pattern fragment operations.
+    """
     resolved_root = root.resolve()
     lang = query.primary_language if query is not None else DEFAULT_QUERY_LANGUAGE
     namespace = "pattern_fragment"
@@ -321,7 +325,11 @@ def build_pattern_fragment_context(
 
 
 def pattern_fragment_entries(fragment_ctx: PatternFragmentContext) -> list[FragmentEntryV1]:
-    """Build fragment entries for pattern caching."""
+    """Build fragment entries for pattern caching.
+
+    Returns:
+        list[FragmentEntryV1]: Cache entry descriptors for every scoped file path.
+    """
     entries: list[FragmentEntryV1] = []
     for file_path in fragment_ctx.paths:
         rel_path = normalize_repo_relative_path(str(file_path), root=fragment_ctx.root)
@@ -348,7 +356,11 @@ def pattern_fragment_entries(fragment_ctx: PatternFragmentContext) -> list[Fragm
 
 
 def decode_pattern_fragment_payload(payload: object) -> object | None:
-    """Decode pattern fragment cache payload."""
+    """Decode pattern fragment cache payload.
+
+    Returns:
+        object | None: Decoded ``(findings, records, raw_matches)`` tuple, or ``None``.
+    """
     decoded = decode_fragment_payload(payload, type_=PatternFragmentCacheV1)
     if decoded is None:
         return None
@@ -360,7 +372,12 @@ def decode_pattern_fragment_payload(payload: object) -> object | None:
 def pattern_data_from_hits(
     hits: tuple[FragmentHitV1, ...],
 ) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
-    """Extract pattern data from cache hits."""
+    """Extract pattern data from cache hits.
+
+    Returns:
+        tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
+            File-bucketed findings, records, and raw-match payloads.
+    """
     findings_by_rel: dict[str, list[Finding]] = {}
     records_by_rel: dict[str, list[SgRecord]] = {}
     raw_by_rel: dict[str, list[dict[str, object]]] = {}
@@ -387,7 +404,12 @@ def compute_pattern_miss_data(
     fragment_ctx: PatternFragmentContext,
     misses: tuple[FragmentMissV1, ...],
 ) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
-    """Compute pattern data for cache misses."""
+    """Compute pattern data for cache misses.
+
+    Returns:
+        tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
+            File-bucketed findings, records, and raw-match payloads for missed entries.
+    """
     miss_paths = [fragment_ctx.root / miss.entry.file for miss in misses]
     state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
     run_ast_grep(
@@ -421,7 +443,12 @@ def assemble_pattern_output(
     records_by_rel: dict[str, list[SgRecord]],
     raw_by_rel: dict[str, list[dict[str, object]]],
 ) -> tuple[list[Finding], list[SgRecord], list[dict[str, object]]]:
-    """Assemble pattern output from file-bucketed data."""
+    """Assemble pattern output from file-bucketed data.
+
+    Returns:
+        tuple[list[Finding], list[SgRecord], list[dict[str, object]]]:
+            Deterministically ordered findings, records, and raw matches.
+    """
     findings: list[Finding] = []
     records: list[SgRecord] = []
     raw_matches: list[dict[str, object]] = []
@@ -437,7 +464,11 @@ def assemble_pattern_output(
 
 
 def collect_rule_prefilter_literals(rules: tuple[AstGrepRule, ...]) -> tuple[str, ...]:
-    """Collect literal fragments from rules for prefiltering."""
+    """Collect literal fragments from rules for prefiltering.
+
+    Returns:
+        tuple[str, ...]: Unique literal fragments sorted by descending specificity.
+    """
     fragments: list[str] = []
     for rule in rules:
         for text in (
@@ -468,7 +499,11 @@ def maybe_prefilter_pattern_paths(
     rules: tuple[AstGrepRule, ...],
     lang: QueryLanguage,
 ) -> list[Path]:
-    """Prefilter paths using ripgrep before ast-grep execution."""
+    """Prefilter paths using ripgrep before ast-grep execution.
+
+    Returns:
+        list[Path]: Candidate files likely to match at least one pattern literal.
+    """
     if len(files) <= 1 or not rules:
         return files
     literals = collect_rule_prefilter_literals(rules)
@@ -566,9 +601,11 @@ def process_ast_grep_rule(
 
 
 def resolve_rule_metavar_names(rule: AstGrepRule, query: Query | None) -> tuple[str, ...]:
-    """Resolve metavar names from rule and query."""
-    from tools.cq.query.ir import Query as QueryType
+    """Resolve metavar names from rule and query.
 
+    Returns:
+        tuple[str, ...]: Sorted metavariable names used by the rule/filter pipeline.
+    """
     names = set(extract_rule_metavars(rule))
     if query is not None:
         names.update(filter_spec.name for filter_spec in query.metavar_filters)
@@ -576,7 +613,11 @@ def resolve_rule_metavar_names(rule: AstGrepRule, query: Query | None) -> tuple[
 
 
 def resolve_rule_variadic_metavars(rule: AstGrepRule) -> frozenset[str]:
-    """Resolve variadic metavar names from rule."""
+    """Resolve variadic metavar names from rule.
+
+    Returns:
+        frozenset[str]: Variadic metavariable names (for example, ``$$$ARGS``).
+    """
     return extract_rule_variadic_metavars(rule)
 
 
@@ -585,9 +626,12 @@ def partition_query_metavar_filters(
     *,
     allowed_names: frozenset[str] | None = None,
 ) -> tuple[dict[str, dict[str, str]], tuple[MetaVarFilter, ...]]:
-    """Partition metavar filters into constraints and residual filters."""
-    from tools.cq.query.ir import MetaVarFilter as MetaVarFilterType
+    """Partition metavar filters into constraints and residual filters.
 
+    Returns:
+        tuple[dict[str, dict[str, str]], tuple[MetaVarFilter, ...]]:
+            Constraint payload and residual filters to apply post-match.
+    """
     if query is None or not query.metavar_filters:
         return {}, ()
     if allowed_names is None:
@@ -613,7 +657,11 @@ def execute_rule_matches(
     *,
     constraints: dict[str, dict[str, str]] | None = None,
 ) -> list[SgNode]:
-    """Execute ast-grep rule and return matched nodes."""
+    """Execute ast-grep rule and return matched nodes.
+
+    Returns:
+        list[SgNode]: Nodes matched by either inline-rule or pattern execution.
+    """
     if rule.requires_inline_rule() or constraints:
         rule_payload = strip_unsupported_sgpy_rule_keys(rule.to_yaml_dict())
         config: Config = {"rule": cast("Rule", rule_payload)}
@@ -633,7 +681,7 @@ def execute_rule_matches(
 def strip_unsupported_sgpy_rule_keys(value: object) -> object:
     """Remove rule keys not supported by ast-grep-py bindings.
 
-    Returns
+    Returns:
     -------
     object
         Sanitized rule payload compatible with ast-grep-py runtime config.
@@ -658,7 +706,11 @@ def build_match_data(
     metavar_names: tuple[str, ...],
     variadic_names: frozenset[str],
 ) -> dict[str, object]:
-    """Build match data dictionary from ast-grep match."""
+    """Build match data dictionary from ast-grep match.
+
+    Returns:
+        dict[str, object]: Serializable match payload used by downstream conversion.
+    """
     range_obj = match.range()
     return {
         "ruleId": rule_id,
@@ -684,7 +736,11 @@ def match_passes_filters(
     metavar_names: tuple[str, ...],
     variadic_names: frozenset[str],
 ) -> bool:
-    """Check if match passes metavar filters."""
+    """Check if match passes metavar filters.
+
+    Returns:
+        bool: ``True`` when the match satisfies all residual metavariable filters.
+    """
     if filters:
         captures = parse_sgpy_metavariables(
             match,
@@ -714,7 +770,11 @@ def apply_metavar_details(
 
 
 def node_payload(node: SgNode) -> dict[str, object]:
-    """Build payload from ast-grep node."""
+    """Build payload from ast-grep node.
+
+    Returns:
+        dict[str, object]: Text and coordinate payload for the provided node.
+    """
     range_obj = node.range()
     return {
         "text": node.text(),
@@ -724,7 +784,11 @@ def node_payload(node: SgNode) -> dict[str, object]:
 
 
 def is_variadic_separator(node: SgNode) -> bool:
-    """Check if node is a variadic separator."""
+    """Check if node is a variadic separator.
+
+    Returns:
+        bool: ``True`` when the node represents a list separator token.
+    """
     text = node.text().strip()
     return node.kind() in {",", ";"} or text in {",", ";"}
 
@@ -749,7 +813,7 @@ def extract_match_metavars(
     include_multi
         Whether to include multi-node captures.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Dictionary of metavariable names to capture payloads.
@@ -796,7 +860,7 @@ def parse_sgpy_metavariables(
     variadic_names
         Names of variadic metavariables.
 
-    Returns
+    Returns:
     -------
     dict[str, MetaVarCapture]
         Dictionary of metavariable info for filtering.
@@ -827,7 +891,11 @@ def parse_sgpy_metavariables(
 
 
 def coerce_int(value: object) -> int:
-    """Coerce value to int, returning 0 if not an int."""
+    """Coerce a value to ``int`` with a zero fallback.
+
+    Returns:
+        int: ``value`` when already an ``int``; otherwise ``0``.
+    """
     if isinstance(value, int):
         return value
     return 0
@@ -836,7 +904,7 @@ def coerce_int(value: object) -> int:
 def match_to_finding(data: dict[str, object]) -> tuple[Finding | None, SgRecord | None]:
     """Convert ast-grep match to Finding and SgRecord.
 
-    Returns
+    Returns:
     -------
     tuple[Finding | None, SgRecord | None]
         Finding and record for the match when available.
@@ -898,7 +966,7 @@ def collect_ast_grep_match_spans(
 ) -> list[AstGrepMatchSpan]:
     """Collect match spans from ast-grep execution.
 
-    Returns
+    Returns:
     -------
     list[AstGrepMatchSpan]
         List of matched spans.
@@ -950,7 +1018,11 @@ def collect_ast_grep_match_spans(
 
 
 def record_to_cache_record(record: SgRecord) -> SgRecordCacheV1:
-    """Convert SgRecord to cache record format."""
+    """Convert ``SgRecord`` to cache record format.
+
+    Returns:
+        SgRecordCacheV1: Cache-serializable representation of the source record.
+    """
     return SgRecordCacheV1(
         record=record.record,
         kind=record.kind,
@@ -965,7 +1037,11 @@ def record_to_cache_record(record: SgRecord) -> SgRecordCacheV1:
 
 
 def cache_record_to_record(cache_record: SgRecordCacheV1) -> SgRecord:
-    """Convert cache record to SgRecord."""
+    """Convert cache record to ``SgRecord``.
+
+    Returns:
+        SgRecord: Runtime record reconstructed from cache payload fields.
+    """
     return SgRecord(
         record=cache_record.record,
         kind=cache_record.kind,
@@ -983,7 +1059,7 @@ def finding_sort_key(finding: Finding) -> tuple[str, int, int]:
     """Return sort key for Finding."""
     if finding.anchor is None:
         return ("", 0, 0)
-    return (finding.anchor.file, finding.anchor.line, finding.anchor.col)
+    return (finding.anchor.file, finding.anchor.line, finding.anchor.col or 0)
 
 
 def record_sort_key(record: SgRecord) -> tuple[str, int, int]:
@@ -1015,7 +1091,7 @@ def collect_match_spans(
 ) -> dict[str, list[tuple[int, int]]]:
     """Collect matched spans for relational constraints using ast-grep-py.
 
-    Returns
+    Returns:
     -------
     dict[str, list[tuple[int, int]]]
         Mapping from file to matched (start_line, end_line) spans.
@@ -1045,7 +1121,7 @@ def group_match_spans(
 ) -> dict[str, list[tuple[int, int]]]:
     """Group match spans by file.
 
-    Returns
+    Returns:
     -------
     dict[str, list[tuple[int, int]]]
         Mapping from file to matched (start_line, end_line) spans.
@@ -1062,7 +1138,7 @@ def filter_records_by_spans(
 ) -> list[SgRecord]:
     """Filter records to those overlapping matched spans.
 
-    Returns
+    Returns:
     -------
     list[SgRecord]
         Records that overlap the provided spans.

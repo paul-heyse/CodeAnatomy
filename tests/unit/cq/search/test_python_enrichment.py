@@ -149,17 +149,20 @@ def _find_node(sg_root: SgRoot, line: int, col: int) -> SgNode | None:
 class TestTruncation:
     """Test truncation helper."""
 
-    def test_no_truncation_short(self) -> None:
+    @staticmethod
+    def test_no_truncation_short() -> None:
         """Test no truncation short."""
         assert _truncate("hello", 10) == "hello"
 
-    def test_truncation_long(self) -> None:
+    @staticmethod
+    def test_truncation_long() -> None:
         """Test truncation long."""
         result = _truncate("a" * 50, TRUNCATION_MAX_CHARS)
         assert len(result) <= TRUNCATION_MAX_CHARS
         assert result.endswith("...")
 
-    def test_truncation_exact_boundary(self) -> None:
+    @staticmethod
+    def test_truncation_exact_boundary() -> None:
         """Test truncation exact boundary."""
         result = _truncate("abcde", 5)
         assert result == "abcde"
@@ -168,7 +171,8 @@ class TestTruncation:
 class TestSignatureExtraction:
     """Test function signature extraction."""
 
-    def test_signature_free_function(self) -> None:
+    @staticmethod
+    def test_signature_free_function() -> None:
         """Test signature free function."""
         sg = _make_sg()
         # free_function starts on line 45
@@ -179,7 +183,8 @@ class TestSignatureExtraction:
         assert isinstance(result["params"], list)
         assert not result.get("is_async", True)
 
-    def test_signature_async_function(self) -> None:
+    @staticmethod
+    def test_signature_async_function() -> None:
         """Test signature async function."""
         sg = _make_sg()
         # async def fetch on line 41
@@ -195,7 +200,8 @@ class TestSignatureExtraction:
             result = _extract_signature(node, _PYTHON_SAMPLE.encode())
             assert result.get("is_async") is True
 
-    def test_signature_with_return_type(self) -> None:
+    @staticmethod
+    def test_signature_with_return_type() -> None:
         """Test signature with return type."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -208,7 +214,8 @@ class TestSignatureExtraction:
 class TestDecoratorExtraction:
     """Test decorator extraction."""
 
-    def test_decorated_function(self) -> None:
+    @staticmethod
+    def test_decorated_function() -> None:
         """Test decorated function."""
         sg = _make_sg()
         # @property on line 46
@@ -223,7 +230,8 @@ class TestDecoratorExtraction:
             assert isinstance(decorators, list)
             assert "property" in decorators
 
-    def test_no_decorators(self) -> None:
+    @staticmethod
+    def test_no_decorators() -> None:
         """Test no decorators."""
         sg = _make_sg()
         # free_function has no decorators (line 45)
@@ -233,7 +241,8 @@ class TestDecoratorExtraction:
         # Not a decorated_definition, so no decorators
         assert result == {} or "decorators" not in result
 
-    def test_pytest_fixture_decorator(self) -> None:
+    @staticmethod
+    def test_pytest_fixture_decorator() -> None:
         """Test pytest fixture decorator."""
         sg = _make_sg()
         # @pytest.fixture on line 62
@@ -252,7 +261,8 @@ class TestDecoratorExtraction:
 class TestItemRole:
     """Test item role classification."""
 
-    def test_free_function_role(self) -> None:
+    @staticmethod
+    def test_free_function_role() -> None:
         """Test free function role."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -260,7 +270,8 @@ class TestItemRole:
         result = _classify_item_role(node, [])
         assert result.get("item_role") == "free_function"
 
-    def test_method_role(self) -> None:
+    @staticmethod
+    def test_method_role() -> None:
         """Test method role."""
         sg = _make_sg()
         # process method on line 62
@@ -275,7 +286,8 @@ class TestItemRole:
             result = _classify_item_role(node, [])
             assert result.get("item_role") in {"method", "free_function"}
 
-    def test_test_function_role(self) -> None:
+    @staticmethod
+    def test_test_function_role() -> None:
         """Test test function role."""
         sg = _make_sg()
         # test_basic_graph on line 56
@@ -284,7 +296,8 @@ class TestItemRole:
         result = _classify_item_role(node, [])
         assert result.get("item_role") == "test_function"
 
-    def test_fixture_role(self) -> None:
+    @staticmethod
+    def test_fixture_role() -> None:
         """Test fixture role."""
         sg = _make_sg()
         # @pytest.fixture on line 62
@@ -296,7 +309,8 @@ class TestItemRole:
             result = _classify_item_role(node, ["pytest.fixture"])
             assert result.get("item_role") == "fixture"
 
-    def test_callsite_role(self) -> None:
+    @staticmethod
+    def test_callsite_role() -> None:
         """Test callsite role."""
         sg = _make_sg()
         # free_function(42) on line 70
@@ -308,7 +322,8 @@ class TestItemRole:
             result = _classify_item_role(node, [])
             assert result.get("item_role") == "callsite"
 
-    def test_import_role(self) -> None:
+    @staticmethod
+    def test_import_role() -> None:
         """Test import role."""
         sg = _make_sg()
         # import os on line 3
@@ -320,7 +335,8 @@ class TestItemRole:
             result = _classify_item_role(node, [])
             assert result.get("item_role") == "import"
 
-    def test_class_def_role(self) -> None:
+    @staticmethod
+    def test_class_def_role() -> None:
         """Test class def role."""
         sg = _make_sg()
         # class GraphBuilder on line 10
@@ -335,7 +351,8 @@ class TestItemRole:
             result = _classify_item_role(node, [])
             assert result.get("item_role") in {"class_def", "dataclass"}
 
-    def test_dataclass_role(self) -> None:
+    @staticmethod
+    def test_dataclass_role() -> None:
         """Test dataclass role."""
         sg = _make_sg()
         # @dataclass class Config on line 73
@@ -351,7 +368,8 @@ class TestItemRole:
 class TestClassContext:
     """Test class context extraction."""
 
-    def test_class_context_for_method(self) -> None:
+    @staticmethod
+    def test_class_context_for_method() -> None:
         """Test class context for method."""
         sg = _make_sg()
         # process method inside GraphBuilder (line 32)
@@ -360,7 +378,8 @@ class TestClassContext:
         result = _extract_class_context(node)
         assert result.get("class_name") == "GraphBuilder"
 
-    def test_base_classes(self) -> None:
+    @staticmethod
+    def test_base_classes() -> None:
         """Test base classes."""
         sg = _make_sg()
         node = _find_node(sg, 10, 6)
@@ -370,7 +389,8 @@ class TestClassContext:
         if isinstance(bases, list):
             assert "Protocol" in bases
 
-    def test_class_kind_protocol(self) -> None:
+    @staticmethod
+    def test_class_kind_protocol() -> None:
         """Test class kind protocol."""
         sg = _make_sg()
         node = _find_node(sg, 10, 6)
@@ -380,7 +400,8 @@ class TestClassContext:
         if "class_kind" in result:
             assert result["class_kind"] in {"protocol", "class"}
 
-    def test_no_class_context_for_free_function(self) -> None:
+    @staticmethod
+    def test_no_class_context_for_free_function() -> None:
         """Test no class context for free function."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -392,7 +413,8 @@ class TestClassContext:
 class TestCallTarget:
     """Test call target extraction."""
 
-    def test_method_call(self) -> None:
+    @staticmethod
+    def test_method_call() -> None:
         """Test method call."""
         sg = _make_sg()
         # builder.process(["a", "b"], timeout=10.0) on line 68
@@ -408,7 +430,8 @@ class TestCallTarget:
             if "call_method" in result:
                 assert result["call_method"] == "process"
 
-    def test_function_call(self) -> None:
+    @staticmethod
+    def test_function_call() -> None:
         """Test function call."""
         sg = _make_sg()
         # free_function(42) on line 70
@@ -420,7 +443,8 @@ class TestCallTarget:
             result = _extract_call_target(node)
             assert result.get("call_target") == "free_function"
 
-    def test_call_args_count(self) -> None:
+    @staticmethod
+    def test_call_args_count() -> None:
         """Test call args count."""
         sg = _make_sg()
         # free_function(42) on line 70
@@ -437,7 +461,8 @@ class TestCallTarget:
 class TestScopeChain:
     """Test scope chain extraction."""
 
-    def test_scope_chain_method(self) -> None:
+    @staticmethod
+    def test_scope_chain_method() -> None:
         """Test scope chain method."""
         sg = _make_sg()
         # Inside process method of GraphBuilder, line 36 is result = self._transform(items)
@@ -450,7 +475,8 @@ class TestScopeChain:
         # Should contain class and method names
         assert len(chain) >= MIN_SCOPE_CHAIN_LENGTH
 
-    def test_scope_chain_free_function(self) -> None:
+    @staticmethod
+    def test_scope_chain_free_function() -> None:
         """Test scope chain free function."""
         sg = _make_sg()
         # Line 46 is return x > 0
@@ -465,7 +491,8 @@ class TestScopeChain:
 class TestStructuralContext:
     """Test structural context extraction."""
 
-    def test_try_block(self) -> None:
+    @staticmethod
+    def test_try_block() -> None:
         """Test try block."""
         sg = _make_sg()
         # Inside try block on line 36 (result = self._transform(items))
@@ -475,7 +502,8 @@ class TestStructuralContext:
         if "structural_context" in result:
             assert result["structural_context"] in {"try_block", "except_handler"}
 
-    def test_with_block(self) -> None:
+    @staticmethod
+    def test_with_block() -> None:
         """Test with block."""
         sg = _make_sg()
         # Inside with block on line 34 (f.write("processing"))
@@ -486,7 +514,8 @@ class TestStructuralContext:
         if "structural_context" in result:
             assert isinstance(result["structural_context"], str)
 
-    def test_no_context_top_level(self) -> None:
+    @staticmethod
+    def test_no_context_top_level() -> None:
         """Test no context top level."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -498,7 +527,8 @@ class TestStructuralContext:
 class TestGeneratorDetection:
     """Test scope-safe generator detection."""
 
-    def test_generator_function(self) -> None:
+    @staticmethod
+    def test_generator_function() -> None:
         """Test generator function."""
         tree = ast.parse(_PYTHON_SAMPLE)
         func = _find_ast_function(tree, 48)
@@ -506,7 +536,8 @@ class TestGeneratorDetection:
         result = _extract_generator_flag(func)
         assert result.get("is_generator") is True
 
-    def test_non_generator_function(self) -> None:
+    @staticmethod
+    def test_non_generator_function() -> None:
         """Test non generator function."""
         tree = ast.parse(_PYTHON_SAMPLE)
         func = _find_ast_function(tree, 45)
@@ -514,7 +545,8 @@ class TestGeneratorDetection:
         result = _extract_generator_flag(func)
         assert result.get("is_generator") is False
 
-    def test_scope_safe_nested_yield(self) -> None:
+    @staticmethod
+    def test_scope_safe_nested_yield() -> None:
         """Yield in a nested function should not make outer function a generator."""
         source = """\
 def outer():
@@ -532,7 +564,8 @@ def outer():
 class TestBehaviorSummary:
     """Test function behavior summary."""
 
-    def test_process_method_behavior(self) -> None:
+    @staticmethod
+    def test_process_method_behavior() -> None:
         """Test process method behavior."""
         tree = ast.parse(_PYTHON_SAMPLE)
         # process method has with, try/except, raise, return (line 32)
@@ -543,7 +576,8 @@ class TestBehaviorSummary:
         assert result.get("raises_exception") is True
         assert result.get("has_context_manager") is True
 
-    def test_async_function_behavior(self) -> None:
+    @staticmethod
+    def test_async_function_behavior() -> None:
         """Test async function behavior."""
         tree = ast.parse(_PYTHON_SAMPLE)
         # async def fetch on line 41
@@ -553,7 +587,8 @@ class TestBehaviorSummary:
         assert result.get("awaits") is True
         assert result.get("returns_value") is True
 
-    def test_generator_behavior(self) -> None:
+    @staticmethod
+    def test_generator_behavior() -> None:
         """Test generator behavior."""
         tree = ast.parse(_PYTHON_SAMPLE)
         # generator_function on line 48
@@ -566,7 +601,8 @@ class TestBehaviorSummary:
 class TestImportDetail:
     """Test import detail extraction."""
 
-    def test_import_statement(self) -> None:
+    @staticmethod
+    def test_import_statement() -> None:
         """Test import statement."""
         source = "import os\n"
         sg = SgRoot(source, "python")
@@ -575,16 +611,18 @@ class TestImportDetail:
         while node is not None and node.kind() != "import_statement":
             node = node.parent()
         if node is not None:
+            ast_tree = ast.parse(source, filename="<test>")
             result = _extract_import_detail(
                 node,
                 source.encode(),
-                cache_key="test_import",
-                line=1,
+                ast_tree,
+                1,
             )
             assert result.get("import_module") == "os"
             assert result.get("import_level") == 0
 
-    def test_from_import(self) -> None:
+    @staticmethod
+    def test_from_import() -> None:
         """Test from import."""
         source = "from collections.abc import Callable, Sequence\n"
         sg = SgRoot(source, "python")
@@ -593,11 +631,12 @@ class TestImportDetail:
         while node is not None and node.kind() != "import_from_statement":
             node = node.parent()
         if node is not None:
+            ast_tree = ast.parse(source, filename="<test>")
             result = _extract_import_detail(
                 node,
                 source.encode(),
-                cache_key="test_from_import",
-                line=1,
+                ast_tree,
+                1,
             )
             assert result.get("import_module") == "collections.abc"
             import_names = result.get("import_names", [])
@@ -605,7 +644,8 @@ class TestImportDetail:
             assert "Callable" in import_names
             assert result.get("import_level") == 0
 
-    def test_type_checking_import(self) -> None:
+    @staticmethod
+    def test_type_checking_import() -> None:
         """Test type checking import."""
         source = _PYTHON_SAMPLE
         sg = _make_sg()
@@ -615,11 +655,12 @@ class TestImportDetail:
         while node is not None and node.kind() != "import_from_statement":
             node = node.parent()
         if node is not None:
+            ast_tree = ast.parse(source, filename="<test>")
             result = _extract_import_detail(
                 node,
                 source.encode(),
-                cache_key="test_tc_import",
-                line=8,
+                ast_tree,
+                8,
             )
             assert result.get("is_type_import") is True
 
@@ -627,7 +668,8 @@ class TestImportDetail:
 class TestClassShape:
     """Test class API shape summary."""
 
-    def test_graphbuilder_shape(self) -> None:
+    @staticmethod
+    def test_graphbuilder_shape() -> None:
         """Test graphbuilder shape."""
         sg = _make_sg()
         # class GraphBuilder on line 10
@@ -644,7 +686,8 @@ class TestClassShape:
             assert isinstance(method_count, int)
             assert method_count > 0
 
-    def test_dataclass_markers(self) -> None:
+    @staticmethod
+    def test_dataclass_markers() -> None:
         """Test dataclass markers."""
         sg = _make_sg()
         # @dataclass(frozen=True, slots=True) class Config on line 73
@@ -662,7 +705,8 @@ class TestClassShape:
 class TestEnrichPythonContext:
     """Test the main enrichment entrypoint."""
 
-    def test_enrichment_applied_for_function(self) -> None:
+    @staticmethod
+    def test_enrichment_applied_for_function() -> None:
         """Test enrichment applied for function."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -682,7 +726,8 @@ class TestEnrichPythonContext:
         assert "enrichment_sources" in result
         assert "node_kind" in result
 
-    def test_stage_status_uses_python_resolution_key(self) -> None:
+    @staticmethod
+    def test_stage_status_uses_python_resolution_key() -> None:
         """Stage metadata should use python_resolution and exclude legacy libcst key."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -707,7 +752,8 @@ class TestEnrichPythonContext:
         assert "libcst" not in stage_status
         assert "libcst" not in stage_timings
 
-    def test_enrichment_applied_for_call(self) -> None:
+    @staticmethod
+    def test_enrichment_applied_for_call() -> None:
         """Test enrichment applied for call."""
         sg = _make_sg()
         # print("done") on line 71
@@ -729,7 +775,8 @@ class TestEnrichPythonContext:
             assert result is not None
             assert result.get("item_role") == "callsite"
 
-    def test_enrichment_none_for_non_enrichable(self) -> None:
+    @staticmethod
+    def test_enrichment_none_for_non_enrichable() -> None:
         """Test enrichment none for non enrichable."""
         source = "# just a comment\n"
         sg = SgRoot(source, "python")
@@ -746,7 +793,8 @@ class TestEnrichPythonContext:
         )
         assert result is None
 
-    def test_enrichment_sources_includes_ast(self) -> None:
+    @staticmethod
+    def test_enrichment_sources_includes_ast() -> None:
         """Test enrichment sources includes ast."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -766,7 +814,8 @@ class TestEnrichPythonContext:
         assert isinstance(sources, list)
         assert "ast_grep" in sources
 
-    def test_agreement_sources_reference_python_resolution(self) -> None:
+    @staticmethod
+    def test_agreement_sources_reference_python_resolution() -> None:
         """Agreement metadata should report python_resolution as a source when present."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -789,7 +838,8 @@ class TestEnrichPythonContext:
         assert "python_resolution" in sources
         assert "libcst" not in sources
 
-    def test_enrichment_emits_payload_budget_metadata(self) -> None:
+    @staticmethod
+    def test_enrichment_emits_payload_budget_metadata() -> None:
         """Payload metadata should include size hint and optional dropped fields."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -810,7 +860,8 @@ class TestEnrichPythonContext:
         dropped = result.get("dropped_fields")
         assert dropped is None or isinstance(dropped, list)
 
-    def test_enrichment_sets_is_dataclass_for_dataclass_context(self) -> None:
+    @staticmethod
+    def test_enrichment_sets_is_dataclass_for_dataclass_context() -> None:
         """Dataclass class contexts should report an explicit boolean marker."""
         sg = _make_sg()
         node = _find_node(sg, 73, 0)
@@ -831,7 +882,8 @@ class TestEnrichPythonContext:
         assert result is not None
         assert result.get("is_dataclass") is True
 
-    def test_byte_range_entrypoint(self) -> None:
+    @staticmethod
+    def test_byte_range_entrypoint() -> None:
         """Byte-range enrichment entrypoint should resolve and enrich target node."""
         sg = _make_sg()
         source = _PYTHON_SAMPLE.encode()
@@ -850,7 +902,8 @@ class TestEnrichPythonContext:
         assert result is not None
         assert result.get("node_kind") in {"function_definition", "decorated_definition"}
 
-    def test_enrichment_fail_open(self) -> None:
+    @staticmethod
+    def test_enrichment_fail_open() -> None:
         """Enrichment should degrade gracefully, not raise."""
         sg = _make_sg()
         node = _find_node(sg, 45, 0)
@@ -874,14 +927,16 @@ class TestEnrichPythonContext:
 class TestCaching:
     """Test AST cache behavior."""
 
-    def test_cache_reuse(self) -> None:
+    @staticmethod
+    def test_cache_reuse() -> None:
         """Test cache reuse."""
         source = b"x = 1\n"
         tree1 = _get_ast(source, cache_key="cache_test")
         tree2 = _get_ast(source, cache_key="cache_test")
         assert tree1 is tree2
 
-    def test_cache_invalidation(self) -> None:
+    @staticmethod
+    def test_cache_invalidation() -> None:
         """Test cache invalidation."""
         source1 = b"x = 1\n"
         source2 = b"x = 2\n"
@@ -889,7 +944,8 @@ class TestCaching:
         tree2 = _get_ast(source2, cache_key="cache_inv")
         assert tree1 is not tree2
 
-    def test_cache_clear(self) -> None:
+    @staticmethod
+    def test_cache_clear() -> None:
         """Test cache clear."""
         _get_ast(b"x = 1\n", cache_key="clear_test")
         assert "clear_test" in _AST_CACHE
@@ -900,7 +956,8 @@ class TestCaching:
 class TestPayloadTruncation:
     """Test payload bounds enforcement."""
 
-    def test_long_signature_truncated(self) -> None:
+    @staticmethod
+    def test_long_signature_truncated() -> None:
         """Test long signature truncated."""
         long_params = ", ".join(f"param_{i}: SomeVeryLongTypeName" for i in range(20))
         source = f"def long_function({long_params}) -> dict[str, int]:\n    pass\n"
@@ -916,7 +973,8 @@ class TestPayloadTruncation:
 class TestUnwrapDecorated:
     """Test decorated definition unwrapping."""
 
-    def test_unwrap_function(self) -> None:
+    @staticmethod
+    def test_unwrap_function() -> None:
         """Test unwrap function."""
         source = "@decorator\ndef foo():\n    pass\n"
         sg = SgRoot(source, "python")
@@ -928,7 +986,8 @@ class TestUnwrapDecorated:
             inner = _unwrap_decorated(node)
             assert inner.kind() == "function_definition"
 
-    def test_unwrap_class(self) -> None:
+    @staticmethod
+    def test_unwrap_class() -> None:
         """Test unwrap class."""
         source = "@dataclass\nclass Foo:\n    x: int = 0\n"
         sg = SgRoot(source, "python")
@@ -940,7 +999,8 @@ class TestUnwrapDecorated:
             inner = _unwrap_decorated(node)
             assert inner.kind() == "class_definition"
 
-    def test_no_unwrap_plain(self) -> None:
+    @staticmethod
+    def test_no_unwrap_plain() -> None:
         """Test no unwrap plain."""
         source = "def foo():\n    pass\n"
         sg = SgRoot(source, "python")

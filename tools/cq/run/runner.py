@@ -3,31 +3,18 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 import msgspec
 
 from tools.cq.cli_app.context import CliContext
-from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.cache import maybe_evict_run_cache_tag
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
-from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.merge import merge_step_results
-from tools.cq.core.multilang_orchestrator import (
-    merge_language_cq_results,
-    runmeta_for_scope_merge,
-)
-from tools.cq.core.request_factory import (
-    RequestContextV1,
-    RequestFactory,
-    SearchRequestOptionsV1,
-)
 from tools.cq.core.result_factory import build_error_result
 from tools.cq.core.run_context import RunContext
-from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding, assign_result_finding_ids, mk_result, ms
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
 from tools.cq.query.batch_spans import collect_span_filters
@@ -41,44 +28,22 @@ from tools.cq.query.executor import (
 )
 from tools.cq.query.ir import Query, Scope
 from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
-    QueryLanguageScope,
     expand_language_scope,
 )
 from tools.cq.query.parser import QueryParseError, parse_query
 from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import list_scan_files
+from tools.cq.run.q_step_collapsing import collapse_parent_q_results
+from tools.cq.run.run_summary import populate_run_summary_metadata
 from tools.cq.run.spec import (
-    BytecodeSurfaceStep,
-    CallsStep,
-    ExceptionsStep,
-    ImpactStep,
-    ImportsStep,
-    NeighborhoodStep,
     QStep,
     RunPlan,
     RunStep,
-    ScopesStep,
-    SearchStep,
-    SideEffectsStep,
-    SigImpactStep,
     normalize_step_ids,
-    step_type,
 )
-from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
-from tools.cq.search.semantic.diagnostics import (
-    build_capability_diagnostics,
-    build_cross_language_diagnostics,
-    build_language_capabilities,
-    diagnostics_to_summary_payload,
-    is_python_oriented_query_text,
-)
-from tools.cq.run.q_step_collapsing import collapse_parent_q_results
-from tools.cq.run.run_summary import populate_run_summary_metadata
 from tools.cq.run.step_executors import (
     RUN_STEP_NON_FATAL_EXCEPTIONS,
-    execute_non_q_step_safe,
     execute_non_q_steps_parallel,
     execute_non_q_steps_serial,
     execute_search_fallback,
@@ -524,8 +489,6 @@ def _tabulate_files(
         globs=None,
         lang=lang,
     )
-
-
 
 
 def _has_query_tokens(query_string: str) -> bool:

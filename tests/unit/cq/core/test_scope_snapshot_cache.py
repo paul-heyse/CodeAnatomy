@@ -27,7 +27,6 @@ def _cache_env(tmp_path: Path) -> Generator[None]:
     os.environ.pop("CQ_CACHE_DIR", None)
 
 
-
 def test_scope_snapshot_digest_is_deterministic_and_cacheable(tmp_path: Path) -> None:
     """Verify scope snapshots are deterministic and benefit from cache hits."""
     root = tmp_path / "repo"

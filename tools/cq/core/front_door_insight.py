@@ -13,14 +13,14 @@ from typing import TYPE_CHECKING, Literal
 
 import msgspec
 
-from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
-from tools.cq.core.structs import CqStruct
-from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 from tools.cq.core.semantic_contracts import (
     SemanticContractStateInputV1,
     SemanticStatus,
     derive_semantic_contract_state,
 )
+from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
+from tools.cq.core.structs import CqStruct
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import Finding

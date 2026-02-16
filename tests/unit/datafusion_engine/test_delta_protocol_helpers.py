@@ -48,22 +48,26 @@ def _make_compatibility(
 class TestCombinedTableFeatures:
     """Test the ``combined_table_features`` helper."""
 
-    def test_empty_features(self) -> None:
+    @staticmethod
+    def test_empty_features() -> None:
         """Empty reader and writer features produce an empty tuple."""
         compat = _make_compatibility()
         assert combined_table_features(compat) == ()
 
-    def test_reader_only(self) -> None:
+    @staticmethod
+    def test_reader_only() -> None:
         """Only reader features returns those features sorted."""
         compat = _make_compatibility(required_reader_features=("b", "a"))
         assert combined_table_features(compat) == ("a", "b")
 
-    def test_writer_only(self) -> None:
+    @staticmethod
+    def test_writer_only() -> None:
         """Only writer features returns those features sorted."""
         compat = _make_compatibility(required_writer_features=("z", "m"))
         assert combined_table_features(compat) == ("m", "z")
 
-    def test_union_deduplicated(self) -> None:
+    @staticmethod
+    def test_union_deduplicated() -> None:
         """Overlapping features are deduplicated in the union."""
         compat = _make_compatibility(
             required_reader_features=("a", "b", "c"),
@@ -71,7 +75,8 @@ class TestCombinedTableFeatures:
         )
         assert combined_table_features(compat) == ("a", "b", "c", "d")
 
-    def test_disjoint_features(self) -> None:
+    @staticmethod
+    def test_disjoint_features() -> None:
         """Disjoint feature sets are merged correctly."""
         compat = _make_compatibility(
             required_reader_features=("x",),
@@ -88,7 +93,8 @@ class TestCombinedTableFeatures:
 class TestDeltaProtocolArtifactPayload:
     """Test the ``delta_protocol_artifact_payload`` helper."""
 
-    def test_basic_payload_structure(self) -> None:
+    @staticmethod
+    def test_basic_payload_structure() -> None:
         """Payload contains all DeltaProtocolCompatibility fields."""
         compat = _make_compatibility(
             compatible=True,
@@ -102,31 +108,36 @@ class TestDeltaProtocolArtifactPayload:
         assert payload["required_reader_features"] == ("columnMapping",)
         assert payload["required_writer_features"] == ("appendOnly",)
 
-    def test_table_uri_included(self) -> None:
+    @staticmethod
+    def test_table_uri_included() -> None:
         """Table URI is included when provided."""
         compat = _make_compatibility()
         payload = delta_protocol_artifact_payload(compat, table_uri="/tmp/delta/table")
         assert payload["table_uri"] == "/tmp/delta/table"
 
-    def test_dataset_name_included(self) -> None:
+    @staticmethod
+    def test_dataset_name_included() -> None:
         """Dataset name is included when provided."""
         compat = _make_compatibility()
         payload = delta_protocol_artifact_payload(compat, dataset_name="my_dataset")
         assert payload["dataset_name"] == "my_dataset"
 
-    def test_table_uri_omitted_when_none(self) -> None:
+    @staticmethod
+    def test_table_uri_omitted_when_none() -> None:
         """Table URI key is absent when not provided."""
         compat = _make_compatibility()
         payload = delta_protocol_artifact_payload(compat)
         assert "table_uri" not in payload
 
-    def test_dataset_name_omitted_when_none(self) -> None:
+    @staticmethod
+    def test_dataset_name_omitted_when_none() -> None:
         """Dataset name key is absent when not provided."""
         compat = _make_compatibility()
         payload = delta_protocol_artifact_payload(compat)
         assert "dataset_name" not in payload
 
-    def test_payload_validates_against_artifact_schema(self) -> None:
+    @staticmethod
+    def test_payload_validates_against_artifact_schema() -> None:
         """Payload conforms to the ``DeltaProtocolArtifact`` msgspec schema."""
         compat = DeltaProtocolCompatibility(
             compatible=False,
@@ -166,7 +177,8 @@ class TestDeltaProtocolArtifactPayload:
 class TestDeltaProtocolArtifactSpec:
     """Test the artifact spec registration for delta_protocol_compatibility_v1."""
 
-    def test_spec_registered(self) -> None:
+    @staticmethod
+    def test_spec_registered() -> None:
         """delta_protocol_compatibility_v1 is registered in the global registry."""
         import serde_artifact_specs  # triggers registration
 
@@ -176,7 +188,8 @@ class TestDeltaProtocolArtifactSpec:
         registry = artifact_spec_registry()
         assert "delta_protocol_compatibility_v1" in registry
 
-    def test_spec_has_payload_type(self) -> None:
+    @staticmethod
+    def test_spec_has_payload_type() -> None:
         """Spec payload type is DeltaProtocolArtifact."""
         from serde_artifact_specs import DELTA_PROTOCOL_ARTIFACT_SPEC
 

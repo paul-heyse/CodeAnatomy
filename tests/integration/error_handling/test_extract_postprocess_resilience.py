@@ -61,7 +61,8 @@ def assert_diagnostic_event_taxonomy(
 class TestExtractPostprocessResilience:
     """Verify postprocess failures are recorded, not propagated."""
 
-    def test_extract_quality_event_structure(self) -> None:
+    @staticmethod
+    def test_extract_quality_event_structure() -> None:
         """Verify ExtractQualityEvent has expected fields."""
         from extraction.diagnostics import ExtractQualityEvent
 
@@ -79,7 +80,8 @@ class TestExtractPostprocessResilience:
         assert event.status == "register_view_failed"
         assert event.issue == "test issue"
 
-    def test_register_view_failed_taxonomy(self) -> None:
+    @staticmethod
+    def test_register_view_failed_taxonomy() -> None:
         """Verify register_view_failed event uses canonical taxonomy."""
         from extraction.diagnostics import ExtractQualityEvent
 
@@ -94,7 +96,8 @@ class TestExtractPostprocessResilience:
         )
         assert_diagnostic_event_taxonomy(event, expected_status="register_view_failed")
 
-    def test_view_artifact_failed_taxonomy(self) -> None:
+    @staticmethod
+    def test_view_artifact_failed_taxonomy() -> None:
         """Verify view_artifact_failed event uses canonical taxonomy."""
         from extraction.diagnostics import ExtractQualityEvent
 
@@ -109,7 +112,8 @@ class TestExtractPostprocessResilience:
         )
         assert_diagnostic_event_taxonomy(event, expected_status="view_artifact_failed")
 
-    def test_schema_contract_failed_taxonomy(self) -> None:
+    @staticmethod
+    def test_schema_contract_failed_taxonomy() -> None:
         """Verify schema_contract_failed event uses canonical taxonomy."""
         from extraction.diagnostics import ExtractQualityEvent
 
@@ -124,7 +128,8 @@ class TestExtractPostprocessResilience:
         )
         assert_diagnostic_event_taxonomy(event, expected_status="schema_contract_failed")
 
-    def test_extract_quality_event_to_payload(self) -> None:
+    @staticmethod
+    def test_extract_quality_event_to_payload() -> None:
         """Verify ExtractQualityEvent.to_payload() returns dict."""
         from extraction.diagnostics import ExtractQualityEvent
 
@@ -143,7 +148,8 @@ class TestExtractPostprocessResilience:
         assert payload["status"] == "register_view_failed"
         assert payload["stage"] == "postprocess"
 
-    def test_extract_quality_event_optional_fields(self) -> None:
+    @staticmethod
+    def test_extract_quality_event_optional_fields() -> None:
         """Verify ExtractQualityEvent handles optional fields correctly."""
         from extraction.diagnostics import ExtractQualityEvent
 
@@ -161,7 +167,8 @@ class TestExtractPostprocessResilience:
         assert event.plan_fingerprint == "fp-123"
         assert event.plan_signature is None
 
-    def test_engine_event_recorder_exists(self) -> None:
+    @staticmethod
+    def test_engine_event_recorder_exists() -> None:
         """Verify EngineEventRecorder can be instantiated."""
         from extraction.diagnostics import EngineEventRecorder
         from tests.test_helpers.datafusion_runtime import df_profile
@@ -170,7 +177,8 @@ class TestExtractPostprocessResilience:
         recorder = EngineEventRecorder(profile)
         assert recorder is not None
 
-    def test_postprocess_status_taxonomy_complete(self) -> None:
+    @staticmethod
+    def test_postprocess_status_taxonomy_complete() -> None:
         """Verify all canonical postprocess statuses are accounted for.
 
         This test ensures the taxonomy set covers all statuses used
@@ -179,6 +187,7 @@ class TestExtractPostprocessResilience:
         expected = {"register_view_failed", "view_artifact_failed", "schema_contract_failed"}
         assert expected == POSTPROCESS_STATUSES
 
-    def test_postprocess_stage_is_canonical(self) -> None:
+    @staticmethod
+    def test_postprocess_stage_is_canonical() -> None:
         """Verify the canonical stage name for postprocess events."""
         assert "postprocess" in POSTPROCESS_STAGES

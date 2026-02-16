@@ -23,7 +23,8 @@ from schema_spec.specs import FieldBundle
 class TestExtractionSchemaBuilder:
     """Tests for ExtractionSchemaBuilder."""
 
-    def test_builder_basic_construction(self) -> None:
+    @staticmethod
+    def test_builder_basic_construction() -> None:
         """Test basic builder construction."""
         builder = ExtractionSchemaBuilder("test_dataset", version=1)
         schema = builder.build()
@@ -31,7 +32,8 @@ class TestExtractionSchemaBuilder:
         assert schema.version == 1
         assert len(schema.fields) == 0
 
-    def test_builder_with_file_identity(self) -> None:
+    @staticmethod
+    def test_builder_with_file_identity() -> None:
         """Test builder with file identity fields."""
         schema = (
             ExtractionSchemaBuilder("test_dataset").with_file_identity(include_sha256=True).build()
@@ -43,14 +45,16 @@ class TestExtractionSchemaBuilder:
         assert "file_id" in schema.required_non_null
         assert "path" in schema.required_non_null
 
-    def test_builder_with_byte_span(self) -> None:
+    @staticmethod
+    def test_builder_with_byte_span() -> None:
         """Test builder with byte span fields."""
         schema = ExtractionSchemaBuilder("test_dataset").with_span(style="byte").build()
         field_names = {f.name for f in schema.fields}
         assert "bstart" in field_names
         assert "bend" in field_names
 
-    def test_builder_with_prefixed_span(self) -> None:
+    @staticmethod
+    def test_builder_with_prefixed_span() -> None:
         """Test builder with prefixed span fields."""
         schema = (
             ExtractionSchemaBuilder("test_dataset").with_span(prefix="def", style="byte").build()
@@ -59,7 +63,8 @@ class TestExtractionSchemaBuilder:
         assert "def_bstart" in field_names
         assert "def_bend" in field_names
 
-    def test_builder_with_line_col_span(self) -> None:
+    @staticmethod
+    def test_builder_with_line_col_span() -> None:
         """Test builder with line/col span fields."""
         schema = ExtractionSchemaBuilder("test_dataset").with_span(style="line_col").build()
         field_names = {f.name for f in schema.fields}
@@ -68,18 +73,21 @@ class TestExtractionSchemaBuilder:
         assert "end_line" in field_names
         assert "end_col" in field_names
 
-    def test_builder_with_structured_span(self) -> None:
+    @staticmethod
+    def test_builder_with_structured_span() -> None:
         """Test builder with structured span field."""
         schema = ExtractionSchemaBuilder("test_dataset").with_span(style="structured").build()
         field_names = {f.name for f in schema.fields}
         assert "span" in field_names
 
-    def test_builder_with_invalid_span_style(self) -> None:
+    @staticmethod
+    def test_builder_with_invalid_span_style() -> None:
         """Test builder raises on invalid span style."""
         with pytest.raises(ValueError, match="Unsupported span style"):
             ExtractionSchemaBuilder("test_dataset").with_span(style="invalid")
 
-    def test_builder_with_evidence_metadata(self) -> None:
+    @staticmethod
+    def test_builder_with_evidence_metadata() -> None:
         """Test builder with evidence metadata fields."""
         schema = ExtractionSchemaBuilder("test_dataset").with_evidence_metadata().build()
         field_names = {f.name for f in schema.fields}
@@ -87,7 +95,8 @@ class TestExtractionSchemaBuilder:
         assert "confidence" in field_names
         assert "score" in field_names
 
-    def test_builder_with_custom_field(self) -> None:
+    @staticmethod
+    def test_builder_with_custom_field() -> None:
         """Test builder with custom fields."""
         schema = (
             ExtractionSchemaBuilder("test_dataset")
@@ -99,14 +108,16 @@ class TestExtractionSchemaBuilder:
         assert "custom_col" in field_names
         assert "custom_int" in field_names
 
-    def test_builder_with_field_spec(self) -> None:
+    @staticmethod
+    def test_builder_with_field_spec() -> None:
         """Test builder with FieldSpec objects."""
         custom_spec = FieldSpec(name="custom_field", dtype=arrow_type_from_pyarrow(pa.float64()))
         schema = ExtractionSchemaBuilder("test_dataset").with_fields(custom_spec).build()
         field_names = {f.name for f in schema.fields}
         assert "custom_field" in field_names
 
-    def test_builder_with_custom_bundle(self) -> None:
+    @staticmethod
+    def test_builder_with_custom_bundle() -> None:
         """Test builder with custom field bundle."""
         bundle = FieldBundle(
             name="custom_bundle",
@@ -120,7 +131,8 @@ class TestExtractionSchemaBuilder:
         assert "bundle_field1" in field_names
         assert "bundle_field2" in field_names
 
-    def test_builder_field_deduplication(self) -> None:
+    @staticmethod
+    def test_builder_field_deduplication() -> None:
         """Test that duplicate field names are deduplicated."""
         schema = (
             ExtractionSchemaBuilder("test_dataset")
@@ -132,7 +144,8 @@ class TestExtractionSchemaBuilder:
         file_id_count = sum(1 for f in schema.fields if f.name == "file_id")
         assert file_id_count == 1
 
-    def test_builder_with_key_fields(self) -> None:
+    @staticmethod
+    def test_builder_with_key_fields() -> None:
         """Test builder with key fields."""
         schema = (
             ExtractionSchemaBuilder("test_dataset")
@@ -143,7 +156,8 @@ class TestExtractionSchemaBuilder:
         assert "file_id" in schema.key_fields
         assert "path" in schema.key_fields
 
-    def test_builder_with_required_non_null(self) -> None:
+    @staticmethod
+    def test_builder_with_required_non_null() -> None:
         """Test builder with required non-null fields."""
         schema = (
             ExtractionSchemaBuilder("test_dataset")
@@ -153,7 +167,8 @@ class TestExtractionSchemaBuilder:
         )
         assert "important" in schema.required_non_null
 
-    def test_builder_chaining(self) -> None:
+    @staticmethod
+    def test_builder_chaining() -> None:
         """Test that all builder methods return self for chaining."""
         schema = (
             ExtractionSchemaBuilder("test_dataset", version=2)
@@ -173,12 +188,14 @@ class TestExtractionSchemaBuilder:
 class TestExtractionSchemaTemplates:
     """Tests for extraction schema templates."""
 
-    def test_templates_exist(self) -> None:
+    @staticmethod
+    def test_templates_exist() -> None:
         """Test that expected templates are defined."""
         expected = {"ast", "cst", "bytecode", "symtable", "scip", "tree_sitter", "repo_scan"}
         assert expected.issubset(set(EXTRACTION_SCHEMA_TEMPLATES.keys()))
 
-    def test_build_ast_template(self) -> None:
+    @staticmethod
+    def test_build_ast_template() -> None:
         """Test building from AST template."""
         schema = build_schema_from_template("ast", "py_ast_nodes_v1")
         field_names = {f.name for f in schema.fields}
@@ -192,7 +209,8 @@ class TestExtractionSchemaTemplates:
         assert "node_type" in field_names
         assert "node_id" in field_names
 
-    def test_build_cst_template(self) -> None:
+    @staticmethod
+    def test_build_cst_template() -> None:
         """Test building from CST template."""
         schema = build_schema_from_template("cst", "py_cst_nodes_v1")
         field_names = {f.name for f in schema.fields}
@@ -200,7 +218,8 @@ class TestExtractionSchemaTemplates:
         assert "node_id" in field_names
         assert "qualified_name" in field_names
 
-    def test_build_bytecode_template(self) -> None:
+    @staticmethod
+    def test_build_bytecode_template() -> None:
         """Test building from bytecode template."""
         schema = build_schema_from_template("bytecode", "py_bytecode_v1")
         field_names = {f.name for f in schema.fields}
@@ -212,7 +231,8 @@ class TestExtractionSchemaTemplates:
         assert "code_unit_id" in field_names
         assert "opname" in field_names
 
-    def test_build_scip_template(self) -> None:
+    @staticmethod
+    def test_build_scip_template() -> None:
         """Test building from SCIP template."""
         schema = build_schema_from_template("scip", "py_scip_symbols_v1")
         field_names = {f.name for f in schema.fields}
@@ -223,19 +243,22 @@ class TestExtractionSchemaTemplates:
         assert "symbol" in field_names
         assert "document_id" in field_names
 
-    def test_build_template_with_extra_fields(self) -> None:
+    @staticmethod
+    def test_build_template_with_extra_fields() -> None:
         """Test building template with extra fields."""
         extra = [FieldSpec(name="extra_col", dtype=arrow_type_from_pyarrow(pa.binary()))]
         schema = build_schema_from_template("ast", "custom_ast", extra_fields=extra)
         field_names = {f.name for f in schema.fields}
         assert "extra_col" in field_names
 
-    def test_build_template_with_version(self) -> None:
+    @staticmethod
+    def test_build_template_with_version() -> None:
         """Test building template with specific version."""
         schema = build_schema_from_template("ast", "py_ast_v2", version=2)
         assert schema.version == SCHEMA_VERSION_TWO
 
-    def test_build_unknown_template_raises(self) -> None:
+    @staticmethod
+    def test_build_unknown_template_raises() -> None:
         """Test that unknown template raises KeyError."""
         with pytest.raises(KeyError, match="Unknown extraction template"):
             build_schema_from_template("unknown_template", "test")
@@ -244,7 +267,8 @@ class TestExtractionSchemaTemplates:
 class TestDerivationOptions:
     """Tests for DerivationOptions."""
 
-    def test_default_options(self) -> None:
+    @staticmethod
+    def test_default_options() -> None:
         """Test default derivation options."""
         options = DerivationOptions()
         assert options.version == 1
@@ -253,7 +277,8 @@ class TestDerivationOptions:
         assert options.include_evidence_metadata is False
         assert options.span_style == "byte"
 
-    def test_custom_options(self) -> None:
+    @staticmethod
+    def test_custom_options() -> None:
         """Test custom derivation options."""
         options = DerivationOptions(
             version=2,
@@ -271,7 +296,8 @@ class TestDerivationOptions:
 class TestUtilityFunctions:
     """Tests for utility functions."""
 
-    def test_extraction_schema_to_arrow(self) -> None:
+    @staticmethod
+    def test_extraction_schema_to_arrow() -> None:
         """Test converting schema spec to Arrow schema."""
         schema_spec = (
             ExtractionSchemaBuilder("test")
@@ -284,7 +310,8 @@ class TestUtilityFunctions:
         assert "file_id" in arrow_schema.names
         assert "custom" in arrow_schema.names
 
-    def test_validate_extraction_schema_valid(self) -> None:
+    @staticmethod
+    def test_validate_extraction_schema_valid() -> None:
         """Test validation of valid schema."""
         schema_spec = (
             ExtractionSchemaBuilder("test").with_file_identity().with_span(style="byte").build()
@@ -297,7 +324,8 @@ class TestUtilityFunctions:
         assert is_valid is True
         assert len(errors) == 0
 
-    def test_validate_extraction_schema_missing_identity(self) -> None:
+    @staticmethod
+    def test_validate_extraction_schema_missing_identity() -> None:
         """Test validation catches missing file identity."""
         schema_spec = ExtractionSchemaBuilder("test").with_span(style="byte").build()
         is_valid, errors = validate_extraction_schema(
@@ -307,7 +335,8 @@ class TestUtilityFunctions:
         assert is_valid is False
         assert any("file identity" in err.lower() for err in errors)
 
-    def test_validate_extraction_schema_missing_span(self) -> None:
+    @staticmethod
+    def test_validate_extraction_schema_missing_span() -> None:
         """Test validation catches missing span."""
         schema_spec = ExtractionSchemaBuilder("test").with_file_identity().build()
         is_valid, errors = validate_extraction_schema(
@@ -318,7 +347,8 @@ class TestUtilityFunctions:
         assert is_valid is False
         assert any("span" in err.lower() for err in errors)
 
-    def test_validate_extraction_schema_no_requirements(self) -> None:
+    @staticmethod
+    def test_validate_extraction_schema_no_requirements() -> None:
         """Test validation with no requirements passes."""
         schema_spec = ExtractionSchemaBuilder("test").build()
         is_valid, errors = validate_extraction_schema(

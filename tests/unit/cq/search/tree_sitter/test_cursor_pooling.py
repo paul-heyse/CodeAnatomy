@@ -65,10 +65,12 @@ class _Cursor:
             return 0
         return None
 
-    def goto_first_child(self) -> bool:
+    @staticmethod
+    def goto_first_child() -> bool:
         return False
 
-    def goto_next_sibling(self) -> bool:
+    @staticmethod
+    def goto_next_sibling() -> bool:
         return False
 
     def goto_parent(self) -> bool:

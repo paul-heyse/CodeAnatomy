@@ -31,7 +31,7 @@ def count_callers_for_definition(
     index
         File interval index
 
-    Returns
+    Returns:
     -------
     int
         Number of matching callsites
@@ -68,7 +68,7 @@ def resolve_enclosing_scope(def_record: SgRecord, index: FileIntervalIndex) -> s
     index
         File interval index
 
-    Returns
+    Returns:
     -------
     str
         Enclosing scope name, or `<module>` when no parent scope exists
@@ -97,7 +97,7 @@ def record_key(record: SgRecord) -> tuple[str, int, int, int, int]:
     record
         Record to key
 
-    Returns
+    Returns:
     -------
     tuple[str, int, int, int, int]
         Stable key identifying a record location
@@ -124,7 +124,7 @@ def build_def_evidence_map(
     root
         Repository root
 
-    Returns
+    Returns:
     -------
     dict[tuple[str, int, int, int, int], dict[str, object]]
         Evidence details keyed by record location
@@ -204,7 +204,7 @@ def call_to_finding(
     extra_details
         Optional extra details
 
-    Returns
+    Returns:
     -------
     Finding
         Finding describing the callsite
@@ -237,7 +237,7 @@ def extract_call_target(call: SgRecord) -> str:
     call
         Call record
 
-    Returns
+    Returns:
     -------
     str
         Extracted target name
@@ -266,7 +266,7 @@ def extract_call_receiver(call: SgRecord) -> str | None:
     call
         Call record
 
-    Returns
+    Returns:
     -------
     str | None
         Receiver name when present
@@ -292,7 +292,7 @@ def find_enclosing_class(
     index
         File interval index
 
-    Returns
+    Returns:
     -------
     SgRecord | None
         Enclosing class record when found
@@ -330,7 +330,7 @@ def extract_call_name(call: SgRecord) -> str | None:
     call
         Call record
 
-    Returns
+    Returns:
     -------
     str | None
         Extracted call name when available
@@ -340,14 +340,14 @@ def extract_call_name(call: SgRecord) -> str | None:
 
 
 __all__ = [
-    "count_callers_for_definition",
-    "resolve_enclosing_scope",
-    "record_key",
-    "build_def_evidence_map",
     "apply_call_evidence",
+    "build_def_evidence_map",
     "call_to_finding",
-    "extract_call_target",
-    "extract_call_receiver",
-    "find_enclosing_class",
+    "count_callers_for_definition",
     "extract_call_name",
+    "extract_call_receiver",
+    "extract_call_target",
+    "find_enclosing_class",
+    "record_key",
+    "resolve_enclosing_scope",
 ]

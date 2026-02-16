@@ -21,7 +21,11 @@ from utils.uuid_factory import uuid7_hex
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.delta.store_policy import DeltaStorePolicy
+    from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.registry_facade import RegistryFacade
+    from schema_spec.contracts import ScanPolicyConfig
     from semantics.program_manifest import ManifestDatasetResolver
 
 
@@ -146,6 +150,30 @@ class IncrementalRuntime:
             IO adapter bound to the runtime session.
         """
         return DataFusionIOAdapter(ctx=self._session_runtime.ctx, profile=self.profile)
+
+    def delta_service(self) -> DeltaService:
+        """Return the Delta service from the runtime profile."""
+        return self.profile.delta_ops.delta_service()
+
+    def scan_policy(self) -> ScanPolicyConfig:
+        """Return the scan policy from the runtime profile."""
+        return self.profile.policies.scan_policy
+
+    def delta_store_policy(self) -> DeltaStorePolicy | None:
+        """Return the Delta store policy from the runtime profile."""
+        return self.profile.policies.delta_store_policy
+
+    def diagnostics_sink(self) -> DiagnosticsSink | None:
+        """Return the diagnostics sink, if configured."""
+        return self.profile.diagnostics.diagnostics_sink
+
+    def settings_hash(self) -> str:
+        """Return the DataFusion settings hash for reproducibility."""
+        return self.profile.settings_hash()
+
+    def config_policy_name(self) -> str | None:
+        """Return the runtime policy-profile name."""
+        return self.profile.policies.config_policy_name
 
 
 class TempTableRegistry:

@@ -17,25 +17,29 @@ EXPECTED_JOIN_COUNT = 2
 class TestJoinTarget:
     """Tests for JoinTarget dataclass."""
 
-    def test_simple_join_target(self) -> None:
+    @staticmethod
+    def test_simple_join_target() -> None:
         """Create simple join target."""
         target = JoinTarget(entity="function", name=None)
         assert target.entity == "function"
         assert target.name is None
 
-    def test_join_target_with_name(self) -> None:
+    @staticmethod
+    def test_join_target_with_name() -> None:
         """Create join target with name filter."""
         target = JoinTarget(entity="function", name="foo")
         assert target.entity == "function"
         assert target.name == "foo"
 
-    def test_parse_simple_target(self) -> None:
+    @staticmethod
+    def test_parse_simple_target() -> None:
         """Parse simple target specification."""
         target = JoinTarget.parse("function")
         assert target.entity == "function"
         assert target.name is None
 
-    def test_parse_target_with_name(self) -> None:
+    @staticmethod
+    def test_parse_target_with_name() -> None:
         """Parse target specification with name."""
         target = JoinTarget.parse("function:foo")
         assert target.entity == "function"
@@ -45,7 +49,8 @@ class TestJoinTarget:
 class TestJoinConstraint:
     """Tests for JoinConstraint dataclass."""
 
-    def test_used_by_constraint(self) -> None:
+    @staticmethod
+    def test_used_by_constraint() -> None:
         """Create used_by join constraint."""
         constraint = JoinConstraint(
             join_type="used_by",
@@ -54,7 +59,8 @@ class TestJoinConstraint:
         assert constraint.join_type == "used_by"
         assert constraint.target.entity == "function"
 
-    def test_defines_constraint(self) -> None:
+    @staticmethod
+    def test_defines_constraint() -> None:
         """Create defines join constraint."""
         constraint = JoinConstraint(
             join_type="defines",
@@ -67,7 +73,8 @@ class TestJoinConstraint:
 class TestJoinQueryParsing:
     """Tests for parsing join queries."""
 
-    def test_used_by_parsing(self) -> None:
+    @staticmethod
+    def test_used_by_parsing() -> None:
         """Parse query with used_by constraint."""
         query = parse_query("entity=function used_by=function:main")
         assert len(query.joins) == 1
@@ -75,26 +82,30 @@ class TestJoinQueryParsing:
         assert query.joins[0].target.entity == "function"
         assert query.joins[0].target.name == "main"
 
-    def test_defines_parsing(self) -> None:
+    @staticmethod
+    def test_defines_parsing() -> None:
         """Parse query with defines constraint."""
         query = parse_query("entity=module defines=class:Config")
         assert len(query.joins) == 1
         assert query.joins[0].join_type == "defines"
         assert query.joins[0].target.name == "Config"
 
-    def test_raises_parsing(self) -> None:
+    @staticmethod
+    def test_raises_parsing() -> None:
         """Parse query with raises constraint."""
         query = parse_query("entity=function raises=class:ValueError")
         assert len(query.joins) == 1
         assert query.joins[0].join_type == "raises"
 
-    def test_exports_parsing(self) -> None:
+    @staticmethod
+    def test_exports_parsing() -> None:
         """Parse query with exports constraint."""
         query = parse_query("entity=module exports=function:main")
         assert len(query.joins) == 1
         assert query.joins[0].join_type == "exports"
 
-    def test_multiple_joins(self) -> None:
+    @staticmethod
+    def test_multiple_joins() -> None:
         """Parse query with multiple join constraints."""
         query = parse_query("entity=function used_by=function:main raises=class:Error")
         assert len(query.joins) == EXPECTED_JOIN_COUNT
@@ -106,7 +117,8 @@ class TestJoinQueryParsing:
 class TestJoinQueryIR:
     """Tests for join query IR construction."""
 
-    def test_query_with_joins(self) -> None:
+    @staticmethod
+    def test_query_with_joins() -> None:
         """Create query with join constraints."""
         query = Query(
             entity="function",
@@ -119,7 +131,8 @@ class TestJoinQueryIR:
         )
         assert len(query.joins) == 1
 
-    def test_query_default_empty_joins(self) -> None:
+    @staticmethod
+    def test_query_default_empty_joins() -> None:
         """Query has empty joins by default."""
         query = Query(entity="function")
         assert query.joins == ()

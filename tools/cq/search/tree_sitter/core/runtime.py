@@ -48,7 +48,7 @@ class QueryExecutionCallbacksV1:
 class _BoundedQueryStateV1:
     effective_settings: QueryExecutionSettingsV1
     cursor: object
-    windows: list[tuple[QueryWindowV1 | None, QueryPointWindowV1 | None]]
+    windows: tuple[tuple[QueryWindowV1, QueryPointWindowV1 | None], ...]
     base_window_count: int
     progress: Callable[[object], bool] | None
     predicate_callback: Callable[[str, object, int, Mapping[str, Sequence[object]]], bool] | None

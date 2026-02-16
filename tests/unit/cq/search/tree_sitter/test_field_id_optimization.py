@@ -10,6 +10,7 @@ from tools.cq.search.tree_sitter.core import infrastructure
 
 def test_child_by_field_prefers_field_id_path() -> None:
     """Prefer field-id lookup path when field ID is available."""
+
     class _Node:
         def __init__(self) -> None:
             self.name_by_id = {1: "id_child"}
@@ -28,6 +29,7 @@ def test_child_by_field_prefers_field_id_path() -> None:
 
 def test_child_by_field_falls_back_to_field_name() -> None:
     """Fallback to name lookup when field-id lookup is unavailable."""
+
     class _Node:
         @staticmethod
         def child_by_field_id(_field_id: int) -> object | None:

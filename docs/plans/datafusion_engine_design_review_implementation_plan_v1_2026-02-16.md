@@ -1204,8 +1204,7 @@ def _enrich_query_telemetry(
 ### Files to Edit
 
 - `src/datafusion_engine/session/runtime.py` — Replace contradictory normalization booleans with `IdentifierNormalizationMode`; deduplicate telemetry enrichment blocks
-- `src/datafusion_engine/session/config_structs.py` — Add strongly typed runtime config fields for normalization and telemetry policy
-- `src/datafusion_engine/session/contracts.py` — Add runtime enums/struct contracts
+- `src/datafusion_engine/session/config.py` — Route runtime construction through explicit normalization/telemetry contracts (until `config_structs.py` lands)
 
 ### New Files to Create
 
@@ -1833,7 +1832,7 @@ Define explicit acceptance criteria for observability changes (logs, metrics, tr
 ### Representative Code Snippets
 
 ```python
-# src/datafusion_engine/obs/runtime_metrics.py (NEW)
+# src/obs/datafusion_engine_runtime_metrics.py (NEW)
 from __future__ import annotations
 
 from opentelemetry import metrics, trace
@@ -1856,11 +1855,12 @@ with tracer.start_as_current_span("delta.maintenance.compact"):
 - `src/datafusion_engine/delta/maintenance.py` — Add counters/timers/spans for maintenance operations
 - `src/datafusion_engine/delta/observability.py` — Emit structured error attributes for failure cases
 - `rust/codeanatomy_engine/src/executor/tracing/exec_instrumentation.rs` — Validate and complete tracing coverage for Rust execution path
-- `src/datafusion_engine/obs/` modules — Add metric/tracing helper wiring used by S28/S29
+- `src/obs/otel/metrics.py` — Wire DataFusion engine metrics into existing OTel metrics plumbing
+- `src/obs/otel/tracing.py` — Wire DataFusion engine spans into existing tracing plumbing
 
 ### New Files to Create
 
-- `src/datafusion_engine/obs/runtime_metrics.py` — Shared metric/tracer instruments for DataFusion engine paths
+- `src/obs/datafusion_engine_runtime_metrics.py` — Shared metric/tracer instruments for DataFusion engine paths
 - `tests/unit/datafusion_engine/obs/test_runtime_metrics.py` — Instrument creation and attribute schema tests
 - `tests/unit/datafusion_engine/delta/test_maintenance_observability.py` — Span/metric emission behavior tests
 

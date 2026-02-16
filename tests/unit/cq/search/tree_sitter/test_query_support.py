@@ -72,10 +72,12 @@ def test_first_capture_returns_first_node() -> None:
 
 
 class _CacheWithGetSet:
-    def get(self, _key: str, default: object | None = None, **_kw: object) -> object | None:
+    @staticmethod
+    def get(_key: str, default: object | None = None, **_kw: object) -> object | None:
         return default
 
-    def set(self, _key: str, _value: object, **_kw: object) -> bool:
+    @staticmethod
+    def set(_key: str, _value: object, **_kw: object) -> bool:
         return True
 
 

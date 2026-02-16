@@ -17,7 +17,10 @@ from tools.cq.search.pipeline.classifier import MatchCategory, SymtableEnrichmen
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
 
+    from tools.cq.core.front_door_insight import InsightNeighborhoodV1
+    from tools.cq.core.schema import Finding, Section
     from tools.cq.core.semantic_contracts import SemanticProvider
+    from tools.cq.search.objects.resolve import ObjectResolutionRuntime
     from tools.cq.search.pipeline.contracts import SearchConfig, SmartSearchContext
 
 # Type aliases
@@ -305,15 +308,15 @@ class _SearchAssemblyInputs:
     """Assembly phase inputs."""
 
     enriched_matches: list[EnrichedMatch]
-    object_runtime: object  # ObjectResolutionRuntime - avoid circular import
+    object_runtime: ObjectResolutionRuntime
     summary: dict[str, object]
-    sections: list[object]  # Section - avoid circular import
-    all_diagnostics: list[object]  # Finding - avoid circular import
+    sections: list[Section]
+    all_diagnostics: list[Finding]
     definition_matches: list[EnrichedMatch]
-    candidate_findings: list[object]  # Finding - avoid circular import
-    primary_target_finding: object | None  # Finding - avoid circular import
+    candidate_findings: list[Finding]
+    primary_target_finding: Finding | None
     primary_target_match: EnrichedMatch | None
-    insight_neighborhood: object | None  # InsightNeighborhoodV1 - avoid circular import
+    insight_neighborhood: InsightNeighborhoodV1 | None
     neighborhood_notes: list[str]
 
 
@@ -321,7 +324,7 @@ class _SearchAssemblyInputs:
 class _NeighborhoodPreviewInputs:
     """Neighborhood preview computation inputs."""
 
-    primary_target_finding: object | None  # Finding - avoid circular import
+    primary_target_finding: Finding | None
     definition_matches: list[EnrichedMatch]
     has_target_candidates: bool
 

@@ -40,7 +40,7 @@ def collapse_parent_q_results(
     ctx : CliContext
         CLI context.
 
-    Returns
+    Returns:
     -------
     list[tuple[str, CqResult]]
         Collapsed results with one result per parent step.
@@ -221,3 +221,8 @@ def _merge_collapsed_q_group(group: list[CqResult], *, ctx: CliContext) -> CqRes
             summary_common=_summary_common_for_collapse(query_text, mode, lang_scope),
         )
     )
+
+
+__all__ = [
+    "collapse_parent_q_results",
+]

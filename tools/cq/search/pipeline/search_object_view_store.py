@@ -35,7 +35,7 @@ def pop_search_object_view_for_run(run_id: str | None) -> SearchObjectResolvedVi
     run_id
         Run identifier to retrieve view for.
 
-    Returns
+    Returns:
     -------
     SearchObjectResolvedViewV1 | None
         Popped view if run_id exists and is cached, otherwise None.

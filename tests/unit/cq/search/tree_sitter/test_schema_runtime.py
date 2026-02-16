@@ -13,11 +13,13 @@ FUNCTION_FIELD_ID = 4
 
 
 class _LanguageStub:
-    def id_for_node_kind(self, name: str, named: object) -> int:
+    @staticmethod
+    def id_for_node_kind(name: str, named: object) -> int:
         _ = named
         return {"identifier": 1, "call": 2, "function_definition": 3}[name]
 
-    def field_id_for_name(self, name: str) -> int:
+    @staticmethod
+    def field_id_for_name(name: str) -> int:
         return {"name": 1, "body": 2, "parameters": 3, "function": 4}[name]
 
 

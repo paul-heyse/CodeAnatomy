@@ -293,8 +293,8 @@ class TreeSitterArtifactBundleV1(CqCacheStruct, frozen=True):
 
 __all__ = [
     "AdaptiveRuntimeSnapshotV1",
-    "NodeLike",
     "InjectionRuntimeResultV1",
+    "NodeLike",
     "ObjectEvidenceRowV1",
     "ParseSessionStatsV1",
     "PointV1",

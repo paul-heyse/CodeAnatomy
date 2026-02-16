@@ -487,8 +487,8 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
     timeout_seconds_seen = 0.0
 
     class FakeScheduler:
+        @staticmethod
         def submit_cpu(
-            self,
             fn: Callable[[_RenderEnrichTask], _RenderEnrichResult],
             task: _RenderEnrichTask,
         ) -> _RenderEnrichResult:
@@ -496,8 +496,8 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
             submit_count += 1
             return fn(task)
 
+        @staticmethod
         def collect_bounded(
-            self,
             futures: list[_RenderEnrichResult],
             *,
             timeout_seconds: float,

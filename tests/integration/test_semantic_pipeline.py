@@ -61,8 +61,8 @@ def datafusion_session() -> SessionContext:
 class TestSemanticPipelineIntegration:
     """Integration tests for end-to-end semantic pipeline."""
 
+    @staticmethod
     def test_semantic_input_validation_detects_missing_tables(
-        self,
         datafusion_session: SessionContext,
     ) -> None:
         """Verify input validation detects missing tables."""
@@ -76,8 +76,8 @@ class TestSemanticPipelineIntegration:
         assert "cst_refs" in missing_required
         assert "scip_occurrences" in missing_required
 
+    @staticmethod
     def test_semantic_input_validation_resolves_present_tables(
-        self,
         datafusion_session: SessionContext,
     ) -> None:
         """Verify input validation resolves tables when present."""
@@ -96,8 +96,8 @@ class TestSemanticPipelineIntegration:
         # cst_refs should be resolved now
         assert "cst_refs" not in missing_required
 
+    @staticmethod
     def test_semantic_input_validation_uses_fallback_dataset_names(
-        self,
         datafusion_session: SessionContext,
     ) -> None:
         """Verify legacy suffixed dataset names do not resolve."""
@@ -111,16 +111,16 @@ class TestSemanticPipelineIntegration:
         missing_required = _missing_required_from_error(exc_info.value)
         assert "cst_refs" in missing_required
 
+    @staticmethod
     def test_semantic_input_mapping_raises_when_missing(
-        self,
         datafusion_session: SessionContext,
     ) -> None:
         """Verify mapping resolution raises when required inputs are missing."""
         with pytest.raises(ValueError, match="Missing required semantic inputs"):
             resolve_semantic_input_mapping(datafusion_session)
 
+    @staticmethod
     def test_semantic_inputs_validate_when_tables_present(
-        self,
         datafusion_session: SessionContext,
     ) -> None:
         """Verify semantic input validation passes with required tables + columns."""
@@ -241,7 +241,8 @@ class TestSemanticPipelineIntegration:
         )
         assert validation.valid
 
-    def test_canonical_naming_consistency(self) -> None:
+    @staticmethod
+    def test_canonical_naming_consistency() -> None:
         """Verify naming module exports expected canonical names."""
         from semantics.ir_pipeline import build_semantic_ir
 
@@ -257,7 +258,8 @@ class TestSemanticPipelineIntegration:
         # Verify unknown names pass through unchanged
         assert canonical_output_name("unknown_table") == "unknown_table"
 
-    def test_join_strategy_inference_span_overlap(self) -> None:
+    @staticmethod
+    def test_join_strategy_inference_span_overlap() -> None:
         """Verify join inference produces SPAN_OVERLAP for span-capable schemas."""
         # Create schemas with file_id + spans
         left_schema = pa.schema(
@@ -283,7 +285,8 @@ class TestSemanticPipelineIntegration:
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.SPAN_OVERLAP
 
-    def test_join_strategy_inference_file_equi_join(self) -> None:
+    @staticmethod
+    def test_join_strategy_inference_file_equi_join() -> None:
         """Verify join inference falls back to EQUI_JOIN when only file_id present."""
         # Create schemas with file_id only (no spans)
         left_schema = pa.schema(
@@ -307,7 +310,8 @@ class TestSemanticPipelineIntegration:
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.EQUI_JOIN
 
-    def test_join_strategy_inference_no_common_keys(self) -> None:
+    @staticmethod
+    def test_join_strategy_inference_no_common_keys() -> None:
         """Verify join inference returns None when no common join keys."""
         # Create schemas with no common join keys
         left_schema = pa.schema(
@@ -330,7 +334,8 @@ class TestSemanticPipelineIntegration:
 
         assert strategy is None
 
-    def test_join_strategy_with_hint(self) -> None:
+    @staticmethod
+    def test_join_strategy_with_hint() -> None:
         """Verify join inference respects strategy hints."""
         left_schema = pa.schema(
             [
@@ -356,7 +361,8 @@ class TestSemanticPipelineIntegration:
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.SPAN_CONTAINS
 
-    def test_annotated_schema_from_arrow(self) -> None:
+    @staticmethod
+    def test_annotated_schema_from_arrow() -> None:
         """Verify AnnotatedSchema correctly annotates Arrow schema."""
         from semantics.types import SemanticType
 
@@ -380,7 +386,8 @@ class TestSemanticPipelineIntegration:
         assert "entity_id" in annotated
         assert "file_id" in annotated
 
-    def test_annotated_schema_join_key_inference(self) -> None:
+    @staticmethod
+    def test_annotated_schema_join_key_inference() -> None:
         """Verify AnnotatedSchema can infer join keys between schemas."""
         left_schema = pa.schema(
             [

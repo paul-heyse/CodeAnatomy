@@ -44,7 +44,8 @@ def _is_test_function(attributes: list[str]) -> bool:
 
     Parameters
     ----------
-    attributes
+
+    Attributes:
         Attribute strings (already stripped of ``#[...]`` delimiters).
 
     Returns:
@@ -94,7 +95,8 @@ def _classify_function_role(
     ----------
     node
         A tree-sitter ``function_item`` node.
-    attributes
+
+    Attributes:
         Pre-extracted attributes for the function.
     max_scope_depth
         Maximum ancestor search depth.
@@ -151,7 +153,8 @@ def _classify_item_role(
         The tree-sitter node at the match location.
     scope
         The nearest enclosing scope node.
-    attributes
+
+    Attributes:
         Pre-extracted attribute strings.
     max_scope_depth
         Maximum ancestor search depth.

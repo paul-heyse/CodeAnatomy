@@ -14,7 +14,8 @@ from tools.cq.search.rust.contracts import (
 class TestMacroExpansionContracts:
     """Tests for macro expansion request/result contracts."""
 
-    def test_request_round_trip(self) -> None:
+    @staticmethod
+    def test_request_round_trip() -> None:
         """Verify request struct construction and field access."""
         req = RustMacroExpansionRequestV1(
             file_path="src/lib.rs",
@@ -25,7 +26,8 @@ class TestMacroExpansionContracts:
         assert req.file_path == "src/lib.rs"
         assert req.macro_call_id == "src/lib.rs:10:4:sql"
 
-    def test_result_defaults(self) -> None:
+    @staticmethod
+    def test_result_defaults() -> None:
         """Verify result struct defaults."""
         result = RustMacroExpansionResultV1(macro_call_id="id")
         assert result.applied is False
@@ -37,12 +39,14 @@ class TestMacroExpansionContracts:
 class TestModuleGraphContracts:
     """Tests for module graph node/edge/graph contracts."""
 
-    def test_module_node_construction(self) -> None:
+    @staticmethod
+    def test_module_node_construction() -> None:
         """Verify module node construction with optional file_path."""
         node = RustModuleNodeV1(module_id="module:core", module_name="core")
         assert node.file_path is None
 
-    def test_import_edge_defaults(self) -> None:
+    @staticmethod
+    def test_import_edge_defaults() -> None:
         """Verify import edge defaults."""
         edge = RustImportEdgeV1(
             source_module_id="module:core",
@@ -51,7 +55,8 @@ class TestModuleGraphContracts:
         assert edge.visibility == "private"
         assert edge.is_reexport is False
 
-    def test_module_graph_defaults(self) -> None:
+    @staticmethod
+    def test_module_graph_defaults() -> None:
         """Verify module graph empty defaults."""
         graph = RustModuleGraphV1()
         assert graph.modules == ()

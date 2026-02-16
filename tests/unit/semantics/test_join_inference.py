@@ -22,7 +22,8 @@ EXPECTED_INNER_JOIN_MATCH_COUNT = 2
 class TestResolveJoinKeysStatic:
     """Tests for _resolve_join_keys static method via TableInfo objects."""
 
-    def test_explicit_keys_returned_unchanged(self) -> None:
+    @staticmethod
+    def test_explicit_keys_returned_unchanged() -> None:
         """Explicit left_on/right_on bypass inference and pass through."""
         ctx = SessionContext()
         left_df = ctx.from_pydict({"file_id": ["f1"], "entity_id": ["e1"]}, name="left_t")
@@ -39,7 +40,8 @@ class TestResolveJoinKeysStatic:
         assert list(left_on) == ["file_id"]
         assert list(right_on) == ["file_id"]
 
-    def test_infers_file_id_when_both_empty(self) -> None:
+    @staticmethod
+    def test_infers_file_id_when_both_empty() -> None:
         """Infer file_id as join key when left_on and right_on are both empty."""
         ctx = SessionContext()
         left_df = ctx.from_pydict(
@@ -64,7 +66,8 @@ class TestResolveJoinKeysStatic:
         assert "bstart" not in list(left_on)
         assert "bend" not in list(left_on)
 
-    def test_infers_file_id_and_path(self) -> None:
+    @staticmethod
+    def test_infers_file_id_and_path() -> None:
         """Infer both file_id and path when both are present on both sides."""
         ctx = SessionContext()
         left_df = ctx.from_pydict(
@@ -89,7 +92,8 @@ class TestResolveJoinKeysStatic:
         assert "file_id" in right_list
         assert "path" in right_list
 
-    def test_asymmetric_keys_raises(self) -> None:
+    @staticmethod
+    def test_asymmetric_keys_raises() -> None:
         """Error when only one of left_on/right_on is provided."""
         ctx = SessionContext()
         left_df = ctx.from_pydict({"file_id": ["f1"]}, name="left_asym")
@@ -105,7 +109,8 @@ class TestResolveJoinKeysStatic:
                 right_on=[],
             )
 
-    def test_asymmetric_right_only_raises(self) -> None:
+    @staticmethod
+    def test_asymmetric_right_only_raises() -> None:
         """Error when only right_on is provided."""
         ctx = SessionContext()
         left_df = ctx.from_pydict({"file_id": ["f1"]}, name="left_asym2")
@@ -121,7 +126,8 @@ class TestResolveJoinKeysStatic:
                 right_on=["file_id"],
             )
 
-    def test_no_file_identity_columns_raises(self) -> None:
+    @staticmethod
+    def test_no_file_identity_columns_raises() -> None:
         """Error when schemas share no FILE_IDENTITY columns."""
         ctx = SessionContext()
         left_df = ctx.from_pydict({"x": [1], "y": [2]}, name="left_no_fid")
@@ -137,7 +143,8 @@ class TestResolveJoinKeysStatic:
                 right_on=[],
             )
 
-    def test_only_span_columns_raises(self) -> None:
+    @staticmethod
+    def test_only_span_columns_raises() -> None:
         """Error when only SPAN_POSITION columns are shared (no FILE_IDENTITY)."""
         ctx = SessionContext()
         left_df = ctx.from_pydict({"bstart": [0], "bend": [10]}, name="left_span_only")
@@ -157,7 +164,8 @@ class TestResolveJoinKeysStatic:
 class TestJoinKeyInferenceEndToEnd:
     """Tests for join key inference through compile_relationship_with_quality."""
 
-    def test_inferred_join_produces_correct_result(self) -> None:
+    @staticmethod
+    def test_inferred_join_produces_correct_result() -> None:
         """Compiler infers file_id and produces correct joined output."""
         ctx = SessionContext()
         ctx.from_pydict(
@@ -208,7 +216,8 @@ class TestJoinKeyInferenceEndToEnd:
         assert entity_ids == ["e1"]
         assert symbols == ["sym_a"]
 
-    def test_no_common_file_id_raises_through_public_api(self) -> None:
+    @staticmethod
+    def test_no_common_file_id_raises_through_public_api() -> None:
         """Error propagates through public API when no FILE_IDENTITY columns."""
         ctx = SessionContext()
         ctx.from_pydict({"x": [1], "y": [2]}, name="left_no_fileid")
@@ -223,7 +232,8 @@ class TestJoinKeyInferenceEndToEnd:
         with pytest.raises(SemanticSchemaError, match="FILE_IDENTITY"):
             compiler.compile_relationship_with_quality(spec)
 
-    def test_explicit_keys_still_work(self) -> None:
+    @staticmethod
+    def test_explicit_keys_still_work() -> None:
         """Explicit left_on/right_on bypass inference through public API."""
         ctx = SessionContext()
         ctx.from_pydict(
@@ -261,7 +271,8 @@ class TestJoinKeyInferenceEndToEnd:
         result = df.collect()[0]
         assert len(result["entity_id"].to_pylist()) == 1
 
-    def test_multi_row_inferred_join(self) -> None:
+    @staticmethod
+    def test_multi_row_inferred_join() -> None:
         """Inferred join correctly matches on file_id with multiple rows."""
         ctx = SessionContext()
         ctx.from_pydict(
@@ -314,7 +325,8 @@ class TestIRInferredKeysParityWithCompiler:
     resolve them at runtime.
     """
 
-    def test_file_id_parity(self) -> None:
+    @staticmethod
+    def test_file_id_parity() -> None:
         """IR inferred keys match compiler resolution for file_id columns."""
         from semantics.ir import InferredViewProperties, SemanticIRView
         from semantics.ir_pipeline import _resolve_keys_from_inferred
@@ -365,7 +377,8 @@ class TestIRInferredKeysParityWithCompiler:
         assert set(ir_left) == set(compiler_left)
         assert set(ir_right) == set(compiler_right)
 
-    def test_file_id_and_path_parity(self) -> None:
+    @staticmethod
+    def test_file_id_and_path_parity() -> None:
         """IR inferred keys match compiler for file_id + path columns."""
         from semantics.ir import InferredViewProperties, SemanticIRView
         from semantics.ir_pipeline import (
@@ -413,7 +426,8 @@ class TestIRInferredKeysParityWithCompiler:
         assert set(ir_left) == set(compiler_left)
         assert set(ir_right) == set(compiler_right)
 
-    def test_no_file_identity_parity(self) -> None:
+    @staticmethod
+    def test_no_file_identity_parity() -> None:
         """Both IR and compiler fail gracefully when no FILE_IDENTITY columns."""
         from semantics.ir import InferredViewProperties, SemanticIRView
         from semantics.ir_pipeline import (

@@ -248,9 +248,9 @@ def test_cursor_state_progression_through_cdf_reads(tmp_path: Path) -> None:
 
     # Third read: No new data, should return None or empty result
     start_version_3 = store.get_start_version(dataset_name)
-    assert (
-        start_version_3 == START_VERSION_AFTER_TWO_READS
-    ), "Start version should be last_version + 1"
+    assert start_version_3 == START_VERSION_AFTER_TWO_READS, (
+        "Start version should be last_version + 1"
+    )
 
     # Read with no new changes
     options3 = CdfReadOptions(
@@ -315,9 +315,9 @@ def test_cursor_recovery_after_corruption(tmp_path: Path) -> None:
     # Verify recovery succeeded
     loaded_after = store.load_cursor(dataset_name)
     assert loaded_after is not None, "Recovered cursor should load"
-    assert (
-        loaded_after.last_version == RECOVERY_CURSOR_VERSION
-    ), "Recovered cursor should have new version"
+    assert loaded_after.last_version == RECOVERY_CURSOR_VERSION, (
+        "Recovered cursor should have new version"
+    )
 
     # Verify normal operations continue
     updated = store.update_version(dataset_name, UPDATED_CURSOR_VERSION)

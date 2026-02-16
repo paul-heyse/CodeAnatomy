@@ -62,6 +62,11 @@ _SEMANTIC_VERSION_PARTS = 3
 
 
 def normalize_semantic_version(value: object) -> tuple[int, int, int] | None:
+    """Normalize a value to a (major, minor, patch) semantic version tuple.
+
+    Returns:
+        tuple[int, int, int] | None: Normalized version or None if invalid.
+    """
     if not isinstance(value, tuple) or len(value) != _SEMANTIC_VERSION_PARTS:
         return None
     if not all(isinstance(part, int) and not isinstance(part, bool) for part in value):

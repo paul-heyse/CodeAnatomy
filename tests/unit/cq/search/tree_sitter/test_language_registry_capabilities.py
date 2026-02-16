@@ -28,17 +28,21 @@ def test_load_tree_sitter_capabilities_detects_runtime_methods(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Detect parser and cursor feature availability from runtime classes."""
+
     class _Cursor:
         def copy(self) -> _Cursor:
             return self
 
-        def reset(self, _node: object) -> None:
+        @staticmethod
+        def reset(_node: object) -> None:
             return None
 
-        def reset_to(self, _cursor: object) -> None:
+        @staticmethod
+        def reset_to(_cursor: object) -> None:
             return None
 
-        def goto_first_child_for_byte(self, _byte_offset: int) -> int | None:
+        @staticmethod
+        def goto_first_child_for_byte(_byte_offset: int) -> int | None:
             return 0
 
     class _Root:

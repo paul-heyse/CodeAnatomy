@@ -13,7 +13,8 @@
     "function: resolve",
     "module: AsyncService",
     "module: AsyncService",
-    "class: AsyncService"
+    "class: AsyncService",
+    "Query pack lint failed: 2 errors"
   ],
   "sections": [
     {
@@ -81,6 +82,13 @@
         "./tests/e2e/cq/_golden_workspace/python_project/app/services.py: 1 matches"
       ],
       "title": "search_0: Hot Files"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Query pack lint failed: 2 errors"
+      ],
+      "title": "search_0: Cross-Language Diagnostics"
     }
   ],
   "summary": {

@@ -31,7 +31,7 @@ def test_cache_policy_returns_valid_instance(tmp_path: Path) -> None:
     """Test that cache_policy returns a valid CqCachePolicyV1."""
     policy = SettingsFactory.cache_policy(root=tmp_path)
     assert isinstance(policy, CqCachePolicyV1)
-    assert policy.directory != ""
+    assert policy.directory
 
 
 def test_parser_controls_returns_valid_instance() -> None:
@@ -139,4 +139,4 @@ def test_cache_runtime_tuning_derives_from_policy(tmp_path: Path) -> None:
 
     # Verify tuning is derived from policy
     assert tuning.cull_limit == policy.cull_limit or tuning.cull_limit > 0
-    assert tuning.eviction_policy == policy.eviction_policy or tuning.eviction_policy != ""
+    assert tuning.eviction_policy == policy.eviction_policy or tuning.eviction_policy

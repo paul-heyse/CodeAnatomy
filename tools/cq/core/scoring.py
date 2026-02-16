@@ -6,9 +6,13 @@ Provides standardized scoring for cq findings based on impact and confidence sig
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from tools.cq.core.schema import DetailPayload, ScoreDetails
 from tools.cq.core.structs import CqStruct
+
+if TYPE_CHECKING:
+    from tools.cq.macros.contracts import ScoringDetailsV1
 
 # Bucket thresholds
 _HIGH_THRESHOLD = 0.7
@@ -204,7 +208,7 @@ def build_detail_payload(
     *,
     data: Mapping[str, object] | None = None,
     score: ScoreDetails | None = None,
-    scoring: Mapping[str, object] | None = None,
+    scoring: Mapping[str, object] | ScoringDetailsV1 | None = None,
     kind: str | None = None,
 ) -> DetailPayload:
     """Construct a DetailPayload from scoring signals and data.
@@ -224,9 +228,19 @@ def build_detail_payload(
     )
 
 
-def _score_details_from_mapping(scoring: Mapping[str, object]) -> ScoreDetails | None:
+def _score_details_from_mapping(
+    scoring: Mapping[str, object] | ScoringDetailsV1,
+) -> ScoreDetails | None:
+    import msgspec
+
     if not scoring:
         return None
+
+    # Convert ScoringDetailsV1 to dict if needed
+    if isinstance(scoring, msgspec.Struct):
+        scoring_dict = msgspec.structs.asdict(scoring)
+    else:
+        scoring_dict = scoring
 
     def _coerce_float(value: object) -> float | None:
         if value is None:
@@ -243,9 +257,9 @@ def _score_details_from_mapping(scoring: Mapping[str, object]) -> ScoreDetails |
         return str(value)
 
     return ScoreDetails(
-        impact_score=_coerce_float(scoring.get("impact_score")),
-        impact_bucket=_coerce_str(scoring.get("impact_bucket")),
-        confidence_score=_coerce_float(scoring.get("confidence_score")),
-        confidence_bucket=_coerce_str(scoring.get("confidence_bucket")),
-        evidence_kind=_coerce_str(scoring.get("evidence_kind")),
+        impact_score=_coerce_float(scoring_dict.get("impact_score")),
+        impact_bucket=_coerce_str(scoring_dict.get("impact_bucket")),
+        confidence_score=_coerce_float(scoring_dict.get("confidence_score")),
+        confidence_bucket=_coerce_str(scoring_dict.get("confidence_bucket")),
+        evidence_kind=_coerce_str(scoring_dict.get("evidence_kind")),
     )

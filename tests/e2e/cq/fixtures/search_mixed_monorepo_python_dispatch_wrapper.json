@@ -3,7 +3,8 @@
     "./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py"
   ],
   "key_findings": [
-    "function: dispatch_wrapper"
+    "function: dispatch_wrapper",
+    "Query pack lint failed: 2 errors"
   ],
   "sections": [
     {
@@ -14,15 +15,14 @@
       "title": "Target Candidates"
     },
     {
-      "count": 7,
+      "count": 6,
       "messages": [
-        "Enclosing Context: 1 (top: @trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or ...)",
-        "Parent Scopes: 2 (top: @trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or ..., from __future__ import annotations\n\nfrom abc import ABC, abstractmethod\nfrom collections.abc import Callable\n\n\ndef tr...)",
+        "Enclosing Context: 1 (top: @trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or LocalBackend()\n    resolver: Callable[[str], str] = active.dispatch\n    return resolver(payload))",
+        "Parent Scopes: 2 (top: @trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or LocalBackend()\n    resolver: Callable[[str], str] = active.dispatch\n    return resolver(payload), from __future__ import annotations\n\nfrom abc import ABC, abstractmethod\nfrom collections.abc import Callable\nfrom typing import override\n\n\ndef trace(label: str) -> Callable[[Callable[..., str]], Callable[..., str]]:\n    def decorate(fn: Callable[..., str]) -> Callable[..., str]:\n        def wrapped(*args: object, **kwargs: object) -> str:\n            _ = label\n            return fn(*args, **kwargs)\n\n        return wrapped\n\n    return decorate\n\n\nclass Backend(ABC):\n    @abstractmethod\n    def dispatch(self, payload: str) -> str:\n        raise NotImplementedError\n\n\nclass LocalBackend(Backend):\n    @override\n    def dispatch(self, payload: str) -> str:\n        return payload.upper()\n\n\n@trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or LocalBackend()\n    resolver: Callable[[str], str] = active.dispatch\n    return resolver(payload)\n\n\ndef make_pipeline(prefix: str) -> Callable[[str], str]:\n    def _inner(value: str) -> str:\n        return f\"{prefix}:{dispatch_wrapper(value)}\"\n\n    return _inner)",
         "Children: 4 (top: dispatch_wrapper, (payload: str, backend: Backend | None = None), str, active = backend or LocalBackend()\n    resolver: Callable[[str], str] = active.dispatch\n    return resolver(payload))",
         "Siblings: 3 (top: @trace(\"runtime\"), LocalBackend, make_pipeline)",
         "Conjunction Peers: 1 (top: @trace(\"runtime\"))",
-        "Callers: 1 (top: dispatch_wrapper(value))",
-        "Callees: 2 (top: LocalBackend, resolver)"
+        "Callees: 2 (top: LocalBackend(), resolver(payload))"
       ],
       "title": "Neighborhood Preview"
     },
@@ -30,15 +30,15 @@
       "count": 2,
       "messages": [
         "function: dispatch_wrapper (1 occurrences) [object_id=obj_1d591aa7c5bd4178092fd052]",
-        "reference: dispatch_wrapper (1 occurrences) [object_id=obj_d35ab55b5fb107e74c81fa1b]"
+        "reference: dispatch_wrapper (1 occurrences) [object_id=obj_bc2e4895c51485355d852bae]"
       ],
       "title": "Resolved Objects"
     },
     {
       "count": 2,
       "messages": [
-        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:30:4 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:30-35) [reference] [object_id=obj_1d591aa7c5bd4178092fd052] [line_id=e01572781dbc4b12c652d1ca]",
-        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:38:27 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:37-40) [reference] [object_id=obj_d35ab55b5fb107e74c81fa1b] [line_id=4c4cebffee73a9ba0018e914]"
+        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:32:4 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:32-37) [reference] [object_id=obj_1d591aa7c5bd4178092fd052] [line_id=79f005e1e2c3e7ffc0c534b1]",
+        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:40:27 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:39-42) [reference] [object_id=obj_bc2e4895c51485355d852bae] [line_id=a45580daf13ad421e760207e]"
       ],
       "title": "Occurrences"
     },
@@ -55,6 +55,13 @@
         "./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py: 2 matches"
       ],
       "title": "Hot Files"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Query pack lint failed: 2 errors"
+      ],
+      "title": "Cross-Language Diagnostics"
     }
   ],
   "summary": {
@@ -80,8 +87,8 @@
           "total": 2
         },
         "callers": {
-          "availability": "full",
-          "total": 1
+          "availability": "unavailable",
+          "total": 0
         },
         "hierarchy_or_scope": {
           "availability": "full",
@@ -95,7 +102,7 @@
       "risk": {
         "counters": {
           "callees": 2,
-          "callers": 1,
+          "callers": 0,
           "forwarding_count": 0,
           "hazard_count": 0
         },
@@ -107,7 +114,7 @@
         "location": {
           "col": 4,
           "file": "tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py",
-          "line": 30
+          "line": 32
         },
         "selection_reason": "top_definition",
         "symbol": "dispatch_wrapper"

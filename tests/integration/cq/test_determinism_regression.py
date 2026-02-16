@@ -7,7 +7,6 @@ which is critical for caching and reproducibility guarantees.
 from __future__ import annotations
 
 import pytest
-
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
@@ -60,19 +59,17 @@ def test_repeated_runs_produce_identical_summary_payload() -> None:
 
     for key in stable_keys:
         if key in summary1 and key in summary2:
-            assert (
-                summary1[key] == summary2[key]
-            ), f"Summary field {key!r} differs: {summary1[key]} != {summary2[key]}"
+            assert summary1[key] == summary2[key], (
+                f"Summary field {key!r} differs: {summary1[key]} != {summary2[key]}"
+            )
 
     # Verify finding counts are identical
-    assert len(result1.key_findings) == len(
-        result2.key_findings
-    ), "Finding counts differ across runs"
+    assert len(result1.key_findings) == len(result2.key_findings), (
+        "Finding counts differ across runs"
+    )
 
     # Verify section counts are identical
-    assert len(result1.sections) == len(
-        result2.sections
-    ), "Section counts differ across runs"
+    assert len(result1.sections) == len(result2.sections), "Section counts differ across runs"
 
 
 @pytest.mark.integration
@@ -109,11 +106,11 @@ def test_pattern_query_determinism() -> None:
 
     for key in stable_keys:
         if key in summary1 and key in summary2:
-            assert (
-                summary1[key] == summary2[key]
-            ), f"Summary field {key!r} differs: {summary1[key]} != {summary2[key]}"
+            assert summary1[key] == summary2[key], (
+                f"Summary field {key!r} differs: {summary1[key]} != {summary2[key]}"
+            )
 
     # Verify finding counts are identical
-    assert len(result1.key_findings) == len(
-        result2.key_findings
-    ), "Pattern query finding counts differ across runs"
+    assert len(result1.key_findings) == len(result2.key_findings), (
+        "Pattern query finding counts differ across runs"
+    )

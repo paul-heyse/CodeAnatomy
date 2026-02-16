@@ -29,7 +29,6 @@ def test_lane_guard_noop_backend() -> None:
     assert marker["entered"]
 
 
-
 def test_publish_once_barrier_executes_function() -> None:
     """Publish-once barrier executes callback exactly once."""
     backend = NoopCacheBackend()
@@ -44,7 +43,6 @@ def test_publish_once_barrier_executes_function() -> None:
         publish_fn=_publish,
     )
     assert counter["value"] == 1
-
 
 
 def test_lane_guard_with_diskcache_backend(tmp_path: Path) -> None:

@@ -10,14 +10,16 @@ from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightTargetV1
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import (
     ExecutePlanRequestV1,
-    FileIntervalIndex,
-    _build_callers_section,
     execute_plan,
 )
 from tools.cq.query.merge import _mark_entity_insight_partial_from_summary
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
+from tools.cq.query.section_builders import (
+    build_callers_section,
+)
 from tools.cq.query.sg_parser import SgRecord
+from tools.cq.utils.interval_index import FileIntervalIndex
 
 
 def _def_record(file: str, name: str, start: int, end: int) -> SgRecord:
@@ -76,7 +78,7 @@ def test_callers_section_respects_file_boundaries() -> None:
     call = _call_record("b.py", 5, "target()")
 
     index = FileIntervalIndex.from_records([target_def, caller_def])
-    section = _build_callers_section([target_def], [call], index, Path())
+    section = build_callers_section([target_def], [call], index, Path())
 
     assert len(section.findings) == 1
     finding = section.findings[0]

@@ -55,7 +55,6 @@ def test_tree_sitter_cache_store_roundtrip(tmp_path: Path) -> None:
     os.environ.pop("CQ_CACHE_DIR", None)
 
 
-
 def test_tree_sitter_cache_store_uses_blob_pointer_for_large_payload(tmp_path: Path) -> None:
     """Store large payloads via blob pointer and read back identical content."""
     close_cq_cache_backend()

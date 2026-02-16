@@ -30,7 +30,8 @@ def test_search_command_in_dir_directory_appends_recursive_glob(
     captured: dict[str, object] = {}
 
     class _FakeSearchService:
-        def execute(self, request: SearchServiceRequest) -> CqResult:
+        @staticmethod
+        def execute(request: SearchServiceRequest) -> CqResult:
             captured["request"] = request
             return _empty_result(argv=["cq", "search"], root=tmp_path)
 
@@ -67,7 +68,8 @@ def test_search_command_in_dir_file_keeps_file_path(
     captured: dict[str, object] = {}
 
     class _FakeSearchService:
-        def execute(self, request: SearchServiceRequest) -> CqResult:
+        @staticmethod
+        def execute(request: SearchServiceRequest) -> CqResult:
             captured["request"] = request
             return _empty_result(argv=["cq", "search"], root=tmp_path)
 
@@ -99,7 +101,8 @@ def test_search_command_forwards_with_neighborhood_flag(
     captured: dict[str, object] = {}
 
     class _FakeSearchService:
-        def execute(self, request: SearchServiceRequest) -> CqResult:
+        @staticmethod
+        def execute(request: SearchServiceRequest) -> CqResult:
             captured["request"] = request
             return _empty_result(argv=["cq", "search"], root=tmp_path)
 

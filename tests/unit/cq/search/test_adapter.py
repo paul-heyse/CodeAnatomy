@@ -130,7 +130,8 @@ def ignored_function():
 class TestFindFilesWithPattern:
     """Test file search with pattern matching."""
 
-    def test_finds_python_files_with_def(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_finds_python_files_with_def(sample_repo: Path) -> None:
         """Test finding Python files containing 'def'."""
         files = find_files_with_pattern(sample_repo, pattern=r"def ")
         file_names = {f.name for f in files}
@@ -139,7 +140,8 @@ class TestFindFilesWithPattern:
         assert "helpers.py" in file_names
         assert "test_module.py" in file_names
 
-    def test_respects_include_globs(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_respects_include_globs(sample_repo: Path) -> None:
         """Test include_globs filters to matching files."""
         files = find_files_with_pattern(
             sample_repo,
@@ -154,7 +156,8 @@ class TestFindFilesWithPattern:
         # Should not include test files
         assert "test_module.py" not in file_names
 
-    def test_respects_exclude_globs(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_respects_exclude_globs(sample_repo: Path) -> None:
         """Test exclude_globs filters out matching files."""
         files = find_files_with_pattern(
             sample_repo,
@@ -170,7 +173,8 @@ class TestFindFilesWithPattern:
         # Should exclude __init__.py (no 'def' anyway) and excluded directory
         assert "ignore_me.py" not in file_names
 
-    def test_combined_include_exclude(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_combined_include_exclude(sample_repo: Path) -> None:
         """Test combining include and exclude globs."""
         files = find_files_with_pattern(
             sample_repo,
@@ -186,7 +190,8 @@ class TestFindFilesWithPattern:
         assert "helpers.py" in file_names
         assert "test_module.py" not in file_names
 
-    def test_pattern_matching(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_pattern_matching(sample_repo: Path) -> None:
         """Test pattern matching in file content."""
         # Find files containing test function definitions
         files = find_files_with_pattern(sample_repo, pattern=r"def test_")
@@ -195,12 +200,14 @@ class TestFindFilesWithPattern:
         # Should not match non-test files
         assert "module_a.py" not in file_names
 
-    def test_empty_result(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_empty_result(sample_repo: Path) -> None:
         """Test search with no matching files."""
         files = find_files_with_pattern(sample_repo, pattern=r"nonexistent_pattern_xyz")
         assert len(files) == 0
 
-    def test_respects_max_files(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_respects_max_files(sample_repo: Path) -> None:
         """Test max_files limit is respected."""
         limits = SearchLimits(max_files=1, max_total_matches=100)
         files = find_files_with_pattern(
@@ -210,9 +217,8 @@ class TestFindFilesWithPattern:
         )
         assert len(files) <= 1
 
-    def test_timeout_returns_empty(
-        self, sample_repo: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    @staticmethod
+    def test_timeout_returns_empty(sample_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test timeout handling returns empty results."""
         from tools.cq.search.rg import adapter as adapter_module
 
@@ -233,7 +239,8 @@ class TestFindFilesWithPattern:
 class TestFindCallCandidates:
     """Test function call candidate detection."""
 
-    def test_finds_function_calls(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_finds_function_calls(sample_repo: Path) -> None:
         """Test finding calls to a function."""
         limits = SearchLimits(max_total_matches=100)
         results = find_call_candidates(
@@ -248,7 +255,8 @@ class TestFindCallCandidates:
         assert "helpers.py" in file_names
         assert "test_module.py" in file_names
 
-    def test_finds_method_calls(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_finds_method_calls(sample_repo: Path) -> None:
         """Test finding method calls."""
         limits = SearchLimits(max_total_matches=100)
         results = find_call_candidates(
@@ -261,7 +269,8 @@ class TestFindCallCandidates:
         assert len(results) >= 1
         assert any(r[0].name == "test_module.py" for r in results)
 
-    def test_respects_limits(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_respects_limits(sample_repo: Path) -> None:
         """Test result limits are respected."""
         limits = SearchLimits(max_total_matches=1)
         results = find_call_candidates(
@@ -277,7 +286,8 @@ class TestFindCallCandidates:
 class TestFindCallers:
     """Test caller location detection."""
 
-    def test_finds_callers(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_finds_callers(sample_repo: Path) -> None:
         """Test finding caller locations."""
         limits = SearchLimits(max_total_matches=100)
         results = find_callers(
@@ -292,7 +302,8 @@ class TestFindCallers:
         assert "helpers.py" in file_names
         assert "test_module.py" in file_names
 
-    def test_caller_result_format(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_caller_result_format(sample_repo: Path) -> None:
         """Test caller result contains expected format (Path, line_number)."""
         limits = SearchLimits(max_total_matches=100)
         results = find_callers(
@@ -307,7 +318,8 @@ class TestFindCallers:
             assert isinstance(line_number, int)
             assert line_number > 0
 
-    def test_respects_limits(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_respects_limits(sample_repo: Path) -> None:
         """Test caller search respects limits."""
         limits = SearchLimits(max_total_matches=1)
         results = find_callers(
@@ -322,7 +334,8 @@ class TestFindCallers:
 class TestSearchContent:
     """Test content search functionality."""
 
-    def test_searches_content(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_searches_content(sample_repo: Path) -> None:
         """Test searching file contents."""
         limits = SearchLimits(max_total_matches=100)
         results = search_content(
@@ -337,7 +350,8 @@ class TestSearchContent:
         assert "module_a.py" in file_names
         assert "helpers.py" in file_names
 
-    def test_result_format(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_result_format(sample_repo: Path) -> None:
         """Test search results have correct format."""
         limits = SearchLimits(max_total_matches=100)
         results = search_content(
@@ -355,7 +369,8 @@ class TestSearchContent:
             assert isinstance(content, str)
             assert "process_data" in content
 
-    def test_respects_file_globs(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_respects_file_globs(sample_repo: Path) -> None:
         """Test file_globs filters content search."""
         limits = SearchLimits(max_total_matches=100)
         results = search_content(
@@ -370,7 +385,8 @@ class TestSearchContent:
         assert "helpers.py" in file_names
         assert "module_a.py" not in file_names
 
-    def test_respects_limits(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_respects_limits(sample_repo: Path) -> None:
         """Test content search respects result limits."""
         limits = SearchLimits(max_total_matches=2)
         results = search_content(
@@ -381,7 +397,8 @@ class TestSearchContent:
 
         assert len(results) <= MAX_GLOB_FILTERED_RESULTS
 
-    def test_empty_result(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_empty_result(sample_repo: Path) -> None:
         """Test search with no matches."""
         limits = SearchLimits(max_total_matches=100)
         results = search_content(
@@ -396,7 +413,8 @@ class TestSearchContent:
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
-    def test_nonexistent_directory(self) -> None:
+    @staticmethod
+    def test_nonexistent_directory() -> None:
         """Test search in non-existent directory."""
         nonexistent = Path("/nonexistent/path")
         limits = SearchLimits(max_total_matches=100)
@@ -412,7 +430,8 @@ class TestEdgeCases:
         )
         assert len(results) == 0
 
-    def test_empty_directory(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_empty_directory(tmp_path: Path) -> None:
         """Test search in empty directory."""
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
@@ -428,7 +447,8 @@ class TestEdgeCases:
         )
         assert len(results) == 0
 
-    def test_special_characters_in_pattern(self, sample_repo: Path) -> None:
+    @staticmethod
+    def test_special_characters_in_pattern(sample_repo: Path) -> None:
         """Test patterns with special regex characters."""
         limits = SearchLimits(max_total_matches=100)
 
@@ -440,6 +460,7 @@ class TestEdgeCases:
         )
         assert len(results) > 0
 
+    @staticmethod
     @pytest.mark.parametrize(
         "glob_pattern",
         [
@@ -449,7 +470,6 @@ class TestEdgeCases:
         ],
     )
     def test_various_glob_patterns(
-        self,
         sample_repo: Path,
         glob_pattern: str,
     ) -> None:

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from tools.cq.core.enrichment_facts import (
     additional_language_payload,
@@ -16,11 +15,9 @@ from tools.cq.core.enrichment_facts import (
     resolve_fact_context,
     resolve_primary_language_payload,
 )
+from tools.cq.core.schema import Finding
 from tools.cq.core.serialization import to_builtins
 from tools.cq.search.objects.render import is_applicability_not_applicable
-
-if TYPE_CHECKING:
-    from tools.cq.core.schema import Finding
 
 MAX_FACT_VALUE_ITEMS = 8
 MAX_FACT_MAPPING_SCALAR_PAIRS = 4
@@ -48,7 +45,7 @@ def extract_enrichment_payload(finding: Finding) -> dict[str, object] | None:
     finding : Finding
         Finding to extract enrichment from.
 
-    Returns
+    Returns:
     -------
     dict[str, object] | None
         Enrichment payload, or None if not present.
@@ -77,7 +74,7 @@ def extract_compact_details_payload(finding: Finding) -> dict[str, object] | Non
     finding : Finding
         Finding to extract details from.
 
-    Returns
+    Returns:
     -------
     dict[str, object] | None
         Compact details payload, or None if empty.
@@ -271,7 +268,7 @@ def format_enrichment_facts(payload: dict[str, object]) -> list[str]:
     payload : dict[str, object]
         Enrichment payload to format.
 
-    Returns
+    Returns:
     -------
     list[str]
         Markdown-formatted fact lines.

@@ -18,12 +18,10 @@ def test_struct_bases_are_msgspec_contract_types() -> None:
     assert issubclass(CqCacheStruct, msgspec.Struct)
 
 
-
 def test_cache_contract_rejects_unknown_fields() -> None:
     """Reject unknown keys when decoding cache record contracts."""
     with pytest.raises(msgspec.ValidationError):
         msgspec.convert({"record": "def", "extra": 1}, type=SgRecordCacheV1)
-
 
 
 def test_cache_policy_rejects_unknown_fields() -> None:
@@ -42,7 +40,6 @@ def test_cache_policy_rejects_unknown_fields() -> None:
         )
 
 
-
 def test_meta_constraints_reject_invalid_numeric_values() -> None:
     """Enforce numeric lower bounds and guard ranges in shared contracts."""
     with pytest.raises(msgspec.ValidationError):
@@ -55,7 +52,6 @@ def test_meta_constraints_reject_invalid_numeric_values() -> None:
         msgspec.convert({"record": "def", "start_line": -1}, type=SgRecordCacheV1)
 
 
-
 def test_unset_fields_are_omitted_by_default() -> None:
     """Default serialization omits unset optional fields."""
     diag_payload = msgspec.to_builtins(CrossLanguageDiagnostic())
@@ -64,14 +60,12 @@ def test_unset_fields_are_omitted_by_default() -> None:
     assert "primary_symbol" not in overview_payload
 
 
-
 def test_explicit_none_is_distinct_from_unset() -> None:
     """Distinguish explicit ``None`` fields from omitted optional fields."""
     diag_payload = msgspec.to_builtins(CrossLanguageDiagnostic(feature=None))
     overview_payload = msgspec.to_builtins(PythonSemanticOverview(primary_symbol=None))
     assert diag_payload["feature"] is None
     assert overview_payload["primary_symbol"] is None
-
 
 
 def test_query_cache_round_trip_uses_typed_contracts() -> None:
@@ -95,7 +89,6 @@ def test_query_cache_round_trip_uses_typed_contracts() -> None:
     decoded = msgspec.json.decode(encoded, type=QueryEntityScanCacheV1)
     assert decoded.records[0].record == "def"
     assert decoded.records[0].file == "src/mod.py"
-
 
 
 def test_type_info_exposes_contract_shape_and_constraints() -> None:

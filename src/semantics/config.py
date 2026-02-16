@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from core_types import IdentifierStr
-from semantics.column_types import TYPE_PATTERNS, ColumnType
+from semantics.column_types import ColumnType
 from serde_msgspec import StructBaseStrict, to_builtins
 
 if TYPE_CHECKING:
@@ -24,9 +24,24 @@ class SemanticTypePatternSpec(StructBaseStrict, frozen=True):
     column_type: ColumnType
 
 
+_LEGACY_DEFAULT_TYPE_PATTERNS: tuple[tuple[str, ColumnType], ...] = (
+    (r"^(path|file_path|document_path)$", ColumnType.PATH),
+    (r"^file_id$", ColumnType.FILE_ID),
+    (r"^bstart$|_bstart$|^byte_start$|_byte_start$", ColumnType.SPAN_START),
+    (r"^bend$|_bend$|^byte_end$|_byte_end$|^byte_len$|_byte_len$", ColumnType.SPAN_END),
+    (r"_id$", ColumnType.ENTITY_ID),
+    (r"^(symbol|qname|qualified_name)$", ColumnType.SYMBOL),
+    (r"^name$|_name$|_text$", ColumnType.TEXT),
+    (r"^(confidence|score|origin|resolution_method)$", ColumnType.EVIDENCE),
+)
+
 _DEFAULT_TYPE_PATTERN_SPECS: tuple[SemanticTypePatternSpec, ...] = tuple(
-    SemanticTypePatternSpec(pattern=pattern.pattern, column_type=col_type)
-    for pattern, col_type in TYPE_PATTERNS
+    SemanticTypePatternSpec(pattern=pattern, column_type=col_type)
+    for pattern, col_type in _LEGACY_DEFAULT_TYPE_PATTERNS
+)
+
+_DEFAULT_RUNTIME_TYPE_PATTERNS: tuple[tuple[re.Pattern[str], ColumnType], ...] = tuple(
+    (re.compile(pattern), col_type) for pattern, col_type in _LEGACY_DEFAULT_TYPE_PATTERNS
 )
 
 _DEFAULT_DISALLOW_ENTITY_ID_PATTERNS: tuple[str, ...] = (
@@ -49,7 +64,7 @@ class SemanticConfigSpec(StructBaseStrict, frozen=True):
 class SemanticConfig:
     """Configuration overrides for semantic schema inference."""
 
-    type_patterns: tuple[tuple[re.Pattern[str], ColumnType], ...] = TYPE_PATTERNS
+    type_patterns: tuple[tuple[re.Pattern[str], ColumnType], ...] = _DEFAULT_RUNTIME_TYPE_PATTERNS
     table_overrides: dict[IdentifierStr, dict[ColumnType, str]] = field(default_factory=dict)
     spec_registry: dict[str, SemanticTableSpec] | None = None
     disallow_entity_id_patterns: tuple[re.Pattern[str], ...] = (

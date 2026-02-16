@@ -45,7 +45,7 @@ def test_rg_prefilter_files_fail_open_on_runner_error(
     file_path = tmp_path / "a.py"
     file_path.write_text("print('x')\n", encoding="utf-8")
 
-    monkeypatch.setattr(prefilter, "run_rg_files_with_matches", lambda **_kwargs: None)
+    monkeypatch.setattr(prefilter, "run_rg_files_with_matches", lambda _request: None)
 
     files = prefilter.rg_prefilter_files(
         tmp_path,

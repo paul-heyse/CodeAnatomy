@@ -23,7 +23,8 @@ NTH_CHILD_POSITION = 2
 class TestPatternSpec:
     """Tests for PatternSpec dataclass."""
 
-    def test_basic_pattern(self) -> None:
+    @staticmethod
+    def test_basic_pattern() -> None:
         """Create basic pattern spec."""
         spec = PatternSpec(pattern="def $F($$$)")
         assert spec.pattern == "def $F($$$)"
@@ -31,7 +32,8 @@ class TestPatternSpec:
         assert spec.selector is None
         assert spec.strictness == "smart"
 
-    def test_pattern_with_context(self) -> None:
+    @staticmethod
+    def test_pattern_with_context() -> None:
         """Create pattern spec with context."""
         spec = PatternSpec(
             pattern="def $F($$$)",
@@ -39,7 +41,8 @@ class TestPatternSpec:
         )
         assert spec.context == "class $C"
 
-    def test_pattern_with_strictness(self) -> None:
+    @staticmethod
+    def test_pattern_with_strictness() -> None:
         """Create pattern spec with custom strictness."""
         spec = PatternSpec(
             pattern="def $F($$$)",
@@ -51,7 +54,8 @@ class TestPatternSpec:
 class TestPatternQueryParsing:
     """Tests for parsing pattern queries."""
 
-    def test_simple_pattern(self) -> None:
+    @staticmethod
+    def test_simple_pattern() -> None:
         """Parse simple pattern query."""
         query = parse_query("pattern='def $F($$$)'")
         assert query.is_pattern_query
@@ -59,31 +63,36 @@ class TestPatternQueryParsing:
         assert query.pattern_spec.pattern == "def $F($$$)"
         assert query.entity is None
 
-    def test_pattern_with_strictness(self) -> None:
+    @staticmethod
+    def test_pattern_with_strictness() -> None:
         """Parse pattern query with strictness."""
         query = parse_query("pattern='getattr($X, $Y)' strictness=ast")
         assert query.pattern_spec is not None
         assert query.pattern_spec.strictness == "ast"
 
-    def test_pattern_with_context(self) -> None:
+    @staticmethod
+    def test_pattern_with_context() -> None:
         """Parse pattern query with context."""
         query = parse_query("pattern='def $F($$$)' context='class $C'")
         assert query.pattern_spec is not None
         assert query.pattern_spec.context == "class $C"
 
-    def test_pattern_with_scope(self) -> None:
+    @staticmethod
+    def test_pattern_with_scope() -> None:
         """Parse pattern query with scope constraints."""
         query = parse_query("pattern='def $F($$$)' in=src/")
         assert query.pattern_spec is not None
         assert query.scope.in_dir == "src/"
 
-    def test_pattern_with_limit(self) -> None:
+    @staticmethod
+    def test_pattern_with_limit() -> None:
         """Parse pattern query with limit."""
         query = parse_query(f"pattern='$X = getattr($Y, $Z)' limit={PATTERN_LIMIT}")
         assert query.pattern_spec is not None
         assert query.limit == PATTERN_LIMIT
 
-    def test_pattern_with_double_quotes(self) -> None:
+    @staticmethod
+    def test_pattern_with_double_quotes() -> None:
         """Parse pattern query with double-quoted value."""
         query = parse_query('pattern="def $F($$$)"')
         assert query.pattern_spec is not None
@@ -93,19 +102,22 @@ class TestPatternQueryParsing:
 class TestPatternQueryIR:
     """Tests for pattern query IR construction."""
 
-    def test_pattern_query_is_pattern(self) -> None:
+    @staticmethod
+    def test_pattern_query_is_pattern() -> None:
         """Pattern query should report is_pattern_query=True."""
         query = Query(
             pattern_spec=PatternSpec(pattern="def $F($$$)"),
         )
         assert query.is_pattern_query
 
-    def test_entity_query_not_pattern(self) -> None:
+    @staticmethod
+    def test_entity_query_not_pattern() -> None:
         """Entity query should report is_pattern_query=False."""
         query = Query(entity="function")
         assert not query.is_pattern_query
 
-    def test_cannot_have_both_entity_and_pattern(self) -> None:
+    @staticmethod
+    def test_cannot_have_both_entity_and_pattern() -> None:
         """Query cannot specify both entity and pattern_spec."""
         with pytest.raises(ValueError, match="cannot specify both"):
             Query(
@@ -113,7 +125,8 @@ class TestPatternQueryIR:
                 pattern_spec=PatternSpec(pattern="def $F($$$)"),
             )
 
-    def test_must_have_entity_or_pattern(self) -> None:
+    @staticmethod
+    def test_must_have_entity_or_pattern() -> None:
         """Query must specify either entity or pattern_spec."""
         with pytest.raises(ValueError, match="must specify either"):
             Query()
@@ -122,7 +135,8 @@ class TestPatternQueryIR:
 class TestPatternQueryPlanning:
     """Tests for pattern query compilation."""
 
-    def test_compile_pattern_query(self) -> None:
+    @staticmethod
+    def test_compile_pattern_query() -> None:
         """Compile pattern query produces ast-grep rules."""
         query = Query(
             pattern_spec=PatternSpec(pattern="def $F($$$)"),
@@ -132,7 +146,8 @@ class TestPatternQueryPlanning:
         assert len(plan.sg_rules) == 1
         assert plan.sg_rules[0].pattern == "def $F($$$)"
 
-    def test_pattern_with_context_in_rule(self) -> None:
+    @staticmethod
+    def test_pattern_with_context_in_rule() -> None:
         """Pattern with context produces rule with context."""
         query = Query(
             pattern_spec=PatternSpec(
@@ -143,7 +158,8 @@ class TestPatternQueryPlanning:
         plan = compile_query(query)
         assert plan.sg_rules[0].context == "class $C"
 
-    def test_compile_pattern_query_threads_composite_and_nth_child(self) -> None:
+    @staticmethod
+    def test_compile_pattern_query_threads_composite_and_nth_child() -> None:
         """Pattern-plan compilation should preserve composite + nthChild."""
         query = parse_query(
             "pattern='print($A)' any='print($A),print($B)' "
@@ -161,18 +177,21 @@ class TestPatternQueryPlanning:
 class TestAstGrepRule:
     """Tests for AstGrepRule dataclass."""
 
-    def test_basic_rule(self) -> None:
+    @staticmethod
+    def test_basic_rule() -> None:
         """Create basic ast-grep rule."""
         rule = AstGrepRule(pattern="def $F($$$)")
         assert rule.pattern == "def $F($$$)"
 
-    def test_rule_to_yaml_dict(self) -> None:
+    @staticmethod
+    def test_rule_to_yaml_dict() -> None:
         """Convert rule to YAML dict."""
         rule = AstGrepRule(pattern="def $F($$$)")
         yaml_dict = rule.to_yaml_dict()
         assert yaml_dict["pattern"] == "def $F($$$)"
 
-    def test_rule_with_inside(self) -> None:
+    @staticmethod
+    def test_rule_with_inside() -> None:
         """Rule with inside constraint."""
         rule = AstGrepRule(
             pattern="def $F($$$)",
@@ -183,7 +202,8 @@ class TestAstGrepRule:
         inside = cast("Mapping[str, object]", yaml_dict["inside"])
         assert inside["pattern"] == "class $C"
 
-    def test_rule_with_stop_by(self) -> None:
+    @staticmethod
+    def test_rule_with_stop_by() -> None:
         """Rule with stop-by mode."""
         rule = AstGrepRule(
             pattern="def $F($$$)",
@@ -194,7 +214,8 @@ class TestAstGrepRule:
         inside = cast("Mapping[str, object]", yaml_dict["inside"])
         assert inside["stopBy"] == "end"
 
-    def test_rule_with_strictness(self) -> None:
+    @staticmethod
+    def test_rule_with_strictness() -> None:
         """Rule with custom strictness."""
         rule = AstGrepRule(
             pattern="def $F($$$)",
@@ -203,7 +224,8 @@ class TestAstGrepRule:
         yaml_dict = rule.to_yaml_dict()
         assert yaml_dict["strictness"] == "ast"
 
-    def test_rule_with_has(self) -> None:
+    @staticmethod
+    def test_rule_with_has() -> None:
         """Rule with has constraint."""
         rule = AstGrepRule(
             pattern="class $C($$$)",

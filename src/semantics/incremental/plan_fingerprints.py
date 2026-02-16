@@ -85,7 +85,7 @@ def read_plan_snapshots(
     if not path.exists():
         return {}
     resolved = context.resolve_storage(table_uri=str(path))
-    version = context.runtime.profile.delta_ops.delta_service().table_version(
+    version = context.runtime.delta_service().table_version(
         path=str(path),
         storage_options=resolved.storage_options,
         log_storage_options=resolved.log_storage_options,

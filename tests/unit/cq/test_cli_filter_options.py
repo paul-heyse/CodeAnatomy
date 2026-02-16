@@ -18,12 +18,14 @@ CLI_LIMIT = 25
 class TestFilterOptionsConversion:
     """Tests for converting filter params into CommonFilters."""
 
-    def test_empty_filters(self) -> None:
+    @staticmethod
+    def test_empty_filters() -> None:
         """Test building filters with all defaults."""
         filters = options_from_params(FilterParams(), type_=CommonFilters)
         assert not filters.has_filters
 
-    def test_include_patterns(self) -> None:
+    @staticmethod
+    def test_include_patterns() -> None:
         """Test building filters with include patterns."""
         filters = options_from_params(
             FilterParams(include=["src/", "tools/"]),
@@ -31,7 +33,8 @@ class TestFilterOptionsConversion:
         )
         assert filters.include == ["src/", "tools/"]
 
-    def test_exclude_patterns(self) -> None:
+    @staticmethod
+    def test_exclude_patterns() -> None:
         """Test building filters with exclude patterns."""
         filters = options_from_params(
             FilterParams(exclude=["tests/", "docs/"]),
@@ -39,7 +42,8 @@ class TestFilterOptionsConversion:
         )
         assert filters.exclude == ["tests/", "docs/"]
 
-    def test_limit(self) -> None:
+    @staticmethod
+    def test_limit() -> None:
         """Test building filters with limit."""
         filters = options_from_params(FilterParams(limit=DEFAULT_LIMIT), type_=CommonFilters)
         assert filters.limit == DEFAULT_LIMIT
@@ -48,7 +52,8 @@ class TestFilterOptionsConversion:
 class TestFilterOptionsFromCLI:
     """Tests for filter options parsed from CLI."""
 
-    def test_include_repeated_flag(self) -> None:
+    @staticmethod
+    def test_include_repeated_flag() -> None:
         """Test include with repeated flags."""
         _cmd, bound, _extra = app.parse_args(
             [
@@ -63,7 +68,8 @@ class TestFilterOptionsFromCLI:
         opts = bound.kwargs["opts"]
         assert opts.include == ["src/", "tools/"]
 
-    def test_include_consume_multiple_tokens(self) -> None:
+    @staticmethod
+    def test_include_consume_multiple_tokens() -> None:
         """Test include parsing with consume_multiple token lists."""
         _cmd, bound, _extra = app.parse_args(
             [
@@ -80,19 +86,22 @@ class TestFilterOptionsFromCLI:
         assert opts.include == ["src/", "tools/"]
         assert opts.exclude == ["tests/"]
 
-    def test_limit_from_cli(self) -> None:
+    @staticmethod
+    def test_limit_from_cli() -> None:
         """Test limit parsed from CLI."""
         _cmd, bound, _extra = app.parse_args(["calls", "foo", "--limit", str(CLI_LIMIT)])
         opts = bound.kwargs["opts"]
         assert opts.limit == CLI_LIMIT
 
-    def test_impact_filter_flag(self) -> None:
+    @staticmethod
+    def test_impact_filter_flag() -> None:
         """Test --impact flag."""
         _cmd, bound, _extra = app.parse_args(["calls", "foo", "--impact", "high,med"])
         opts = bound.kwargs["opts"]
         assert [str(value) for value in opts.impact] == ["high", "med"]
 
-    def test_impact_filter_multi_token(self) -> None:
+    @staticmethod
+    def test_impact_filter_multi_token() -> None:
         """Test --impact supports multiple tokens after one flag."""
         _cmd, bound, _extra = app.parse_args(
             ["calls", "foo", "--impact", "high", "med", "--confidence", "high"]

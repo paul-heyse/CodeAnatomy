@@ -47,6 +47,7 @@ from tools.cq.search.tree_sitter.core.infrastructure import run_file_lanes_paral
 
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.contracts import SmartSearchContext
+    from tools.cq.search.pipeline.smart_search_types import _PythonSemanticPrefetchResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +189,7 @@ def _candidate_phase(
     lang: QueryLanguage,
     mode: QueryMode,
     scope: _PartitionScopeContext,
-) -> tuple[list[object], object, str]:
+) -> tuple[list[RawMatch], SearchStats, str]:
     namespace = "search_candidates"
     cache_enabled = is_namespace_cache_enabled(policy=scope.policy, namespace=namespace)
     ttl_seconds = resolve_namespace_ttl_seconds(policy=scope.policy, namespace=namespace)
@@ -254,14 +255,11 @@ def _candidate_payload_from_cache(
     ctx: SmartSearchContext,
     lang: QueryLanguage,
     mode: QueryMode,
-) -> tuple[list[object], object, str, bool]:
+) -> tuple[list[RawMatch], SearchStats, str, bool]:
     payload = decode_fragment_payload(cached, type_=SearchCandidatesCacheV1)
     if payload is not None:
         try:
-            raw_matches = [
-                msgspec.convert(item, type=RawMatch)
-                for item in payload.raw_matches
-            ]
+            raw_matches = [msgspec.convert(item, type=RawMatch) for item in payload.raw_matches]
             stats = msgspec.convert(payload.stats, type=SearchStats)
         except (RuntimeError, TypeError, ValueError):
             record_cache_decode_failure(namespace="search_candidates")
@@ -301,7 +299,7 @@ def _enrichment_phase(
     lang: QueryLanguage,
     raw_matches: list[Any],
     scope: _PartitionScopeContext,
-) -> list[object]:
+) -> list[EnrichedMatch]:
     namespace = "search_enrichment"
     context = _EnrichmentCacheContext(
         cache=scope.cache,
@@ -333,9 +331,7 @@ def _enrichment_phase(
             enriched_results=enriched_results,
             context=context,
         )
-    return [
-        match for match in enriched_results if isinstance(match, EnrichedMatch)
-    ]
+    return [match for match in enriched_results if isinstance(match, EnrichedMatch)]
 
 
 def _probe_enrichment_cache(
@@ -448,9 +444,7 @@ def _classify_enrichment_misses(
     batches = list(partitioned.values())
     from tools.cq.search.pipeline.smart_search import MAX_SEARCH_CLASSIFY_WORKERS
 
-    workers = min(
-        len(batches), max(1, int(MAX_SEARCH_CLASSIFY_WORKERS))
-    )
+    workers = min(len(batches), max(1, int(MAX_SEARCH_CLASSIFY_WORKERS)))
     if workers <= 1:
         return _classify_enrichment_miss_batch(
             _EnrichmentMissTask(
@@ -527,20 +521,20 @@ def _classify_enrichment_miss_batch(
 
 def _resolve_prefetch_result(
     prefetch_future: Future[object] | None,
-) -> object | None:
+) -> _PythonSemanticPrefetchResult | None:
     if prefetch_future is None:
         return None
     try:
-        return prefetch_future.result()
+        return cast("_PythonSemanticPrefetchResult | None", prefetch_future.result())
     except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
         from tools.cq.search.pipeline.smart_search_telemetry import (
             new_python_semantic_telemetry,
         )
-        from tools.cq.search.pipeline.smart_search_types import _PythonSemanticPrefetchResult
-
-        return _PythonSemanticPrefetchResult(
-            telemetry=new_python_semantic_telemetry()
+        from tools.cq.search.pipeline.smart_search_types import (
+            _PythonSemanticPrefetchResult as _PrefetchResult,
         )
+
+        return _PrefetchResult(telemetry=new_python_semantic_telemetry())
 
 
 __all__ = ["run_search_partition"]

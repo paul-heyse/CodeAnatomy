@@ -187,7 +187,7 @@ def find_call_candidates(
         return []
     limits = limits or DEFAULT
     symbol = function_name.rsplit(".", maxsplit=1)[-1]
-    pattern = rf"\b{re.escape(symbol)}\s*\("
+    pattern = rf"{re.escape(symbol)}\s*\("
     try:
         proc = search_sync_with_timeout(
             run_rg_json,
@@ -196,7 +196,7 @@ def find_call_candidates(
                 "request": RgRunRequest(
                     root=root,
                     pattern=pattern,
-                    mode=QueryMode.REGEX,
+                    mode=QueryMode.IDENTIFIER,
                     lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
                     include_globs=[],
                     exclude_globs=[],

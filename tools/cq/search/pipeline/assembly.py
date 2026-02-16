@@ -14,8 +14,8 @@ from tools.cq.core.cache import (
 )
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.run_context import RunContext
-from tools.cq.core.schema import Anchor, CqResult, Finding, Section, assign_result_finding_ids, ms
-from tools.cq.query.language import QueryLanguage, expand_language_scope
+from tools.cq.core.schema import Anchor, CqResult, Finding, Section, assign_result_finding_ids
+from tools.cq.query.language import QueryLanguage
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime
 from tools.cq.search.pipeline.classifier import get_sg_root
 from tools.cq.search.pipeline.contracts import SmartSearchContext
@@ -28,7 +28,6 @@ from tools.cq.search.pipeline.smart_search_types import (
     _NeighborhoodPreviewInputs,
     _SearchAssemblyInputs,
 )
-from tools.cq.search.semantic.diagnostics import diagnostics_to_summary_payload
 
 if TYPE_CHECKING:
     from tools.cq.core.front_door_insight import (
@@ -61,7 +60,7 @@ def _normalize_neighborhood_file_path(path: str) -> str:
     path
         File path string to normalize.
 
-    Returns
+    Returns:
     -------
     str
         Normalized POSIX path.
@@ -80,7 +79,7 @@ def _normalize_target_candidate_kind(kind: str | None) -> str:
     kind
         Kind string from object reference.
 
-    Returns
+    Returns:
     -------
     str
         Normalized kind identifier.
@@ -113,7 +112,7 @@ def _build_object_candidate_finding(
     representative
         Representative match for this object (if available).
 
-    Returns
+    Returns:
     -------
     Finding
         Target candidate finding.
@@ -164,7 +163,7 @@ def _collect_definition_candidates(
     object_runtime
         Object resolution runtime with resolved view.
 
-    Returns
+    Returns:
     -------
     tuple[list[EnrichedMatch], list[Finding]]
         Definition matches and candidate findings.
@@ -228,7 +227,7 @@ def _resolve_primary_target_match(
     enriched_matches
         All enriched matches.
 
-    Returns
+    Returns:
     -------
     EnrichedMatch | None
         Primary target match if resolved.
@@ -265,7 +264,7 @@ def _ast_grep_prefilter_scope_paths(
     lang
         Language for ast-grep root check.
 
-    Returns
+    Returns:
     -------
     tuple[Path, ...] | None
         Filtered scope paths or original if filtering yields empty.
@@ -296,7 +295,7 @@ def _candidate_scope_paths_for_neighborhood(
     partition_results
         Language partition results.
 
-    Returns
+    Returns:
     -------
     tuple[Path, ...]
         Ordered scope paths from matched files.
@@ -330,7 +329,7 @@ def _build_structural_neighborhood_preview(
     definition_matches
         Definition matches for language inference.
 
-    Returns
+    Returns:
     -------
     tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]
         Neighborhood, findings, and degradation notes.
@@ -430,7 +429,7 @@ def _build_tree_sitter_neighborhood_preview(
     inputs
         Neighborhood preview input parameters.
 
-    Returns
+    Returns:
     -------
     tuple[InsightNeighborhoodV1 | None, list[str]]
         Insight neighborhood and degradation notes.
@@ -472,7 +471,7 @@ def _build_search_result_key_findings(inputs: _SearchAssemblyInputs) -> list[Fin
     inputs
         Search assembly inputs.
 
-    Returns
+    Returns:
     -------
     list[Finding]
         Key findings for CqResult.
@@ -494,7 +493,7 @@ def _build_search_risk(
     neighborhood
         Insight neighborhood with caller/callee totals.
 
-    Returns
+    Returns:
     -------
     InsightRiskV1 | None
         Risk assessment or None if no neighborhood available.
@@ -524,7 +523,7 @@ def _assemble_search_insight(
     inputs
         Search assembly inputs.
 
-    Returns
+    Returns:
     -------
     FrontDoorInsightV1
         Assembled insight card with semantic enrichment.
@@ -572,7 +571,7 @@ def _prepare_search_assembly_inputs(
     partition_results
         Language partition results.
 
-    Returns
+    Returns:
     -------
     _SearchAssemblyInputs
         Complete assembly inputs for result construction.
@@ -657,7 +656,7 @@ def _assemble_smart_search_result(
     partition_results
         Language partition results.
 
-    Returns
+    Returns:
     -------
     CqResult
         Complete assembled search result.
@@ -707,7 +706,7 @@ def assemble_smart_search_result(
     partition_results
         Language-partitioned search results from discovery phase.
 
-    Returns
+    Returns:
     -------
     CqResult
         Assembled search result with sections and insights.

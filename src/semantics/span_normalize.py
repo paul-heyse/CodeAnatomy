@@ -6,14 +6,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import pyarrow as pa
 from datafusion import col, lit
-from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.udf.expr import udf_expr
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
+from semantics.normalization_helpers import LineIndexJoinOptions, byte_offset_expr, line_index_join
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -182,62 +181,49 @@ def _normalize_via_line_index(
     if not join_on_file_id and not join_on_path:
         msg = "Line-based span normalization requires file_id or path columns."
         raise ValueError(msg)
-
-    start_idx = line_index.select(
-        col("file_id").alias("start_file_id"),
-        col("path").alias("start_path"),
-        col("line_no").alias("start_line_no"),
-        col("line_start_byte").alias("start_line_start_byte"),
-        col("line_text").alias("start_line_text"),
+    joined = line_index_join(
+        df,
+        cfg.line_index_table,
+        options=LineIndexJoinOptions(
+            start_line_col=cfg.start_line_col,
+            end_line_col=cfg.end_line_col,
+            line_index_df=line_index,
+            file_id_col=cfg.file_id_col,
+            path_col=cfg.path_col,
+        ),
     )
-    end_idx = line_index.select(
-        col("file_id").alias("end_file_id"),
-        col("path").alias("end_path"),
-        col("line_no").alias("end_line_no"),
-        col("line_start_byte").alias("end_line_start_byte"),
-        col("line_text").alias("end_line_text"),
-    )
-
-    if join_on_file_id:
-        join_keys = ([cfg.file_id_col, cfg.start_line_col], ["start_file_id", "start_line_no"])
-    else:
-        join_keys = ([cfg.path_col, cfg.start_line_col], ["start_path", "start_line_no"])
-    joined = df.join(start_idx, join_keys=join_keys, how="left", coalesce_duplicate_keys=True)
-
-    if join_on_file_id:
-        join_keys = ([cfg.file_id_col, cfg.end_line_col], ["end_file_id", "end_line_no"])
-    else:
-        join_keys = ([cfg.path_col, cfg.end_line_col], ["end_path", "end_line_no"])
-    joined = joined.join(end_idx, join_keys=join_keys, how="left", coalesce_duplicate_keys=True)
 
     unit_expr = col(cfg.col_unit_col) if cfg.col_unit_col in names else lit("byte")
 
-    def _byte_offset(line_start: str, line_text: str, col_name: str) -> Expr:
-        base = col(line_start).cast(pa.int64())
-        char_col = col(col_name).cast(pa.int64())
-        offset = udf_expr("col_to_byte", col(line_text), char_col, unit_expr)
-        guard = col(line_start).is_null() | col(line_text).is_null() | col(col_name).is_null()
-        if cfg.col_unit_col in names:
-            guard |= col(cfg.col_unit_col).is_null()
-        return f.when(guard, lit(None).cast(pa.int64())).otherwise(base + offset)
-
     joined = joined.with_column(
         "_tmp_bstart",
-        _byte_offset("start_line_start_byte", "start_line_text", cfg.start_col_col),
+        byte_offset_expr(
+            "start_line_start_byte",
+            "start_line_text",
+            cfg.start_col_col,
+            unit_expr,
+            unit_col=cfg.col_unit_col if cfg.col_unit_col in names else None,
+        ),
     )
     joined = joined.with_column(
         "_tmp_bend",
-        _byte_offset("end_line_start_byte", "end_line_text", cfg.end_col_col),
+        byte_offset_expr(
+            "end_line_start_byte",
+            "end_line_text",
+            cfg.end_col_col,
+            unit_expr,
+            unit_col=cfg.col_unit_col if cfg.col_unit_col in names else None,
+        ),
     )
     joined = joined.drop(
         "start_file_id",
         "start_path",
-        "start_line_no",
+        "start_line_no_idx",
         "start_line_start_byte",
         "start_line_text",
         "end_file_id",
         "end_path",
-        "end_line_no",
+        "end_line_no_idx",
         "end_line_start_byte",
         "end_line_text",
     )

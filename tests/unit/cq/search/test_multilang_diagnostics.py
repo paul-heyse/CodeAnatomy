@@ -17,20 +17,23 @@ MULTI_FEATURE_DIAGNOSTIC_COUNT = 2
 class TestCapabilityMatrix:
     """Tests for the capability matrix data structure."""
 
-    def test_matrix_has_expected_keys(self) -> None:
+    @staticmethod
+    def test_matrix_has_expected_keys() -> None:
         """Test that capability matrix contains expected feature keys."""
         assert "entity:function" in CAPABILITY_MATRIX
         assert "entity:decorator" in CAPABILITY_MATRIX
         assert "macro:calls" in CAPABILITY_MATRIX
 
-    def test_matrix_values_are_valid(self) -> None:
+    @staticmethod
+    def test_matrix_values_are_valid() -> None:
         """Test that all capability levels are valid."""
         valid_levels = {"full", "partial", "none"}
         for feature, caps in CAPABILITY_MATRIX.items():
             for lang, level in caps.items():
                 assert level in valid_levels, f"{feature}[{lang}] = {level!r}"
 
-    def test_all_features_have_both_languages(self) -> None:
+    @staticmethod
+    def test_all_features_have_both_languages() -> None:
         """Test that every feature has python and rust entries."""
         for feature, caps in CAPABILITY_MATRIX.items():
             assert "python" in caps, f"{feature} missing python"
@@ -40,7 +43,8 @@ class TestCapabilityMatrix:
 class TestBuildCapabilityDiagnostics:
     """Tests for capability-aware diagnostic building."""
 
-    def test_no_diagnostics_for_full_support(self) -> None:
+    @staticmethod
+    def test_no_diagnostics_for_full_support() -> None:
         """Test that no diagnostics are generated for fully supported features."""
         diags = build_capability_diagnostics(
             features=["entity:function"],
@@ -48,7 +52,8 @@ class TestBuildCapabilityDiagnostics:
         )
         assert diags == []
 
-    def test_diagnostics_for_rust_none(self) -> None:
+    @staticmethod
+    def test_diagnostics_for_rust_none() -> None:
         """Test diagnostic generation for unsupported rust features."""
         diags = build_capability_diagnostics(
             features=["entity:decorator"],
@@ -62,7 +67,8 @@ class TestBuildCapabilityDiagnostics:
         assert isinstance(code, str)
         assert code.startswith("ML_CAP_")
 
-    def test_diagnostics_for_partial_support(self) -> None:
+    @staticmethod
+    def test_diagnostics_for_partial_support() -> None:
         """Test diagnostic generation for partially supported features."""
         diags = build_capability_diagnostics(
             features=["macro:calls"],
@@ -71,7 +77,8 @@ class TestBuildCapabilityDiagnostics:
         assert len(diags) == 1
         assert "partial" in diags[0].message
 
-    def test_no_diagnostics_for_explicit_scope(self) -> None:
+    @staticmethod
+    def test_no_diagnostics_for_explicit_scope() -> None:
         """Test that explicit python scope suppresses diagnostics."""
         diags = build_capability_diagnostics(
             features=["entity:decorator"],
@@ -79,7 +86,8 @@ class TestBuildCapabilityDiagnostics:
         )
         assert diags == []
 
-    def test_diagnostics_for_explicit_rust_scope(self) -> None:
+    @staticmethod
+    def test_diagnostics_for_explicit_rust_scope() -> None:
         """Test diagnostic generation for explicit rust scope with unsupported feature."""
         diags = build_capability_diagnostics(
             features=["entity:decorator"],
@@ -88,7 +96,8 @@ class TestBuildCapabilityDiagnostics:
         assert len(diags) == 1
         assert "rust" in diags[0].message
 
-    def test_unknown_feature_ignored(self) -> None:
+    @staticmethod
+    def test_unknown_feature_ignored() -> None:
         """Test that unknown features are ignored."""
         diags = build_capability_diagnostics(
             features=["unknown_feature"],
@@ -96,7 +105,8 @@ class TestBuildCapabilityDiagnostics:
         )
         assert diags == []
 
-    def test_multiple_features(self) -> None:
+    @staticmethod
+    def test_multiple_features() -> None:
         """Test diagnostic generation for multiple features."""
         diags = build_capability_diagnostics(
             features=["entity:decorator", "scope_filter"],
@@ -108,11 +118,13 @@ class TestBuildCapabilityDiagnostics:
 class TestFeaturesFromMacro:
     """Tests for macro feature extraction."""
 
-    def test_calls_macro(self) -> None:
+    @staticmethod
+    def test_calls_macro() -> None:
         """Test feature extraction for calls macro."""
         assert features_from_macro("calls") == ["macro:calls"]
 
-    def test_impact_macro(self) -> None:
+    @staticmethod
+    def test_impact_macro() -> None:
         """Test feature extraction for impact macro."""
         assert features_from_macro("impact") == ["macro:impact"]
 
@@ -120,7 +132,8 @@ class TestFeaturesFromMacro:
 class TestExistingCrossLanguageDiagnostics:
     """Ensure existing cross_language_hint diagnostics still work."""
 
-    def test_cross_lang_hint_fires(self) -> None:
+    @staticmethod
+    def test_cross_lang_hint_fires() -> None:
         """Test that cross-language hint diagnostic fires when appropriate."""
         diags = build_cross_language_diagnostics(
             lang_scope="auto",
@@ -132,7 +145,8 @@ class TestExistingCrossLanguageDiagnostics:
         assert diags[0].category == "cross_language_hint"
         assert diags[0].details.data["code"] == "ML001"
 
-    def test_cross_lang_hint_no_fire_with_python_matches(self) -> None:
+    @staticmethod
+    def test_cross_lang_hint_no_fire_with_python_matches() -> None:
         """Test that hint doesn't fire when python matches exist."""
         diags = build_cross_language_diagnostics(
             lang_scope="auto",
@@ -142,7 +156,8 @@ class TestExistingCrossLanguageDiagnostics:
         )
         assert diags == []
 
-    def test_cross_lang_hint_no_fire_explicit_scope(self) -> None:
+    @staticmethod
+    def test_cross_lang_hint_no_fire_explicit_scope() -> None:
         """Test that hint doesn't fire for explicit python scope."""
         diags = build_cross_language_diagnostics(
             lang_scope="python",
@@ -156,7 +171,8 @@ class TestExistingCrossLanguageDiagnostics:
 class TestSummaryPayloadHelpers:
     """Tests for summary payload serialization helpers."""
 
-    def test_diagnostics_to_summary_payload(self) -> None:
+    @staticmethod
+    def test_diagnostics_to_summary_payload() -> None:
         """Test diagnostic list conversion into summary payload rows."""
         diags = build_cross_language_diagnostics(
             lang_scope="auto",
@@ -171,7 +187,8 @@ class TestSummaryPayloadHelpers:
         assert first["severity"] == "warning"
         assert "languages" in first
 
-    def test_language_capabilities_shape(self) -> None:
+    @staticmethod
+    def test_language_capabilities_shape() -> None:
         """Test language-capabilities payload top-level shape."""
         caps = build_language_capabilities(lang_scope="auto")
         assert "python" in caps

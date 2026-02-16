@@ -6,7 +6,8 @@
   ],
   "key_findings": [
     "module: mixed_symbol",
-    "function: mixed_symbol"
+    "function: mixed_symbol",
+    "Query pack lint failed: 2 errors"
   ],
   "sections": [
     {
@@ -32,7 +33,7 @@
       "messages": [
         "mixed_symbol: ./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs:1:7 (block ./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs:1-4) [reference] [object_id=obj_9ac8428c113bb515555185bb] [line_id=bf9a3af7faa9e91f568a84d7]",
         "mixed_symbol: ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py:4:22 (block ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py:1-6) [from_import] [object_id=obj_9c2d67ed3d0cab1fad092e63] [line_id=e1a8be4d5ed30d4d7857b2a5]",
-        "mixed_symbol: ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py:6:4 (block ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py:6-9) [reference] [object_id=obj_ed2bc890deb9774064df4c59] [line_id=edc7444b6c3f0200c5bdfd09]"
+        "mixed_symbol: ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py:6:4 (block ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py:6-14) [reference] [object_id=obj_ed2bc890deb9774064df4c59] [line_id=edc7444b6c3f0200c5bdfd09]"
       ],
       "title": "Occurrences"
     },
@@ -59,6 +60,13 @@
         "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py: 1 matches"
       ],
       "title": "Hot Files"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Query pack lint failed: 2 errors"
+      ],
+      "title": "Cross-Language Diagnostics"
     }
   ],
   "summary": {

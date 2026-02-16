@@ -22,12 +22,17 @@ from tools.cq.core.render_enrichment import (
 from tools.cq.core.render_overview import render_code_overview as _render_code_overview
 from tools.cq.core.render_summary import (
     compact_summary_for_rendering,
-    render_insight_card_from_summary as _render_insight_card_from_summary,
-    render_summary as _render_summary,
     render_summary_condensed,
+)
+from tools.cq.core.render_summary import (
+    render_insight_card_from_summary as _render_insight_card_from_summary,
+)
+from tools.cq.core.render_summary import (
+    render_summary as _render_summary,
 )
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
+from tools.cq.core.serialization import to_builtins
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.type_coercion import coerce_float
 from tools.cq.query.language import QueryLanguage
@@ -185,8 +190,6 @@ def _format_context_block(finding: Finding, *, enabled: bool = True) -> list[str
     return [header, f"  ```{lang}", indented_snippet, "  ```"]
 
 
-
-
 def _na(reason: str) -> str:
     return f"N/A — {reason.replace('_', ' ')}"
 
@@ -280,10 +283,6 @@ def _format_resolved_object_occurrences(finding: Finding) -> list[str]:
     return lines
 
 
-
-
-
-
 def _infer_language(finding: Finding) -> QueryLanguage:
     language = finding.details.get("language")
     if language in {"python", "rust"}:
@@ -357,8 +356,6 @@ def _read_line_text(root: Path, rel_path: str, line_number: int) -> str | None:
     if index >= len(lines):
         return None
     return lines[index]
-
-
 
 
 def _compute_render_enrichment_payload_from_anchor(
@@ -628,8 +625,6 @@ def _count_render_enrichment_tasks(
     )
 
 
-
-
 def _compute_render_enrichment_payload(
     finding: Finding,
     *,
@@ -726,8 +721,6 @@ def _format_section(
         lines.append(f"\n_... and {remaining} more_")
 
     return "\n".join(lines)
-
-
 
 
 def _render_key_findings(
@@ -897,8 +890,6 @@ def _render_footer(result: CqResult) -> list[str]:
     return ["---", footer]
 
 
-
-
 def _reorder_sections(sections: list[Section], macro: str) -> list[Section]:
     """Reorder sections according to fixed order for the command.
 
@@ -924,8 +915,6 @@ def _reorder_sections(sections: list[Section], macro: str) -> list[Section]:
     unknown = [s for s in sections if s.title not in order_index]
     known.sort(key=lambda s: order_index[s.title])
     return known + unknown
-
-
 
 
 def render_markdown(result: CqResult) -> str:

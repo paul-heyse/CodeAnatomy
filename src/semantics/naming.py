@@ -6,16 +6,34 @@ Canonical names are now identical to internal view names (no version suffixes).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
+
+
+class HasOutputNameMap(Protocol):
+    """Protocol for manifest-like objects exposing output name mappings."""
+
+    @property
+    def output_name_map(self) -> Mapping[str, str] | None:
+        """Return mapping from internal names to canonical output names."""
+        ...
+
+
+class HasName(Protocol):
+    """Protocol for IR-like objects exposing a ``name`` attribute."""
+
+    @property
+    def name(self) -> str:
+        """Return canonical identifier for a semantic view-like object."""
+        ...
 
 
 def canonical_output_name(
     internal_name: str,
     *,
-    manifest: object | None = None,
+    manifest: HasOutputNameMap | None = None,
 ) -> str:
     """Get canonical output name for an internal view name.
 
@@ -38,10 +56,8 @@ def canonical_output_name(
         The canonical output name.
         Returns the internal name unchanged if no mapping exists.
     """
-    if manifest is not None:
-        output_map: Mapping[str, str] | None = getattr(manifest, "output_name_map", None)
-        if output_map is not None:
-            return output_map.get(internal_name, internal_name)
+    if manifest is not None and manifest.output_name_map is not None:
+        return manifest.output_name_map.get(internal_name, internal_name)
     return internal_name
 
 
@@ -63,7 +79,7 @@ def internal_name(output_name: str) -> str:
 
 
 def output_name_map_from_views(
-    views: tuple[object, ...],
+    views: Sequence[HasName],
 ) -> dict[str, str]:
     """Build an output name map from compiled SemanticIR views.
 
@@ -82,13 +98,14 @@ def output_name_map_from_views(
     """
     name_map: dict[str, str] = {}
     for view in views:
-        view_name: str = getattr(view, "name", "")
-        if view_name:
-            name_map[view_name] = view_name
+        if view.name:
+            name_map[view.name] = view.name
     return name_map
 
 
 __all__ = [
+    "HasName",
+    "HasOutputNameMap",
     "canonical_output_name",
     "internal_name",
     "output_name_map_from_views",

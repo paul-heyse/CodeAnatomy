@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import pyarrow as pa
+
 from core.fingerprinting import CompositeFingerprint
 from utils.hashing import hash_sha256_hex
 
@@ -125,56 +127,6 @@ def _hash_string(s: str, *, length: int = 32) -> str:
     return _hash_bytes(s.encode("utf-8"), length=length)
 
 
-def _extract_field_type(schema: object, idx: int) -> str:
-    """Extract field type string from a schema at a given index.
-
-    Parameters
-    ----------
-    schema
-        Schema object with field access.
-    idx
-        Field index.
-
-    Returns:
-    -------
-    str
-        Field type as string, or "unknown" if unavailable.
-    """
-    field_method = getattr(schema, "field", None)
-    if not callable(field_method):
-        return "unknown"
-    try:
-        field = field_method(idx)
-        type_attr = getattr(field, "type", None)
-        if callable(type_attr):
-            return str(type_attr())
-        return str(type_attr) if type_attr else "unknown"
-    except (RuntimeError, TypeError, ValueError, IndexError):
-        return "unknown"
-
-
-def _schema_from_names(schema: object, names: list[object] | tuple[object, ...]) -> str:
-    """Build schema string from field names.
-
-    Parameters
-    ----------
-    schema
-        Schema object with field access.
-    names
-        Field names.
-
-    Returns:
-    -------
-    str
-        Canonical schema representation.
-    """
-    parts: list[str] = []
-    for idx, name in enumerate(names):
-        field_type = _extract_field_type(schema, idx)
-        parts.append(f"{name}:{field_type}")
-    return ",".join(sorted(parts))
-
-
 def _schema_to_string(schema: object) -> str:
     """Convert a schema object to a canonical string representation.
 
@@ -188,21 +140,22 @@ def _schema_to_string(schema: object) -> str:
     str
         Canonical string representation.
     """
-    # Try to_arrow() method for DataFusion schema
-    to_arrow_method = getattr(schema, "to_arrow", None)
-    if callable(to_arrow_method):
-        try:
-            arrow_schema = to_arrow_method()
-            return str(arrow_schema)
-        except (RuntimeError, TypeError, ValueError):
-            pass
+    # DataFusion schemas expose ``to_arrow`` while pyarrow schemas already
+    # provide deterministic field ordering and string rendering.
+    arrow_schema: pa.Schema | None = None
+    if isinstance(schema, pa.Schema):
+        arrow_schema = schema
 
-    # Try names property (DataFusion Schema has this as property, not method)
-    names_attr = getattr(schema, "names", None)
-    if names_attr is not None:
-        names = names_attr() if callable(names_attr) else names_attr
-        if isinstance(names, (list, tuple)):
-            return _schema_from_names(schema, names)
+    to_arrow_method = getattr(schema, "to_arrow", None)
+    if arrow_schema is None and callable(to_arrow_method):
+        try:
+            candidate = to_arrow_method()
+            if isinstance(candidate, pa.Schema):
+                arrow_schema = candidate
+        except (RuntimeError, TypeError, ValueError):
+            arrow_schema = None
+    if arrow_schema is not None:
+        return ",".join(f"{field.name}:{field.type}" for field in arrow_schema)
 
     # Fallback to string representation
     return str(schema)

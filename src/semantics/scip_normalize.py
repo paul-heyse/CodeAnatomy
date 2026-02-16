@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
-from datafusion import col, lit
+from datafusion import col
 from datafusion import functions as f
 
 from datafusion_engine.arrow.interop import empty_table_for_schema
@@ -15,10 +15,10 @@ from datafusion_engine.udf.expr import udf_expr
 from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
+from semantics.normalization_helpers import LineIndexJoinOptions, byte_offset_expr, line_index_join
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
-    from datafusion.expr import Expr
 
 
 LOGGER = logging.getLogger(__name__)
@@ -109,64 +109,40 @@ def scip_to_byte_offsets(
         scip = scip.with_column("start_line_no", col("start_line") - col("line_base"))
         scip = scip.with_column("end_line_no", col("end_line") - col("line_base"))
 
-        line_index = ctx.table(line_index_table)
-        start_idx = line_index.select(
-            col("file_id").alias("start_file_id"),
-            col("path").alias("start_path"),
-            col("line_no").alias("start_line_no_idx"),
-            col("line_start_byte").alias("start_line_start_byte"),
-            col("line_text").alias("start_line_text"),
-        )
-        end_idx = line_index.select(
-            col("file_id").alias("end_file_id"),
-            col("path").alias("end_path"),
-            col("line_no").alias("end_line_no_idx"),
-            col("line_start_byte").alias("end_line_start_byte"),
-            col("line_text").alias("end_line_text"),
-        )
-
-        joined = scip.join(
-            start_idx,
-            join_keys=(
-                ["path", "start_line_no"],
-                ["start_path", "start_line_no_idx"],
+        joined = line_index_join(
+            scip,
+            line_index_table,
+            options=LineIndexJoinOptions(
+                start_line_col="start_line_no",
+                end_line_col="end_line_no",
+                ctx=ctx,
+                path_col="path",
             ),
-            how="left",
-            coalesce_duplicate_keys=True,
-        )
-        joined = joined.join(
-            end_idx,
-            join_keys=(
-                ["path", "end_line_no"],
-                ["end_path", "end_line_no_idx"],
-            ),
-            how="left",
-            coalesce_duplicate_keys=True,
         )
         joined = joined.with_column(
             "file_id",
             f.coalesce(col("start_file_id"), col("end_file_id")),
         )
 
-        def _byte_offset(line_start: str, line_text: str, col_name: str) -> Expr:
-            base = col(line_start).cast(pa.int64())
-            char_col = col(col_name).cast(pa.int64())
-            offset = udf_expr("col_to_byte", col(line_text), char_col, col("col_unit"))
-            guard = (
-                col(line_start).is_null()
-                | col(line_text).is_null()
-                | col(col_name).is_null()
-                | col("col_unit").is_null()
-            )
-            return f.when(guard, lit(None).cast(pa.int64())).otherwise(base + offset)
-
         df = joined.with_column(
             "bstart",
-            _byte_offset("start_line_start_byte", "start_line_text", "start_char"),
+            byte_offset_expr(
+                "start_line_start_byte",
+                "start_line_text",
+                "start_char",
+                col("col_unit"),
+                unit_col="col_unit",
+            ),
         )
         df = df.with_column(
             "bend",
-            _byte_offset("end_line_start_byte", "end_line_text", "end_char"),
+            byte_offset_expr(
+                "end_line_start_byte",
+                "end_line_text",
+                "end_char",
+                col("col_unit"),
+                unit_col="col_unit",
+            ),
         )
         df = df.with_column("span", udf_expr("span_make", col("bstart"), col("bend")))
 

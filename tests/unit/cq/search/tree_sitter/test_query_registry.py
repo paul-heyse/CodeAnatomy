@@ -38,6 +38,7 @@ def test_load_query_pack_sources_prefers_local_pack_over_distribution_duplicate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Prefer local query packs over distribution duplicates for same pack name."""
+
     def _no_cache_loader(_language: str) -> object | None:
         return None
 

@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from typing import Final
 
-from relspec.contracts import RELATION_OUTPUT_ORDERING_KEYS
-from relspec.view_defs import RELATION_OUTPUT_NAME
-from semantics.catalog.dataset_registry import DatasetRegistrySpec
-from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION
+from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
 from semantics.naming import canonical_output_name
+from semantics.output_names import RELATION_OUTPUT_NAME, RELATION_OUTPUT_ORDERING_KEYS
 
 _RELATION_OUTPUT_FIELDS: tuple[str, ...] = (
     "src",
@@ -37,8 +35,8 @@ _RELATION_OUTPUT_FIELDS: tuple[str, ...] = (
 
 _RELATION_OUTPUT_KEYS: tuple[str, ...] = tuple(key for key, _order in RELATION_OUTPUT_ORDERING_KEYS)
 
-SEMANTIC_SINGLETON_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
-    DatasetRegistrySpec(
+SEMANTIC_SINGLETON_DATASETS: Final[tuple[SemanticDatasetRow, ...]] = (
+    SemanticDatasetRow(
         name=canonical_output_name("scip_occurrences_norm"),
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
@@ -61,7 +59,7 @@ SEMANTIC_SINGLETON_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         register_view=True,
         source_dataset="scip_occurrences",
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="file_quality",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
@@ -89,7 +87,7 @@ SEMANTIC_SINGLETON_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         register_view=True,
         source_dataset=None,
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name=RELATION_OUTPUT_NAME,
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),

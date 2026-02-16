@@ -35,7 +35,6 @@ def test_build_namespace_cache_tag_uses_canonical_atom_order() -> None:
     assert "run-123" not in atoms[5]
 
 
-
 def test_build_namespace_cache_tag_is_stable_for_equivalent_scope_payloads() -> None:
     """Normalize scope inputs before hashing so equivalent payloads map to equal tags."""
     scope_hash_a = build_scope_hash(

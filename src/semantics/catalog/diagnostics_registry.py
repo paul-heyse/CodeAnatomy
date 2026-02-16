@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import Final
 
-from semantics.catalog.dataset_registry import DatasetRegistrySpec
-from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION
+from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
 
-DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
-    DatasetRegistrySpec(
+DIAGNOSTIC_DATASETS: Final[tuple[SemanticDatasetRow, ...]] = (
+    SemanticDatasetRow(
         name="relationship_quality_metrics",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
@@ -33,7 +32,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="relationship_quality_metrics_df_builder",
         register_view=True,
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="relationship_ambiguity_report",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
@@ -53,7 +52,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="relationship_ambiguity_report_df_builder",
         register_view=True,
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="relationship_candidates",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
@@ -79,7 +78,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="relationship_candidates_df_builder",
         register_view=True,
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="relationship_decisions",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
@@ -105,7 +104,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="relationship_decisions_df_builder",
         register_view=True,
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="schema_anomalies",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
@@ -123,7 +122,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="schema_anomalies_df_builder",
         register_view=True,
     ),
-    DatasetRegistrySpec(
+    SemanticDatasetRow(
         name="file_coverage_report",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),

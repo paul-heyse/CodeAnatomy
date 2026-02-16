@@ -7,8 +7,8 @@ from collections.abc import Sequence
 from tools.cq.core.structs import CqStruct
 from tools.cq.search.tree_sitter.contracts.core_models import NodeLike
 from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
-from tools.cq.search.tree_sitter.python_lane.runtime import get_python_field_ids
 from tools.cq.search.tree_sitter.core.node_utils import node_text
+from tools.cq.search.tree_sitter.python_lane.runtime import get_python_field_ids
 
 
 class LocalBindingV1(CqStruct, frozen=True):
@@ -18,9 +18,6 @@ class LocalBindingV1(CqStruct, frozen=True):
     scope_start: int
     scope_end: int
     definition_start: int
-
-
-from tools.cq.search.tree_sitter.python_lane.runtime import get_python_field_ids
 
 
 def _contains(container: NodeLike, item: NodeLike) -> bool:

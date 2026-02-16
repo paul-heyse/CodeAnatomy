@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from tools.cq.core.python_ast_utils import get_call_name
-from tools.cq.index.def_index import DefIndex, FnDecl, _SELF_CLS
+from tools.cq.index.def_index import _SELF_CLS, DefIndex, FnDecl
+
 _CALL_SPLIT_PARTS = 2
 
 CallConfidence = Literal["exact", "likely", "ambiguous", "unresolved"]

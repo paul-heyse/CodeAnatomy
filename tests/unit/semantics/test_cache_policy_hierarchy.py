@@ -9,12 +9,14 @@ from semantics.pipeline import _resolve_cache_policy_hierarchy
 class TestResolveCachePolicyHierarchy:
     """Test explicit -> compiled cache policy layering."""
 
-    def test_explicit_policy_takes_highest_precedence(
-        self,
-    ) -> None:
+    @staticmethod
+    def test_explicit_policy_takes_highest_precedence() -> None:
         """Explicit cache policy overrides compiled mappings."""
         explicit: dict[str, CachePolicy] = {"cpg_nodes": "none", "rel_calls": "delta_output"}
-        compiled = {"cpg_nodes": "delta_staging", "rel_calls": "delta_staging"}
+        compiled: dict[str, CachePolicy] = {
+            "cpg_nodes": "delta_staging",
+            "rel_calls": "delta_staging",
+        }
 
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=explicit,
@@ -25,11 +27,10 @@ class TestResolveCachePolicyHierarchy:
         assert result["cpg_nodes"] == "none"
         assert result["rel_calls"] == "delta_output"
 
-    def test_compiled_policy_takes_precedence_when_explicit_absent(
-        self,
-    ) -> None:
+    @staticmethod
+    def test_compiled_policy_takes_precedence_when_explicit_absent() -> None:
         """Compiled cache policy should be used when explicit policy is absent."""
-        compiled = {
+        compiled: dict[str, CachePolicy] = {
             "cpg_nodes": "delta_staging",
             "cpg_edges": "none",
             "rel_calls": "delta_output",
@@ -48,9 +49,8 @@ class TestResolveCachePolicyHierarchy:
         assert result["cpg_edges"] == "none"
         assert result["rel_calls"] == "delta_output"
 
-    def test_returns_empty_mapping_when_explicit_and_compiled_absent(
-        self,
-    ) -> None:
+    @staticmethod
+    def test_returns_empty_mapping_when_explicit_and_compiled_absent() -> None:
         """Missing explicit/compiled cache policy should resolve to empty mapping."""
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=None,
@@ -59,11 +59,10 @@ class TestResolveCachePolicyHierarchy:
 
         assert result == {}
 
-    def test_empty_compiled_policy_is_used_not_skipped(
-        self,
-    ) -> None:
+    @staticmethod
+    def test_empty_compiled_policy_is_used_not_skipped() -> None:
         """An empty compiled mapping is still treated as authoritative."""
-        compiled: dict[str, str] = {}
+        compiled: dict[str, CachePolicy] = {}
 
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=None,

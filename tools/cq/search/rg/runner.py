@@ -177,9 +177,6 @@ def _search_paths(paths: tuple[str, ...]) -> list[str]:
 def build_rg_command(request: RgRunRequest, *, pcre2_available: bool = False) -> list[str]:
     """Build deterministic command arguments for the provided rg request.
 
-    Raises:
-        ValueError: If ``request.operation`` is unsupported.
-
     Returns:
         list[str]: Function return value.
     """

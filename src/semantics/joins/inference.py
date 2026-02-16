@@ -14,6 +14,8 @@ The inference can be guided with optional hints to prefer specific strategies.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -28,6 +30,18 @@ from semantics.types.core import CompatibilityGroup, SemanticType
 
 if TYPE_CHECKING:
     from semantics.types import AnnotatedSchema
+
+logger = logging.getLogger(__name__)
+_SCHEMA_LABEL_PREVIEW_COLUMNS = 3
+
+
+def _schema_debug_label(schema: AnnotatedSchema) -> str:
+    columns = schema.column_names
+    preview = ",".join(columns[:_SCHEMA_LABEL_PREVIEW_COLUMNS])
+    if len(columns) > _SCHEMA_LABEL_PREVIEW_COLUMNS:
+        preview = f"{preview},..."
+    return f"[{preview}]"
+
 
 # Confidence scores assigned to inferred join strategies based on the
 # strength of the schema-level evidence.  Higher priority strategies
@@ -329,35 +343,196 @@ def _infer_with_hint(
     JoinStrategy | None
         Strategy if hint can be satisfied, None otherwise.
     """
-    strategy: JoinStrategy | None = None
-    if hint in {JoinStrategyType.SPAN_OVERLAP, JoinStrategyType.SPAN_CONTAINS}:
-        if _can_span_join(left_caps, right_caps):
-            strategy = _span_strategy(hint, left_schema, right_schema)
-            strategy = replace(strategy, confidence=_SPAN_CONFIDENCE)
-    elif hint == JoinStrategyType.EQUI_JOIN:
-        strategy = _resolve_equi_join(
-            left_caps,
-            right_caps,
-            left_schema=left_schema,
-            right_schema=right_schema,
-        )
-        if strategy is not None:
-            strategy = replace(strategy, confidence=_FILE_EQUI_CONFIDENCE)
-    elif hint == JoinStrategyType.FOREIGN_KEY:
-        fk_match = _find_fk_match(left_caps, right_caps)
-        if fk_match:
-            strategy = make_fk_strategy(fk_match[0], fk_match[1])
-            strategy = replace(strategy, confidence=_FK_CONFIDENCE)
-    elif hint == JoinStrategyType.SYMBOL_MATCH:
-        strategy = _resolve_symbol_match(
-            left_caps,
-            right_caps,
-            left_schema=left_schema,
-            right_schema=right_schema,
-        )
-        if strategy is not None:
-            strategy = replace(strategy, confidence=_SYMBOL_CONFIDENCE)
+    logger.debug(
+        "Join inference hint=%s for %s x %s",
+        hint,
+        _schema_debug_label(left_schema),
+        _schema_debug_label(right_schema),
+    )
+    resolver = _resolver_for(hint)
+    if resolver is None:
+        logger.debug("Join inference could not satisfy hint=%s", hint)
+        return None
+    strategy = resolver(
+        left_caps,
+        right_caps,
+        left_schema,
+        right_schema,
+    )
+    if strategy is None:
+        logger.debug("Join inference could not satisfy hint=%s", hint)
     return strategy
+
+
+def _infer_span_hint(
+    hint: JoinStrategyType,
+    left_caps: JoinCapabilities,
+    right_caps: JoinCapabilities,
+    *,
+    left_schema: AnnotatedSchema,
+    right_schema: AnnotatedSchema,
+) -> JoinStrategy | None:
+    if not _can_span_join(left_caps, right_caps):
+        logger.debug("Join inference rejected hinted span strategy=%s (caps)", hint)
+        return None
+    strategy = _span_strategy(hint, left_schema, right_schema)
+    logger.debug("Join inference accepted hinted span strategy=%s", hint)
+    return replace(strategy, confidence=_SPAN_CONFIDENCE)
+
+
+def _infer_equi_hint(
+    left_caps: JoinCapabilities,
+    right_caps: JoinCapabilities,
+    *,
+    left_schema: AnnotatedSchema,
+    right_schema: AnnotatedSchema,
+) -> JoinStrategy | None:
+    strategy = _resolve_equi_join(
+        left_caps,
+        right_caps,
+        left_schema=left_schema,
+        right_schema=right_schema,
+    )
+    if strategy is None:
+        logger.debug("Join inference rejected hinted strategy=equi_join")
+        return None
+    logger.debug("Join inference accepted hinted strategy=equi_join")
+    return replace(strategy, confidence=_FILE_EQUI_CONFIDENCE)
+
+
+def _infer_fk_hint(
+    left_caps: JoinCapabilities,
+    right_caps: JoinCapabilities,
+    *,
+    left_schema: AnnotatedSchema,
+    right_schema: AnnotatedSchema,
+) -> JoinStrategy | None:
+    _ = left_schema, right_schema
+    fk_match = _find_fk_match(left_caps, right_caps)
+    if not fk_match:
+        logger.debug("Join inference rejected hinted strategy=foreign_key")
+        return None
+    logger.debug("Join inference accepted hinted strategy=foreign_key")
+    return replace(make_fk_strategy(fk_match[0], fk_match[1]), confidence=_FK_CONFIDENCE)
+
+
+def _infer_symbol_hint(
+    left_caps: JoinCapabilities,
+    right_caps: JoinCapabilities,
+    *,
+    left_schema: AnnotatedSchema,
+    right_schema: AnnotatedSchema,
+) -> JoinStrategy | None:
+    strategy = _resolve_symbol_match(
+        left_caps,
+        right_caps,
+        left_schema=left_schema,
+        right_schema=right_schema,
+    )
+    if strategy is None:
+        logger.debug("Join inference rejected hinted strategy=symbol_match")
+        return None
+    logger.debug("Join inference accepted hinted strategy=symbol_match")
+    return replace(strategy, confidence=_SYMBOL_CONFIDENCE)
+
+
+def _resolve_span_overlap(
+    left_caps: JoinCapabilities,
+    right_caps: JoinCapabilities,
+    *,
+    left_schema: AnnotatedSchema,
+    right_schema: AnnotatedSchema,
+) -> JoinStrategy | None:
+    return _infer_span_hint(
+        JoinStrategyType.SPAN_OVERLAP,
+        left_caps,
+        right_caps,
+        left_schema=left_schema,
+        right_schema=right_schema,
+    )
+
+
+def _resolve_span_contains(
+    left_caps: JoinCapabilities,
+    right_caps: JoinCapabilities,
+    *,
+    left_schema: AnnotatedSchema,
+    right_schema: AnnotatedSchema,
+) -> JoinStrategy | None:
+    return _infer_span_hint(
+        JoinStrategyType.SPAN_CONTAINS,
+        left_caps,
+        right_caps,
+        left_schema=left_schema,
+        right_schema=right_schema,
+    )
+
+
+_StrategyResolver = Callable[
+    [JoinCapabilities, JoinCapabilities, "AnnotatedSchema", "AnnotatedSchema"],
+    JoinStrategy | None,
+]
+
+_STRATEGY_RESOLVERS: tuple[tuple[JoinStrategyType, _StrategyResolver], ...] = (
+    (
+        JoinStrategyType.SPAN_OVERLAP,
+        lambda left_caps, right_caps, left_schema, right_schema: _resolve_span_overlap(
+            left_caps,
+            right_caps,
+            left_schema=left_schema,
+            right_schema=right_schema,
+        ),
+    ),
+    (
+        JoinStrategyType.SPAN_CONTAINS,
+        lambda left_caps, right_caps, left_schema, right_schema: _resolve_span_contains(
+            left_caps,
+            right_caps,
+            left_schema=left_schema,
+            right_schema=right_schema,
+        ),
+    ),
+    (
+        JoinStrategyType.FOREIGN_KEY,
+        lambda left_caps, right_caps, left_schema, right_schema: _infer_fk_hint(
+            left_caps,
+            right_caps,
+            left_schema=left_schema,
+            right_schema=right_schema,
+        ),
+    ),
+    (
+        JoinStrategyType.SYMBOL_MATCH,
+        lambda left_caps, right_caps, left_schema, right_schema: _infer_symbol_hint(
+            left_caps,
+            right_caps,
+            left_schema=left_schema,
+            right_schema=right_schema,
+        ),
+    ),
+    (
+        JoinStrategyType.EQUI_JOIN,
+        lambda left_caps, right_caps, left_schema, right_schema: _infer_equi_hint(
+            left_caps,
+            right_caps,
+            left_schema=left_schema,
+            right_schema=right_schema,
+        ),
+    ),
+)
+
+_STRATEGY_RESOLVER_BY_TYPE: dict[JoinStrategyType, _StrategyResolver] = dict(_STRATEGY_RESOLVERS)
+
+_DEFAULT_STRATEGY_ORDER: tuple[JoinStrategyType, ...] = (
+    JoinStrategyType.SPAN_OVERLAP,
+    JoinStrategyType.FOREIGN_KEY,
+    JoinStrategyType.SYMBOL_MATCH,
+    JoinStrategyType.EQUI_JOIN,
+)
+
+
+def _resolver_for(strategy_type: JoinStrategyType) -> _StrategyResolver | None:
+    return _STRATEGY_RESOLVER_BY_TYPE.get(strategy_type)
 
 
 def _infer_default(
@@ -387,31 +562,26 @@ def _infer_default(
     JoinStrategy | None
         Best inferred strategy, or None if no valid strategy.
     """
-    if _can_span_join(left_caps, right_caps):
-        strategy = _span_strategy(JoinStrategyType.SPAN_OVERLAP, left_schema, right_schema)
-        return replace(strategy, confidence=_SPAN_CONFIDENCE)
-
-    fk_match = _find_fk_match(left_caps, right_caps)
-    if fk_match:
-        return replace(make_fk_strategy(fk_match[0], fk_match[1]), confidence=_FK_CONFIDENCE)
-
-    strategy = _resolve_symbol_match(
-        left_caps,
-        right_caps,
-        left_schema=left_schema,
-        right_schema=right_schema,
+    logger.debug(
+        "Join inference default strategy selection for %s x %s",
+        _schema_debug_label(left_schema),
+        _schema_debug_label(right_schema),
     )
-    if strategy is not None:
-        return replace(strategy, confidence=_SYMBOL_CONFIDENCE)
-
-    equi = _resolve_equi_join(
-        left_caps,
-        right_caps,
-        left_schema=left_schema,
-        right_schema=right_schema,
-    )
-    if equi is not None:
-        return replace(equi, confidence=_FILE_EQUI_CONFIDENCE)
+    for strategy_type in _DEFAULT_STRATEGY_ORDER:
+        resolver = _resolver_for(strategy_type)
+        if resolver is None:
+            continue
+        strategy = resolver(
+            left_caps,
+            right_caps,
+            left_schema,
+            right_schema,
+        )
+        if strategy is not None:
+            logger.debug("Join inference selected strategy=%s", strategy_type.value)
+            return strategy
+        logger.debug("Join inference strategy %s not viable", strategy_type.value)
+    logger.debug("Join inference found no viable strategy")
     return None
 
 

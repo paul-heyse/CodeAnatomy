@@ -15,7 +15,8 @@ from tests.test_helpers.immutability import assert_immutable_assignment
 class TestCompiledExecutionPolicyConstruction:
     """Test CompiledExecutionPolicy construction and defaults."""
 
-    def test_default_construction(self) -> None:
+    @staticmethod
+    def test_default_construction() -> None:
         """Construct with all defaults and verify empty mappings."""
         policy = CompiledExecutionPolicy()
         assert policy.cache_policy_by_view == {}
@@ -30,14 +31,16 @@ class TestCompiledExecutionPolicyConstruction:
         assert policy.validation_mode == "warn"
         assert policy.policy_fingerprint is None
 
-    def test_construction_with_cache_policies(self) -> None:
+    @staticmethod
+    def test_construction_with_cache_policies() -> None:
         """Construct with populated cache policies."""
         cache = {"cpg_nodes": "delta_output", "rel_calls": "delta_staging"}
         policy = CompiledExecutionPolicy(cache_policy_by_view=cache)
         assert policy.cache_policy_by_view == cache
         assert policy.validation_mode == "warn"
 
-    def test_construction_with_all_fields(self) -> None:
+    @staticmethod
+    def test_construction_with_all_fields() -> None:
         """Construct with all fields populated."""
         policy = CompiledExecutionPolicy(
             cache_policy_by_view={"v1": "delta_output"},
@@ -66,7 +69,8 @@ class TestCompiledExecutionPolicyConstruction:
         assert policy.validation_mode == "error"
         assert policy.policy_fingerprint == "abc123"
 
-    def test_frozen_immutability(self) -> None:
+    @staticmethod
+    def test_frozen_immutability() -> None:
         """Verify the struct is frozen (immutable)."""
         policy = CompiledExecutionPolicy()
         assert_immutable_assignment(
@@ -76,7 +80,8 @@ class TestCompiledExecutionPolicyConstruction:
             expected_exception=AttributeError,
         )
 
-    def test_forbid_unknown_fields(self) -> None:
+    @staticmethod
+    def test_forbid_unknown_fields() -> None:
         """Verify the struct rejects unknown fields during deserialization."""
         with pytest.raises(msgspec.ValidationError):
             msgspec.json.decode(
@@ -88,14 +93,16 @@ class TestCompiledExecutionPolicyConstruction:
 class TestCompiledExecutionPolicySerialization:
     """Test serialization round-trip behavior."""
 
-    def test_to_builtins_empty(self) -> None:
+    @staticmethod
+    def test_to_builtins_empty() -> None:
         """Empty policy serializes to a minimal dict (omit_defaults)."""
         policy = CompiledExecutionPolicy()
         payload = to_builtins(policy)
         # omit_defaults: only non-default fields appear
         assert isinstance(payload, dict)
 
-    def test_to_builtins_with_data(self) -> None:
+    @staticmethod
+    def test_to_builtins_with_data() -> None:
         """Policy with data serializes to dict with expected keys."""
         policy = CompiledExecutionPolicy(
             cache_policy_by_view={"cpg_nodes": "delta_output"},
@@ -106,7 +113,8 @@ class TestCompiledExecutionPolicySerialization:
         assert payload["cache_policy_by_view"] == {"cpg_nodes": "delta_output"}
         assert payload["validation_mode"] == "error"
 
-    def test_round_trip_msgspec(self) -> None:
+    @staticmethod
+    def test_round_trip_msgspec() -> None:
         """Encode and decode round-trip preserves data."""
         original = CompiledExecutionPolicy(
             cache_policy_by_view={"v1": "delta_output", "v2": "none"},
@@ -123,7 +131,8 @@ class TestCompiledExecutionPolicySerialization:
 class TestCompiledExecutionPolicyFingerprint:
     """Test fingerprint stability and determinism."""
 
-    def test_fingerprint_deterministic(self) -> None:
+    @staticmethod
+    def test_fingerprint_deterministic() -> None:
         """Same inputs produce the same fingerprint."""
         from relspec.policy_compiler import _compute_policy_fingerprint
 
@@ -135,7 +144,8 @@ class TestCompiledExecutionPolicyFingerprint:
         assert fp1 == fp2
         assert len(fp1) == SHA256_HEX_DIGEST_LENGTH  # SHA-256 hex digest
 
-    def test_fingerprint_differs_for_different_policies(self) -> None:
+    @staticmethod
+    def test_fingerprint_differs_for_different_policies() -> None:
         """Different policies produce different fingerprints."""
         from relspec.policy_compiler import _compute_policy_fingerprint
 
@@ -147,7 +157,8 @@ class TestCompiledExecutionPolicyFingerprint:
         )
         assert _compute_policy_fingerprint(policy_a) != _compute_policy_fingerprint(policy_b)
 
-    def test_fingerprint_is_hex_string(self) -> None:
+    @staticmethod
+    def test_fingerprint_is_hex_string() -> None:
         """Fingerprint is a valid hex string."""
         from relspec.policy_compiler import _compute_policy_fingerprint
 

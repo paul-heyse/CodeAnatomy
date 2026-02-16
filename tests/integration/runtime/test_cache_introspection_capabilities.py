@@ -26,7 +26,8 @@ def setup_module() -> None:
 class TestCacheIntrospectionCapabilities:
     """Verify cache introspection registration boundary."""
 
-    def test_compatible_hook_registers_successfully(self) -> None:
+    @staticmethod
+    def test_compatible_hook_registers_successfully() -> None:
         """Verify cache introspection functions register on compatible context.
 
         Given a SessionContext with extension hooks available, calling
@@ -45,7 +46,8 @@ class TestCacheIntrospectionCapabilities:
             # If extension hooks not available, that's a known limitation
             pytest.skip("Extension hooks not available in this build")
 
-    def test_register_cache_introspection_idempotent(self) -> None:
+    @staticmethod
+    def test_register_cache_introspection_idempotent() -> None:
         """Verify repeated registration is safe."""
         from datafusion_engine.catalog.introspection import (
             register_cache_introspection_functions,
@@ -59,7 +61,8 @@ class TestCacheIntrospectionCapabilities:
         except (ImportError, TypeError):
             pytest.skip("Extension hooks not available in this build")
 
-    def test_missing_extension_raises_import_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @staticmethod
+    def test_missing_extension_raises_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
         """Verify missing extension hook produces ImportError.
 
         When neither datafusion._internal nor datafusion_ext can be imported,
@@ -92,7 +95,8 @@ class TestCacheIntrospectionCapabilities:
         else:
             pytest.fail("Expected extension registration to fail when hooks are unavailable.")
 
-    def test_install_cache_tables_feature_gating(self) -> None:
+    @staticmethod
+    def test_install_cache_tables_feature_gating() -> None:
         """Verify _install_cache_tables respects feature gate flags.
 
         _install_cache_tables returns early unless enable_cache_manager,

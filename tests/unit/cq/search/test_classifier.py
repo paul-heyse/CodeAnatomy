@@ -27,51 +27,63 @@ CALLSITE_CONFIDENCE_HEURISTIC = 0.6
 class TestQueryModeDetection:
     """Tests for query mode detection."""
 
-    def test_identifier_simple(self) -> None:
+    @staticmethod
+    def test_identifier_simple() -> None:
         """Test simple identifier detection."""
         assert detect_query_mode("build_graph") == QueryMode.IDENTIFIER
 
-    def test_identifier_dotted(self) -> None:
+    @staticmethod
+    def test_identifier_dotted() -> None:
         """Test dotted identifier detection."""
         assert detect_query_mode("module.function") == QueryMode.IDENTIFIER
 
-    def test_identifier_with_numbers(self) -> None:
+    @staticmethod
+    def test_identifier_with_numbers() -> None:
         """Test identifier with numbers."""
         assert detect_query_mode("func123") == QueryMode.IDENTIFIER
 
-    def test_regex_star(self) -> None:
+    @staticmethod
+    def test_regex_star() -> None:
         """Test regex with star metacharacter."""
         assert detect_query_mode("config.*path") == QueryMode.REGEX
 
-    def test_regex_brackets(self) -> None:
+    @staticmethod
+    def test_regex_brackets() -> None:
         """Test regex with brackets."""
         assert detect_query_mode("[a-z]+") == QueryMode.REGEX
 
-    def test_regex_parens(self) -> None:
+    @staticmethod
+    def test_regex_parens() -> None:
         """Test regex with parentheses."""
         assert detect_query_mode("(foo|bar)") == QueryMode.REGEX
 
-    def test_regex_escape(self) -> None:
+    @staticmethod
+    def test_regex_escape() -> None:
         """Test regex with escape."""
         assert detect_query_mode(r"foo\d+") == QueryMode.REGEX
 
-    def test_literal_whitespace(self) -> None:
+    @staticmethod
+    def test_literal_whitespace() -> None:
         """Test literal with whitespace."""
         assert detect_query_mode("hello world") == QueryMode.LITERAL
 
-    def test_literal_special(self) -> None:
+    @staticmethod
+    def test_literal_special() -> None:
         """Test literal with non-identifier chars."""
         assert detect_query_mode("foo-bar") == QueryMode.LITERAL
 
-    def test_force_regex(self) -> None:
+    @staticmethod
+    def test_force_regex() -> None:
         """Test forced regex mode."""
         assert detect_query_mode("build_graph", force_mode=QueryMode.REGEX) == QueryMode.REGEX
 
-    def test_force_literal(self) -> None:
+    @staticmethod
+    def test_force_literal() -> None:
         """Test forced literal mode."""
         assert detect_query_mode("build_graph", force_mode=QueryMode.LITERAL) == QueryMode.LITERAL
 
-    def test_force_identifier(self) -> None:
+    @staticmethod
+    def test_force_identifier() -> None:
         """Test forced identifier mode."""
         assert (
             detect_query_mode("config.*path", force_mode=QueryMode.IDENTIFIER)
@@ -82,60 +94,69 @@ class TestQueryModeDetection:
 class TestHeuristicClassification:
     """Tests for fast heuristic classification."""
 
-    def test_comment_match(self) -> None:
+    @staticmethod
+    def test_comment_match() -> None:
         """Test comment detection."""
         result = classify_heuristic("x = 1  # build_graph here", 14, "build_graph")
         assert result.category == "comment_match"
         assert result.confidence >= HIGH_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is True
 
-    def test_def_pattern(self) -> None:
+    @staticmethod
+    def test_def_pattern() -> None:
         """Test function definition detection."""
         result = classify_heuristic("def build_graph(data):", 4, "build_graph")
         assert result.category == "definition"
         assert result.confidence >= MEDIUM_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is False
 
-    def test_async_def_pattern(self) -> None:
+    @staticmethod
+    def test_async_def_pattern() -> None:
         """Test async function definition detection."""
         result = classify_heuristic("async def build_graph(data):", 10, "build_graph")
         assert result.category == "definition"
         assert result.confidence >= MEDIUM_CONFIDENCE_HEURISTIC
 
-    def test_class_pattern(self) -> None:
+    @staticmethod
+    def test_class_pattern() -> None:
         """Test class definition detection."""
         result = classify_heuristic("class GraphBuilder:", 6, "GraphBuilder")
         assert result.category == "definition"
         assert result.confidence >= MEDIUM_CONFIDENCE_HEURISTIC
 
-    def test_import_pattern(self) -> None:
+    @staticmethod
+    def test_import_pattern() -> None:
         """Test import detection."""
         result = classify_heuristic("import build_graph", 7, "build_graph")
         assert result.category == "import"
         assert result.confidence >= HIGH_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is True
 
-    def test_from_import_pattern(self) -> None:
+    @staticmethod
+    def test_from_import_pattern() -> None:
         """Test from import detection."""
         result = classify_heuristic("from module import build_graph", 19, "build_graph")
         assert result.category == "from_import"
         assert result.confidence >= HIGH_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is True
 
-    def test_call_pattern(self) -> None:
+    @staticmethod
+    def test_call_pattern() -> None:
         """Test call pattern detection."""
         result = classify_heuristic("result = build_graph(data)", 9, "build_graph")
         assert result.category == "callsite"
         assert result.confidence >= CALLSITE_CONFIDENCE_HEURISTIC
         assert result.skip_deeper is False  # Needs AST confirmation
 
-    def test_docstring_hint(self) -> None:
+    @staticmethod
+    def test_docstring_hint() -> None:
         """Test docstring hint detection."""
         result = classify_heuristic('    """build_graph function."""', 7, "build_graph")
         assert result.category == "docstring_match"
         assert result.skip_deeper is False  # Needs AST to confirm
 
-    def test_no_classification(self) -> None:
+    @staticmethod
+    def test_no_classification() -> None:
         """Test no confident classification."""
         result = classify_heuristic("x = build_graph", 4, "build_graph")
         assert result.category is None or result.category == "callsite"
@@ -144,8 +165,9 @@ class TestHeuristicClassification:
 class TestASTClassification:
     """Tests for AST-based classification."""
 
+    @staticmethod
     @pytest.fixture
-    def python_source(self, tmp_path: Path) -> Path:
+    def python_source(tmp_path: Path) -> Path:
         """Create sample Python file for testing.
 
         Returns:
@@ -174,7 +196,8 @@ import os
         )
         return source
 
-    def test_classify_function_definition(self, python_source: Path) -> None:
+    @staticmethod
+    def test_classify_function_definition(python_source: Path) -> None:
         """Test classification of function definition."""
         clear_caches()
         sg_root = get_sg_root(python_source)
@@ -184,7 +207,8 @@ import os
         assert result is not None
         assert result.category in {"definition", "reference"}
 
-    def test_classify_class_definition(self, python_source: Path) -> None:
+    @staticmethod
+    def test_classify_class_definition(python_source: Path) -> None:
         """Test classification of class definition."""
         clear_caches()
         sg_root = get_sg_root(python_source)
@@ -194,7 +218,8 @@ import os
         assert result is not None
         assert result.category in {"definition", "reference"}
 
-    def test_classify_call(self, python_source: Path) -> None:
+    @staticmethod
+    def test_classify_call(python_source: Path) -> None:
         """Test classification of function call."""
         clear_caches()
         sg_root = get_sg_root(python_source)
@@ -205,7 +230,8 @@ import os
         # Could be callsite or reference depending on exact position
         assert result.category in {"callsite", "reference", "assignment"}
 
-    def test_classify_import(self, python_source: Path) -> None:
+    @staticmethod
+    def test_classify_import(python_source: Path) -> None:
         """Test classification of import."""
         clear_caches()
         sg_root = get_sg_root(python_source)
@@ -215,7 +241,8 @@ import os
         assert result is not None
         assert result.category in {"from_import", "reference"}
 
-    def test_containing_scope_detected(self, python_source: Path) -> None:
+    @staticmethod
+    def test_containing_scope_detected(python_source: Path) -> None:
         """Test that containing scope is detected."""
         clear_caches()
         sg_root = get_sg_root(python_source)
@@ -227,7 +254,8 @@ import os
             # Scope could be the method or class
             pass
 
-    def test_classify_from_records_import(self, python_source: Path) -> None:
+    @staticmethod
+    def test_classify_from_records_import(python_source: Path) -> None:
         """Record-based classification should detect imports."""
         clear_caches()
         root = python_source.parent
@@ -235,7 +263,8 @@ import os
         assert result is not None
         assert result.category in {"from_import", "import"}
 
-    def test_classify_from_records_definition_requires_name_overlap(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_classify_from_records_definition_requires_name_overlap(tmp_path: Path) -> None:
         """Definition records should not classify body references as definitions."""
         source = tmp_path / "sample.py"
         source.write_text(
@@ -250,7 +279,8 @@ import os
 class TestCacheHelpers:
     """Tests for classifier cache helpers."""
 
-    def test_def_lines_cached(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_def_lines_cached(tmp_path: Path) -> None:
         """Def line cache should return the same object for repeated calls."""
         source = tmp_path / "sample.py"
         source.write_text("def foo():\n    return 1\n\nasync def bar():\n    pass\n")
@@ -260,7 +290,8 @@ class TestCacheHelpers:
         assert first is second
         assert any(line == 1 for line, _ in first)
 
-    def test_symtable_cached(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_symtable_cached(tmp_path: Path) -> None:
         """Symtable cache should reuse the same table object."""
         source = tmp_path / "sym.py"
         source.write_text("def foo(x):\n    return x\n")
@@ -275,7 +306,8 @@ class TestCacheHelpers:
 class TestNodeIndex:
     """Tests for AST node index caching and scaling."""
 
-    def test_node_index_cached(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_node_index_cached(tmp_path: Path) -> None:
         """Node index should be cached per file."""
         source = tmp_path / "nodes.py"
         source.write_text("def foo():\n    return 1\n")
@@ -286,7 +318,8 @@ class TestNodeIndex:
         index2 = get_node_index(source, sg_root)
         assert index1 is index2
 
-    def test_node_index_large_file(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_node_index_large_file(tmp_path: Path) -> None:
         """Node index should handle large files without error."""
         source = tmp_path / "large.py"
         lines = []
@@ -305,7 +338,8 @@ class TestNodeIndex:
 class TestSymtableEnrichment:
     """Tests for symtable-based enrichment."""
 
-    def test_parameter_detection(self) -> None:
+    @staticmethod
+    def test_parameter_detection() -> None:
         """Test parameter detection."""
         source = """\
 def foo(param):
@@ -315,7 +349,8 @@ def foo(param):
         assert result is not None
         assert result.is_parameter is True
 
-    def test_local_detection(self) -> None:
+    @staticmethod
+    def test_local_detection() -> None:
         """Test local variable detection."""
         source = """\
 def foo():
@@ -327,7 +362,8 @@ def foo():
         assert result.is_local is True
         assert result.is_assigned is True
 
-    def test_global_detection(self) -> None:
+    @staticmethod
+    def test_global_detection() -> None:
         """Test global variable detection."""
         source = """\
 GLOBAL = 1
@@ -340,7 +376,8 @@ def foo():
         assert result is not None
         assert result.is_global is True
 
-    def test_imported_detection(self) -> None:
+    @staticmethod
+    def test_imported_detection() -> None:
         """Test imported symbol detection at module level."""
         source = """\
 import os
@@ -351,7 +388,8 @@ x = os.path
         assert result is not None
         assert result.is_imported is True
 
-    def test_closure_detection(self) -> None:
+    @staticmethod
+    def test_closure_detection() -> None:
         """Test free variable (closure) detection."""
         source = """\
 def outer():
@@ -364,7 +402,8 @@ def outer():
         assert result is not None
         assert result.is_free is True
 
-    def test_nonlocal_detection(self) -> None:
+    @staticmethod
+    def test_nonlocal_detection() -> None:
         """Test nonlocal variable detection."""
         source = """\
 def outer():
@@ -380,13 +419,15 @@ def outer():
         # but also declared nonlocal
         assert result.is_nonlocal is True
 
-    def test_syntax_error_returns_none(self) -> None:
+    @staticmethod
+    def test_syntax_error_returns_none() -> None:
         """Test that syntax errors return None."""
         source = "def foo(:\n    pass"
         result = enrich_with_symtable(source, "test.py", "foo", 1)
         assert result is None
 
-    def test_unknown_symbol_returns_none(self) -> None:
+    @staticmethod
+    def test_unknown_symbol_returns_none() -> None:
         """Test that unknown symbols return None."""
         source = """\
 def foo():
@@ -399,7 +440,8 @@ def foo():
 class TestCacheManagement:
     """Tests for cache management."""
 
-    def test_clear_caches(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_clear_caches(tmp_path: Path) -> None:
         """Test cache clearing."""
         source = tmp_path / "cached.py"
         source.write_text("def foo(): pass")

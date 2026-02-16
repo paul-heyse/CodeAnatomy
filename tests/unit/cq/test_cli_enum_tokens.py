@@ -18,6 +18,7 @@ class TestOutputFormatTokens:
     so we use app.meta.parse_args() for these tests.
     """
 
+    @staticmethod
     @pytest.mark.parametrize(
         ("token", "expected"),
         [
@@ -30,13 +31,14 @@ class TestOutputFormatTokens:
             ("dot", OutputFormat.dot),
         ],
     )
-    def test_format_token_parsing(self, token: str, expected: OutputFormat) -> None:
+    def test_format_token_parsing(token: str, expected: OutputFormat) -> None:
         """Test that CLI tokens are correctly parsed to enum values."""
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--format", token])
         global_opts = bound.kwargs["global_opts"]
         assert global_opts.output_format == expected
 
-    def test_mermaid_class_hyphen_form(self) -> None:
+    @staticmethod
+    def test_mermaid_class_hyphen_form() -> None:
         """Test that mermaid-class (with hyphen) works.
 
         This is the critical test for name_transform working correctly.
@@ -48,7 +50,8 @@ class TestOutputFormatTokens:
         assert global_opts.output_format == OutputFormat.mermaid_class
         assert str(global_opts.output_format) == "mermaid-class"
 
-    def test_invalid_format_fails(self) -> None:
+    @staticmethod
+    def test_invalid_format_fails() -> None:
         """Test that invalid format token fails parsing."""
         with pytest.raises(SystemExit):
             app.meta.parse_args(
@@ -59,12 +62,14 @@ class TestOutputFormatTokens:
 class TestEnumValuePreservation:
     """Tests that enum values are preserved correctly."""
 
-    def test_output_format_str_returns_value(self) -> None:
+    @staticmethod
+    def test_output_format_str_returns_value() -> None:
         """Test that str(OutputFormat) returns the CLI token."""
         assert str(OutputFormat.md) == "md"
         assert str(OutputFormat.mermaid_class) == "mermaid-class"
 
-    def test_output_format_value_lookup(self) -> None:
+    @staticmethod
+    def test_output_format_value_lookup() -> None:
         """Test creating enum from value string."""
         assert OutputFormat("md") == OutputFormat.md
         assert OutputFormat("mermaid-class") == OutputFormat.mermaid_class

@@ -13,7 +13,7 @@ from tools.cq.search.tree_sitter.query.contract_snapshot import QueryContractSna
 class QueryRuntimeState:
     """Consolidated runtime state for query subsystem.
 
-    Attributes
+    Attributes:
     ----------
     last_contract_snapshots : dict[str, QueryContractSnapshotV1]
         Last contract snapshot captured per language by drift detection.
@@ -26,7 +26,7 @@ class QueryRuntimeState:
 
 
 _STATE_LOCK = threading.Lock()
-_GLOBAL_STATE: QueryRuntimeState | None = None
+_GLOBAL_STATE_HOLDER: dict[str, QueryRuntimeState | None] = {"value": None}
 
 
 def get_query_runtime_state() -> QueryRuntimeState:
@@ -34,16 +34,15 @@ def get_query_runtime_state() -> QueryRuntimeState:
 
     Thread-safe singleton accessor with lazy initialization.
 
-    Returns
+    Returns:
     -------
     QueryRuntimeState
         The global runtime state instance.
     """
-    global _GLOBAL_STATE
     with _STATE_LOCK:
-        if _GLOBAL_STATE is None:
-            _GLOBAL_STATE = QueryRuntimeState()
-        return _GLOBAL_STATE
+        if _GLOBAL_STATE_HOLDER["value"] is None:
+            _GLOBAL_STATE_HOLDER["value"] = QueryRuntimeState()
+        return _GLOBAL_STATE_HOLDER["value"]
 
 
 def set_query_runtime_state(state: QueryRuntimeState | None) -> None:
@@ -56,9 +55,8 @@ def set_query_runtime_state(state: QueryRuntimeState | None) -> None:
     state : QueryRuntimeState | None
         New state to install, or None to clear.
     """
-    global _GLOBAL_STATE
     with _STATE_LOCK:
-        _GLOBAL_STATE = state
+        _GLOBAL_STATE_HOLDER["value"] = state
 
 
 __all__ = [

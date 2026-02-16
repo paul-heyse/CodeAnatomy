@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 from tools.cq.search.tree_sitter.rust_lane import runtime as tree_sitter_rust
+from tools.cq.search.tree_sitter.rust_lane.enrichment_extractors import _MAX_FIELDS_SHOWN
 from tools.cq.search.tree_sitter.rust_lane.runtime import MAX_SOURCE_BYTES
+from tools.cq.search.tree_sitter.rust_lane.runtime_cache import (
+    _MAX_TREE_CACHE_ENTRIES,
+    _TREE_CACHE,
+)
 
 _RUST_SAMPLE = 'mod outer {\n    fn build_graph() {\n        println!("hello");\n    }\n}\n'
 
@@ -38,12 +43,12 @@ def test_enrich_rust_context_returns_scope_chain() -> None:
 def test_enrich_rust_context_fail_open_on_parser_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unexpected parser failures should degrade to None."""
 
-    def _boom() -> object:
+    def _boom(*_args: object, **_kwargs: object) -> object:
         msg = "forced parse failure"
         raise RuntimeError(msg)
 
     tree_sitter_rust.clear_tree_sitter_rust_cache()
-    monkeypatch.setattr(tree_sitter_rust, "_make_parser", _boom)
+    monkeypatch.setattr(tree_sitter_rust, "_parse_with_session", _boom)
     payload = tree_sitter_rust.enrich_rust_context(_RUST_SAMPLE, line=2, col=8, cache_key="boom")
     assert payload is None
 
@@ -475,13 +480,13 @@ def test_cache_staleness() -> None:
 def test_cache_bounded() -> None:
     """Cache should not grow beyond _MAX_TREE_CACHE_ENTRIES."""
     tree_sitter_rust.clear_tree_sitter_rust_cache()
-    limit = tree_sitter_rust._MAX_TREE_CACHE_ENTRIES  # noqa: SLF001
+    limit = _MAX_TREE_CACHE_ENTRIES
 
     for i in range(limit + 20):
         source = f"fn func_{i}() {{}}\n"
         tree_sitter_rust.enrich_rust_context(source, line=1, col=3, cache_key=f"bounded-{i}")
 
-    cache_size = len(tree_sitter_rust._TREE_CACHE)  # noqa: SLF001
+    cache_size = len(_TREE_CACHE)
     assert cache_size <= limit
     assert tree_sitter_rust.get_tree_sitter_rust_cache_stats()["cache_evictions"] > 0
 
@@ -494,7 +499,7 @@ def test_payload_truncation() -> None:
     payload = _enrich(big_struct, line=2, col=4, cache_key="truncate")
     field_list = payload.get("struct_fields")
     if isinstance(field_list, list) and len(field_list) > 0:
-        max_shown = tree_sitter_rust._MAX_FIELDS_SHOWN  # noqa: SLF001
+        max_shown = _MAX_FIELDS_SHOWN
         # The list should be capped (max_shown fields + "... and N more")
         assert len(field_list) <= max_shown + 1
         if len(field_list) == max_shown + 1:

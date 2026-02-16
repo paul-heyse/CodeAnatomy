@@ -15,8 +15,9 @@ from semantics.incremental.config import SemanticIncrementalConfig
 class TestSemanticIncrementalConfig:
     """Tests for SemanticIncrementalConfig dataclass."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_create_default_config(self) -> None:
+    def test_create_default_config() -> None:
         """SemanticIncrementalConfig can be created with defaults."""
         config = SemanticIncrementalConfig()
         assert config.enabled is False
@@ -28,7 +29,8 @@ class TestSemanticIncrementalConfig:
         assert config.git_head_ref is None
         assert config.git_changed_only is False
 
-    def test_create_enabled_config(self) -> None:
+    @staticmethod
+    def test_create_enabled_config() -> None:
         """SemanticIncrementalConfig can be created with enabled=True."""
         config = SemanticIncrementalConfig(
             enabled=True,
@@ -37,7 +39,8 @@ class TestSemanticIncrementalConfig:
         assert config.enabled is True
         assert config.state_dir == Path("/tmp/state")
 
-    def test_config_with_all_fields(self) -> None:
+    @staticmethod
+    def test_config_with_all_fields() -> None:
         """SemanticIncrementalConfig can be created with all fields."""
         config = SemanticIncrementalConfig(
             enabled=True,
@@ -60,7 +63,8 @@ class TestSemanticIncrementalConfig:
         assert config.git_head_ref == "feature-branch"
         assert config.git_changed_only is True
 
-    def test_config_is_frozen(self) -> None:
+    @staticmethod
+    def test_config_is_frozen() -> None:
         """SemanticIncrementalConfig is immutable."""
         config = SemanticIncrementalConfig()
         attr_name = "enabled"
@@ -71,8 +75,9 @@ class TestSemanticIncrementalConfig:
 class TestCursorStorePath:
     """Tests for cursor_store_path property."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_cursor_store_path_with_state_dir(self) -> None:
+    def test_cursor_store_path_with_state_dir() -> None:
         """cursor_store_path returns cursors subdirectory."""
         config = SemanticIncrementalConfig(
             enabled=True,
@@ -80,12 +85,14 @@ class TestCursorStorePath:
         )
         assert config.cursor_store_path == Path("/tmp/incremental_state/cursors")
 
-    def test_cursor_store_path_none_when_no_state_dir(self) -> None:
+    @staticmethod
+    def test_cursor_store_path_none_when_no_state_dir() -> None:
         """cursor_store_path returns None when state_dir is None."""
         config = SemanticIncrementalConfig(enabled=False)
         assert config.cursor_store_path is None
 
-    def test_cursor_store_path_relative_state_dir(self) -> None:
+    @staticmethod
+    def test_cursor_store_path_relative_state_dir() -> None:
         """cursor_store_path works with relative state_dir."""
         config = SemanticIncrementalConfig(
             enabled=True,
@@ -97,8 +104,9 @@ class TestCursorStorePath:
 class TestWithCdfEnabled:
     """Tests for with_cdf_enabled factory method."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_with_cdf_enabled_basic(self) -> None:
+    def test_with_cdf_enabled_basic() -> None:
         """with_cdf_enabled creates enabled config."""
         config = SemanticIncrementalConfig.with_cdf_enabled(
             state_dir=Path("/tmp/state"),
@@ -106,7 +114,8 @@ class TestWithCdfEnabled:
         assert config.enabled is True
         assert config.state_dir == Path("/tmp/state")
 
-    def test_with_cdf_enabled_default_filter_policy(self) -> None:
+    @staticmethod
+    def test_with_cdf_enabled_default_filter_policy() -> None:
         """with_cdf_enabled uses inserts_and_updates_only by default."""
         config = SemanticIncrementalConfig.with_cdf_enabled(
             state_dir=Path("/tmp/state"),
@@ -115,7 +124,8 @@ class TestWithCdfEnabled:
         assert config.cdf_filter_policy.include_update_postimage is True
         assert config.cdf_filter_policy.include_delete is False
 
-    def test_with_cdf_enabled_custom_filter_policy(self) -> None:
+    @staticmethod
+    def test_with_cdf_enabled_custom_filter_policy() -> None:
         """with_cdf_enabled accepts custom filter policy."""
         custom_policy = CdfFilterPolicy.include_all()
         config = SemanticIncrementalConfig.with_cdf_enabled(
@@ -124,7 +134,8 @@ class TestWithCdfEnabled:
         )
         assert config.cdf_filter_policy.include_delete is True
 
-    def test_with_cdf_enabled_custom_merge_strategy(self) -> None:
+    @staticmethod
+    def test_with_cdf_enabled_custom_merge_strategy() -> None:
         """with_cdf_enabled accepts custom merge strategy."""
         config = SemanticIncrementalConfig.with_cdf_enabled(
             state_dir=Path("/tmp/state"),
@@ -132,14 +143,16 @@ class TestWithCdfEnabled:
         )
         assert config.default_merge_strategy == CDFMergeStrategy.REPLACE
 
-    def test_with_cdf_enabled_default_merge_strategy(self) -> None:
+    @staticmethod
+    def test_with_cdf_enabled_default_merge_strategy() -> None:
         """with_cdf_enabled defaults to UPSERT merge strategy."""
         config = SemanticIncrementalConfig.with_cdf_enabled(
             state_dir=Path("/tmp/state"),
         )
         assert config.default_merge_strategy == CDFMergeStrategy.UPSERT
 
-    def test_with_cdf_enabled_cursor_store_path(self) -> None:
+    @staticmethod
+    def test_with_cdf_enabled_cursor_store_path() -> None:
         """with_cdf_enabled creates valid cursor_store_path."""
         config = SemanticIncrementalConfig.with_cdf_enabled(
             state_dir=Path("/tmp/state"),
@@ -150,7 +163,8 @@ class TestWithCdfEnabled:
 class TestDefaultCdfFilterPolicy:
     """Tests for default CDF filter policy."""
 
-    def test_default_policy_excludes_deletes(self) -> None:
+    @staticmethod
+    def test_default_policy_excludes_deletes() -> None:
         """Default cdf_filter_policy excludes deletes."""
         config = SemanticIncrementalConfig()
         policy = config.cdf_filter_policy
@@ -162,8 +176,9 @@ class TestDefaultCdfFilterPolicy:
 class TestToRunSnapshot:
     """Tests for to_run_snapshot method."""
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_to_run_snapshot_basic(self) -> None:
+    def test_to_run_snapshot_basic() -> None:
         """to_run_snapshot returns IncrementalRunConfig."""
         config = SemanticIncrementalConfig(
             enabled=True,
@@ -174,7 +189,8 @@ class TestToRunSnapshot:
         assert snapshot.enabled is True
         assert snapshot.state_dir == "/tmp/state"
 
-    def test_to_run_snapshot_with_git_refs(self) -> None:
+    @staticmethod
+    def test_to_run_snapshot_with_git_refs() -> None:
         """to_run_snapshot includes git refs."""
         config = SemanticIncrementalConfig(
             enabled=True,
@@ -191,7 +207,8 @@ class TestToRunSnapshot:
         assert snapshot.git_head_ref == "feature"
         assert snapshot.git_changed_only is True
 
-    def test_to_run_snapshot_none_state_dir(self) -> None:
+    @staticmethod
+    def test_to_run_snapshot_none_state_dir() -> None:
         """to_run_snapshot handles None state_dir."""
         config = SemanticIncrementalConfig()
         snapshot = config.to_run_snapshot()
@@ -202,7 +219,8 @@ class TestToRunSnapshot:
 class TestConfigIntegration:
     """Integration tests for SemanticIncrementalConfig."""
 
-    def test_config_with_real_paths(self, tmp_path: Path) -> None:
+    @staticmethod
+    def test_config_with_real_paths(tmp_path: Path) -> None:
         """Config works with real filesystem paths."""
         state_dir = tmp_path / "incremental_state"
         config = SemanticIncrementalConfig.with_cdf_enabled(state_dir=state_dir)
@@ -210,7 +228,8 @@ class TestConfigIntegration:
         assert config.enabled is True
         assert config.cursor_store_path == state_dir / "cursors"
 
-    def test_config_defaults_are_consistent(self) -> None:
+    @staticmethod
+    def test_config_defaults_are_consistent() -> None:
         """Keep safe defaults when incremental processing is disabled."""
         default_config = SemanticIncrementalConfig()
         # When disabled, should have safe defaults

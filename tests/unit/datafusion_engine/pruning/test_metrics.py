@@ -21,7 +21,8 @@ PRUNING_EFFECTIVENESS_MEDIUM = 0.5
 class TestPruningMetricsCreation:
     """Test PruningMetrics construction."""
 
-    def test_default_values(self) -> None:
+    @staticmethod
+    def test_default_values() -> None:
         """Default PruningMetrics has all-zero fields."""
         m = PruningMetrics()
         assert m.row_groups_total == 0
@@ -32,7 +33,8 @@ class TestPruningMetricsCreation:
         assert m.statistics_available is False
         assert m.pruning_effectiveness == 0.0
 
-    def test_full_construction(self) -> None:
+    @staticmethod
+    def test_full_construction() -> None:
         """Construct PruningMetrics with all fields set."""
         m = PruningMetrics(
             row_groups_total=ROW_GROUPS_TOTAL,
@@ -51,7 +53,8 @@ class TestPruningMetricsCreation:
         assert m.statistics_available is True
         assert m.pruning_effectiveness == PRUNING_EFFECTIVENESS_HIGH
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """PruningMetrics is immutable (frozen)."""
         m = PruningMetrics()
         assert_immutable_assignment(
@@ -65,7 +68,8 @@ class TestPruningMetricsCreation:
 class TestPruningMetricsSerialization:
     """Test msgspec round-trip for PruningMetrics."""
 
-    def test_round_trip(self) -> None:
+    @staticmethod
+    def test_round_trip() -> None:
         """Encode and decode PruningMetrics via msgspec."""
         original = PruningMetrics(
             row_groups_total=ROUNDTRIP_ROW_GROUPS_TOTAL,
@@ -80,7 +84,8 @@ class TestPruningMetricsSerialization:
         assert decoded.row_groups_pruned == ROUNDTRIP_ROW_GROUPS_PRUNED
         assert decoded.pruning_effectiveness == PRUNING_EFFECTIVENESS_MEDIUM
 
-    def test_omit_defaults(self) -> None:
+    @staticmethod
+    def test_omit_defaults() -> None:
         """Default-valued fields are omitted in serialized output."""
         m = PruningMetrics()
         data = msgspec.json.encode(m)

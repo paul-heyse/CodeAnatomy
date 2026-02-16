@@ -49,9 +49,9 @@ def test_macro_scoring_details_supports_breakage_signals() -> None:
         ambiguities=3,
         evidence_kind="resolved_ast",
     )
-    assert details["impact_score"] is not None
-    assert details["confidence_score"] is not None
-    assert details["evidence_kind"] == "resolved_ast"
+    assert details.impact_score is not None
+    assert details.confidence_score is not None
+    assert details.evidence_kind == "resolved_ast"
 
 
 def test_resolve_target_files_finds_explicit_path(tmp_path: Path) -> None:

@@ -6,13 +6,10 @@ for the calls macro command.
 
 from __future__ import annotations
 
-import ast
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import msgspec
 
 from tools.cq.core.cache import maybe_evict_run_cache_tag
 from tools.cq.core.run_context import RunContext
@@ -26,9 +23,14 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.macros.calls.analysis import CallSite, _analyze_sites, _collect_call_sites_from_records
+from tools.cq.macros.calls.analysis import (
+    CallSite,
+    _analyze_sites,
+    _collect_call_sites_from_records,
+)
 from tools.cq.macros.calls.insight import (
     CallsFrontDoorState,
+    CallsInsightSummary,
     _add_context_section,
     _add_hazard_section,
     _add_kw_section,
@@ -37,8 +39,8 @@ from tools.cq.macros.calls.insight import (
     _build_call_scoring,
     _build_calls_confidence,
     _build_calls_front_door_insight,
-    _find_function_signature,
     _finalize_calls_semantic_state,
+    _find_function_signature,
 )
 from tools.cq.macros.calls.neighborhood import (
     CallAnalysisSummary,
@@ -58,7 +60,7 @@ from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightNeighborhoodV1
+    from tools.cq.core.front_door_insight import FrontDoorInsightV1
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.macros.calls.analysis import CallSite
     from tools.cq.query.language import QueryLanguage
@@ -424,13 +426,16 @@ def _build_calls_result(
     analysis, score = _analyze_calls_sites(result, ctx=ctx, scan_result=scan_result)
     state = _build_calls_front_door_state(result, ctx=ctx, analysis=analysis, score=score)
     confidence = _build_calls_confidence(score)
-    insight = _build_calls_front_door_insight(
+    summary_input = CallsInsightSummary(
         function_name=ctx.function_name,
         signature_info=scan_result.signature_info,
         files_with_calls=scan_result.files_with_calls,
         arg_shape_count=len(analysis.arg_shapes),
         forwarding_count=analysis.forwarding_count,
         hazard_counts=dict(analysis.hazard_counts),
+    )
+    insight = _build_calls_front_door_insight(
+        summary=summary_input,
         confidence=confidence,
         state=state,
         used_fallback=scan_result.used_fallback,

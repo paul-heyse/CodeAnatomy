@@ -241,14 +241,16 @@ class TestRustRuleSpecs:
         rule_ids = {rule.rule_id for rule in self._rust_rules()}
         assert "rs_call_macro" in rule_ids
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_rules_by_record_type_has_module(self) -> None:
+    def test_rules_by_record_type_has_module() -> None:
         """Verify ``def`` rules include the rs_def_module spec."""
         def_rules = get_rules_for_types({"def"}, lang="rust")
         assert any(rule.rule_id == "rs_def_module" for rule in def_rules)
 
+    @staticmethod
     @pytest.mark.smoke
-    def test_rules_by_record_type_has_macro_call(self) -> None:
+    def test_rules_by_record_type_has_macro_call() -> None:
         """Verify rs_call_macro is available in call-record dispatch."""
         call_rules = get_rules_for_types({"call"}, lang="rust")
         assert any(rule.rule_id == "rs_call_macro" for rule in call_rules)

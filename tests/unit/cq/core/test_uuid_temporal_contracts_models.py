@@ -21,7 +21,6 @@ def test_temporal_uuid_info_model() -> None:
     assert row.time_ms == TEMPORAL_TIME_MS
 
 
-
 def test_run_identity_contract_model() -> None:
     """Validate model fields for run identity contract."""
     row = RunIdentityContractV1(

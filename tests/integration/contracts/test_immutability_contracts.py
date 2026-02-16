@@ -208,12 +208,12 @@ _CASES: tuple[tuple[str, _MutationCase], ...] = (
 class TestImmutabilityContracts:
     """Tests for immutability enforcement on frozen dataclasses and structs."""
 
+    @staticmethod
     @pytest.mark.parametrize(
         ("_case_id", "case"),
         _CASES,
     )
     def test_immutable_assignments_raise_and_preserve_values(
-        self,
         _case_id: str,
         case: _MutationCase,
     ) -> None:

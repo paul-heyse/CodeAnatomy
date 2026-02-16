@@ -35,12 +35,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
+from relspec.inference_confidence import InferenceConfidence
 from semantics.config import SemanticConfig
 from semantics.join_helpers import join_by_span_contains, join_by_span_overlap
 from semantics.joins import JoinStrategy, JoinStrategyType
@@ -51,9 +52,9 @@ if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
     from datafusion.expr import Expr
 
-    from semantics.exprs import ExprContextImpl, ExprSpec
     from semantics.ir import SemanticIRJoinGroup
-    from semantics.quality import JoinHow
+    from semantics.quality import QualityRelationshipSpec
+    from semantics.quality_compiler import TableInfoLike
     from semantics.specs import SemanticTableSpec
     from semantics.types import AnnotatedSchema
 
@@ -76,11 +77,6 @@ CANONICAL_EDGE_SCHEMA: tuple[tuple[str, pa.DataType], ...] = (
     ("origin", pa.string()),
 )
 
-_LEFT_ALIAS_PREFIX = "l__"
-_RIGHT_ALIAS_PREFIX = "r__"
-_FILE_QUALITY_PREFIX = "fq__"
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -92,16 +88,6 @@ class TextNormalizationOptions:
     casefold: bool = False
     collapse_ws: bool = False
     output_suffix: str = "_norm"
-
-
-@dataclass(frozen=True)
-class _QualityOutputContext:
-    """Context for projecting quality relationship outputs."""
-
-    rank_available: set[str]
-    hard_columns: list[str]
-    feature_columns: set[str]
-    required_columns: set[str]
 
 
 @dataclass
@@ -268,6 +254,11 @@ class SemanticCompiler:
             return tuple(schema.names)
         return tuple(field.name for field in schema)
 
+    def schema_names(self, df: DataFrame) -> tuple[str, ...]:
+        """Return schema column names for a DataFusion DataFrame."""
+        _ = self
+        return SemanticCompiler._schema_names(df)
+
     @staticmethod
     def _prefix_df(df: DataFrame, prefix: str) -> DataFrame:
         from datafusion import col
@@ -275,6 +266,11 @@ class SemanticCompiler:
         names = SemanticCompiler._schema_names(df)
         exprs = [col(name).alias(f"{prefix}{name}") for name in names]
         return df.select(*exprs)
+
+    def prefix_df(self, df: DataFrame, prefix: str) -> DataFrame:
+        """Return DataFrame with all columns prefixed by ``prefix``."""
+        _ = self
+        return SemanticCompiler._prefix_df(df, prefix)
 
     @staticmethod
     def _ensure_columns_present(
@@ -377,6 +373,27 @@ class SemanticCompiler:
         )
         return resolved_left, resolved_right
 
+    def resolve_join_keys(
+        self,
+        *,
+        left_info: TableInfoLike,
+        right_info: TableInfoLike,
+        left_on: Sequence[str],
+        right_on: Sequence[str],
+    ) -> tuple[Sequence[str], Sequence[str]]:
+        """Resolve join keys for quality-relationship compilation.
+
+        Returns:
+            tuple[Sequence[str], Sequence[str]]: Resolved left/right join keys.
+        """
+        _ = self
+        return SemanticCompiler._resolve_join_keys(
+            left_info=cast("TableInfo", left_info),
+            right_info=cast("TableInfo", right_info),
+            left_on=left_on,
+            right_on=right_on,
+        )
+
     @staticmethod
     def _validate_join_keys(
         *,
@@ -423,6 +440,23 @@ class SemanticCompiler:
                 f"{right_view!r}.{right_key} ({right_type})."
             )
             raise SemanticSchemaError(msg)
+
+    def validate_join_keys(
+        self,
+        *,
+        left_info: TableInfoLike,
+        right_info: TableInfoLike,
+        left_on: Sequence[str],
+        right_on: Sequence[str],
+    ) -> None:
+        """Validate join-key shape and semantic compatibility."""
+        _ = self
+        SemanticCompiler._validate_join_keys(
+            left_info=cast("TableInfo", left_info),
+            right_info=cast("TableInfo", right_info),
+            left_on=left_on,
+            right_on=right_on,
+        )
 
     @staticmethod
     def _null_guard(
@@ -484,9 +518,6 @@ class SemanticCompiler:
         else:
             left_keys = tuple(f"{left_prefix}{key}" for key in strategy.left_keys)
             right_keys = tuple(f"{right_prefix}{key}" for key in strategy.right_keys)
-            if not left_keys or not right_keys:
-                msg = f"Join strategy {strategy.strategy_type} missing join keys."
-                raise SemanticSchemaError(msg)
             joined = left_pref.join(
                 right_pref,
                 left_on=list(left_keys),
@@ -514,7 +545,7 @@ class SemanticCompiler:
 
         dfs: list[DataFrame] = []
         for name in spec.table_names:
-            info = self.get(name)
+            info = self.get_or_register(name)
             projected = self._project_to_schema(info.df, spec.schema)
             dfs.append(projected.with_column(spec.discriminator, lit(name)))
 
@@ -560,8 +591,8 @@ class SemanticCompiler:
         self._tables[name] = info
         return info
 
-    def get(self, name: str) -> TableInfo:
-        """Get or analyze a table.
+    def get_or_register(self, name: str) -> TableInfo:
+        """Get or register a table.
 
         Parameters
         ----------
@@ -605,7 +636,7 @@ class SemanticCompiler:
             from datafusion_engine.udf.expr import udf_expr
 
             self._require_udfs(("stable_id", "span_make"))
-            info = self.get(spec.table)
+            info = self.get_or_register(spec.table)
             df = info.df
             names = set(self._schema_names(df))
 
@@ -699,8 +730,6 @@ class SemanticCompiler:
         Returns:
             DataFrame: Result.
 
-        Raises:
-            SemanticSchemaError: If schema normalization cannot be resolved.
         """
         with stage_span(
             "semantics.normalize",
@@ -713,31 +742,13 @@ class SemanticCompiler:
         ):
             from datafusion import col
 
-            from semantics.column_types import ColumnType
-
             spec = self._spec_for_table(table_name)
             if spec is not None:
                 return self.normalize_from_spec(spec)
 
-            info = self.get(table_name)
+            info = self.get_or_register(table_name)
             sem = info.sem
-            span_start_candidates = tuple(
-                name
-                for name, col_type in sem.column_types.items()
-                if col_type == ColumnType.SPAN_START
-            )
-            span_end_candidates = tuple(
-                name
-                for name, col_type in sem.column_types.items()
-                if col_type == ColumnType.SPAN_END
-            )
-            if len(span_start_candidates) > 1 or len(span_end_candidates) > 1:
-                msg = (
-                    f"Table {table_name!r} has ambiguous span columns: "
-                    f"start={span_start_candidates!r}, end={span_end_candidates!r}. "
-                    "Provide a SemanticTableSpec to select the primary span."
-                )
-                raise SemanticSchemaError(msg)
+            sem.require_unambiguous_spans(table=table_name)
             sem.require_evidence(table=table_name)
             self._require_udfs(("stable_id", "span_make"))
 
@@ -792,7 +803,7 @@ class SemanticCompiler:
 
             from datafusion_engine.udf.expr import udf_expr
 
-            info = self.get(table_name)
+            info = self.get_or_register(table_name)
             self._require_udfs(("utf8_normalize",))
             df = info.df
 
@@ -839,6 +850,65 @@ class SemanticCompiler:
     # Rules 5, 6, 7: Relationship building
     # -------------------------------------------------------------------------
 
+    @staticmethod
+    def _relation_hint(options: RelationOptions) -> JoinStrategyType | None:
+        hint = options.strategy_hint
+        if hint is None and options.join_type is not None:
+            return (
+                JoinStrategyType.SPAN_CONTAINS
+                if options.join_type == "contains"
+                else JoinStrategyType.SPAN_OVERLAP
+            )
+        return hint
+
+    def _infer_relation_strategy(
+        self,
+        *,
+        left_table: str,
+        right_table: str,
+        left_info: TableInfo,
+        right_info: TableInfo,
+        options: RelationOptions,
+    ) -> tuple[JoinStrategy, InferenceConfidence | None]:
+        from semantics.joins.inference import (
+            JoinCapabilities,
+            JoinInferenceError,
+            infer_join_strategy_with_confidence,
+        )
+
+        hint = self._relation_hint(options)
+        strategy_result = infer_join_strategy_with_confidence(
+            left_info.annotated,
+            right_info.annotated,
+            hint=hint,
+        )
+        if strategy_result is None:
+            left_caps = JoinCapabilities.from_schema(left_info.annotated)
+            right_caps = JoinCapabilities.from_schema(right_info.annotated)
+            details: list[str] = []
+            if hint is not None:
+                details.append(f"Hint requested: {hint}")
+            details.extend(
+                (
+                    (
+                        f"{left_table}: file_identity={left_caps.has_file_identity}, "
+                        f"spans={left_caps.has_spans}, entity_id={left_caps.has_entity_id}, "
+                        f"symbol={left_caps.has_symbol}"
+                    ),
+                    (
+                        f"{right_table}: file_identity={right_caps.has_file_identity}, "
+                        f"spans={right_caps.has_spans}, entity_id={right_caps.has_entity_id}, "
+                        f"symbol={right_caps.has_symbol}"
+                    ),
+                )
+            )
+            msg = (
+                f"Cannot infer join strategy between {left_table!r} and {right_table!r}.\n"
+                + "\n".join(f"  {detail}" for detail in details)
+            )
+            raise JoinInferenceError(msg)
+        return strategy_result.strategy, strategy_result.confidence
+
     def relate(
         self,
         left_table: str,
@@ -852,20 +922,15 @@ class SemanticCompiler:
         - Rule 5 or 6: Join by span overlap/containment
         - Rule 7: Project to relation schema
 
-        Parameters
-        ----------
-        left_table
-            Entity table (must have entity_id).
-        right_table
-            Symbol table (must have symbol).
-        options
-            Relationship inference options and filters.
+        Parameters:
+            left_table: Entity table (must have ``entity_id``).
+            right_table: Symbol table (must have ``symbol``).
+            options: Relationship inference options and filters.
 
         Returns:
-        -------
-        DataFrame
-            Relationship table with schema:
-            (entity_id, symbol, path, bstart, bend, origin)
+            DataFrame: Relationship table with schema
+                ``(entity_id, symbol, path, bstart, bend, origin)``.
+
         """
         with stage_span(
             f"semantics.relate.{options.join_type or 'infer'}",
@@ -882,36 +947,18 @@ class SemanticCompiler:
         ):
             from datafusion import lit
 
-            from semantics.joins import infer_join_strategy_with_confidence, require_join_strategy
-
-            left_info = self.get(left_table)
-            right_info = self.get(right_table)
+            left_info = self.get_or_register(left_table)
+            right_info = self.get_or_register(right_table)
             left_info.sem.require_entity(table=left_table)
             right_info.sem.require_symbol_source(table=right_table)
-            hint = options.strategy_hint
-            if hint is None and options.join_type is not None:
-                hint = (
-                    JoinStrategyType.SPAN_CONTAINS
-                    if options.join_type == "contains"
-                    else JoinStrategyType.SPAN_OVERLAP
-                )
-            strategy_result = infer_join_strategy_with_confidence(
-                left_info.annotated,
-                right_info.annotated,
-                hint=hint,
+
+            strategy, join_confidence = self._infer_relation_strategy(
+                left_table=left_table,
+                right_table=right_table,
+                left_info=left_info,
+                right_info=right_info,
+                options=options,
             )
-            if strategy_result is None:
-                strategy = require_join_strategy(
-                    left_info.annotated,
-                    right_info.annotated,
-                    hint=hint,
-                    left_name=left_table,
-                    right_name=right_table,
-                )
-                join_confidence = None
-            else:
-                strategy = strategy_result.strategy
-                join_confidence = strategy_result.confidence
             if join_confidence is not None:
                 logger.debug(
                     "join_strategy_inference_confidence",
@@ -935,6 +982,17 @@ class SemanticCompiler:
                     right_table=right_table,
                 )
                 self._require_udfs(("span_overlaps", "span_contains"))
+
+            joined, left_sem, right_sem = self._join_with_strategy(
+                JoinInputs(
+                    left_df=left_info.df,
+                    right_df=right_info.df,
+                    left_sem=left_info.sem,
+                    right_sem=right_info.sem,
+                ),
+                strategy=strategy,
+                filter_sql=options.filter_sql,
+            )
 
             if options.use_cdf:
                 from semantics.incremental import (
@@ -984,28 +1042,6 @@ class SemanticCompiler:
                         )
                     left_sem = left_info.sem.prefixed("left__")
                     right_sem = right_info.sem.prefixed("right__")
-                else:
-                    joined, left_sem, right_sem = self._join_with_strategy(
-                        JoinInputs(
-                            left_df=left_info.df,
-                            right_df=right_info.df,
-                            left_sem=left_info.sem,
-                            right_sem=right_info.sem,
-                        ),
-                        strategy=strategy,
-                        filter_sql=options.filter_sql,
-                    )
-            else:
-                joined, left_sem, right_sem = self._join_with_strategy(
-                    JoinInputs(
-                        left_df=left_info.df,
-                        right_df=right_info.df,
-                        left_sem=left_info.sem,
-                        right_sem=right_info.sem,
-                    ),
-                    strategy=strategy,
-                    filter_sql=options.filter_sql,
-                )
 
             # Rule 7: Project to relation schema
             return joined.select(
@@ -1047,7 +1083,7 @@ class SemanticCompiler:
 
         dfs: list[DataFrame] = []
         for name in table_names:
-            info = self.get(name)
+            info = self.get_or_register(name)
             dfs.append(info.df.with_column(discriminator, lit(name)))
 
         first_schema = dfs[0].schema()
@@ -1178,7 +1214,7 @@ class SemanticCompiler:
         ):
             from datafusion import col, functions
 
-            info = self.get(table_name)
+            info = self.get_or_register(table_name)
             df = info.df
 
             # Build aggregation expressions
@@ -1233,7 +1269,7 @@ class SemanticCompiler:
         ):
             from datafusion import col, functions, lit
 
-            info = self.get(table_name)
+            info = self.get_or_register(table_name)
 
             # Use window function to rank, then filter to rank 1
             partition_by = [col(c) for c in key_columns]
@@ -1251,61 +1287,15 @@ class SemanticCompiler:
     # Quality-aware relationship compilation
     # -------------------------------------------------------------------------
 
-    def _build_joined_tables(
-        self,
-        *,
-        left_view: str,
-        right_view: str,
-        left_on: Sequence[str],
-        right_on: Sequence[str],
-        how: JoinHow,
-    ) -> DataFrame:
-        left_info = self.get(left_view)
-        right_info = self.get(right_view)
-
-        # Resolve join keys (infer from schemas when empty).
-        left_on, right_on = self._resolve_join_keys(
-            left_info=left_info,
-            right_info=right_info,
-            left_on=left_on,
-            right_on=right_on,
-        )
-
-        self._validate_join_keys(
-            left_info=left_info,
-            right_info=right_info,
-            left_on=left_on,
-            right_on=right_on,
-        )
-
-        left_aliased = self._prefix_df(left_info.df, _LEFT_ALIAS_PREFIX)
-        right_aliased = self._prefix_df(right_info.df, _RIGHT_ALIAS_PREFIX)
-
-        left_keys = [f"{_LEFT_ALIAS_PREFIX}{k}" for k in left_on]
-        right_keys = [f"{_RIGHT_ALIAS_PREFIX}{k}" for k in right_on]
-
-        return left_aliased.join(
-            right_aliased,
-            left_on=left_keys,
-            right_on=right_keys,
-            how=how,
-        )
-
     def build_join_group(self, group: SemanticIRJoinGroup) -> DataFrame:
         """Build a shared join group for multiple relationships.
 
         Returns:
-        -------
-        DataFrame
-            Joined DataFrame with left/right prefixes.
+            DataFrame: Joined DataFrame shared by grouped relationship specs.
         """
-        return self._build_joined_tables(
-            left_view=group.left_view,
-            right_view=group.right_view,
-            left_on=group.left_on,
-            right_on=group.right_on,
-            how=group.how,
-        )
+        from semantics.quality_compiler import build_join_group
+
+        return build_join_group(self, group)
 
     def compile_relationship_from_join(
         self,
@@ -1316,444 +1306,17 @@ class SemanticCompiler:
     ) -> DataFrame:
         """Compile a relationship from a pre-joined DataFrame.
 
-        Parameters
-        ----------
-        joined
-            Pre-joined DataFrame with left/right prefixes.
-        spec
-            Quality relationship specification.
-        file_quality_df
-            Optional file quality DataFrame for confidence adjustment.
-
         Returns:
-        -------
-        DataFrame
-            Compiled relationship output.
+            DataFrame: Relationship output projected from pre-joined input rows.
         """
-        return self.compile_relationship_with_quality(
+        from semantics.quality_compiler import compile_relationship_from_join
+
+        return compile_relationship_from_join(
+            self,
+            joined,
             spec,
             file_quality_df=file_quality_df,
-            joined=joined,
         )
-
-    def _maybe_join_file_quality(
-        self,
-        joined: DataFrame,
-        *,
-        spec: QualityRelationshipSpec,
-        file_quality_df: DataFrame | None,
-    ) -> DataFrame:
-        if not spec.join_file_quality:
-            return joined
-        fq_df = file_quality_df
-        if fq_df is None:
-            try:
-                fq_df = self.ctx.table(spec.file_quality_view)
-            except (KeyError, RuntimeError, TypeError, ValueError):
-                return joined
-        if fq_df is None:
-            return joined
-        fq_aliased = self._prefix_df(fq_df, _FILE_QUALITY_PREFIX)
-        left_file_id = f"{_LEFT_ALIAS_PREFIX}file_id"
-        fq_file_id = f"{_FILE_QUALITY_PREFIX}file_id"
-        return joined.join(
-            fq_aliased,
-            left_on=[left_file_id],
-            right_on=[fq_file_id],
-            how="left",
-        )
-
-    def _compile_relationship_with_quality_inner(
-        self,
-        spec: QualityRelationshipSpec,
-        *,
-        file_quality_df: DataFrame | None,
-        joined: DataFrame | None,
-    ) -> DataFrame:
-        # 1. Build equi-join (require keys) unless pre-joined is provided
-        if joined is None:
-            joined = self._build_joined_tables(
-                left_view=spec.left_view,
-                right_view=spec.right_view,
-                left_on=spec.left_on,
-                right_on=spec.right_on,
-                how=spec.how,
-            )
-
-        # 2. Optionally join file quality signals
-        joined = self._maybe_join_file_quality(
-            joined,
-            spec=spec,
-            file_quality_df=file_quality_df,
-        )
-
-        # 3. Set up expression context with prefixes
-        from semantics.exprs import ExprContextImpl
-
-        expr_ctx = ExprContextImpl(left_alias="l", right_alias="r")
-        schema_names = set(self._schema_names(joined))
-        feature_columns = self._feature_columns(spec)
-        rank_available = self._rank_available(schema_names, feature_columns, spec)
-        required_columns = self._initial_required_columns(spec)
-
-        # 4. Apply hard predicates
-        joined, hard_columns, required_columns = self._apply_hard_predicates(
-            joined,
-            spec=spec,
-            expr_ctx=expr_ctx,
-            schema_names=schema_names,
-            required_columns=required_columns,
-        )
-
-        # 5. Add feature columns and compute score
-        joined, required_columns = self._apply_feature_columns(
-            joined,
-            spec=spec,
-            expr_ctx=expr_ctx,
-            schema_names=schema_names,
-            required_columns=required_columns,
-        )
-
-        # 6. Compute confidence with quality adjustment
-        joined = self._apply_confidence(joined, spec=spec)
-
-        # 7. Add metadata columns
-        joined = self._apply_metadata(joined, spec=spec)
-
-        # 8. Apply ranking if specified
-        joined, required_columns = self._apply_ranking(
-            joined,
-            spec=spec,
-            expr_ctx=expr_ctx,
-            rank_available=rank_available,
-            required_columns=required_columns,
-        )
-
-        # 9. Project final output columns if specified
-        output_ctx = _QualityOutputContext(
-            rank_available=rank_available,
-            hard_columns=hard_columns,
-            feature_columns=feature_columns,
-            required_columns=required_columns,
-        )
-        return self._project_quality_output(
-            joined,
-            spec=spec,
-            expr_ctx=expr_ctx,
-            output_ctx=output_ctx,
-        )
-
-    @staticmethod
-    def _record_expr_issue(exc: Exception, *, expr_label: str) -> None:
-        logger.warning(
-            "Semantic expression validation failed for %s (%s).",
-            expr_label,
-            exc,
-        )
-
-    @staticmethod
-    def _collect_expr_columns(
-        expr_spec: ExprSpec,
-        *,
-        available_columns: set[str],
-        expr_label: str,
-    ) -> set[str] | None:
-        from semantics.exprs import ExprValidationContext, validate_expr_spec
-
-        try:
-            validate_expr_spec(
-                expr_spec,
-                available_columns=available_columns,
-                expr_label=expr_label,
-            )
-        except ValueError as exc:
-            SemanticCompiler._record_expr_issue(exc, expr_label=expr_label)
-            return None
-        validation_ctx = ExprValidationContext()
-        _ = expr_spec(validation_ctx)
-        return validation_ctx.used_columns()
-
-    @staticmethod
-    def _feature_columns(spec: QualityRelationshipSpec) -> set[str]:
-        return {f"feat_{feature.name}" for feature in spec.signals.features}
-
-    @staticmethod
-    def _rank_available(
-        schema_names: set[str],
-        feature_columns: set[str],
-        spec: QualityRelationshipSpec,
-    ) -> set[str]:
-        rank_available = {
-            *schema_names,
-            *feature_columns,
-            "score",
-            "confidence",
-            "origin",
-            "provider",
-        }
-        if spec.rule_name is not None:
-            rank_available.add("rule_name")
-        return rank_available
-
-    @staticmethod
-    def _initial_required_columns(spec: QualityRelationshipSpec) -> set[str]:
-        required_columns: set[str] = set()
-        required_columns.update({f"{_LEFT_ALIAS_PREFIX}{key}" for key in spec.left_on})
-        required_columns.update({f"{_RIGHT_ALIAS_PREFIX}{key}" for key in spec.right_on})
-        return required_columns
-
-    def _apply_hard_predicates(
-        self,
-        joined: DataFrame,
-        *,
-        spec: QualityRelationshipSpec,
-        expr_ctx: ExprContextImpl,
-        schema_names: set[str],
-        required_columns: set[str],
-    ) -> tuple[DataFrame, list[str], set[str]]:
-        from datafusion import col
-
-        hard_columns: list[str] = []
-        for index, hard_pred in enumerate(spec.signals.hard, start=1):
-            hard_required = self._collect_expr_columns(
-                hard_pred.predicate,
-                available_columns=schema_names,
-                expr_label=f"{spec.name}.hard[{index}]",
-            )
-            if hard_required is None:
-                continue
-            required_columns.update(hard_required)
-            pred_expr = hard_pred.predicate(expr_ctx)
-            hard_col = f"hard_{index}"
-            try:
-                joined = joined.with_column(hard_col, pred_expr)
-                joined = joined.filter(col(hard_col))
-            except (RuntimeError, TypeError, ValueError) as exc:
-                self._record_expr_issue(exc, expr_label=f"{spec.name}.hard[{index}]")
-                continue
-            hard_columns.append(hard_col)
-        return joined, hard_columns, required_columns
-
-    def _apply_feature_columns(
-        self,
-        joined: DataFrame,
-        *,
-        spec: QualityRelationshipSpec,
-        expr_ctx: ExprContextImpl,
-        schema_names: set[str],
-        required_columns: set[str],
-    ) -> tuple[DataFrame, set[str]]:
-        from datafusion import col, lit
-
-        base_score = lit(spec.signals.base_score)
-        for feature in spec.signals.features:
-            feature_required = self._collect_expr_columns(
-                feature.expr,
-                available_columns=schema_names,
-                expr_label=f"{spec.name}.feature[{feature.name}]",
-            )
-            if feature_required is None:
-                continue
-            required_columns.update(feature_required)
-            feature_expr = feature.expr(expr_ctx)
-            feature_col = f"feat_{feature.name}"
-            try:
-                joined = joined.with_column(feature_col, feature_expr)
-            except (RuntimeError, TypeError, ValueError) as exc:
-                self._record_expr_issue(exc, expr_label=f"{spec.name}.feature[{feature.name}]")
-                continue
-            base_score += col(feature_col) * lit(feature.weight)
-        joined = joined.with_column("score", base_score)
-        return joined, required_columns
-
-    def _apply_confidence(
-        self,
-        joined: DataFrame,
-        *,
-        spec: QualityRelationshipSpec,
-    ) -> DataFrame:
-        from datafusion import col, functions, lit
-
-        from semantics.exprs import clamp
-
-        base_conf = lit(spec.signals.base_confidence)
-        quality_col = f"{_FILE_QUALITY_PREFIX}{spec.signals.quality_score_column}"
-        schema_names = set(self._schema_names(joined))
-        if quality_col in schema_names:
-            quality_adj = functions.coalesce(col(quality_col), lit(1000.0)) * lit(
-                spec.signals.quality_weight
-            )
-            raw_conf = base_conf + (col("score") / lit(10000.0)) + quality_adj
-        else:
-            raw_conf = base_conf + (col("score") / lit(10000.0))
-        conf_expr = clamp(raw_conf, min_value=lit(0.0), max_value=lit(1.0))
-        return joined.with_column("confidence", conf_expr)
-
-    @staticmethod
-    def _apply_metadata(joined: DataFrame, *, spec: QualityRelationshipSpec) -> DataFrame:
-        from datafusion import lit
-
-        joined = joined.with_column("origin", lit(spec.origin))
-        joined = joined.with_column("provider", lit(spec.provider))
-        if spec.rule_name is not None:
-            joined = joined.with_column("rule_name", lit(spec.rule_name))
-        return joined
-
-    def _apply_ranking(
-        self,
-        joined: DataFrame,
-        *,
-        spec: QualityRelationshipSpec,
-        expr_ctx: ExprContextImpl,
-        rank_available: set[str],
-        required_columns: set[str],
-    ) -> tuple[DataFrame, set[str]]:
-        if spec.rank is None:
-            return joined, required_columns
-        from datafusion import col, functions, lit
-        from datafusion.expr import SortKey
-
-        key_required = self._collect_expr_columns(
-            spec.rank.ambiguity_key_expr,
-            available_columns=set(self._schema_names(joined)),
-            expr_label=f"{spec.name}.rank.ambiguity_key_expr",
-        )
-        if key_required is None:
-            return joined, required_columns
-        required_columns.update(key_required)
-        group_key = spec.rank.ambiguity_key_expr(expr_ctx)
-        group_id_expr = group_key
-        if spec.rank.ambiguity_group_id_expr is not None:
-            group_id_required = self._collect_expr_columns(
-                spec.rank.ambiguity_group_id_expr,
-                available_columns=set(self._schema_names(joined)),
-                expr_label=f"{spec.name}.rank.ambiguity_group_id_expr",
-            )
-            if group_id_required is not None:
-                required_columns.update(group_id_required)
-                group_id_expr = spec.rank.ambiguity_group_id_expr(expr_ctx)
-        joined = joined.with_column("ambiguity_group_id", group_id_expr)
-        if not spec.rank.order_by:
-            return joined, required_columns
-        order_exprs: list[SortKey] = []
-        for index, order in enumerate(spec.rank.order_by, start=1):
-            order_required = self._collect_expr_columns(
-                order.expr,
-                available_columns=rank_available,
-                expr_label=f"{spec.name}.rank.order_by[{index}]",
-            )
-            if order_required is None:
-                return joined, required_columns
-            required_columns.update(order_required)
-            order_exprs.append(order.expr(expr_ctx).sort(ascending=(order.direction == "asc")))
-        row_num = functions.row_number(
-            partition_by=[col("ambiguity_group_id")],
-            order_by=order_exprs,
-        )
-        joined = joined.with_column("_rn", row_num)
-        if spec.rank.keep == "best":
-            joined = joined.filter(col("_rn") <= lit(spec.rank.top_k))
-        joined = joined.drop("_rn")
-        return joined, required_columns
-
-    @staticmethod
-    def _existing_cols(schema_names: set[str], names: Sequence[str]) -> list[Expr]:
-        from datafusion import col
-
-        return [col(name) for name in names if name in schema_names]
-
-    def _project_quality_output(
-        self,
-        joined: DataFrame,
-        *,
-        spec: QualityRelationshipSpec,
-        expr_ctx: ExprContextImpl,
-        output_ctx: _QualityOutputContext,
-    ) -> DataFrame:
-        if spec.select_exprs:
-            return self._select_quality_expr_output(
-                joined,
-                spec=spec,
-                expr_ctx=expr_ctx,
-                output_ctx=output_ctx,
-            )
-        return self._select_quality_default_output(
-            joined,
-            spec=spec,
-            output_ctx=output_ctx,
-        )
-
-    def _select_quality_expr_output(
-        self,
-        joined: DataFrame,
-        *,
-        spec: QualityRelationshipSpec,
-        expr_ctx: ExprContextImpl,
-        output_ctx: _QualityOutputContext,
-    ) -> DataFrame:
-        schema_names = set(self._schema_names(joined))
-        select_available = {
-            *output_ctx.rank_available,
-            "ambiguity_group_id",
-        }
-        select_cols: list[Expr] = []
-        for select_expr in spec.select_exprs:
-            select_required = self._collect_expr_columns(
-                select_expr.expr,
-                available_columns=select_available,
-                expr_label=f"{spec.name}.select[{select_expr.alias}]",
-            )
-            if select_required is None:
-                continue
-            select_cols.append(select_expr.expr(expr_ctx).alias(select_expr.alias))
-        select_cols.extend(
-            self._existing_cols(schema_names, ("confidence", "score", "origin", "provider"))
-        )
-        if spec.rank is not None:
-            select_cols.extend(self._existing_cols(schema_names, ("ambiguity_group_id",)))
-        if spec.rule_name is not None:
-            select_cols.extend(self._existing_cols(schema_names, ("rule_name",)))
-        select_cols.extend(self._existing_cols(schema_names, output_ctx.hard_columns))
-        select_cols.extend(self._existing_cols(schema_names, sorted(output_ctx.feature_columns)))
-        return joined.select(*select_cols)
-
-    def _select_quality_default_output(
-        self,
-        joined: DataFrame,
-        *,
-        spec: QualityRelationshipSpec,
-        output_ctx: _QualityOutputContext,
-    ) -> DataFrame:
-        from datafusion import col
-
-        schema_names = set(self._schema_names(joined))
-        select_cols: list[Expr] = []
-        seen: set[str] = set()
-
-        def _append_col(name: str) -> None:
-            if name in seen or name not in schema_names:
-                return
-            select_cols.append(col(name))
-            seen.add(name)
-
-        join_cols = [f"{_LEFT_ALIAS_PREFIX}{key}" for key in spec.left_on] + [
-            f"{_RIGHT_ALIAS_PREFIX}{key}" for key in spec.right_on
-        ]
-        for name in join_cols:
-            _append_col(name)
-        for name in sorted(output_ctx.required_columns):
-            _append_col(name)
-        for name in ("confidence", "score", "origin", "provider"):
-            _append_col(name)
-        if spec.rule_name is not None:
-            _append_col("rule_name")
-        if spec.rank is not None:
-            _append_col("ambiguity_group_id")
-        for hard_col in output_ctx.hard_columns:
-            _append_col(hard_col)
-        for feature_name in sorted(output_ctx.feature_columns):
-            _append_col(feature_name)
-        return joined.select(*select_cols)
 
     def compile_relationship_with_quality(
         self,
@@ -1764,55 +1327,17 @@ class SemanticCompiler:
     ) -> DataFrame:
         """Compile a relationship with quality signals.
 
-        This method implements quality-aware relationship compilation:
-        1. Alias left/right tables with prefixes to prevent column collision
-        2. Equi-join on hard keys (left_on/right_on)
-        3. Optionally join file_quality signals via file_id
-        4. Apply hard predicates via filter()
-        5. Add feature columns via with_column()
-        6. Compute score and confidence
-        7. Add metadata columns (origin, provider, rule_name)
-        8. Apply ambiguity grouping with row_number() window function
-        9. Filter to top_k if keep="best"
-
-        Parameters
-        ----------
-        spec
-            Quality relationship specification.
-        file_quality_df
-            Optional pre-built file quality DataFrame. If None and
-            spec.join_file_quality is True, will try to use file_quality_v1.
-        joined
-            Optional pre-joined DataFrame with left/right prefixes.
-
         Returns:
-        -------
-        DataFrame
-            Compiled relationship with confidence, score, and ambiguity_group_id.
-
+            DataFrame: Relationship output with quality scoring and diagnostic columns.
         """
-        with stage_span(
-            "semantics.compile_relationship_with_quality",
-            stage="semantics",
-            scope_name=SCOPE_SEMANTICS,
-            attributes={
-                "codeanatomy.spec_name": spec.name,
-                "codeanatomy.left_view": spec.left_view,
-                "codeanatomy.right_view": spec.right_view,
-                "codeanatomy.join_how": spec.how,
-                "codeanatomy.join_file_quality": spec.join_file_quality,
-            },
-        ):
-            return self._compile_relationship_with_quality_inner(
-                spec,
-                file_quality_df=file_quality_df,
-                joined=joined,
-            )
+        from semantics.quality_compiler import compile_relationship_with_quality
 
-
-# Type import for compile_relationship_with_quality
-if TYPE_CHECKING:
-    from semantics.quality import QualityRelationshipSpec
+        return compile_relationship_with_quality(
+            self,
+            spec,
+            file_quality_df=file_quality_df,
+            joined=joined,
+        )
 
 
 __all__ = ["SemanticCompiler", "TableInfo"]

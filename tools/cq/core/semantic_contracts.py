@@ -45,7 +45,7 @@ def derive_semantic_contract_state(
 ) -> SemanticContractStateV1:
     """Derive canonical semantic state from capability + attempt telemetry.
 
-    Returns
+    Returns:
     -------
     SemanticContractStateV1
         Derived contract state.

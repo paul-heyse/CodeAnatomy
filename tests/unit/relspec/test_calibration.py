@@ -41,25 +41,29 @@ LOW_CONFIDENCE_OBSERVE_CEILING = 0.5
 class TestCalibrationBoundsDefaults:
     """Verify default calibration bound values."""
 
-    def test_high_fanout_defaults(self) -> None:
+    @staticmethod
+    def test_high_fanout_defaults() -> None:
         """Default high-fanout bounds are [1, 10]."""
         b = CalibrationBounds()
         assert b.min_high_fanout_threshold == 1
         assert b.max_high_fanout_threshold == DEFAULT_HIGH_FANOUT_MAX
 
-    def test_small_table_defaults(self) -> None:
+    @staticmethod
+    def test_small_table_defaults() -> None:
         """Default small-table bounds are [1_000, 100_000]."""
         b = CalibrationBounds()
         assert b.min_small_table_row_threshold == DEFAULT_SMALL_TABLE_MIN
         assert b.max_small_table_row_threshold == DEFAULT_SMALL_TABLE_MAX
 
-    def test_large_table_defaults(self) -> None:
+    @staticmethod
+    def test_large_table_defaults() -> None:
         """Default large-table bounds are [100_000, 10_000_000]."""
         b = CalibrationBounds()
         assert b.min_large_table_row_threshold == DEFAULT_LARGE_TABLE_MIN
         assert b.max_large_table_row_threshold == DEFAULT_LARGE_TABLE_MAX
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """CalibrationBounds struct is immutable."""
         b = CalibrationBounds()
         assert_immutable_assignment(
@@ -73,7 +77,8 @@ class TestCalibrationBoundsDefaults:
 class TestDefaultCalibrationBounds:
     """Verify module-level default constant."""
 
-    def test_matches_fresh_instance(self) -> None:
+    @staticmethod
+    def test_matches_fresh_instance() -> None:
         """DEFAULT_CALIBRATION_BOUNDS matches a fresh CalibrationBounds."""
         fresh = CalibrationBounds()
         assert (
@@ -91,7 +96,8 @@ class TestDefaultCalibrationBounds:
             == fresh.max_small_table_row_threshold
         )
 
-    def test_is_valid(self) -> None:
+    @staticmethod
+    def test_is_valid() -> None:
         """DEFAULT_CALIBRATION_BOUNDS passes validation."""
         errors = validate_calibration_bounds(DEFAULT_CALIBRATION_BOUNDS)
         assert errors == []
@@ -100,7 +106,8 @@ class TestDefaultCalibrationBounds:
 class TestValidateCalibrationBounds:
     """Verify bounds validation logic."""
 
-    def test_valid_bounds_no_errors(self) -> None:
+    @staticmethod
+    def test_valid_bounds_no_errors() -> None:
         """Well-ordered bounds produce no errors."""
         bounds = CalibrationBounds(
             min_high_fanout_threshold=1,
@@ -112,7 +119,8 @@ class TestValidateCalibrationBounds:
         )
         assert validate_calibration_bounds(bounds) == []
 
-    def test_equal_high_fanout_bounds_error(self) -> None:
+    @staticmethod
+    def test_equal_high_fanout_bounds_error() -> None:
         """Equal min and max for high-fanout produces an error."""
         bounds = CalibrationBounds(
             min_high_fanout_threshold=3,
@@ -122,7 +130,8 @@ class TestValidateCalibrationBounds:
         assert len(errors) == 1
         assert "high_fanout_threshold" in errors[0]
 
-    def test_inverted_small_table_bounds_error(self) -> None:
+    @staticmethod
+    def test_inverted_small_table_bounds_error() -> None:
         """Inverted small-table bounds produce an error."""
         bounds = CalibrationBounds(
             min_small_table_row_threshold=50_000,
@@ -132,7 +141,8 @@ class TestValidateCalibrationBounds:
         assert len(errors) == 1
         assert "small_table_row_threshold" in errors[0]
 
-    def test_inverted_large_table_bounds_error(self) -> None:
+    @staticmethod
+    def test_inverted_large_table_bounds_error() -> None:
         """Inverted large-table bounds produce an error."""
         bounds = CalibrationBounds(
             min_large_table_row_threshold=10_000_000,
@@ -142,7 +152,8 @@ class TestValidateCalibrationBounds:
         assert len(errors) == 1
         assert "large_table_row_threshold" in errors[0]
 
-    def test_multiple_invalid_bounds(self) -> None:
+    @staticmethod
+    def test_multiple_invalid_bounds() -> None:
         """All three pairs invalid produces three errors."""
         bounds = CalibrationBounds(
             min_high_fanout_threshold=10,
@@ -164,14 +175,16 @@ class TestValidateCalibrationBounds:
 class TestCalibrationThresholds:
     """Verify CalibrationThresholds struct."""
 
-    def test_defaults(self) -> None:
+    @staticmethod
+    def test_defaults() -> None:
         """Default thresholds match canonical project values."""
         t = CalibrationThresholds()
         assert t.high_fanout_threshold == DEFAULT_HIGH_FANOUT_THRESHOLD
         assert t.small_table_row_threshold == DEFAULT_ROW_THRESHOLD_SMALL
         assert t.large_table_row_threshold == DEFAULT_ROW_THRESHOLD_LARGE
 
-    def test_custom_values(self) -> None:
+    @staticmethod
+    def test_custom_values() -> None:
         """Custom thresholds are preserved."""
         t = CalibrationThresholds(
             high_fanout_threshold=CUSTOM_HIGH_FANOUT_THRESHOLD,
@@ -182,7 +195,8 @@ class TestCalibrationThresholds:
         assert t.small_table_row_threshold == CUSTOM_ROW_THRESHOLD_SMALL
         assert t.large_table_row_threshold == CUSTOM_ROW_THRESHOLD_LARGE
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """CalibrationThresholds is immutable."""
         t = CalibrationThresholds()
         assert_immutable_assignment(
@@ -201,7 +215,8 @@ class TestCalibrationThresholds:
 class TestCalibrateOff:
     """Verify mode='off' returns thresholds unchanged."""
 
-    def test_off_returns_current_thresholds(self) -> None:
+    @staticmethod
+    def test_off_returns_current_thresholds() -> None:
         """Mode 'off' preserves current thresholds exactly."""
         current = CalibrationThresholds(
             high_fanout_threshold=3,
@@ -224,7 +239,8 @@ class TestCalibrateOff:
         assert result.cost_ratio is None
         assert result.bounded is False
 
-    def test_off_confidence_is_low(self) -> None:
+    @staticmethod
+    def test_off_confidence_is_low() -> None:
         """Mode 'off' produces zero-confidence result."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -247,7 +263,8 @@ class TestCalibrateOff:
 class TestCalibrateObserve:
     """Verify mode='observe' produces recommendations without side effects."""
 
-    def test_observe_returns_adjusted_thresholds(self) -> None:
+    @staticmethod
+    def test_observe_returns_adjusted_thresholds() -> None:
         """Mode 'observe' computes adjusted thresholds."""
         metrics = ExecutionMetricsSummary(
             predicted_cost=100.0,
@@ -264,7 +281,8 @@ class TestCalibrateObserve:
         assert result.cost_ratio is not None
         assert result.cost_ratio == pytest.approx(2.0)
 
-    def test_observe_evidence_summary_contains_ratio(self) -> None:
+    @staticmethod
+    def test_observe_evidence_summary_contains_ratio() -> None:
         """Evidence summary includes cost ratio."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -278,7 +296,8 @@ class TestCalibrateObserve:
         )
         assert "cost_ratio" in result.evidence_summary
 
-    def test_observe_confidence_with_many_observations(self) -> None:
+    @staticmethod
+    def test_observe_confidence_with_many_observations() -> None:
         """Many observations produce high confidence."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -292,7 +311,8 @@ class TestCalibrateObserve:
         )
         assert result.calibration_confidence.confidence_score >= HIGH_CONFIDENCE_FLOOR
 
-    def test_observe_confidence_with_few_observations(self) -> None:
+    @staticmethod
+    def test_observe_confidence_with_few_observations() -> None:
         """Few observations produce low confidence."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -315,7 +335,8 @@ class TestCalibrateObserve:
 class TestCalibrateApply:
     """Verify mode='apply' produces adjusted thresholds."""
 
-    def test_apply_under_estimation_raises_thresholds(self) -> None:
+    @staticmethod
+    def test_apply_under_estimation_raises_thresholds() -> None:
         """When actual >> predicted (under-estimation), thresholds increase."""
         current = CalibrationThresholds(
             high_fanout_threshold=5,
@@ -345,7 +366,8 @@ class TestCalibrateApply:
             >= current.large_table_row_threshold
         )
 
-    def test_apply_over_estimation_lowers_thresholds(self) -> None:
+    @staticmethod
+    def test_apply_over_estimation_lowers_thresholds() -> None:
         """When actual << predicted (over-estimation), thresholds decrease."""
         current = CalibrationThresholds(
             high_fanout_threshold=5,
@@ -373,7 +395,8 @@ class TestCalibrateApply:
             <= current.large_table_row_threshold
         )
 
-    def test_apply_well_calibrated_minimal_change(self) -> None:
+    @staticmethod
+    def test_apply_well_calibrated_minimal_change() -> None:
         """When actual ~= predicted, thresholds change minimally."""
         current = CalibrationThresholds()
         metrics = ExecutionMetricsSummary(
@@ -389,7 +412,8 @@ class TestCalibrateApply:
         )
         assert result.adjusted_thresholds == current
 
-    def test_apply_mode_in_result(self) -> None:
+    @staticmethod
+    def test_apply_mode_in_result() -> None:
         """Result mode is 'apply'."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -412,7 +436,8 @@ class TestCalibrateApply:
 class TestBoundsClamping:
     """Verify EMA adjustments are clamped within bounds."""
 
-    def test_extreme_under_estimation_clamped(self) -> None:
+    @staticmethod
+    def test_extreme_under_estimation_clamped() -> None:
         """Extreme under-estimation does not exceed max bounds."""
         current = CalibrationThresholds(
             high_fanout_threshold=5,
@@ -449,7 +474,8 @@ class TestBoundsClamping:
         )
         assert result.bounded is True
 
-    def test_extreme_over_estimation_clamped(self) -> None:
+    @staticmethod
+    def test_extreme_over_estimation_clamped() -> None:
         """Extreme over-estimation does not go below min bounds."""
         current = CalibrationThresholds(
             high_fanout_threshold=2,
@@ -495,7 +521,8 @@ class TestBoundsClamping:
 class TestCalibrationValidation:
     """Verify validation of calibration inputs."""
 
-    def test_invalid_bounds_raises_value_error(self) -> None:
+    @staticmethod
+    def test_invalid_bounds_raises_value_error() -> None:
         """Invalid bounds raise ValueError."""
         bad_bounds = CalibrationBounds(
             min_high_fanout_threshold=10,
@@ -513,7 +540,8 @@ class TestCalibrationValidation:
                 mode="apply",
             )
 
-    def test_zero_predicted_cost_returns_unchanged(self) -> None:
+    @staticmethod
+    def test_zero_predicted_cost_returns_unchanged() -> None:
         """Zero predicted cost skips calibration gracefully."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -537,7 +565,8 @@ class TestCalibrationValidation:
 class TestCalibrationConfidence:
     """Verify InferenceConfidence metadata from calibration."""
 
-    def test_high_observation_count_yields_high_confidence(self) -> None:
+    @staticmethod
+    def test_high_observation_count_yields_high_confidence() -> None:
         """Many observations produce high-confidence result."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -558,7 +587,8 @@ class TestCalibrationConfidence:
         assert "row_count" in conf.evidence_sources
         assert conf.decision_type == "calibration"
 
-    def test_low_observation_count_yields_low_confidence(self) -> None:
+    @staticmethod
+    def test_low_observation_count_yields_low_confidence() -> None:
         """Few observations produce low-confidence result."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -575,7 +605,8 @@ class TestCalibrationConfidence:
         assert conf.fallback_reason is not None
         assert "insufficient" in conf.fallback_reason
 
-    def test_confidence_evidence_sources_minimal(self) -> None:
+    @staticmethod
+    def test_confidence_evidence_sources_minimal() -> None:
         """Minimal metrics produce only execution_metrics source."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -601,7 +632,8 @@ class TestCalibrationConfidence:
 class TestPolicyCalibrationResult:
     """Verify PolicyCalibrationResult struct properties."""
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """PolicyCalibrationResult is immutable."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
@@ -620,7 +652,8 @@ class TestPolicyCalibrationResult:
             expected_exception=AttributeError,
         )
 
-    def test_result_has_all_fields(self) -> None:
+    @staticmethod
+    def test_result_has_all_fields() -> None:
         """Result contains all expected fields."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(

@@ -20,26 +20,12 @@ from relspec.view_defs import (
     REL_IMPORT_SYMBOL_OUTPUT,
     REL_NAME_SYMBOL_OUTPUT,
 )
-from relspec.view_defs import (
-    RELATION_OUTPUT_NAME as RELATION_OUTPUT_VIEW,
-)
+from semantics.output_names import RELATION_OUTPUT_NAME, RELATION_OUTPUT_ORDERING_KEYS
 
 REL_NAME_SYMBOL_NAME: Final[str] = REL_NAME_SYMBOL_OUTPUT
 REL_IMPORT_SYMBOL_NAME: Final[str] = REL_IMPORT_SYMBOL_OUTPUT
 REL_DEF_SYMBOL_NAME: Final[str] = REL_DEF_SYMBOL_OUTPUT
 REL_CALLSITE_SYMBOL_NAME: Final[str] = REL_CALLSITE_SYMBOL_OUTPUT
-RELATION_OUTPUT_NAME: Final[str] = RELATION_OUTPUT_VIEW
-
-RELATION_OUTPUT_ORDERING_KEYS: tuple[tuple[str, str], ...] = (
-    ("path", "ascending"),
-    ("bstart", "ascending"),
-    ("bend", "ascending"),
-    ("edge_owner_file_id", "ascending"),
-    ("src", "ascending"),
-    ("dst", "ascending"),
-    ("task_priority", "ascending"),
-    ("task_name", "ascending"),
-)
 
 
 class CompileExecutionPolicyRequestV1(msgspec.Struct, frozen=True):

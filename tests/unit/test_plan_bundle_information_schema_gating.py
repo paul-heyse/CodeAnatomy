@@ -20,31 +20,38 @@ def test_information_schema_snapshot_skips_udf_catalog_when_udfs_disabled(
         def __init__(self, _ctx: object, *, sql_options: object | None = None) -> None:
             _ = (_ctx, sql_options)
 
-        def tables_snapshot(self) -> list[dict[str, object]]:
+        @staticmethod
+        def tables_snapshot() -> list[dict[str, object]]:
             return [{"table_name": "events"}]
 
-        def table_definition(self, _name: str) -> str:
+        @staticmethod
+        def table_definition(_name: str) -> str:
             return "CREATE TABLE events (id BIGINT)"
 
-        def settings_snapshot(self) -> list[dict[str, object]]:
+        @staticmethod
+        def settings_snapshot() -> list[dict[str, object]]:
             return []
 
-        def schemata_snapshot(self) -> list[dict[str, object]]:
+        @staticmethod
+        def schemata_snapshot() -> list[dict[str, object]]:
             return []
 
-        def columns_snapshot(self) -> list[dict[str, object]]:
+        @staticmethod
+        def columns_snapshot() -> list[dict[str, object]]:
             return []
 
-        def routines_snapshot(self) -> list[dict[str, object]]:
+        @staticmethod
+        def routines_snapshot() -> list[dict[str, object]]:
             msg = "routines_snapshot should be gated off when enable_udfs=False"
             raise AssertionError(msg)
 
-        def parameters_snapshot(self) -> list[dict[str, object]]:
+        @staticmethod
+        def parameters_snapshot() -> list[dict[str, object]]:
             msg = "parameters_snapshot should be gated off when enable_udfs=False"
             raise AssertionError(msg)
 
+        @staticmethod
         def function_catalog_snapshot(
-            self,
             *,
             include_parameters: bool = False,
         ) -> list[dict[str, object]]:

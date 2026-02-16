@@ -36,7 +36,8 @@ def _make_run_meta() -> RunMeta:
 class TestMermaidFlowchart:
     """Tests for Mermaid flowchart rendering."""
 
-    def test_render_empty_result(self) -> None:
+    @staticmethod
+    def test_render_empty_result() -> None:
         """Empty result produces minimal diagram."""
         result = CqResult(run=_make_run_meta(), key_findings=[], sections=[])
         output = render_mermaid_flowchart(result)
@@ -44,7 +45,8 @@ class TestMermaidFlowchart:
         assert "flowchart TD" in output
         assert "```" in output
 
-    def test_render_with_definitions(self) -> None:
+    @staticmethod
+    def test_render_with_definitions() -> None:
         """Result with definitions includes nodes."""
         findings = [
             Finding(
@@ -58,7 +60,8 @@ class TestMermaidFlowchart:
         output = render_mermaid_flowchart(result)
         assert "foo" in output
 
-    def test_render_with_callers(self) -> None:
+    @staticmethod
+    def test_render_with_callers() -> None:
         """Result with caller section includes edges."""
         callers = [
             Finding(
@@ -80,7 +83,8 @@ class TestMermaidFlowchart:
 class TestMermaidClassDiagram:
     """Tests for Mermaid class diagram rendering."""
 
-    def test_render_empty_result(self) -> None:
+    @staticmethod
+    def test_render_empty_result() -> None:
         """Empty result produces minimal diagram."""
         result = CqResult(run=_make_run_meta(), key_findings=[], sections=[])
         output = render_mermaid_class_diagram(result)
@@ -88,7 +92,8 @@ class TestMermaidClassDiagram:
         assert "classDiagram" in output
         assert "```" in output
 
-    def test_render_with_class(self) -> None:
+    @staticmethod
+    def test_render_with_class() -> None:
         """Result with class definition includes class node."""
         findings = [
             Finding(
@@ -102,7 +107,8 @@ class TestMermaidClassDiagram:
         output = render_mermaid_class_diagram(result)
         assert "MyClass" in output
 
-    def test_render_function_as_class_node(self) -> None:
+    @staticmethod
+    def test_render_function_as_class_node() -> None:
         """Functions without class context render as class nodes."""
         findings = [
             Finding(
@@ -120,22 +126,26 @@ class TestMermaidClassDiagram:
 class TestMermaidNodeSanitization:
     """Tests for Mermaid node ID sanitization."""
 
-    def test_simple_name(self) -> None:
+    @staticmethod
+    def test_simple_name() -> None:
         """Simple names pass through."""
         assert _sanitize_node_id("foo") == "foo"
 
-    def test_name_with_special_chars(self) -> None:
+    @staticmethod
+    def test_name_with_special_chars() -> None:
         """Special characters are replaced."""
         result = _sanitize_node_id("foo.bar")
         assert "." not in result
         assert "foo" in result
 
-    def test_name_starting_with_number(self) -> None:
+    @staticmethod
+    def test_name_starting_with_number() -> None:
         """Names starting with numbers get prefix."""
         result = _sanitize_node_id("123abc")
         assert result[0].isalpha()
 
-    def test_empty_name(self) -> None:
+    @staticmethod
+    def test_empty_name() -> None:
         """Empty name returns 'unknown'."""
         assert _sanitize_node_id("") == "unknown"
 
@@ -143,14 +153,16 @@ class TestMermaidNodeSanitization:
 class TestDotRenderer:
     """Tests for DOT format rendering."""
 
-    def test_render_empty_result(self) -> None:
+    @staticmethod
+    def test_render_empty_result() -> None:
         """Empty result produces valid DOT graph."""
         result = CqResult(run=_make_run_meta(), key_findings=[], sections=[])
         output = render_dot(result)
         assert "digraph" in output
         assert "rankdir=LR" in output
 
-    def test_render_with_definitions(self) -> None:
+    @staticmethod
+    def test_render_with_definitions() -> None:
         """Result with definitions includes nodes."""
         findings = [
             Finding(
@@ -165,7 +177,8 @@ class TestDotRenderer:
         assert "foo" in output
         assert "[label=" in output
 
-    def test_render_with_callers(self) -> None:
+    @staticmethod
+    def test_render_with_callers() -> None:
         """Result with caller section includes edges."""
         callers = [
             Finding(
@@ -187,26 +200,31 @@ class TestDotRenderer:
 class TestDotSanitization:
     """Tests for DOT string sanitization."""
 
-    def test_sanitize_simple_id(self) -> None:
+    @staticmethod
+    def test_sanitize_simple_id() -> None:
         """Simple IDs pass through."""
         assert _sanitize_dot_id("foo") == "foo"
 
-    def test_sanitize_id_with_dots(self) -> None:
+    @staticmethod
+    def test_sanitize_id_with_dots() -> None:
         """Dots are replaced in IDs."""
         result = _sanitize_dot_id("foo.bar")
         assert "." not in result
 
-    def test_escape_quotes_in_labels(self) -> None:
+    @staticmethod
+    def test_escape_quotes_in_labels() -> None:
         """Quotes are escaped in labels."""
         result = _escape_dot_string('foo "bar" baz')
         assert '\\"' in result
 
-    def test_escape_backslashes(self) -> None:
+    @staticmethod
+    def test_escape_backslashes() -> None:
         """Backslashes are escaped in labels."""
         result = _escape_dot_string("foo\\bar")
         assert "\\\\" in result
 
-    def test_escape_newlines(self) -> None:
+    @staticmethod
+    def test_escape_newlines() -> None:
         """Newlines are escaped in labels."""
         result = _escape_dot_string("foo\nbar")
         assert "\\n" in result

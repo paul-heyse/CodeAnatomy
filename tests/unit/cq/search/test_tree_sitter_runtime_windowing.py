@@ -74,7 +74,6 @@ def _clear_ranges() -> None:
     _CAPTURED_POINT_RANGES.clear()
 
 
-
 def test_run_bounded_query_uses_point_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Forward point window boundaries to the cursor during bounded query."""
     monkeypatch.setattr(tree_sitter_runtime, "_TreeSitterQueryCursor", _fake_cursor_factory)
@@ -92,7 +91,6 @@ def test_run_bounded_query_uses_point_windows(monkeypatch: pytest.MonkeyPatch) -
 
     assert _CAPTURED_POINT_RANGES == [((1, 0), (1, 5))]
     assert telemetry.windows_executed == 1
-
 
 
 def test_run_bounded_query_enforces_containment(monkeypatch: pytest.MonkeyPatch) -> None:

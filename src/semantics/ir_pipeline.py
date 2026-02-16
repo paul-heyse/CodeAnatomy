@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
@@ -12,7 +13,6 @@ from relspec.inference_confidence import (
     high_confidence,
     low_confidence,
 )
-from semantics.catalog.dataset_registry import DatasetRegistrySpec
 from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
 from semantics.ir import (
     GraphPosition,
@@ -24,6 +24,7 @@ from semantics.ir import (
 from semantics.ir_optimize import IRCost, order_join_groups, prune_ir
 from semantics.joins.inference import infer_join_strategy_with_confidence
 from semantics.naming import canonical_output_name
+from semantics.output_names import RELATION_OUTPUT_NAME
 from semantics.registry import SEMANTIC_MODEL, SemanticModel, SemanticOutputSpec
 from semantics.types.annotated_schema import AnnotatedSchema
 from semantics.types.core import CompatibilityGroup
@@ -316,43 +317,10 @@ def _cost_hints_from_rows(rows: Sequence[SemanticDatasetRow]) -> dict[str, IRCos
     return hints
 
 
-def _row_from_registry_spec(
-    spec: DatasetRegistrySpec,
-    *,
-    fields: tuple[str, ...] | None = None,
-) -> SemanticDatasetRow:
-    resolved_fields = fields if fields is not None else spec.fields
-    return SemanticDatasetRow(
-        name=spec.name,
-        version=spec.version,
-        bundles=spec.bundles,
-        fields=resolved_fields,
-        category=spec.category,
-        supports_cdf=spec.supports_cdf,
-        partition_cols=spec.partition_cols,
-        merge_keys=spec.merge_keys,
-        join_keys=spec.join_keys,
-        template=spec.template,
-        view_builder=spec.view_builder,
-        kind=spec.kind,
-        semantic_id=spec.semantic_id,
-        entity=spec.entity,
-        grain=spec.grain,
-        stability=spec.stability,
-        schema_ref=spec.schema_ref,
-        materialization=spec.materialization,
-        materialized_name=spec.materialized_name,
-        metadata_extra=spec.metadata_extra,
-        register_view=spec.register_view,
-        source_dataset=spec.source_dataset,
-        role=spec.role,
-    )
-
-
 def _build_normalize_rows() -> tuple[SemanticDatasetRow, ...]:
     from semantics.catalog.normalize_registry import NORMALIZE_DATASETS
 
-    return tuple(_row_from_registry_spec(spec) for spec in NORMALIZE_DATASETS)
+    return tuple(NORMALIZE_DATASETS)
 
 
 def _build_semantic_normalization_rows(
@@ -450,7 +418,7 @@ def _build_relationship_rows(
 def _build_singleton_rows() -> tuple[SemanticDatasetRow, ...]:
     from semantics.catalog.semantic_singletons_registry import SEMANTIC_SINGLETON_DATASETS
 
-    return tuple(_row_from_registry_spec(spec) for spec in SEMANTIC_SINGLETON_DATASETS)
+    return tuple(SEMANTIC_SINGLETON_DATASETS)
 
 
 def _build_diagnostic_rows() -> tuple[SemanticDatasetRow, ...]:
@@ -474,14 +442,14 @@ def _build_diagnostic_rows() -> tuple[SemanticDatasetRow, ...]:
         fields = spec.fields
         if spec.name in dynamic_fields:
             fields = (*fields, *hard_fields, *feature_fields)
-        rows.append(_row_from_registry_spec(spec, fields=fields))
+        rows.append(replace(spec, fields=fields))
     return tuple(rows)
 
 
 def _build_export_rows() -> tuple[SemanticDatasetRow, ...]:
     from semantics.catalog.export_registry import EXPORT_DATASETS
 
-    return tuple(_row_from_registry_spec(spec) for spec in EXPORT_DATASETS)
+    return tuple(EXPORT_DATASETS)
 
 
 def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
@@ -816,8 +784,6 @@ def compile_semantics(model: SemanticModel) -> SemanticIR:
             outputs=(model.semantic_nodes_union_name,),
         )
     )
-    from relspec.view_defs import RELATION_OUTPUT_NAME
-
     views.append(
         SemanticIRView(
             name=RELATION_OUTPUT_NAME,
@@ -919,6 +885,7 @@ def compile_semantics(model: SemanticModel) -> SemanticIR:
 
 def optimize_semantics(
     ir: SemanticIR,
+    model: SemanticModel,
     *,
     outputs: Collection[str] | None = None,
 ) -> SemanticIR:
@@ -926,6 +893,7 @@ def optimize_semantics(
 
     Args:
         ir: Semantic IR to optimize.
+        model: Semantic model containing relationship specifications.
         outputs: Optional output node allowlist.
 
     Returns:
@@ -944,13 +912,13 @@ def optimize_semantics(
             msg = f"Duplicate semantic IR view with different definitions: {view.name!r}."
             raise ValueError(msg)
     base_views = list(seen.values())
-    relationship_specs = {spec.name: spec for spec in SEMANTIC_MODEL.relationship_specs}
+    relationship_specs = {spec.name: spec for spec in model.relationship_specs}
     join_groups, join_group_views = _build_join_groups(
         base_views,
         relationship_specs,
         existing_names=set(seen),
     )
-    cost_hints = _cost_hints_from_rows(_dataset_rows_for_model(SEMANTIC_MODEL))
+    cost_hints = _cost_hints_from_rows(_dataset_rows_for_model(model))
     ordered_join_groups = order_join_groups(join_groups, costs=cost_hints)
     join_view_lookup = {view.name: view for view in join_group_views}
     ordered_join_group_views = tuple(
@@ -975,16 +943,19 @@ def optimize_semantics(
     return prune_ir(optimized, outputs=outputs)
 
 
-def emit_semantics(ir: SemanticIR) -> SemanticIR:
-    """Emit semantic IR artifacts (placeholder).
+def emit_semantics(ir: SemanticIR, model: SemanticModel) -> SemanticIR:
+    """Emit final semantic IR with dataset rows and model fingerprint.
+
+    Compute dataset-row metadata for all views in the IR and attach the
+    semantic model fingerprint for reproducibility tracking.
 
     Returns:
     -------
     SemanticIR
-        Emitted semantic IR artifacts.
+        Semantic IR enriched with dataset rows, model hash, and IR hash.
     """
-    dataset_rows = _dataset_rows_for_model(SEMANTIC_MODEL)
-    model_hash = semantic_model_fingerprint(SEMANTIC_MODEL)
+    dataset_rows = _dataset_rows_for_model(model)
+    model_hash = semantic_model_fingerprint(model)
     ir_hash = semantic_ir_fingerprint(ir)
     return SemanticIR(
         views=ir.views,
@@ -1296,7 +1267,7 @@ def _build_schema_index(
     return index
 
 
-def infer_semantics(ir: SemanticIR) -> SemanticIR:
+def infer_semantics(ir: SemanticIR, model: SemanticModel) -> SemanticIR:
     """Infer derivable properties from schemas and graph topology.
 
     Insert between compile and optimize to enrich each view with
@@ -1323,8 +1294,8 @@ def infer_semantics(ir: SemanticIR) -> SemanticIR:
 
     view_names = frozenset(view.name for view in ir.views)
     consumer_map = _build_consumer_map(ir.views)
-    schema_index = _build_schema_index(SEMANTIC_MODEL)
-    relationship_specs = {spec.name: spec for spec in SEMANTIC_MODEL.relationship_specs}
+    schema_index = _build_schema_index(model)
+    relationship_specs = {spec.name: spec for spec in model.relationship_specs}
 
     enriched: list[SemanticIRView] = []
     for view in ir.views:
@@ -1357,7 +1328,11 @@ def infer_semantics(ir: SemanticIR) -> SemanticIR:
     )
 
 
-def build_semantic_ir(*, outputs: Collection[str] | None = None) -> SemanticIR:
+def build_semantic_ir(
+    *,
+    outputs: Collection[str] | None = None,
+    model: SemanticModel | None = None,
+) -> SemanticIR:
     """Build the end-to-end semantic IR pipeline.
 
     Returns:
@@ -1368,10 +1343,11 @@ def build_semantic_ir(*, outputs: Collection[str] | None = None) -> SemanticIR:
     resolved_outputs = None
     if outputs is not None:
         resolved_outputs = {canonical_output_name(name) for name in outputs}
-    compiled = compile_semantics(SEMANTIC_MODEL)
-    inferred = infer_semantics(compiled)
-    optimized = optimize_semantics(inferred, outputs=resolved_outputs)
-    return emit_semantics(optimized)
+    resolved_model = SEMANTIC_MODEL if model is None else model
+    compiled = compile_semantics(resolved_model)
+    inferred = infer_semantics(compiled, resolved_model)
+    optimized = optimize_semantics(inferred, resolved_model, outputs=resolved_outputs)
+    return emit_semantics(optimized, resolved_model)
 
 
 __all__ = [

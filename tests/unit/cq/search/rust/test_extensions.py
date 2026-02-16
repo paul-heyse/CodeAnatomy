@@ -11,7 +11,8 @@ BATCH_EXPANSION_RESULT_COUNT = 2
 class _FakeClient:
     """Fake LSP client for macro expansion tests."""
 
-    def request(self, method: str, payload: dict[str, object]) -> dict[str, object]:
+    @staticmethod
+    def request(method: str, payload: dict[str, object]) -> dict[str, object]:
         """Return a canned macro expansion response."""
         assert method == "rust-analyzer/expandMacro"
         assert "textDocument" in payload
@@ -26,7 +27,8 @@ class _FakeClient:
 class TestExpandMacro:
     """Tests for expand_macro."""
 
-    def test_returns_applied_result(self) -> None:
+    @staticmethod
+    def test_returns_applied_result() -> None:
         """Verify applied result from a real client."""
         request = RustMacroExpansionRequestV1(
             file_path="src/lib.rs",
@@ -39,7 +41,8 @@ class TestExpandMacro:
         assert result.name == "sql"
         assert result.expansion == "SELECT 1"
 
-    def test_fails_open_without_client_request(self) -> None:
+    @staticmethod
+    def test_fails_open_without_client_request() -> None:
         """Verify graceful degradation when client lacks request method."""
         request = RustMacroExpansionRequestV1(
             file_path="src/lib.rs",
@@ -55,7 +58,8 @@ class TestExpandMacro:
 class TestExpandMacros:
     """Tests for expand_macros batch helper."""
 
-    def test_batch_expansion(self) -> None:
+    @staticmethod
+    def test_batch_expansion() -> None:
         """Verify batch expansion returns tuple of results."""
         requests = (
             RustMacroExpansionRequestV1(file_path="src/lib.rs", line=1, col=0, macro_call_id="id1"),
@@ -69,7 +73,8 @@ class TestExpandMacros:
 class TestBuildModuleGraph:
     """Tests for build_module_graph."""
 
-    def test_normalizes_nodes_and_edges(self) -> None:
+    @staticmethod
+    def test_normalizes_nodes_and_edges() -> None:
         """Verify deduplication of module nodes and import edges."""
         graph = build_module_graph(
             module_rows=[
@@ -103,7 +108,8 @@ class TestBuildModuleGraph:
         assert metadata.get("module_count") == 1
         assert metadata.get("edge_count") == 1
 
-    def test_empty_inputs(self) -> None:
+    @staticmethod
+    def test_empty_inputs() -> None:
         """Verify build_module_graph handles empty inputs gracefully."""
         graph = build_module_graph(module_rows=[], import_rows=[])
         # msgspec.to_builtins omits fields at default values (empty tuples)

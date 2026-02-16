@@ -8,6 +8,7 @@ from semantics.ir import (
     SemanticIRView,
 )
 from semantics.ir_pipeline import infer_semantics
+from semantics.registry import SEMANTIC_MODEL
 from semantics.view_kinds import ViewKindStr
 from tests.test_helpers.immutability import assert_immutable_assignment
 
@@ -44,7 +45,8 @@ def _make_ir(views: tuple[SemanticIRView, ...]) -> SemanticIR:
 class TestInferSemanticsPreservesStructure:
     """Verify the infer phase is additive and preserves IR structure."""
 
-    def test_same_view_count(self) -> None:
+    @staticmethod
+    def test_same_view_count() -> None:
         """Infer must return the same number of views as the input IR."""
         views = (
             _make_view("a"),
@@ -52,56 +54,61 @@ class TestInferSemanticsPreservesStructure:
             _make_view("c", inputs=("b",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         assert len(result.views) == len(ir.views)
 
-    def test_view_names_preserved(self) -> None:
+    @staticmethod
+    def test_view_names_preserved() -> None:
         """View names must be identical after inference."""
         views = (
             _make_view("x"),
             _make_view("y", inputs=("x",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         original_names = [v.name for v in ir.views]
         inferred_names = [v.name for v in result.views]
         assert inferred_names == original_names
 
-    def test_view_kinds_preserved(self) -> None:
+    @staticmethod
+    def test_view_kinds_preserved() -> None:
         """View kinds must not be changed by inference."""
         views = (
             _make_view("n", kind="normalize"),
             _make_view("r", kind="relate", inputs=("n", "n")),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         assert result.views[0].kind == "normalize"
         assert result.views[1].kind == "relate"
 
-    def test_view_inputs_outputs_preserved(self) -> None:
+    @staticmethod
+    def test_view_inputs_outputs_preserved() -> None:
         """Inputs and outputs must not be modified by inference."""
         views = (
             _make_view("a", inputs=("x",), outputs=("a_out",)),
             _make_view("b", inputs=("a",), outputs=("b_out",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         assert result.views[0].inputs == ("x",)
         assert result.views[0].outputs == ("a_out",)
         assert result.views[1].inputs == ("a",)
         assert result.views[1].outputs == ("b_out",)
 
-    def test_empty_ir_returns_unchanged(self) -> None:
+    @staticmethod
+    def test_empty_ir_returns_unchanged() -> None:
         """Empty IR should pass through without error."""
         ir = SemanticIR(views=())
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         assert result.views == ()
 
-    def test_dataset_rows_preserved(self) -> None:
+    @staticmethod
+    def test_dataset_rows_preserved() -> None:
         """Non-view IR fields must be carried through."""
         views = (_make_view("v"),)
         ir = SemanticIR(views=views, model_hash="abc", ir_hash="def")
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         assert result.model_hash == "abc"
         assert result.ir_hash == "def"
 
@@ -114,31 +121,34 @@ class TestInferSemanticsPreservesStructure:
 class TestGraphPositionClassification:
     """Verify graph position is correctly inferred from topology."""
 
-    def test_source_view_has_no_upstream(self) -> None:
+    @staticmethod
+    def test_source_view_has_no_upstream() -> None:
         """View with no inputs in the IR is classified as source."""
         views = (
             _make_view("root"),
             _make_view("child", inputs=("root",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         root_props = result.views[0].inferred_properties
         assert root_props is not None
         assert root_props.graph_position == "source"
 
-    def test_terminal_view_has_no_downstream(self) -> None:
+    @staticmethod
+    def test_terminal_view_has_no_downstream() -> None:
         """View with no consumers is classified as terminal."""
         views = (
             _make_view("root"),
             _make_view("leaf", inputs=("root",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         leaf_props = result.views[1].inferred_properties
         assert leaf_props is not None
         assert leaf_props.graph_position == "terminal"
 
-    def test_intermediate_view(self) -> None:
+    @staticmethod
+    def test_intermediate_view() -> None:
         """View with both upstream and downstream is intermediate."""
         views = (
             _make_view("a"),
@@ -146,12 +156,13 @@ class TestGraphPositionClassification:
             _make_view("c", inputs=("b",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         mid_props = result.views[1].inferred_properties
         assert mid_props is not None
         assert mid_props.graph_position == "intermediate"
 
-    def test_high_fan_out_view(self) -> None:
+    @staticmethod
+    def test_high_fan_out_view() -> None:
         """View consumed by 3+ others is classified as high_fan_out."""
         views = (
             _make_view("hub"),
@@ -160,7 +171,7 @@ class TestGraphPositionClassification:
             _make_view("c3", inputs=("hub",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         hub_props = result.views[0].inferred_properties
         assert hub_props is not None
         assert hub_props.graph_position == "high_fan_out"
@@ -174,7 +185,8 @@ class TestGraphPositionClassification:
 class TestCachePolicyHints:
     """Verify cache policy hints follow graph position rules."""
 
-    def test_high_fan_out_gets_eager(self) -> None:
+    @staticmethod
+    def test_high_fan_out_gets_eager() -> None:
         """High fan-out views should get eager cache policy hint."""
         views = (
             _make_view("hub"),
@@ -183,31 +195,33 @@ class TestCachePolicyHints:
             _make_view("c", inputs=("hub",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         hub_props = result.views[0].inferred_properties
         assert hub_props is not None
         assert hub_props.inferred_cache_policy == "eager"
 
-    def test_terminal_gets_lazy(self) -> None:
+    @staticmethod
+    def test_terminal_gets_lazy() -> None:
         """Terminal views should get lazy cache policy hint."""
         views = (
             _make_view("root"),
             _make_view("leaf", inputs=("root",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         leaf_props = result.views[1].inferred_properties
         assert leaf_props is not None
         assert leaf_props.inferred_cache_policy == "lazy"
 
-    def test_source_gets_no_cache_hint(self) -> None:
+    @staticmethod
+    def test_source_gets_no_cache_hint() -> None:
         """Source views without high fan-out should have no cache hint."""
         views = (
             _make_view("root"),
             _make_view("child", inputs=("root",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         root_props = result.views[0].inferred_properties
         assert root_props is not None
         assert root_props.inferred_cache_policy is None
@@ -221,33 +235,36 @@ class TestCachePolicyHints:
 class TestNonJoinViewDefaults:
     """Verify non-join views get position/cache but no join metadata."""
 
-    def test_normalize_view_has_no_join_strategy(self) -> None:
+    @staticmethod
+    def test_normalize_view_has_no_join_strategy() -> None:
         """Normalize views should not get join strategy inference."""
         views = (_make_view("n", kind="normalize"),)
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         props = result.views[0].inferred_properties
         assert props is not None
         assert props.inferred_join_strategy is None
         assert props.inferred_join_keys is None
 
-    def test_export_view_has_no_join_strategy(self) -> None:
+    @staticmethod
+    def test_export_view_has_no_join_strategy() -> None:
         """Export views should not get join strategy inference."""
         views = (_make_view("e", kind="export"),)
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         props = result.views[0].inferred_properties
         assert props is not None
         assert props.inferred_join_strategy is None
 
-    def test_finalize_view_has_graph_position(self) -> None:
+    @staticmethod
+    def test_finalize_view_has_graph_position() -> None:
         """Finalize views should still get graph position."""
         views = (
             _make_view("src"),
             _make_view("fin", kind="finalize", inputs=("src",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         fin_props = result.views[1].inferred_properties
         assert fin_props is not None
         assert fin_props.graph_position is not None
@@ -261,7 +278,8 @@ class TestNonJoinViewDefaults:
 class TestInferredViewPropertiesDefaults:
     """Verify the InferredViewProperties dataclass default behavior."""
 
-    def test_all_none_by_default(self) -> None:
+    @staticmethod
+    def test_all_none_by_default() -> None:
         """All fields should default to None."""
         props = InferredViewProperties()
         assert props.inferred_join_strategy is None
@@ -269,7 +287,8 @@ class TestInferredViewPropertiesDefaults:
         assert props.inferred_cache_policy is None
         assert props.graph_position is None
 
-    def test_frozen(self) -> None:
+    @staticmethod
+    def test_frozen() -> None:
         """InferredViewProperties should be immutable."""
         props = InferredViewProperties(graph_position="source")
         assert_immutable_assignment(
@@ -288,7 +307,8 @@ class TestInferredViewPropertiesDefaults:
 class TestInferSemanticsFullPipeline:
     """Integration test using build_semantic_ir to verify the infer phase runs."""
 
-    def test_build_semantic_ir_produces_inferred_properties(self) -> None:
+    @staticmethod
+    def test_build_semantic_ir_produces_inferred_properties() -> None:
         """The full pipeline should produce views with inferred_properties."""
         from semantics.ir_pipeline import build_semantic_ir
 
@@ -297,7 +317,8 @@ class TestInferSemanticsFullPipeline:
         views_with_props = [v for v in ir.views if v.inferred_properties is not None]
         assert len(views_with_props) > 0
 
-    def test_relate_views_have_join_metadata(self) -> None:
+    @staticmethod
+    def test_relate_views_have_join_metadata() -> None:
         """Relate views should have join strategy/keys populated."""
         from semantics.ir_pipeline import build_semantic_ir
 
@@ -313,7 +334,8 @@ class TestInferSemanticsFullPipeline:
         ]
         assert len(relate_with_strategy) > 0
 
-    def test_all_views_have_graph_position(self) -> None:
+    @staticmethod
+    def test_all_views_have_graph_position() -> None:
         """All views should have a graph position assigned."""
         from semantics.ir_pipeline import build_semantic_ir
 
@@ -335,7 +357,8 @@ class TestInferSemanticsFullPipeline:
 class TestResolveKeysFromInferred:
     """Verify FILE_IDENTITY key extraction from inferred view properties."""
 
-    def test_returns_file_id_when_present(self) -> None:
+    @staticmethod
+    def test_returns_file_id_when_present() -> None:
         """Extract file_id from inferred join keys."""
         from semantics.ir_pipeline import _resolve_keys_from_inferred
 
@@ -354,7 +377,8 @@ class TestResolveKeysFromInferred:
         assert left_on == ("file_id",)
         assert right_on == ("file_id",)
 
-    def test_returns_file_id_and_path(self) -> None:
+    @staticmethod
+    def test_returns_file_id_and_path() -> None:
         """Extract both file_id and path when present."""
         from semantics.ir_pipeline import _resolve_keys_from_inferred
 
@@ -379,7 +403,8 @@ class TestResolveKeysFromInferred:
         # symbol is not FILE_IDENTITY, should be excluded
         assert "symbol" not in resolved_left_on
 
-    def test_returns_none_when_no_inferred_properties(self) -> None:
+    @staticmethod
+    def test_returns_none_when_no_inferred_properties() -> None:
         """Return None when inferred_properties is absent."""
         from semantics.ir_pipeline import _resolve_keys_from_inferred
 
@@ -391,7 +416,8 @@ class TestResolveKeysFromInferred:
         )
         assert _resolve_keys_from_inferred(view) is None
 
-    def test_returns_none_when_inferred_keys_is_none(self) -> None:
+    @staticmethod
+    def test_returns_none_when_inferred_keys_is_none() -> None:
         """Return None when inferred_join_keys is None."""
         from semantics.ir_pipeline import _resolve_keys_from_inferred
 
@@ -404,7 +430,8 @@ class TestResolveKeysFromInferred:
         )
         assert _resolve_keys_from_inferred(view) is None
 
-    def test_returns_none_when_only_span_keys(self) -> None:
+    @staticmethod
+    def test_returns_none_when_only_span_keys() -> None:
         """Return None when only non-FILE_IDENTITY keys are inferred."""
         from semantics.ir_pipeline import _resolve_keys_from_inferred
 
@@ -419,7 +446,8 @@ class TestResolveKeysFromInferred:
         )
         assert _resolve_keys_from_inferred(view) is None
 
-    def test_skips_cross_name_pairs(self) -> None:
+    @staticmethod
+    def test_skips_cross_name_pairs() -> None:
         """Cross-name pairs like (file_id, path) are excluded."""
         from semantics.ir_pipeline import _resolve_keys_from_inferred
 
@@ -443,7 +471,8 @@ class TestResolveKeysFromInferred:
 class TestBuildJoinGroupsWithInferredKeys:
     """Verify _build_join_groups uses inferred keys for empty-key specs."""
 
-    def test_groups_specs_with_inferred_keys(self) -> None:
+    @staticmethod
+    def test_groups_specs_with_inferred_keys() -> None:
         """Specs with empty join keys should be grouped via inferred properties."""
         from semantics.ir_pipeline import _build_join_groups
         from semantics.quality import QualityRelationshipSpec
@@ -488,7 +517,8 @@ class TestBuildJoinGroupsWithInferredKeys:
         assert groups[0].left_on == ("file_id",)
         assert groups[0].right_on == ("file_id",)
 
-    def test_skips_specs_with_no_inferred_keys(self) -> None:
+    @staticmethod
+    def test_skips_specs_with_no_inferred_keys() -> None:
         """Specs without inferred properties should still be skipped."""
         from semantics.ir_pipeline import _build_join_groups
         from semantics.quality import QualityRelationshipSpec
@@ -526,7 +556,8 @@ class TestBuildJoinGroupsWithInferredKeys:
         groups, _ = _build_join_groups(views, specs, existing_names=set())
         assert len(groups) == 0
 
-    def test_explicit_keys_still_work(self) -> None:
+    @staticmethod
+    def test_explicit_keys_still_work() -> None:
         """Specs with explicit join keys bypass inference as before."""
         from semantics.ir_pipeline import _build_join_groups
         from semantics.quality import QualityRelationshipSpec
@@ -567,7 +598,8 @@ class TestBuildJoinGroupsWithInferredKeys:
         assert len(groups) == 1
         assert groups[0].left_on == ("file_id",)
 
-    def test_mixed_explicit_and_inferred(self) -> None:
+    @staticmethod
+    def test_mixed_explicit_and_inferred() -> None:
         """Explicit and inferred keys resolving to same values group together."""
         from semantics.ir_pipeline import _build_join_groups
         from semantics.quality import QualityRelationshipSpec
@@ -620,12 +652,14 @@ class TestBuildJoinGroupsWithInferredKeys:
 class TestInferenceConfidenceField:
     """Verify InferenceConfidence is attached to InferredViewProperties."""
 
-    def test_defaults_to_none(self) -> None:
+    @staticmethod
+    def test_defaults_to_none() -> None:
         """The inference_confidence field defaults to None."""
         props = InferredViewProperties()
         assert props.inference_confidence is None
 
-    def test_field_is_accessible(self) -> None:
+    @staticmethod
+    def test_field_is_accessible() -> None:
         """The inference_confidence field can be set at construction."""
         from relspec.inference_confidence import high_confidence
 
@@ -642,7 +676,8 @@ class TestInferenceConfidenceField:
         assert props.inference_confidence.decision_type == "join_strategy"
         assert props.inference_confidence.confidence_score >= MIN_CONFIDENCE_FOR_HIGH_SCORE
 
-    def test_frozen_inference_confidence(self) -> None:
+    @staticmethod
+    def test_frozen_inference_confidence() -> None:
         """InferenceConfidence field is immutable on InferredViewProperties."""
         from relspec.inference_confidence import high_confidence
 
@@ -663,7 +698,8 @@ class TestInferenceConfidenceField:
 class TestInferSemanticsAttachesConfidence:
     """Verify that infer_semantics populates inference_confidence."""
 
-    def test_high_fan_out_view_has_cache_confidence(self) -> None:
+    @staticmethod
+    def test_high_fan_out_view_has_cache_confidence() -> None:
         """High fan-out views should have cache_policy confidence attached."""
         views = (
             _make_view("hub"),
@@ -672,44 +708,45 @@ class TestInferSemanticsAttachesConfidence:
             _make_view("c", inputs=("hub",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         hub_props = result.views[0].inferred_properties
         assert hub_props is not None
         assert hub_props.inference_confidence is not None
         assert hub_props.inference_confidence.decision_type == "cache_policy"
         assert hub_props.inference_confidence.decision_value == "eager"
-        assert (
-            hub_props.inference_confidence.confidence_score >= MIN_CONFIDENCE_FOR_HIGH_SCORE
-        )
+        assert hub_props.inference_confidence.confidence_score >= MIN_CONFIDENCE_FOR_HIGH_SCORE
 
-    def test_terminal_view_has_cache_confidence(self) -> None:
+    @staticmethod
+    def test_terminal_view_has_cache_confidence() -> None:
         """Terminal views should have cache_policy confidence attached."""
         views = (
             _make_view("root"),
             _make_view("leaf", inputs=("root",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         leaf_props = result.views[1].inferred_properties
         assert leaf_props is not None
         assert leaf_props.inference_confidence is not None
         assert leaf_props.inference_confidence.decision_type == "cache_policy"
         assert leaf_props.inference_confidence.decision_value == "lazy"
 
-    def test_source_view_with_no_cache_hint_has_no_confidence(self) -> None:
+    @staticmethod
+    def test_source_view_with_no_cache_hint_has_no_confidence() -> None:
         """Source views without cache hint should have no confidence."""
         views = (
             _make_view("root"),
             _make_view("child", inputs=("root",)),
         )
         ir = _make_ir(views)
-        result = infer_semantics(ir)
+        result = infer_semantics(ir, SEMANTIC_MODEL)
         root_props = result.views[0].inferred_properties
         assert root_props is not None
         # Source views have no cache hint, so no confidence
         assert root_props.inference_confidence is None
 
-    def test_full_pipeline_relate_views_have_confidence(self) -> None:
+    @staticmethod
+    def test_full_pipeline_relate_views_have_confidence() -> None:
         """Relate views in the full pipeline should have confidence metadata."""
         from semantics.ir_pipeline import build_semantic_ir
 
@@ -726,7 +763,8 @@ class TestInferSemanticsAttachesConfidence:
         ]
         assert len(relate_with_confidence) > 0
 
-    def test_confidence_has_valid_score_range(self) -> None:
+    @staticmethod
+    def test_confidence_has_valid_score_range() -> None:
         """All confidence scores should be in [0.0, 1.0]."""
         from semantics.ir_pipeline import build_semantic_ir
 

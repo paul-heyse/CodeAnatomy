@@ -146,6 +146,7 @@ def test_parse_injected_ranges_reports_errors_from_failed_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Report parser runtime errors while preserving successful parser runs."""
+
     class _Parser:
         def __init__(self, language: object | None = None) -> None:
             self.language = language

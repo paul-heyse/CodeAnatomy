@@ -296,9 +296,9 @@ class SemanticModel:
 
 
 def _build_output_specs() -> tuple[SemanticOutputSpec, ...]:
-    from relspec.view_defs import RELATION_OUTPUT_NAME
     from semantics.diagnostics import SEMANTIC_DIAGNOSTIC_VIEW_NAMES
     from semantics.naming import canonical_output_name
+    from semantics.output_names import RELATION_OUTPUT_NAME
 
     ordered: list[SemanticOutputSpec] = []
     seen: set[str] = set()

@@ -33,13 +33,15 @@ class _SgNode:
 class TestExtractSignatureStage:
     """Tests for extract_signature_stage."""
 
-    def test_extracts_and_truncates(self) -> None:
+    @staticmethod
+    def test_extracts_and_truncates() -> None:
         """Verify signature extraction from node text."""
         payload = extract_signature_stage(cast("Any", _SgNode("def build_graph(x, y):\n    pass")))
         signature = cast("str", payload["signature"])
         assert signature.startswith("def build_graph")
 
-    def test_empty_text_returns_empty(self) -> None:
+    @staticmethod
+    def test_empty_text_returns_empty() -> None:
         """Verify empty text produces empty dict."""
         payload = extract_signature_stage(cast("Any", _SgNode("")))
         assert payload == {}
@@ -48,7 +50,8 @@ class TestExtractSignatureStage:
 class TestFindImportAliases:
     """Tests for find_import_aliases."""
 
-    def test_uses_config_rules(self) -> None:
+    @staticmethod
+    def test_uses_config_rules() -> None:
         """Verify find_import_aliases passes config rule dict to find_all."""
         node = _SgNode()
         rows = find_import_aliases(cast("Any", node))
@@ -59,7 +62,8 @@ class TestFindImportAliases:
 class TestResolutionPayload:
     """Tests for PythonResolutionPayloadV1 and coerce_resolution_payload."""
 
-    def test_coerce_resolution_payload(self) -> None:
+    @staticmethod
+    def test_coerce_resolution_payload() -> None:
         """Verify coercion from dict to typed payload."""
         payload = coerce_resolution_payload(
             {
@@ -71,7 +75,8 @@ class TestResolutionPayload:
         assert isinstance(payload, PythonResolutionPayloadV1)
         assert payload.symbol == "foo"
 
-    def test_defaults(self) -> None:
+    @staticmethod
+    def test_defaults() -> None:
         """Verify default values for optional fields."""
         payload = coerce_resolution_payload({})
         assert payload.symbol is None
@@ -81,7 +86,8 @@ class TestResolutionPayload:
 class TestRunPythonEnrichmentPipeline:
     """Tests for run_python_enrichment_pipeline."""
 
-    def test_merges_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @staticmethod
+    def test_merges_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
         """Verify enrichment pipeline merges resolution and semantic signal."""
         monkeypatch.setattr(
             support_module,

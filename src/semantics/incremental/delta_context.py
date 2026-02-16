@@ -78,7 +78,7 @@ class DeltaAccessContext:
         DeltaStorageOptions
             Storage option bundle after applying policy overrides.
         """
-        policy = self.runtime.profile.policies.delta_store_policy
+        policy = self.runtime.delta_store_policy()
         if policy is None:
             return self.storage
         storage, log_storage = resolve_delta_store_policy(

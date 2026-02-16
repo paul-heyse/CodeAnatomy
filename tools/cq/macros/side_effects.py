@@ -23,7 +23,7 @@ from tools.cq.core.schema import (
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.macros.contracts import ScopedMacroRequestBase
+from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
 
@@ -278,7 +278,7 @@ def _group_effects_by_kind(all_effects: list[SideEffect]) -> dict[str, list[Side
 def _append_kind_sections(
     result: CqResult,
     by_kind: dict[str, list[SideEffect]],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     kind_titles = {
         "top_level_call": "Top Level Calls",
@@ -321,7 +321,7 @@ def _append_kind_sections(
 def _append_evidence(
     result: CqResult,
     all_effects: list[SideEffect],
-    scoring_details: dict[str, object],
+    scoring_details: ScoringDetailsV1,
 ) -> None:
     for effect in all_effects:
         result.evidence.append(

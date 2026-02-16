@@ -1,9 +1,4 @@
-"""Static accessors for semantic dataset specifications.
-
-This module provides compatibility functions matching the normalize layer
-dataset_specs API. Functions accept an optional SessionContext parameter
-for runtime context integration.
-"""
+"""Static accessors for semantic dataset specifications."""
 
 from __future__ import annotations
 
@@ -12,8 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datafusion import SessionContext
-
     from datafusion_engine.arrow.interop import SchemaLike
     from schema_spec.contracts import ContractSpec, DatasetSpec
     from semantics.catalog.dataset_rows import SemanticDatasetRow
@@ -24,8 +17,6 @@ class _DatasetSpecCache:
     dataset_rows: dict[str, SemanticDatasetRow] | None = None
     input_schemas: dict[str, SchemaLike] | None = None
     dataset_specs: dict[str, DatasetSpec] | None = None
-    dataset_aliases: dict[str, str] | None = None
-    aliases_to_name: dict[str, str] | None = None
 
 
 _CACHE = _DatasetSpecCache()
@@ -125,41 +116,17 @@ def _get_dataset_specs() -> dict[str, DatasetSpec]:
     return dataset_specs
 
 
-def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
-    """Return the lazily-initialized alias mappings.
-
-    Raises:
-        ValueError: If the operation cannot be completed.
-    """
-    dataset_aliases = _CACHE.dataset_aliases
-    aliases_to_name = _CACHE.aliases_to_name
-    if dataset_aliases is None or aliases_to_name is None:
-        rows = _get_all_dataset_rows()
-        names = [row.name for row in rows]
-        if len(set(names)) != len(names):
-            msg = "Duplicate semantic dataset names detected in registry."
-            raise ValueError(msg)
-        aliases = {name: name for name in names}
-        reverse = aliases.copy()
-        dataset_aliases = aliases
-        aliases_to_name = reverse
-        _CACHE.dataset_aliases = dataset_aliases
-        _CACHE.aliases_to_name = aliases_to_name
-    return dataset_aliases, aliases_to_name
-
-
-def dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetSpec:
+def dataset_spec(name: str) -> DatasetSpec:
     """Return a DatasetSpec by name.
 
-    Args:
-        name: Description.
-        ctx: Description.
+    Parameters
+    ----------
+    name
+        Dataset name.
 
     Raises:
         KeyError: If the operation cannot be completed.
     """
-    # ctx reserved for future runtime enrichment
-    _ = ctx
     specs = _get_dataset_specs()
     if name not in specs:
         msg = f"Unknown semantic dataset: {name!r}."
@@ -167,7 +134,7 @@ def dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetSpec:
     return specs[name]
 
 
-def maybe_dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetSpec | None:
+def maybe_dataset_spec(name: str) -> DatasetSpec | None:
     """Return a DatasetSpec by name when available.
 
     Returns:
@@ -176,7 +143,7 @@ def maybe_dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetS
         Registered dataset spec when present, otherwise ``None``.
     """
     try:
-        return dataset_spec(name, ctx=ctx)
+        return dataset_spec(name)
     except KeyError:
         return None
 
@@ -239,48 +206,17 @@ def dataset_names() -> tuple[str, ...]:
 
 
 def dataset_name_from_alias(alias: str) -> str:
-    """Return the dataset name for a canonical alias.
-
-    Args:
-        alias: Description.
-
-    Raises:
-        KeyError: If the operation cannot be completed.
-    """
-    name_to_alias, alias_to_name = _get_alias_maps()
-    name = alias_to_name.get(alias)
-    if name is not None:
-        return name
-    # Check if alias is actually a name
-    if alias in name_to_alias:
-        return alias
-    msg = f"Unknown semantic dataset alias: {alias!r}."
-    raise KeyError(msg)
+    """Return the canonical dataset name for an alias (identity mapping)."""
+    return alias
 
 
 def dataset_alias(name: str) -> str:
-    """Return the canonical alias for a dataset name.
-
-    Args:
-        name: Description.
-
-    Raises:
-        KeyError: If the operation cannot be completed.
-    """
-    name_to_alias, alias_to_name = _get_alias_maps()
-    alias = name_to_alias.get(name)
-    if alias is not None:
-        return alias
-    # Check if name is actually an alias
-    if name in alias_to_name:
-        return name
-    msg = f"Unknown semantic dataset: {name!r}."
-    raise KeyError(msg)
+    """Return the canonical alias for a dataset name (identity mapping)."""
+    return name
 
 
 def dataset_contract(
     name: str,
-    ctx: SessionContext | None = None,
 ) -> ContractSpec:
     """Return the ContractSpec for a semantic dataset.
 
@@ -288,8 +224,6 @@ def dataset_contract(
     ----------
     name
         Dataset name to retrieve.
-    ctx
-        Optional DataFusion session context for runtime enrichment.
 
     Returns:
     -------
@@ -298,8 +232,15 @@ def dataset_contract(
     """
     from schema_spec.contracts import dataset_spec_contract_spec_or_default
 
-    spec = dataset_spec(name, ctx=ctx)
+    spec = dataset_spec(name)
     return dataset_spec_contract_spec_or_default(spec)
+
+
+def _reset_cache() -> None:
+    """Reset module-level dataset spec caches. For testing only."""
+    _CACHE.dataset_rows = None
+    _CACHE.input_schemas = None
+    _CACHE.dataset_specs = None
 
 
 def dataset_contract_schema(name: str) -> SchemaLike:
@@ -356,6 +297,7 @@ def supports_incremental(name: str) -> bool:
 
 
 __all__ = [
+    "_reset_cache",
     "dataset_alias",
     "dataset_contract",
     "dataset_contract_schema",

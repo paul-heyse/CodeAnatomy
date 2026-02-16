@@ -41,7 +41,7 @@ def build_scan_context(records: list[SgRecord]) -> ScanContext:
     records
         AST-grep records to index
 
-    Returns
+    Returns:
     -------
     ScanContext
         Scan context with interval indexes and call assignments
@@ -71,7 +71,7 @@ def build_entity_candidates(scan: ScanContext, records: list[SgRecord]) -> Entit
     records
         All ast-grep records
 
-    Returns
+    Returns:
     -------
     EntityCandidates
         Candidate buckets by entity type
@@ -96,7 +96,7 @@ def assign_calls_to_defs(
     calls
         Call records to assign
 
-    Returns
+    Returns:
     -------
     dict[SgRecord, list[SgRecord]]
         Mapping from definition to calls within it
@@ -136,9 +136,9 @@ def assign_calls_to_defs(
 
 
 __all__ = [
-    "ScanContext",
     "EntityCandidates",
-    "build_scan_context",
-    "build_entity_candidates",
+    "ScanContext",
     "assign_calls_to_defs",
+    "build_entity_candidates",
+    "build_scan_context",
 ]

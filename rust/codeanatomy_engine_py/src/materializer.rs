@@ -3,6 +3,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+#[cfg(feature = "tracing")]
+use tracing::instrument;
 
 use codeanatomy_engine::compiler::plan_compiler::SemanticPlanCompiler;
 use codeanatomy_engine::compiler::pushdown_probe_extract::{
@@ -107,6 +109,7 @@ impl CpgMaterializer {
     ///
     /// Raises:
     ///     RuntimeError: If execution or materialization fails
+    #[cfg_attr(feature = "tracing", instrument(skip(self, session_factory, compiled_plan)))]
     fn execute(
         &self,
         session_factory: &PySessionFactory,

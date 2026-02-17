@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import multiprocessing
-from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -31,7 +30,6 @@ from tools.cq.core.cache.telemetry import (
     record_cache_set,
 )
 from tools.cq.core.contracts import contract_to_builtins, require_mapping
-from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.types import QueryLanguage
 from tools.cq.query.language import constrain_include_globs_for_language
 from tools.cq.search._shared.types import QueryMode
@@ -40,9 +38,11 @@ from tools.cq.search.pipeline.candidate_phase import run_candidate_phase
 from tools.cq.search.pipeline.classification import classify_match
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.contracts import SearchPartitionPlanV1
+from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
     LanguageSearchResult,
+    MatchClassifyOptions,
     RawMatch,
     SearchStats,
 )
@@ -51,7 +51,6 @@ from tools.cq.search.tree_sitter.core.infrastructure import run_file_lanes_paral
 
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.contracts import SearchConfig
-    from tools.cq.search.pipeline.smart_search_types import _PythonSemanticPrefetchResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,12 +72,16 @@ class _EnrichmentCacheContext:
     lang: QueryLanguage
     ttl_seconds: int
     tag: str | None
+    incremental_enrichment_enabled: bool
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1
 
 
 @dataclass(frozen=True, slots=True)
 class _EnrichmentMissTask:
     root: str
     lang: QueryLanguage
+    incremental_enrichment_enabled: bool
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1
     items: list[tuple[int, RawMatch, str, str]]
 
 
@@ -110,18 +113,13 @@ def run_search_partition(
         mode=mode,
         scope=scope,
     )
-    prefetch_future = _maybe_submit_prefetch(
-        ctx=ctx,
-        lang=lang,
-        raw_matches=raw_matches,
-    )
     enriched = _enrichment_phase(
         ctx=ctx,
         lang=lang,
         raw_matches=raw_matches,
+        plan=plan,
         scope=scope,
     )
-    python_semantic_prefetch = _resolve_prefetch_result(prefetch_future)
     return LanguageSearchResult(
         lang=lang,
         raw_matches=raw_matches,
@@ -129,7 +127,6 @@ def run_search_partition(
         pattern=pattern,
         enriched_matches=enriched,
         dropped_by_scope=int(getattr(stats, "dropped_by_scope", 0)),
-        python_semantic_prefetch=python_semantic_prefetch,
     )
 
 
@@ -276,31 +273,12 @@ def _candidate_payload_from_cache(
     return raw_matches, stats, pattern, False
 
 
-def _maybe_submit_prefetch(
-    *,
-    ctx: SearchConfig,
-    lang: QueryLanguage,
-    raw_matches: list[RawMatch],
-) -> Future[object] | None:
-    if lang != "python" or not raw_matches:
-        return None
-    from tools.cq.search.pipeline.python_semantic import (
-        run_prefetch_python_semantic_for_raw_matches,
-    )
-
-    return get_worker_scheduler().submit_io(
-        run_prefetch_python_semantic_for_raw_matches,
-        ctx,
-        lang=lang,
-        raw_matches=raw_matches,
-    )
-
-
 def _enrichment_phase(
     *,
     ctx: SearchConfig,
     lang: QueryLanguage,
     raw_matches: list[RawMatch],
+    plan: SearchPartitionPlanV1,
     scope: _PartitionScopeContext,
 ) -> list[EnrichedMatch]:
     namespace = "search_enrichment"
@@ -322,6 +300,8 @@ def _enrichment_phase(
                 run_id=ctx.run_id,
             )
         ),
+        incremental_enrichment_enabled=plan.incremental_enrichment_enabled,
+        incremental_enrichment_mode=plan.incremental_enrichment_mode,
     )
     enriched_results, misses = _probe_enrichment_cache(
         raw_matches=raw_matches,
@@ -333,6 +313,8 @@ def _enrichment_phase(
             misses=misses,
             enriched_results=enriched_results,
             context=context,
+            incremental_enrichment_enabled=plan.incremental_enrichment_enabled,
+            incremental_enrichment_mode=plan.incremental_enrichment_mode,
         )
     return [match for match in enriched_results if isinstance(match, EnrichedMatch)]
 
@@ -358,6 +340,8 @@ def _probe_enrichment_cache(
                 "match_end": raw.match_end,
                 "submatch_index": raw.submatch_index,
                 "file_content_hash": file_hash,
+                "incremental_enrichment_enabled": context.incremental_enrichment_enabled,
+                "incremental_enrichment_mode": context.incremental_enrichment_mode.value,
             },
         )
         if context.cache_enabled and file_hash:
@@ -394,11 +378,15 @@ def _compute_and_persist_enrichment_misses(
     misses: list[tuple[int, RawMatch, str, str]],
     enriched_results: list[EnrichedMatch | None],
     context: _EnrichmentCacheContext,
+    incremental_enrichment_enabled: bool,
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1,
 ) -> None:
     miss_results = _classify_enrichment_misses(
         ctx=ctx,
         misses=misses,
         context=context,
+        incremental_enrichment_enabled=incremental_enrichment_enabled,
+        incremental_enrichment_mode=incremental_enrichment_mode,
     )
     with context.cache.transact():
         for row in miss_results:
@@ -431,12 +419,16 @@ def _classify_enrichment_misses(
     ctx: SearchConfig,
     misses: list[tuple[int, RawMatch, str, str]],
     context: _EnrichmentCacheContext,
+    incremental_enrichment_enabled: bool,
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1,
 ) -> list[_EnrichmentMissResult]:
     if len(misses) <= 1:
         return _classify_enrichment_miss_batch(
             _EnrichmentMissTask(
                 root=str(ctx.root),
                 lang=context.lang,
+                incremental_enrichment_enabled=incremental_enrichment_enabled,
+                incremental_enrichment_mode=incremental_enrichment_mode,
                 items=misses,
             )
         )
@@ -451,6 +443,8 @@ def _classify_enrichment_misses(
             _EnrichmentMissTask(
                 root=str(ctx.root),
                 lang=context.lang,
+                incremental_enrichment_enabled=incremental_enrichment_enabled,
+                incremental_enrichment_mode=incremental_enrichment_mode,
                 items=misses,
             )
         )
@@ -459,6 +453,8 @@ def _classify_enrichment_misses(
         _EnrichmentMissTask(
             root=str(ctx.root),
             lang=context.lang,
+            incremental_enrichment_enabled=incremental_enrichment_enabled,
+            incremental_enrichment_mode=incremental_enrichment_mode,
             items=batch,
         )
         for batch in batches
@@ -483,6 +479,8 @@ def _classify_enrichment_misses(
             _EnrichmentMissTask(
                 root=str(ctx.root),
                 lang=context.lang,
+                incremental_enrichment_enabled=incremental_enrichment_enabled,
+                incremental_enrichment_mode=incremental_enrichment_mode,
                 items=misses,
             )
         )
@@ -495,13 +493,12 @@ def _classify_enrichment_miss_batch(
 ) -> list[_EnrichmentMissResult]:
     root = Path(task.root)
     cache_context = ClassifierCacheContext()
-    deep_enrichment_seen: set[tuple[str, str]] = set()
     results: list[_EnrichmentMissResult] = []
+    options = MatchClassifyOptions(
+        incremental_enabled=task.incremental_enrichment_enabled,
+        incremental_mode=task.incremental_enrichment_mode,
+    )
     for idx, raw, cache_key, file_hash in task.items:
-        enrichment_key = (str(raw.file), str(raw.match_text))
-        enable_deep_enrichment = enrichment_key not in deep_enrichment_seen
-        if enable_deep_enrichment:
-            deep_enrichment_seen.add(enrichment_key)
         results.append(
             _EnrichmentMissResult(
                 idx=idx,
@@ -513,29 +510,11 @@ def _classify_enrichment_miss_batch(
                     root,
                     lang=task.lang,
                     cache_context=cache_context,
-                    enable_deep_enrichment=enable_deep_enrichment,
+                    options=options,
                 ),
             )
         )
     return results
-
-
-def _resolve_prefetch_result(
-    prefetch_future: Future[object] | None,
-) -> _PythonSemanticPrefetchResult | None:
-    if prefetch_future is None:
-        return None
-    try:
-        return cast("_PythonSemanticPrefetchResult | None", prefetch_future.result())
-    except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
-        from tools.cq.search.pipeline.smart_search_telemetry import (
-            new_python_semantic_telemetry,
-        )
-        from tools.cq.search.pipeline.smart_search_types import (
-            _PythonSemanticPrefetchResult as _PrefetchResult,
-        )
-
-        return _PrefetchResult(telemetry=new_python_semantic_telemetry())
 
 
 __all__ = ["run_search_partition"]

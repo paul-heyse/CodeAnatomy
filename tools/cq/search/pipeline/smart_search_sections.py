@@ -17,10 +17,10 @@ from tools.cq.search.objects.render import (
     is_non_code_occurrence,
 )
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime, build_object_resolved_view
-from tools.cq.search.pipeline.classifier import MatchCategory, SymtableEnrichment
+from tools.cq.search.pipeline.classifier import MatchCategory
 from tools.cq.search.pipeline.enrichment_contracts import (
+    incremental_enrichment_payload,
     python_enrichment_payload,
-    python_semantic_enrichment_payload,
     rust_enrichment_payload,
 )
 from tools.cq.search.pipeline.smart_search_followups import build_followups
@@ -63,27 +63,6 @@ def _build_score_details(match: EnrichedMatch) -> ScoreDetails:
     )
 
 
-def _symtable_flags(symtable: SymtableEnrichment) -> list[str]:
-    flags: list[str] = []
-    if symtable.is_imported:
-        flags.append("imported")
-    if symtable.is_assigned:
-        flags.append("assigned")
-    if symtable.is_parameter:
-        flags.append("parameter")
-    if symtable.is_free:
-        flags.append("closure_var")
-    if symtable.is_global:
-        flags.append("global")
-    if symtable.is_referenced:
-        flags.append("referenced")
-    if symtable.is_local:
-        flags.append("local")
-    if symtable.is_nonlocal:
-        flags.append("nonlocal")
-    return flags
-
-
 def _populate_optional_fields(data: dict[str, object], match: EnrichedMatch) -> None:
     if match.context_window:
         data["context_window"] = match.context_window
@@ -93,10 +72,6 @@ def _populate_optional_fields(data: dict[str, object], match: EnrichedMatch) -> 
         data["containing_scope"] = match.containing_scope
     if match.node_kind:
         data["node_kind"] = match.node_kind
-    if match.symtable:
-        flags = _symtable_flags(match.symtable)
-        if flags:
-            data["binding_flags"] = flags
 
 
 def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) -> None:
@@ -108,19 +83,13 @@ def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) ->
         python_payload = python_enrichment_payload(match.python_enrichment)
     elif is_python_language(match.language):
         python_payload = {}
+    if match.incremental_enrichment:
+        incremental_payload = incremental_enrichment_payload(match.incremental_enrichment)
+        if python_payload is None:
+            python_payload = {}
+        python_payload["incremental"] = incremental_payload
     if python_payload is not None:
-        if match.python_semantic_enrichment:
-            python_payload.setdefault(
-                "python_semantic",
-                python_semantic_enrichment_payload(match.python_semantic_enrichment),
-            )
         enrichment["python"] = python_payload
-    if match.python_semantic_enrichment:
-        enrichment["python_semantic"] = python_semantic_enrichment_payload(
-            match.python_semantic_enrichment
-        )
-    if match.symtable:
-        enrichment["symtable"] = match.symtable
     if len(enrichment) > 1:
         data["enrichment"] = enrichment
 

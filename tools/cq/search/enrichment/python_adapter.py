@@ -8,7 +8,9 @@ from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
 from tools.cq.search.enrichment.core import string_or_none
 from tools.cq.search.pipeline.enrichment_contracts import (
+    IncrementalEnrichmentV1,
     PythonEnrichmentV1,
+    incremental_enrichment_payload,
     python_enrichment_payload,
 )
 
@@ -27,10 +29,14 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
             Enrichment payload mapping when available, otherwise ``None``.
         """
         _ = self
-        payload = getattr(match, "python_enrichment", None)
-        if not isinstance(payload, PythonEnrichmentV1):
-            return None
-        return python_enrichment_payload(payload)
+        python_payload = getattr(match, "python_enrichment", None)
+        incremental_payload = getattr(match, "incremental_enrichment", None)
+        out: dict[str, object] = {}
+        if isinstance(python_payload, PythonEnrichmentV1):
+            out.update(python_enrichment_payload(python_payload))
+        if isinstance(incremental_payload, IncrementalEnrichmentV1):
+            out["incremental"] = incremental_enrichment_payload(incremental_payload)
+        return out or None
 
     def accumulate_telemetry(
         self,
@@ -39,17 +45,26 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
     ) -> None:
         """Accumulate Python enrichment telemetry counters into a language bucket."""
         _ = self
+        incremental = payload.get("incremental")
+        if isinstance(incremental, dict):
+            _accumulate_stage_status(
+                lang_bucket=lang_bucket,
+                stage_status=incremental.get("stage_status"),
+            )
+            _accumulate_stage_timings(
+                lang_bucket=lang_bucket,
+                stage_timings=incremental.get("timings_ms"),
+            )
         meta = payload.get("meta")
-        if not isinstance(meta, dict):
-            return
-        _accumulate_stage_status(
-            lang_bucket=lang_bucket,
-            stage_status=meta.get("stage_status"),
-        )
-        _accumulate_stage_timings(
-            lang_bucket=lang_bucket,
-            stage_timings=meta.get("stage_timings_ms"),
-        )
+        if isinstance(meta, dict):
+            _accumulate_stage_status(
+                lang_bucket=lang_bucket,
+                stage_status=meta.get("stage_status"),
+            )
+            _accumulate_stage_timings(
+                lang_bucket=lang_bucket,
+                stage_timings=meta.get("stage_timings_ms"),
+            )
         _accumulate_runtime_flags(
             lang_bucket=lang_bucket,
             runtime_payload=payload.get("query_runtime"),

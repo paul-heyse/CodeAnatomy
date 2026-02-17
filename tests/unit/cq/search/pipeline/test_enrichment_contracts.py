@@ -4,13 +4,10 @@ from __future__ import annotations
 
 from tools.cq.search.pipeline.enrichment_contracts import (
     PythonEnrichmentV1,
-    PythonSemanticEnrichmentV1,
     RustTreeSitterEnrichmentV1,
     python_enrichment_payload,
-    python_semantic_enrichment_payload,
     rust_enrichment_payload,
     wrap_python_enrichment,
-    wrap_python_semantic_enrichment,
     wrap_rust_enrichment,
 )
 
@@ -34,32 +31,21 @@ def test_wrap_python_enrichment_preserves_typed_instance() -> None:
     assert same is wrapped
 
 
-def test_wrap_python_semantic_enrichment_rejects_non_mapping() -> None:
-    """Invalid payload inputs should be ignored at decode boundary."""
-    assert wrap_python_semantic_enrichment(["not", "a", "mapping"]) is None
-
-
 def test_payload_helpers_return_empty_mapping_for_none() -> None:
     """Payload helper adapters should normalize missing payloads to empty dicts."""
     assert rust_enrichment_payload(None) == {}
     assert python_enrichment_payload(None) == {}
-    assert python_semantic_enrichment_payload(None) == {}
 
 
 def test_payload_helpers_return_copy() -> None:
     """Payload helpers should return detached mutable copies."""
     rust_payload = RustTreeSitterEnrichmentV1(payload={"k": "v"})
     python_payload = PythonEnrichmentV1(payload={"k": "v"})
-    semantic_payload = PythonSemanticEnrichmentV1(payload={"k": "v"})
-
     rust = rust_enrichment_payload(rust_payload)
     python = python_enrichment_payload(python_payload)
-    semantic = python_semantic_enrichment_payload(semantic_payload)
 
     rust["k"] = "changed"
     python["k"] = "changed"
-    semantic["k"] = "changed"
 
     assert rust_payload.payload["k"] == "v"
     assert python_payload.payload["k"] == "v"
-    assert semantic_payload.payload["k"] == "v"

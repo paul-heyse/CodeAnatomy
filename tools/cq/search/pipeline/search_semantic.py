@@ -28,7 +28,6 @@ from tools.cq.search.pipeline._semantic_helpers import (
     normalize_python_semantic_degradation_reason as _normalize_python_semantic_degradation_reason,
 )
 from tools.cq.search.pipeline.contracts import SearchConfig
-from tools.cq.search.pipeline.enrichment_contracts import python_semantic_enrichment_payload
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch, _SearchSemanticOutcome
 from tools.cq.search.semantic.models import (
     LanguageSemanticEnrichmentRequest,
@@ -190,10 +189,9 @@ def _resolve_search_semantic_target(
 
 
 def _apply_prefetched_search_semantic_outcome(
-    *,
-    outcome: _SearchSemanticOutcome,
-    target_language: QueryLanguage,
-    primary_target_match: EnrichedMatch | None,
+    _outcome: _SearchSemanticOutcome,
+    _target_language: QueryLanguage,
+    _primary_target_match: EnrichedMatch | None,
 ) -> bool:
     """Apply prefetched python semantic outcome from primary target match.
 
@@ -211,31 +209,8 @@ def _apply_prefetched_search_semantic_outcome(
     bool
         True if prefetched payload was applied.
     """
-    if target_language != "python" or primary_target_match is None:
-        return False
-
-    payload = python_semantic_enrichment_payload(primary_target_match.python_semantic_enrichment)
-    if not payload:
-        return False
-    prefetch_status, prefetch_reason = _payload_coverage_status(payload)
-    if prefetch_status in {"applied", "degraded", "partial_signal", "structural_only"}:
-        outcome.payload = payload
-        outcome.applied = 1
-    elif payload:
-        # Retain closest-fit payload even when strict signal threshold is not met.
-        outcome.payload = payload
-        outcome.applied = 1
-        if prefetch_reason:
-            outcome.reasons.append(prefetch_reason)
-    else:
-        outcome.failed = 1
-        outcome.reasons.append(
-            _normalize_python_semantic_degradation_reason(
-                reasons=(),
-                coverage_reason=prefetch_reason,
-            )
-        )
-    return True
+    # Hard-cutover: search matches no longer carry prefetched python semantic payloads.
+    return False
 
 
 def _apply_search_semantic_payload_outcome(
@@ -348,9 +323,9 @@ def collect_search_semantic_outcome(
 
     outcome.attempted = 1
     if _apply_prefetched_search_semantic_outcome(
-        outcome=outcome,
-        target_language=target_language,
-        primary_target_match=primary_target_match,
+        outcome,
+        target_language,
+        primary_target_match,
     ):
         return outcome
 

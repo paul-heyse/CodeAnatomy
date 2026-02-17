@@ -15,6 +15,7 @@ from tools.cq.search.pipeline.smart_search_types import (
     ClassificationBatchResult,
     ClassificationBatchTask,
     EnrichedMatch,
+    MatchClassifyOptions,
     RawMatch,
 )
 from tools.cq.search.pipeline.worker_policy import resolve_search_worker_count
@@ -25,10 +26,20 @@ def _classify_partition_batch(
 ) -> list[ClassificationBatchResult]:
     root = Path(task.root)
     cache_context = ClassifierCacheContext()
+    options = MatchClassifyOptions(
+        incremental_enabled=task.incremental_enrichment_enabled,
+        incremental_mode=task.incremental_enrichment_mode,
+    )
     return [
         ClassificationBatchResult(
             index=idx,
-            match=classify_match(raw, root, lang=task.lang, cache_context=cache_context),
+            match=classify_match(
+                raw,
+                root,
+                lang=task.lang,
+                cache_context=cache_context,
+                options=options,
+            ),
         )
         for idx, raw in task.batch
     ]
@@ -51,6 +62,10 @@ def run_classify_phase(
     filtered_raw_matches = [m for m in raw_matches if is_path_in_lang_scope(m.file, lang)]
     if not filtered_raw_matches:
         return []
+    options = MatchClassifyOptions(
+        incremental_enabled=config.incremental_enrichment_enabled,
+        incremental_mode=config.incremental_enrichment_mode,
+    )
 
     indexed: list[tuple[int, RawMatch]] = list(enumerate(filtered_raw_matches))
     partitioned: dict[str, list[tuple[int, RawMatch]]] = {}
@@ -61,12 +76,21 @@ def run_classify_phase(
 
     if workers <= 1 or len(batches) <= 1:
         return [
-            classify_match(raw, config.root, lang=lang, cache_context=cache_context)
+            classify_match(
+                raw, config.root, lang=lang, cache_context=cache_context, options=options
+            )
             for raw in filtered_raw_matches
         ]
 
     tasks = [
-        ClassificationBatchTask(root=str(config.root), lang=lang, batch=batch) for batch in batches
+        ClassificationBatchTask(
+            root=str(config.root),
+            lang=lang,
+            incremental_enrichment_enabled=config.incremental_enrichment_enabled,
+            incremental_enrichment_mode=config.incremental_enrichment_mode,
+            batch=batch,
+        )
+        for batch in batches
     ]
     scheduler = get_worker_scheduler()
     try:
@@ -82,7 +106,13 @@ def run_classify_phase(
         )
         if batch.timed_out > 0:
             return [
-                classify_match(raw, config.root, lang=lang, cache_context=cache_context)
+                classify_match(
+                    raw,
+                    config.root,
+                    lang=lang,
+                    cache_context=cache_context,
+                    options=options,
+                )
                 for raw in filtered_raw_matches
             ]
         indexed_results: list[tuple[int, EnrichedMatch]] = []
@@ -97,7 +127,13 @@ def run_classify_phase(
         TypeError,
     ):
         return [
-            classify_match(raw, config.root, lang=lang, cache_context=cache_context)
+            classify_match(
+                raw,
+                config.root,
+                lang=lang,
+                cache_context=cache_context,
+                options=options,
+            )
             for raw in filtered_raw_matches
         ]
 

@@ -282,6 +282,8 @@ def build_search_summary(
     summary["cross_language_diagnostics"] = diagnostics_to_summary_payload(all_diagnostics)
     summary["language_capabilities"] = build_language_capabilities(lang_scope=ctx.lang_scope)
     summary["enrichment_telemetry"] = enrichment_telemetry
+    summary["incremental_enrichment_mode"] = ctx.incremental_enrichment_mode.value
+    summary["incremental_enrichment_enabled"] = bool(ctx.incremental_enrichment_enabled)
     summary["python_semantic_overview"] = python_semantic_overview
     summary["python_semantic_telemetry"] = python_semantic_telemetry
     summary.setdefault(

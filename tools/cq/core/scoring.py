@@ -37,6 +37,10 @@ _NORM_AMBIGUITIES = 10
 _CONFIDENCE_SCORES: dict[str, float] = {
     "resolved_ast": 0.95,
     "bytecode": 0.90,
+    "incremental_full": 0.90,
+    "incremental_ts_sym_dis": 0.86,
+    "incremental_ts_sym": 0.82,
+    "incremental_ts_only": 0.74,
     "resolved_ast_heuristic": 0.75,
     "bytecode_heuristic": 0.75,
     "cross_file_taint": 0.70,

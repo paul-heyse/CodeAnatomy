@@ -50,6 +50,8 @@ class SearchStep(RunStepBase, tag="search", frozen=True):
     include_strings: bool = False
     in_dir: str | None = None
     lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
+    enrich: bool = True
+    enrich_mode: str = "ts_sym"
 
 
 class CallsStep(RunStepBase, tag="calls", frozen=True):
@@ -114,6 +116,8 @@ class NeighborhoodStep(RunStepBase, tag="neighborhood", frozen=True):
     lang: str = "python"
     top_k: int = 10
     semantic_enrichment: bool = True
+    enrich: bool = True
+    enrich_mode: str = "ts_sym"
 
 
 RunStep = (

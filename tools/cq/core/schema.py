@@ -139,12 +139,10 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
         self.data[key] = value
 
     def __contains__(self, key: object) -> bool:
-        """Return True if the key exists in the detail payload.
+        """Return whether the key exists in the detail payload.
 
         Returns:
-        -------
-        bool
-            True if the key exists.
+            bool: True when the key exists in the structured payload view.
         """
         if not isinstance(key, str):
             return False
@@ -171,6 +169,21 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
                 if value is not None:
                     legacy[field] = value
         return legacy
+
+    def kind_rank(self) -> int:
+        """Resolve stable rank for registered detail kinds.
+
+        Returns:
+            int: Stable rank for the kind, or default rank for unknown kinds.
+        """
+        if not isinstance(self.kind, str):
+            return 1000
+        from tools.cq.core.details_kinds import resolve_kind
+
+        spec = resolve_kind(self.kind)
+        if spec is None:
+            return 1000
+        return int(spec.rank)
 
 
 class Anchor(msgspec.Struct, frozen=True, omit_defaults=True):

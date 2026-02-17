@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 
 use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "tracing")]
+use tracing::instrument;
 
 use crate::compiler::cost_model::{
     derive_task_costs, schedule_tasks_with_quality, CostModelConfig, StatsQuality,
@@ -67,6 +69,7 @@ pub struct CompileResponse {
 }
 
 /// Compile a request to deterministic planning artifacts without materialization.
+#[cfg_attr(feature = "tracing", instrument(skip(request)))]
 pub async fn compile_request(request: CompileRequest<'_>) -> Result<CompileResponse> {
     let CompileRequest {
         session_factory,

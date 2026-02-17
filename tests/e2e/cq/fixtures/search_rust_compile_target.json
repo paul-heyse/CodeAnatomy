@@ -80,8 +80,7 @@
       },
       "degradation": {
         "notes": [
-          "not_attempted_by_design",
-          "not_attempted_runtime_disabled"
+          "not_attempted_by_design"
         ],
         "scan": "ok",
         "scope_filter": "none",

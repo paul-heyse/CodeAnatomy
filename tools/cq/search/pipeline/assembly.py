@@ -16,9 +16,7 @@ from tools.cq.core.schema import Anchor, CqResult, Finding, Section, assign_resu
 from tools.cq.core.summary_contract import SearchSummaryV1, as_search_summary, summary_from_mapping
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime
 from tools.cq.search.pipeline.contracts import SearchConfig
-from tools.cq.search.pipeline.python_semantic import merge_matches_and_python_semantic
 from tools.cq.search.pipeline.search_object_view_store import register_search_object_view
-from tools.cq.search.pipeline.search_semantic import apply_search_semantic_insight
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
     LanguageSearchResult,
@@ -480,7 +478,7 @@ def _build_search_risk(
 
 
 def _assemble_search_insight(
-    ctx: SearchConfig,
+    _ctx: SearchConfig,
     inputs: _SearchAssemblyInputs,
 ) -> FrontDoorInsightV1:
     """Assemble front-door insight from search assembly inputs.
@@ -519,13 +517,7 @@ def _assemble_search_insight(
                 ),
             ),
         )
-    return apply_search_semantic_insight(
-        ctx=ctx,
-        insight=insight,
-        summary=inputs.summary,
-        primary_target_finding=inputs.primary_target_finding,
-        primary_target_match=inputs.primary_target_match,
-    )
+    return insight
 
 
 def _prepare_search_assembly_inputs(
@@ -547,22 +539,21 @@ def _prepare_search_assembly_inputs(
         Complete assembly inputs for result construction.
     """
     from tools.cq.search.objects.resolve import build_object_resolved_view
+    from tools.cq.search.pipeline.smart_search import merge_language_matches
     from tools.cq.search.pipeline.smart_search_sections import build_sections
     from tools.cq.search.pipeline.smart_search_summary import build_search_summary
 
-    (
-        enriched_matches,
-        python_semantic_overview,
-        python_semantic_telemetry,
-        python_semantic_diagnostics,
-    ) = merge_matches_and_python_semantic(ctx, partition_results)
+    enriched_matches = merge_language_matches(
+        partition_results=partition_results,
+        lang_scope=ctx.lang_scope,
+    )
     summary_raw, all_diagnostics = build_search_summary(
         ctx,
         partition_results,
         enriched_matches,
-        python_semantic_overview=python_semantic_overview,
-        python_semantic_telemetry=python_semantic_telemetry,
-        python_semantic_diagnostics=python_semantic_diagnostics,
+        python_semantic_overview={},
+        python_semantic_telemetry={},
+        python_semantic_diagnostics=[],
     )
     summary = as_search_summary(summary_from_mapping(summary_raw))
     object_runtime = build_object_resolved_view(enriched_matches, query=ctx.query)

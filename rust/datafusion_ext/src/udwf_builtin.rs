@@ -20,6 +20,8 @@ use datafusion_expr::WindowUDF;
 use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion_functions_window::row_number::row_number_udwf;
 
+use crate::function_types::FunctionKind;
+use crate::registry::metadata::FunctionMetadata;
 use crate::{macros::WindowUdfSpec, window_udfs};
 
 pub fn builtin_udwfs() -> Vec<WindowUDF> {
@@ -63,4 +65,27 @@ fn lag_base_udwf() -> WindowUDF {
 /// - `reverse_expr()`: Returns the equivalent lag expression for reverse execution.
 fn lead_base_udwf() -> WindowUDF {
     lead_udwf().as_ref().clone()
+}
+
+pub(crate) fn function_metadata(name: &str) -> Option<FunctionMetadata> {
+    let (rewrite_tags, has_reverse_expr, has_sort_options): (&'static [&'static str], bool, bool) =
+        match name {
+            "lag_window" => (&["window"], true, true),
+            "lead_window" => (&["window"], true, true),
+            "row_number_window" => (&["window"], false, false),
+            _ => return None,
+        };
+
+    Some(FunctionMetadata {
+        name: "",
+        kind: FunctionKind::Window,
+        rewrite_tags,
+        has_simplify: false,
+        has_coerce_types: false,
+        has_short_circuits: false,
+        has_groups_accumulator: false,
+        has_retract_batch: false,
+        has_reverse_expr,
+        has_sort_options,
+    })
 }

@@ -55,6 +55,8 @@ class SearchOptions(CommonFilters, frozen=True, kw_only=True):
     literal: bool = False
     include_strings: bool = False
     with_neighborhood: bool = False
+    enrich: bool = True
+    enrich_mode: str = "ts_sym"
     in_dir: str | None = None
     lang: QueryLanguageToken = QueryLanguageToken.auto
 

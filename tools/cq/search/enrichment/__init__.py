@@ -16,6 +16,21 @@ from tools.cq.search.enrichment.core import (
     payload_size_hint,
     set_degraded,
 )
+from tools.cq.search.enrichment.incremental_compound_plane import (
+    build_binding_join,
+    build_compound_bundle,
+)
+from tools.cq.search.enrichment.incremental_dis_plane import build_dis_bundle
+from tools.cq.search.enrichment.incremental_inspect_plane import (
+    build_inspect_bundle,
+    inspect_object_inventory,
+)
+from tools.cq.search.enrichment.incremental_provider import enrich_incremental_anchor
+from tools.cq.search.enrichment.incremental_symtable_plane import (
+    build_incremental_symtable_plane,
+    build_sym_scope_graph,
+    resolve_binding_id,
+)
 
 __all__ = [
     "EnrichmentMeta",
@@ -23,11 +38,20 @@ __all__ = [
     "PythonEnrichmentPayload",
     "RustEnrichmentPayload",
     "append_source",
+    "build_binding_join",
+    "build_compound_bundle",
+    "build_dis_bundle",
+    "build_incremental_symtable_plane",
+    "build_inspect_bundle",
+    "build_sym_scope_graph",
     "enforce_payload_budget",
+    "enrich_incremental_anchor",
     "has_value",
+    "inspect_object_inventory",
     "merge_gap_fill_payload",
     "normalize_python_payload",
     "normalize_rust_payload",
     "payload_size_hint",
+    "resolve_binding_id",
     "set_degraded",
 ]

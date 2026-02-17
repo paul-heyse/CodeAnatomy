@@ -22,7 +22,6 @@ def test_run_enrichment_phase_delegates_to_partition_pipeline(
         pattern="target",
         enriched_matches=[],
         dropped_by_scope=0,
-        python_semantic_prefetch=None,
     )
     captured: dict[str, object] = {}
 

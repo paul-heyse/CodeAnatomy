@@ -48,6 +48,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rmp-serde = "1"
 tokio = { version = "1.49.0", features = ["rt-multi-thread"] }
+tracing = { workspace = true }
 unicode-normalization = "0.1"
 url = "2"
 urlencoding = "2"

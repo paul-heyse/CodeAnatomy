@@ -11,21 +11,22 @@ from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, is_python_language, 
 from tools.cq.search._shared.core import PythonByteRangeEnrichmentRequest
 from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
+from tools.cq.search.enrichment.incremental_provider import (
+    IncrementalAnchorRequestV1,
+    enrich_incremental_anchor,
+)
 from tools.cq.search.pipeline.classifier import (
     ClassifierCacheContext,
     HeuristicResult,
     NodeClassification,
-    SymtableEnrichment,
     classify_from_node,
     classify_from_records,
     classify_from_resolved_node,
     classify_heuristic,
-    enrich_with_symtable_from_table,
     get_cached_source,
     get_def_lines_cached,
     get_node_index,
     get_sg_root,
-    get_symtable_table,
 )
 from tools.cq.search.pipeline.context_window import (
     ContextWindow,
@@ -33,12 +34,14 @@ from tools.cq.search.pipeline.context_window import (
     extract_search_context_snippet,
 )
 from tools.cq.search.pipeline.enrichment_contracts import (
+    IncrementalEnrichmentModeV1,
+    IncrementalEnrichmentV1,
     PythonEnrichmentV1,
-    PythonSemanticEnrichmentV1,
     RustTreeSitterEnrichmentV1,
+    parse_incremental_enrichment_mode,
     rust_enrichment_payload,
+    wrap_incremental_enrichment,
     wrap_python_enrichment,
-    wrap_python_semantic_enrichment,
     wrap_rust_enrichment,
 )
 from tools.cq.search.pipeline.profiles import INTERACTIVE
@@ -53,10 +56,6 @@ from tools.cq.search.pipeline.smart_search_types import (
 from tools.cq.search.python.analysis_session import get_python_analysis_session
 from tools.cq.search.python.extractors import enrich_python_context_by_byte_range
 from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
-from tools.cq.search.semantic.models import (
-    LanguageSemanticEnrichmentRequest,
-    enrich_with_language_semantics,
-)
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 from tools.cq.search.tree_sitter.core.runtime_support import budget_ms_per_anchor
 
@@ -80,22 +79,26 @@ class MatchClassificationRequestV1:
     resolved_python: ResolvedNodeContext | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class IncrementalMatchRequestV1:
+    """Input contract for incremental enrichment request assembly."""
+
+    root: Path
+    file_path: Path
+    raw: RawMatch
+    lang: QueryLanguage
+    mode: IncrementalEnrichmentModeV1
+    enabled: bool
+    python_enrichment: PythonEnrichmentV1 | None = None
+
+
 def _merged_classify_options(
     options: MatchClassifyOptions | None,
-    legacy_flags: dict[str, bool],
 ) -> MatchClassifyOptions:
     base = options or MatchClassifyOptions()
     return MatchClassifyOptions(
-        enable_symtable=bool(legacy_flags.get("enable_symtable", base.enable_symtable)),
-        force_semantic_enrichment=bool(
-            legacy_flags.get("force_semantic_enrichment", base.force_semantic_enrichment)
-        ),
-        enable_python_semantic=bool(
-            legacy_flags.get("enable_python_semantic", base.enable_python_semantic)
-        ),
-        enable_deep_enrichment=bool(
-            legacy_flags.get("enable_deep_enrichment", base.enable_deep_enrichment)
-        ),
+        incremental_enabled=bool(base.incremental_enabled),
+        incremental_mode=parse_incremental_enrichment_mode(base.incremental_mode),
     )
 
 
@@ -106,36 +109,43 @@ def classify_match(
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
     cache_context: ClassifierCacheContext,
     options: MatchClassifyOptions | None = None,
-    **legacy_flags: bool,
 ) -> EnrichedMatch:
     """Run three-stage classification and enrichment for one raw match.
 
     Returns:
         EnrichedMatch: Classified/enriched search match.
     """
-    resolved_options = _merged_classify_options(options, legacy_flags)
+    resolved_options = _merged_classify_options(options)
 
     heuristic = classify_heuristic(raw.text, raw.col, raw.match_text)
     file_path = root / raw.file
 
-    if (
-        heuristic.skip_deeper
-        and heuristic.category is not None
-        and not resolved_options.force_semantic_enrichment
-    ):
+    if heuristic.skip_deeper and heuristic.category is not None:
         context_window, context_snippet = _build_context_enrichment(
             file_path,
             raw,
             lang=lang,
             cache_context=cache_context,
         )
+        incremental_enrichment = _maybe_incremental_enrichment(
+            IncrementalMatchRequestV1(
+                root=root,
+                file_path=file_path,
+                raw=raw,
+                lang=lang,
+                mode=resolved_options.incremental_mode,
+                enabled=resolved_options.incremental_enabled,
+                python_enrichment=None,
+            ),
+            cache_context=cache_context,
+        )
         return _build_heuristic_enriched(
             raw,
             heuristic,
-            raw.match_text,
             lang=lang,
             context_window=context_window,
             context_snippet=context_snippet,
+            incremental_enrichment=incremental_enrichment,
         )
 
     resolved_python = (
@@ -154,51 +164,36 @@ def classify_match(
             resolved_python=resolved_python,
         )
     )
-    symtable_enrichment = _maybe_symtable_enrichment(
-        file_path,
-        raw,
-        classification,
-        lang=lang,
-        enable_symtable=resolved_options.enable_symtable,
-        cache_context=cache_context,
-    )
     tree_sitter_budget_ms = adaptive_query_budget_ms(
         language=str(lang),
         fallback_budget_ms=_TREE_SITTER_QUERY_BUDGET_FALLBACK_MS,
     )
-    rust_tree_sitter = (
-        _maybe_rust_tree_sitter_enrichment(
-            file_path,
-            raw,
-            lang=lang,
-            query_budget_ms=tree_sitter_budget_ms,
-            cache_context=cache_context,
-        )
-        if resolved_options.enable_deep_enrichment
-        else None
+    rust_tree_sitter = _maybe_rust_tree_sitter_enrichment(
+        file_path,
+        raw,
+        lang=lang,
+        query_budget_ms=tree_sitter_budget_ms,
+        cache_context=cache_context,
     )
-    python_enrichment = (
-        _maybe_python_enrichment(
-            file_path,
-            raw,
-            lang=lang,
-            resolved_python=resolved_python,
-            query_budget_ms=tree_sitter_budget_ms,
-            cache_context=cache_context,
-        )
-        if resolved_options.enable_deep_enrichment
-        else None
+    python_enrichment = _maybe_python_enrichment(
+        file_path,
+        raw,
+        lang=lang,
+        resolved_python=resolved_python,
+        query_budget_ms=tree_sitter_budget_ms,
+        cache_context=cache_context,
     )
-    python_semantic_enrichment = (
-        _maybe_python_semantic_enrichment(
-            root,
-            file_path,
-            raw,
+    incremental_enrichment = _maybe_incremental_enrichment(
+        IncrementalMatchRequestV1(
+            root=root,
+            file_path=file_path,
+            raw=raw,
             lang=lang,
-            enable_python_semantic=resolved_options.enable_python_semantic,
-        )
-        if resolved_options.enable_deep_enrichment
-        else None
+            mode=resolved_options.incremental_mode,
+            enabled=resolved_options.incremental_enabled,
+            python_enrichment=python_enrichment,
+        ),
+        cache_context=cache_context,
     )
     context_window, context_snippet = _build_context_enrichment(
         file_path,
@@ -207,12 +202,11 @@ def classify_match(
         cache_context=cache_context,
     )
     enrichment = MatchEnrichment(
-        symtable=symtable_enrichment,
         context_window=context_window,
         context_snippet=context_snippet,
         rust_tree_sitter=rust_tree_sitter,
         python_enrichment=python_enrichment,
-        python_semantic_enrichment=python_semantic_enrichment,
+        incremental_enrichment=incremental_enrichment,
     )
     return _build_enriched_match(
         raw,
@@ -226,22 +220,23 @@ def classify_match(
 def _build_heuristic_enriched(
     raw: RawMatch,
     heuristic: HeuristicResult,
-    match_text: str,
     *,
     lang: QueryLanguage,
     context_window: ContextWindow | None = None,
     context_snippet: str | None = None,
+    incremental_enrichment: IncrementalEnrichmentV1 | None = None,
 ) -> EnrichedMatch:
     category = heuristic.category or "text_match"
     return EnrichedMatch(
         span=raw.span,
         text=raw.text,
-        match_text=match_text,
+        match_text=raw.match_text,
         category=category,
         confidence=heuristic.confidence,
         evidence_kind="heuristic",
         context_window=context_window,
         context_snippet=context_snippet,
+        incremental_enrichment=incremental_enrichment,
         language=lang,
     )
 
@@ -338,30 +333,6 @@ def _default_classification() -> ClassificationResult:
     )
 
 
-def _maybe_symtable_enrichment(
-    file_path: Path,
-    raw: RawMatch,
-    classification: ClassificationResult,
-    *,
-    lang: QueryLanguage,
-    enable_symtable: bool,
-    cache_context: ClassifierCacheContext,
-) -> SymtableEnrichment | None:
-    if not is_python_language(lang):
-        return None
-    if not enable_symtable:
-        return None
-    if classification.category not in {"definition", "callsite", "reference", "assignment"}:
-        return None
-    source = get_cached_source(file_path, cache_context=cache_context)
-    if source is None:
-        return None
-    table = get_symtable_table(file_path, source, cache_context=cache_context)
-    if table is None:
-        return None
-    return enrich_with_symtable_from_table(table, raw.match_text, raw.line)
-
-
 def _build_context_enrichment(
     file_path: Path,
     raw: RawMatch,
@@ -416,10 +387,9 @@ def _build_enriched_match(
         containing_scope=containing_scope,
         context_window=enrichment.context_window,
         context_snippet=enrichment.context_snippet,
-        symtable=enrichment.symtable,
         rust_tree_sitter=enrichment.rust_tree_sitter,
         python_enrichment=enrichment.python_enrichment,
-        python_semantic_enrichment=enrichment.python_semantic_enrichment,
+        incremental_enrichment=enrichment.incremental_enrichment,
         language=lang,
     )
 
@@ -555,35 +525,52 @@ def _maybe_python_enrichment(
         return None
 
 
-def _maybe_python_semantic_enrichment(
-    root: Path,
-    file_path: Path,
-    raw: RawMatch,
+def _maybe_incremental_enrichment(
+    request: IncrementalMatchRequestV1,
     *,
-    lang: QueryLanguage,
-    enable_python_semantic: bool,
-) -> PythonSemanticEnrichmentV1 | None:
-    if not enable_python_semantic or not is_python_language(lang):
+    cache_context: ClassifierCacheContext,
+) -> IncrementalEnrichmentV1 | None:
+    if not request.enabled or not is_python_language(request.lang):
         return None
-    if file_path.suffix not in {".py", ".pyi"}:
+    if request.file_path.suffix not in {".py", ".pyi"}:
         return None
+    source = get_cached_source(request.file_path, cache_context=cache_context)
+    if source is None:
+        return None
+    python_payload = (
+        normalize_python_payload(request.python_enrichment.payload)
+        if request.python_enrichment is not None
+        else None
+    )
     try:
-        outcome = enrich_with_language_semantics(
-            LanguageSemanticEnrichmentRequest(
-                language="python",
-                mode="search",
-                root=root,
-                file_path=file_path,
-                line=raw.line,
-                col=raw.col,
-                symbol_hint=raw.match_text,
+        outcome = enrich_incremental_anchor(
+            IncrementalAnchorRequestV1(
+                root=request.root,
+                file_path=request.file_path,
+                source=source,
+                line=request.raw.line,
+                col=request.raw.col,
+                match_text=request.raw.match_text,
+                mode=request.mode,
+                python_payload=python_payload,
+                runtime_enrichment=request.mode.includes_inspect,
             )
         )
-    except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
+    except ENRICHMENT_ERRORS:
         return None
-    if not isinstance(outcome.payload, dict):
-        return None
-    return wrap_python_semantic_enrichment(outcome.payload)
+    if outcome is not None:
+        return outcome
+    return wrap_incremental_enrichment(
+        {
+            "anchor": {
+                "file": str(request.file_path),
+                "line": request.raw.line,
+                "col": request.raw.col,
+                "match_text": request.raw.match_text,
+            }
+        },
+        mode=request.mode,
+    )
 
 
 __all__ = ["classify_match"]

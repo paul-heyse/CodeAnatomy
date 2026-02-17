@@ -34,6 +34,7 @@ from tools.cq.run.spec import (
     SigImpactStep,
     step_type,
 )
+from tools.cq.search.pipeline.enrichment_contracts import parse_incremental_enrichment_mode
 from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
 
 RUN_STEP_NON_FATAL_EXCEPTIONS = (
@@ -227,6 +228,8 @@ def _execute_search_step(
             lang_scope=step.lang_scope,
             limits=SMART_SEARCH_LIMITS,
             run_id=run_id,
+            incremental_enrichment_enabled=step.enrich,
+            incremental_enrichment_mode=parse_incremental_enrichment_mode(step.enrich_mode),
         ),
     )
 
@@ -264,6 +267,8 @@ def execute_search_fallback(query: str, plan: RunPlan, ctx: RunExecutionContext)
             include_strings=False,
             lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
             limits=SMART_SEARCH_LIMITS,
+            incremental_enrichment_enabled=True,
+            incremental_enrichment_mode=parse_incremental_enrichment_mode("ts_sym"),
         ),
     )
 
@@ -376,6 +381,8 @@ def _execute_neighborhood_step(
             lang=step.lang,
             top_k=step.top_k,
             semantic_enrichment=step.semantic_enrichment,
+            incremental_enrichment_enabled=step.enrich,
+            incremental_enrichment_mode=parse_incremental_enrichment_mode(step.enrich_mode),
             artifact_dir=ctx.artifact_dir,
             run_id=run_id,
             services=ctx.services,

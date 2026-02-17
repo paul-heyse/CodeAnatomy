@@ -6,4 +6,6 @@ pub mod metadata;
 pub mod snapshot;
 pub mod snapshot_types;
 
-pub use legacy::{registry_snapshot, snapshot_hook_capabilities, FunctionHookCapabilities, RegistrySnapshot};
+pub use capabilities::snapshot_hook_capabilities;
+pub use snapshot::registry_snapshot;
+pub use snapshot_types::{FunctionHookCapabilities, RegistrySnapshot};

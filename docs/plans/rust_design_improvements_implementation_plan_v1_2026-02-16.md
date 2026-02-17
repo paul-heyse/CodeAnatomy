@@ -50,24 +50,30 @@ Legend: `Complete` means scope goals and listed decommissions are materially lan
 | Scope | Status | Audit Notes |
 |---|---|---|
 | S1 | Complete | Error-message fixes, variadic signature cleanup, and CDF rank constants are landed. |
-| S2 | Partial | Runner delegation landed; `resolve_source_name` rename, `SchemaDiff` struct replacement, and tuner `observe` split remain open. |
+| S2 | Complete | Runner delegation, `ensure_source_registered` rename, `SchemaDiff` struct migration, and tuner observe/propose/apply split are landed. |
 | S3 | Complete | Schema-hash delegation landed; `now_unix_ms` fallback updated; targeted docstring fixes landed. |
-| S4 | Partial | `delta_common` extraction and deprecated shim deletion landed; full builder-only scan/provider path (including full table-provider builder adoption) remains open. |
+| S4 | Complete | `delta_common` extraction, deprecated shim deletion, builder-first scan config, and provider-builder adoption are landed. |
 | S5 | Complete | `df_plugin_common` crate created and wired across host/python/plugin crates; duplicated authorities removed. |
-| S6 | Partial | `function_types`/`operator_utils` and shared scalar helpers landed; file renames, `udaf_arg_best` extraction, hash mixed-shape simplification, and full metadata-authority cleanup remain open. |
+| S6 | Complete | UDF/registry consolidation landed: renamed modules, `udaf_arg_best` extraction, mixed-shape hash simplification, and explicit re-export cleanup are complete. |
 | S7 | Complete | `session/capture.rs` authority landed, governance unification landed, `are_inputs_deterministic()` landed, `CpgRuleSet` visibility tightened with accessor migration. |
-| S8 | Partial | `codeanatomy_ext` moved to module directory with helper extraction and staged legacy backing; full functional decomposition into focused submodules and bridge/module test coverage remain open. |
+| S8 | Complete | `codeanatomy_ext` decomposition is materially landed: delta provider/mutation/maintenance operation logic now lives in scoped module files, positional bridge paths are removed, and planned module-level Rust tests were added under `rust/datafusion_python/tests/`. |
 | S9 | Complete | DataFusion-51-compatible rule instrumentation consolidation (shared macro/helper path) and parity tests landed. |
-| S10 | Partial | `TableVersion` migration across delta request surfaces landed; `RegistrySnapshot` versioning and `codeanatomy_engine_py` compiler-helper extraction remain open. |
-| S11 | Partial | Scan-operator classifier extraction landed; broader tracing instrumentation and pipeline/compile phase decomposition remain open. |
-| S12 | Partial | Registry module scaffolding and initial tests landed; legacy centralized lookup tables and mutable snapshot authority remain open. |
-| S13 | Partial | Determinism contract doc + fixture + initial golden tests landed; removal of superseded parity checks and full cross-language compute parity coverage remain open. |
-| S14 | Partial | Async UDF global-state removal and `ConfigExtension` wiring landed; final Python bridge coverage and full post-S8 module-localization remain open. |
+| S10 | Complete | `TableVersion` migration, `RegistrySnapshot` versioning, and `codeanatomy_engine_py` compiler-helper extraction are landed. |
+| S11 | Complete | Tracing coverage is now present on key `codeanatomy_ext` bridge entrypoints in the decomposed module surfaces, in addition to prior control-plane/compiler/pipeline/materializer spans. |
+| S12 | Complete | Snapshot/type authority now lives in `registry/snapshot.rs` + `registry/snapshot_types.rs`, legacy module is a compatibility shim, and Python-side versioned snapshot contract coverage was added. |
+| S13 | Complete | Determinism contract artifacts and shared golden tests are authoritative; superseded ad hoc parity checks were removed. |
+| S14 | Complete | Async UDF global-state removal and `ConfigExtension` session wiring are landed with bridge coverage additions. |
 | D1 | Complete | Cross-crate duplicate authorities targeted by S4/S5 were removed. |
-| D2 | Partial | Some within-crate duplicates removed, but registry legacy lookup tables and remaining consolidation items are still present. |
-| D3 | Partial | `codeanatomy_ext.rs` file deletion landed, but S8/S9 closure criteria are not both fully complete. |
-| D4 | Partial | Rust-side positional shims/types were hard-cut, but Python control-plane fan-out wrappers still pass positional payloads. |
-| D5 | Partial | New determinism contract artifacts landed; superseded ad hoc parity checks/prose are not fully removed yet. |
+| D2 | Complete | Within-crate duplicate authorities are removed, including legacy registry lookup tables. |
+| D3 | Complete | Monolith decommission closure criteria are now satisfied for planned decomposition scope (scoped modules own active delta bridge logic, and decomposition tests are in place). |
+| D4 | Complete | Bridge/type hard-cutover is complete: request-typed entrypoints are authoritative and positional PyO3 bridge exports are removed. |
+| D5 | Complete | Superseded ad hoc determinism parity checks/prose were removed after shared-golden contract coverage became authoritative. |
+
+---
+
+### Open Scope Delta (2026-02-17 audit refresh)
+
+- Resolved: all prior open items from the 2026-02-17 audit refresh are now implemented.
 
 ---
 
@@ -1379,21 +1385,21 @@ fn async_udf_policy(config: &ConfigOptions) -> AsyncUdfPolicy {
 ## Implementation Checklist
 
 - [x] S1. UDF Error Message and Contract Fixes
-- [ ] S2. Runner and Pipeline DRY Consolidation
+- [x] S2. Runner and Pipeline DRY Consolidation
 - [x] S3. Schema Hashing and Determinism Chain Consolidation
-- [ ] S4. Delta Common Module Extraction
+- [x] S4. Delta Common Module Extraction
 - [x] S5. Cross-Crate Shared Knowledge (`df_plugin_common`)
-- [ ] S6. UDF and Registry Consolidation
+- [x] S6. UDF and Registry Consolidation
 - [x] S7. Session and Compiler Utilities Consolidation
-- [ ] S8. `codeanatomy_ext.rs` Decomposition
+- [x] S8. `codeanatomy_ext.rs` Decomposition
 - [x] S9. Rule Instrumentation Consolidation (DataFusion 51-compatible)
-- [ ] S10. Interface Type Safety
-- [ ] S11. Observability Infrastructure
-- [ ] S12. `registry_snapshot.rs` Decomposition and Metadata Authority
-- [ ] S13. Cross-Language Determinism Contract and Golden Tests
-- [ ] S14. Async UDF Policy Migration to `ConfigExtension`
+- [x] S10. Interface Type Safety
+- [x] S11. Observability Infrastructure
+- [x] S12. `registry_snapshot.rs` Decomposition and Metadata Authority
+- [x] S13. Cross-Language Determinism Contract and Golden Tests
+- [x] S14. Async UDF Policy Migration to `ConfigExtension`
 - [x] D1. Cross-crate decommission batch (after S4, S5)
-- [ ] D2. Within-crate decommission batch (after S6, S7, S12, S14)
-- [ ] D3. Monolith decommission batch (after S8, S9)
-- [ ] D4. Bridge/type hard-cutover decommission (after S4, S8, S10)
-- [ ] D5. Determinism contract decommission batch (after S13)
+- [x] D2. Within-crate decommission batch (after S6, S7, S12, S14)
+- [x] D3. Monolith decommission batch (after S8, S9)
+- [x] D4. Bridge/type hard-cutover decommission (after S4, S8, S10)
+- [x] D5. Determinism contract decommission batch (after S13)

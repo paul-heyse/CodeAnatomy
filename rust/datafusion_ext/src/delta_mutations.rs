@@ -14,6 +14,7 @@ use deltalake::kernel::EagerSnapshot;
 use deltalake::operations::write::SchemaMode;
 use deltalake::protocol::SaveMode;
 use deltalake::table::Constraint;
+use tracing::instrument;
 
 use crate::delta_common::{eager_snapshot, latest_operation_metrics, snapshot_with_gate};
 use crate::delta_control_plane::load_delta_table;
@@ -221,6 +222,7 @@ fn schema_mode_from_label(label: Option<String>) -> Result<Option<SchemaMode>, D
     }
 }
 
+#[instrument(skip(request))]
 pub async fn delta_data_check_request(
     request: DeltaDataCheckRequest<'_>,
 ) -> Result<Vec<String>, DeltaTableError> {
@@ -246,6 +248,7 @@ pub async fn delta_data_check_request(
     run_constraint_check(session_ctx, &snapshot, &batches, extra_constraints).await
 }
 
+#[instrument(skip(request))]
 pub async fn delta_write_ipc_request(
     request: DeltaWriteIpcRequest<'_>,
 ) -> Result<DeltaMutationReport, DeltaTableError> {
@@ -281,6 +284,7 @@ pub async fn delta_write_ipc_request(
     .await
 }
 
+#[instrument(skip(request))]
 pub async fn delta_write_batches_request(
     request: DeltaWriteBatchesRequest<'_>,
 ) -> Result<DeltaMutationReport, DeltaTableError> {
@@ -334,6 +338,7 @@ pub async fn delta_write_batches_request(
     })
 }
 
+#[instrument(skip(request))]
 pub async fn delta_delete_request(
     request: DeltaDeleteRequest<'_>,
 ) -> Result<DeltaMutationReport, DeltaTableError> {
@@ -371,6 +376,7 @@ pub async fn delta_delete_request(
     })
 }
 
+#[instrument(skip(request))]
 pub async fn delta_update_request(
     request: DeltaUpdateRequest<'_>,
 ) -> Result<DeltaMutationReport, DeltaTableError> {
@@ -413,6 +419,7 @@ pub async fn delta_update_request(
     })
 }
 
+#[instrument(skip(request))]
 pub async fn delta_merge_request(
     request: DeltaMergeRequest<'_>,
 ) -> Result<DeltaMutationReport, DeltaTableError> {

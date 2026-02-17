@@ -15,6 +15,10 @@ from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neigh
 from tools.cq.neighborhood.semantic_env import semantic_env_from_bundle
 from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
 from tools.cq.neighborhood.target_resolution import resolve_target
+from tools.cq.search.pipeline.enrichment_contracts import (
+    IncrementalEnrichmentModeV1,
+    parse_incremental_enrichment_mode,
+)
 from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
@@ -32,6 +36,8 @@ class NeighborhoodExecutionRequest(CqStruct, frozen=True):
     lang: str | None = None
     top_k: int = 10
     semantic_enrichment: bool = True
+    incremental_enrichment_enabled: bool = True
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1 = IncrementalEnrichmentModeV1.TS_SYM
     artifact_dir: Path | None = None
     run_id: str | None = None
     services: CqRuntimeServices | None = None
@@ -56,6 +62,7 @@ def execute_neighborhood(request: NeighborhoodExecutionRequest) -> CqResult:
     """
     started = ms()
     active_run_id = request.run_id or uuid7_str()
+    incremental_mode = parse_incremental_enrichment_mode(request.incremental_enrichment_mode)
     resolved_lang: QueryLanguage = (
         cast("QueryLanguage", request.lang) if request.lang in {"python", "rust"} else "python"
     )
@@ -80,6 +87,8 @@ def execute_neighborhood(request: NeighborhoodExecutionRequest) -> CqResult:
             symbol_hint=resolved.symbol_hint,
             top_k=request.top_k,
             enable_semantic_enrichment=request.semantic_enrichment,
+            incremental_enrichment_enabled=request.incremental_enrichment_enabled,
+            incremental_enrichment_mode=incremental_mode.value,
             artifact_dir=request.artifact_dir,
             allow_symbol_fallback=True,
             target_degrade_events=resolved.degrade_events,
@@ -109,6 +118,7 @@ def execute_neighborhood(request: NeighborhoodExecutionRequest) -> CqResult:
     _coerce_neighborhood_summary(result)
     neighborhood_summary = cast("NeighborhoodSummaryV1", result.summary)
     neighborhood_summary.target_resolution_kind = resolved.resolution_kind
+    neighborhood_summary.incremental_enrichment_mode = incremental_mode.value
     result = assign_result_finding_ids(result)
     maybe_evict_run_cache_tag(root=request.root, language=resolved_lang, run_id=active_run_id)
     return result

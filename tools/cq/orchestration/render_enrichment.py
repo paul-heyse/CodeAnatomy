@@ -10,8 +10,9 @@ from tools.cq.core.serialization import to_builtins
 from tools.cq.core.types import QueryLanguage
 from tools.cq.search.pipeline.classification import classify_match
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
+from tools.cq.search.pipeline.enrichment_contracts import parse_incremental_enrichment_mode
 from tools.cq.search.pipeline.smart_search_sections import build_finding
-from tools.cq.search.pipeline.smart_search_types import RawMatch
+from tools.cq.search.pipeline.smart_search_types import MatchClassifyOptions, RawMatch
 
 
 class SmartSearchRenderEnrichmentAdapter(RenderEnrichmentPort):
@@ -68,8 +69,10 @@ class SmartSearchRenderEnrichmentAdapter(RenderEnrichmentPort):
                 root,
                 lang=language,
                 cache_context=ClassifierCacheContext(),
-                force_semantic_enrichment=True,
-                enable_python_semantic=True,
+                options=MatchClassifyOptions(
+                    incremental_enabled=True,
+                    incremental_mode=parse_incremental_enrichment_mode("full"),
+                ),
             )
             finding = build_finding(enriched, root)
         except (OSError, RuntimeError, TypeError, ValueError):

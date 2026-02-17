@@ -39,7 +39,10 @@ def test_rust_udf_docs_cache_is_scoped_by_registry(monkeypatch) -> None:
         calls.append(1)
         return {"revision": len(calls)}
 
-    monkeypatch.setattr(extension_core, "_build_docs_snapshot", _fake_docs_snapshot)
+    monkeypatch.setattr(
+        "datafusion_engine.udf.extension_snapshot_runtime._build_docs_snapshot",
+        _fake_docs_snapshot,
+    )
 
     docs_first = extension_core.rust_udf_docs(ctx, registries=first)
     docs_first_cached = extension_core.rust_udf_docs(ctx, registries=first)

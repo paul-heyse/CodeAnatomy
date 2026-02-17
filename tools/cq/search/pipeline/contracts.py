@@ -11,6 +11,7 @@ from tools.cq.core.toolchain import Toolchain
 from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
 from tools.cq.search._shared.types import QueryMode, SearchLimits
+from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
 
 # --- From partition_contracts.py ---
 
@@ -27,6 +28,8 @@ class SearchPartitionPlanV1(CqStruct, frozen=True):
     exclude_globs: tuple[str, ...] = ()
     max_total_matches: int = 0
     run_id: str | None = None
+    incremental_enrichment_enabled: bool = True
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1 = IncrementalEnrichmentModeV1.TS_SYM
 
 
 # --- From models.py ---
@@ -51,6 +54,8 @@ class SearchConfig(CqSettingsStruct, frozen=True):
     tc: Toolchain | None = None
     started_ms: float = 0.0
     run_id: str | None = None
+    incremental_enrichment_enabled: bool = True
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1 = IncrementalEnrichmentModeV1.TS_SYM
 
 
 class SearchRequest(CqSettingsStruct, frozen=True):
@@ -69,6 +74,8 @@ class SearchRequest(CqSettingsStruct, frozen=True):
     argv: list[str] | None = None
     started_ms: float | None = None
     run_id: str | None = None
+    incremental_enrichment_enabled: bool = True
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1 = IncrementalEnrichmentModeV1.TS_SYM
 
 
 class CandidateSearchRequest(CqSettingsStruct, frozen=True):

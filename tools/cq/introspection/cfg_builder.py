@@ -117,6 +117,11 @@ class CFG:
         """
         return len(self.edges)
 
+    @property
+    def exception_edge_count(self) -> int:
+        """Get number of exception edges."""
+        return sum(1 for edge in self.edges if edge.edge_type == "exception")
+
     def get_block_at_offset(self, offset: int) -> BasicBlock | None:
         """Get block containing instruction at offset.
 

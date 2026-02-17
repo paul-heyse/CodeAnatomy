@@ -96,6 +96,7 @@ _DDL_COMPLEX_TYPE_TOKENS: tuple[str, ...] = (
 
 _EXPECTED_PLUGIN_ABI_MAJOR = 1
 _EXPECTED_PLUGIN_ABI_MINOR = 1
+_REGISTRY_SNAPSHOT_VERSION = 1
 _RUNTIME_INSTALL_ENTRYPOINT = "install_codeanatomy_runtime"
 _RUNTIME_MODULAR_ENTRYPOINTS: tuple[str, ...] = (
     "register_codeanatomy_udfs",
@@ -376,6 +377,17 @@ def _normalize_registry_snapshot(
         msg = "datafusion extension registry_snapshot returned a non-mapping payload."
         raise TypeError(msg)
     payload = dict(snapshot)
+    raw_version = payload.get("version", _REGISTRY_SNAPSHOT_VERSION)
+    if not isinstance(raw_version, int):
+        msg = "datafusion extension registry_snapshot.version must be an integer."
+        raise TypeError(msg)
+    if raw_version != _REGISTRY_SNAPSHOT_VERSION:
+        msg = (
+            "datafusion extension registry_snapshot.version "
+            f"{raw_version} is unsupported (expected {_REGISTRY_SNAPSHOT_VERSION})."
+        )
+        raise ValueError(msg)
+    payload["version"] = raw_version
     payload.pop("pycapsule_udfs", None)
     # Preserve the key for diagnostics/tests while dropping non-serializable payloads.
     payload.setdefault("pycapsule_udfs", [])

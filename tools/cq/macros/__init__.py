@@ -5,6 +5,7 @@ from __future__ import annotations
 from tools.cq.macros.bytecode import cmd_bytecode_surface
 from tools.cq.macros.calls import cmd_calls
 from tools.cq.macros.exceptions import cmd_exceptions
+from tools.cq.macros.expand import cmd_expand
 from tools.cq.macros.impact import cmd_impact
 from tools.cq.macros.imports import cmd_imports
 from tools.cq.macros.scopes import cmd_scopes
@@ -15,6 +16,7 @@ __all__ = [
     "cmd_bytecode_surface",
     "cmd_calls",
     "cmd_exceptions",
+    "cmd_expand",
     "cmd_impact",
     "cmd_imports",
     "cmd_scopes",

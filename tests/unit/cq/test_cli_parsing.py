@@ -293,7 +293,8 @@ class TestNeighborhoodCommandParsing:
             ["nb", "tools/cq/cli_app/app.py:1", "--lang", "python"]
         )
         assert bound.args[0] == "tools/cq/cli_app/app.py:1"
-        assert str(bound.kwargs["lang"]) == "python"
+        opts = bound.kwargs["opts"]
+        assert str(opts.lang) == "python"
 
     @staticmethod
     def test_neighborhood_invalid_lang_fails() -> None:

@@ -1,4 +1,3 @@
-# ruff: noqa: FBT001
 """Command-level e2e tests for `cq neighborhood`/`cq nb`."""
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ from tests.e2e.cq._support.specs import assert_result_matches_spec
 @pytest.mark.e2e
 def test_neighborhood_symbol_target_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test neighborhood symbol target golden."""
@@ -96,3 +96,59 @@ def test_neighborhood_cli_and_run_step_parity(
     assert isinstance(steps, list)
     assert len(steps) == 1
     assert direct_titles == run_titles
+
+
+@pytest.mark.e2e
+def test_neighborhood_incremental_mode_cli_and_run_step_parity(
+    run_cq_result: Callable[..., CqResult],
+) -> None:
+    """Neighborhood CLI and run-step should agree on incremental mode wiring."""
+    target = "tests/e2e/cq/_golden_workspace/python_project/app/api.py:13"
+    step_payload = {
+        "type": "neighborhood",
+        "target": target,
+        "lang": "python",
+        "top_k": 5,
+        "semantic_enrichment": True,
+        "enrich": True,
+        "enrich_mode": "full",
+    }
+
+    direct = run_cq_result(
+        [
+            "neighborhood",
+            target,
+            "--lang",
+            "python",
+            "--top-k",
+            "5",
+            "--enrich",
+            "--enrich-mode",
+            "full",
+            "--format",
+            "json",
+            "--no-save-artifact",
+        ]
+    )
+    run_step = run_cq_result(
+        [
+            "run",
+            "--step",
+            json.dumps(step_payload, separators=(",", ":")),
+            "--format",
+            "json",
+            "--no-save-artifact",
+        ]
+    )
+
+    assert direct.summary.get("incremental_enrichment_mode") == "full"
+    steps = run_step.summary.get("steps")
+    assert isinstance(steps, list)
+    assert len(steps) == 1
+    step_id = steps[0]
+    assert isinstance(step_id, str)
+    step_summaries = run_step.summary.get("step_summaries")
+    assert isinstance(step_summaries, dict)
+    step_summary = step_summaries.get(step_id)
+    assert isinstance(step_summary, dict)
+    assert step_summary.get("incremental_enrichment_mode") == "full"

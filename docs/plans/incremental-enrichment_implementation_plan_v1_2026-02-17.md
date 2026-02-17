@@ -10,6 +10,20 @@ Implement a hard-cutover incremental enrichment system for CQ search/neighborhoo
 - Replace legacy symtable-only and python-semantic-only search enrichment pathways with unified incremental enrichment payloads
 - Keep fail-open behavior for per-anchor enrichment failures, but keep contracts and integration surfaces strict
 
+## Implementation Audit Status (2026-02-17)
+
+This plan has been audited against the current `tools/cq` codebase. Current status:
+
+- `S1`–`S12`: complete.
+- `D1`–`D4`: complete.
+- Hard-cutover cleanup is complete for search-match compatibility surfaces:
+  - Removed `tools/cq/search/pipeline/python_semantic.py`.
+  - Removed semantic-wrapper contract surfaces superseded by incremental contracts.
+  - Removed `python_semantic_prefetch` scaffolding from partition result contracts.
+- Test matrix is aligned to incremental enrichment and hard-cutover expectations:
+  - Added/updated coverage for incremental modes across classification, rendering/sections, CLI search/neighborhood, and run-step parity.
+  - Removed obsolete legacy-focused pipeline tests tied to removed semantic-prefetch paths.
+
 ## Design Principles
 
 1. **Information hiding:** plane internals (scope resolution, CFG/DFG, runtime reflection) remain private implementation details behind typed enrichment contracts.
@@ -25,7 +39,7 @@ Implement a hard-cutover incremental enrichment system for CQ search/neighborhoo
 11. **Determinism/reproducibility:** `dis.get_instructions(..., adaptive=False)` for semantic facts, stable hashing for cache keys, explicit runtime gates.
 12. **Declare/version contracts:** all cross-module payloads are versioned msgspec contracts; preview/expand payload protocol is explicit.
 
-## Current Baseline
+## Historical Baseline (At Plan Creation)
 
 - `EnrichedMatch` currently carries `symtable`, `python_enrichment`, and `python_semantic_enrichment`; there is no incremental enrichment field (`tools/cq/search/pipeline/smart_search_types.py`).
 - `classify_match(...)` currently runs legacy symtable/python/python-semantic stages and has no incremental stage (`tools/cq/search/pipeline/classification.py`).
@@ -703,19 +717,19 @@ def outer(x):
 
 ## Implementation Checklist
 
-- [ ] S1. Contract and mode realignment
-- [ ] S2. Symtable plane completion (A1-A5)
-- [ ] S3. dis plane completion (B1-B3)
-- [ ] S4. inspect plane completion (C1-C4)
-- [ ] S5. Compound joins and unified binding identity (D1-D3)
-- [ ] S6. Provider orchestration and session reuse
-- [ ] S7. Pipeline and cache integration (search classification)
-- [ ] S8. CLI, request factory, run-step, and neighborhood propagation
-- [ ] S9. Rendering and code-facts integration
-- [ ] S10. Details-kind registry and expand dispatcher
-- [ ] S11. Hard-cutover legacy removal
-- [ ] S12. Test matrix, fixtures, and validation expansion
-- [ ] D1. Remove legacy classify options and compatibility merge paths
-- [ ] D2. Remove legacy symtable-only enrichment surfaces
-- [ ] D3. Remove ad-hoc details/rendering paths superseded by registry
-- [ ] D4. Remove obsolete legacy-focused tests
+- [x] S1. Contract and mode realignment
+- [x] S2. Symtable plane completion (A1-A5)
+- [x] S3. dis plane completion (B1-B3)
+- [x] S4. inspect plane completion (C1-C4)
+- [x] S5. Compound joins and unified binding identity (D1-D3)
+- [x] S6. Provider orchestration and session reuse
+- [x] S7. Pipeline and cache integration (search classification)
+- [x] S8. CLI, request factory, run-step, and neighborhood propagation
+- [x] S9. Rendering and code-facts integration
+- [x] S10. Details-kind registry and expand dispatcher
+- [x] S11. Hard-cutover legacy removal
+- [x] S12. Test matrix, fixtures, and validation expansion
+- [x] D1. Remove legacy classify options and compatibility merge paths
+- [x] D2. Remove legacy symtable-only enrichment surfaces
+- [x] D3. Remove ad-hoc details/rendering paths superseded by registry
+- [x] D4. Remove obsolete legacy-focused tests

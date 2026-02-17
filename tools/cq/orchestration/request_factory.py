@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.toolchain import Toolchain
+from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
 
 if TYPE_CHECKING:
     from tools.cq.core.services import CallsServiceRequest, SearchServiceRequest
@@ -54,6 +55,8 @@ class SearchRequestOptionsV1(CqStruct, frozen=True):
     with_neighborhood: bool = False
     limits: SearchLimits | None = None
     run_id: str | None = None
+    incremental_enrichment_enabled: bool = True
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1 = IncrementalEnrichmentModeV1.TS_SYM
 
 
 class RequestFactory:
@@ -134,6 +137,8 @@ class RequestFactory:
             tc=ctx.tc,
             argv=ctx.argv,
             run_id=opts.run_id,
+            incremental_enrichment_enabled=opts.incremental_enrichment_enabled,
+            incremental_enrichment_mode=opts.incremental_enrichment_mode,
         )
 
     @staticmethod

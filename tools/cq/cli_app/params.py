@@ -192,6 +192,22 @@ class SearchParams(FilterParams):
             help="Include structural neighborhood preview (slower)",
         ),
     ] = False
+    enrich: Annotated[
+        bool,
+        Parameter(
+            name="--enrich",
+            negative="--no-enrich",
+            negative_bool=(),
+            help="Enable incremental enrichment",
+        ),
+    ] = True
+    enrich_mode: Annotated[
+        str,
+        Parameter(
+            name="--enrich-mode",
+            help="Incremental enrichment mode (ts_only, ts_sym, ts_sym_dis, full)",
+        ),
+    ] = "ts_sym"
     in_dir: Annotated[str | None, Parameter(name="--in", help="Restrict to directory")] = None
     lang: Annotated[
         QueryLanguageToken,

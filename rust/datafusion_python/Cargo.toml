@@ -210,6 +210,12 @@ features = ["derive"]
 [dependencies.serde_json]
 version = "1"
 
+[dependencies.rmp-serde]
+version = "1"
+
+[dependencies.tracing]
+version = "0.1"
+
 [dependencies.tokio]
 version = "1.47"
 features = [

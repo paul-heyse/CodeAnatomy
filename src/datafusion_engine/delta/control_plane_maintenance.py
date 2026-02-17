@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+import msgspec
 from datafusion import SessionContext
 
-from datafusion_engine.delta.commit_payload import commit_payload_parts
 from datafusion_engine.delta.control_plane_core import (
     DeltaAddConstraintsRequest,
     DeltaAddFeaturesRequest,
@@ -21,8 +21,6 @@ from datafusion_engine.delta.control_plane_core import (
     _raise_engine_error,
     _require_internal_entrypoint,
 )
-from datafusion_engine.delta.payload import commit_payload
-from datafusion_engine.delta.protocol import delta_feature_gate_rust_payload
 from datafusion_engine.errors import ErrorKind
 from utils.validation import ensure_mapping
 
@@ -39,25 +37,11 @@ def delta_optimize_compact(
     Mapping[str, object]
         Control-plane optimize report payload.
     """
-    optimize_fn = _require_internal_entrypoint("delta_optimize_compact")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
-    z_order_payload = list(request.z_order_cols) if request.z_order_cols else None
+    optimize_fn = _require_internal_entrypoint("delta_optimize_compact_request_payload")
+    payload = msgspec.msgpack.encode(request)
     response = optimize_fn(
-        _internal_ctx(ctx, entrypoint="delta_optimize_compact"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        request.target_size,
-        z_order_payload,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+        _internal_ctx(ctx, entrypoint="delta_optimize_compact_request_payload"),
+        payload,
     )
     return ensure_mapping(response, label="delta_optimize_compact")
 
@@ -74,27 +58,11 @@ def delta_vacuum(
     Mapping[str, object]
         Control-plane vacuum report payload.
     """
-    vacuum_fn = _require_internal_entrypoint("delta_vacuum")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
+    vacuum_fn = _require_internal_entrypoint("delta_vacuum_request_payload")
+    payload = msgspec.msgpack.encode(request)
     response = vacuum_fn(
-        _internal_ctx(ctx, entrypoint="delta_vacuum"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        request.retention_hours,
-        request.dry_run,
-        request.dry_run,
-        request.enforce_retention_duration,
-        request.require_vacuum_protocol_check,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+        _internal_ctx(ctx, entrypoint="delta_vacuum_request_payload"),
+        payload,
     )
     return ensure_mapping(response, label="delta_vacuum")
 
@@ -111,15 +79,11 @@ def delta_create_checkpoint(
     Mapping[str, object]
         Control-plane checkpoint report payload.
     """
-    checkpoint_fn = _require_internal_entrypoint("delta_create_checkpoint")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
+    checkpoint_fn = _require_internal_entrypoint("delta_create_checkpoint_request_payload")
+    payload = msgspec.msgpack.encode(request)
     response = checkpoint_fn(
-        _internal_ctx(ctx, entrypoint="delta_create_checkpoint"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        *delta_feature_gate_rust_payload(request.gate),
+        _internal_ctx(ctx, entrypoint="delta_create_checkpoint_request_payload"),
+        payload,
     )
     return ensure_mapping(response, label="delta_create_checkpoint")
 
@@ -134,24 +98,11 @@ def delta_restore(
     Returns:
         Mapping[str, object]: Control-plane restore report payload.
     """
-    restore_fn = _require_internal_entrypoint("delta_restore")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
+    restore_fn = _require_internal_entrypoint("delta_restore_request_payload")
+    payload = msgspec.msgpack.encode(request)
     response = restore_fn(
-        _internal_ctx(ctx, entrypoint="delta_restore"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        request.restore_version,
-        request.restore_timestamp,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+        _internal_ctx(ctx, entrypoint="delta_restore_request_payload"),
+        payload,
     )
     return ensure_mapping(response, label="delta_restore")
 
@@ -169,24 +120,11 @@ def delta_set_properties(
     if not request.properties:
         msg = "Delta property update requires at least one key/value pair."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    set_fn = _require_internal_entrypoint("delta_set_properties")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
-    properties_payload = sorted((str(key), str(value)) for key, value in request.properties.items())
+    set_fn = _require_internal_entrypoint("delta_set_properties_request_payload")
+    payload = msgspec.msgpack.encode(request)
     response = set_fn(
-        _internal_ctx(ctx, entrypoint="delta_set_properties"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        properties_payload,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+        _internal_ctx(ctx, entrypoint="delta_set_properties_request_payload"),
+        payload,
     )
     return ensure_mapping(response, label="delta_set_properties")
 
@@ -204,25 +142,11 @@ def delta_add_features(
     if not request.features:
         msg = "Delta add-features requires at least one feature name."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    add_fn = _require_internal_entrypoint("delta_add_features")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
-    features_payload = [str(feature) for feature in request.features]
+    add_fn = _require_internal_entrypoint("delta_add_features_request_payload")
+    payload = msgspec.msgpack.encode(request)
     response = add_fn(
-        _internal_ctx(ctx, entrypoint="delta_add_features"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        features_payload,
-        request.allow_protocol_versions_increase,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+        _internal_ctx(ctx, entrypoint="delta_add_features_request_payload"),
+        payload,
     )
     return ensure_mapping(response, label="delta_add_features")
 
@@ -240,26 +164,11 @@ def delta_add_constraints(
     if not request.constraints:
         msg = "Delta add-constraints requires at least one constraint."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    add_fn = _require_internal_entrypoint("delta_add_constraints")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
-    constraints_payload = sorted(
-        (str(name), str(expr)) for name, expr in request.constraints.items()
-    )
+    add_fn = _require_internal_entrypoint("delta_add_constraints_request_payload")
+    payload = msgspec.msgpack.encode(request)
     response = add_fn(
-        _internal_ctx(ctx, entrypoint="delta_add_constraints"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        constraints_payload,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+        _internal_ctx(ctx, entrypoint="delta_add_constraints_request_payload"),
+        payload,
     )
     return ensure_mapping(response, label="delta_add_constraints")
 
@@ -277,24 +186,11 @@ def delta_drop_constraints(
     if not request.constraints:
         msg = "Delta drop-constraints requires at least one constraint name."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    drop_fn = _require_internal_entrypoint("delta_drop_constraints")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
+    drop_fn = _require_internal_entrypoint("delta_drop_constraints_request_payload")
+    payload = msgspec.msgpack.encode(request)
     response = drop_fn(
-        _internal_ctx(ctx, entrypoint="delta_drop_constraints"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        [str(name) for name in request.constraints],
-        request.raise_if_not_exists,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+        _internal_ctx(ctx, entrypoint="delta_drop_constraints_request_payload"),
+        payload,
     )
     return ensure_mapping(response, label="delta_drop_constraints")
 
@@ -309,15 +205,11 @@ def delta_cleanup_metadata(
     Returns:
         Mapping[str, object]: Control-plane metadata cleanup report payload.
     """
-    cleanup_fn = _require_internal_entrypoint("delta_cleanup_metadata")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
+    cleanup_fn = _require_internal_entrypoint("delta_cleanup_metadata_request_payload")
+    payload = msgspec.msgpack.encode(request)
     response = cleanup_fn(
-        _internal_ctx(ctx, entrypoint="delta_cleanup_metadata"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        *delta_feature_gate_rust_payload(request.gate),
+        _internal_ctx(ctx, entrypoint="delta_cleanup_metadata_request_payload"),
+        payload,
     )
     return ensure_mapping(response, label="delta_cleanup_metadata")
 

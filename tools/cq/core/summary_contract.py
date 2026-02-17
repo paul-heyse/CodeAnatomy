@@ -150,6 +150,8 @@ class SearchSummaryV1(SummaryEnvelopeV1):
     dropped_by_scope: object | None = None
     case_sensitive: bool | None = None
     with_neighborhood: bool | None = None
+    incremental_enrichment_enabled: bool | None = None
+    incremental_enrichment_mode: str | None = None
     scan_method: str | None = None
     rg_pcre2_available: bool | None = None
     rg_pcre2_version: str | None = None
@@ -239,6 +241,7 @@ class NeighborhoodSummaryV1(SummaryEnvelopeV1):
     target_resolution_kind: str | None = None
     top_k: int | None = None
     enable_semantic_enrichment: bool | None = None
+    incremental_enrichment_mode: str | None = None
     bundle_id: str | None = None
     semantic_health: object | None = None
     semantic_quiescent: object | None = None

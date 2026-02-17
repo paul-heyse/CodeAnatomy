@@ -29,9 +29,11 @@ use std::sync::Arc;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion_common::{DataFusionError, Result};
+#[cfg(feature = "tracing")]
+use tracing::instrument;
 
 use crate::compiler::cost_model::{
-    derive_task_costs, schedule_tasks_with_quality, CostModelConfig,
+    derive_task_costs, schedule_tasks_with_quality, CostModelConfig, StatsQuality,
 };
 use crate::compiler::optimizer_pipeline::{
     run_optimizer_compile_only, OptimizerPipelineConfig, RuleFailurePolicy,
@@ -41,7 +43,7 @@ use crate::compiler::plan_compiler::SemanticPlanCompiler;
 use crate::compiler::pushdown_probe_extract::{
     extract_input_filter_predicates, verify_pushdown_contracts,
 };
-use crate::compiler::scheduling::TaskGraph;
+use crate::compiler::scheduling::{TaskGraph, TaskSchedule};
 use crate::executor::delta_writer::LineageContext;
 use crate::executor::maintenance;
 use crate::executor::metrics_collector::{self, summarize_collected_metrics, CollectedMetrics};
@@ -102,6 +104,7 @@ pub struct PipelineOutcome {
 /// Returns `datafusion_common::Result` errors from plan compilation or
 /// materialization. Best-effort operations (plan bundle capture, maintenance)
 /// do not propagate errors; they are captured as warnings in the result.
+#[cfg_attr(feature = "tracing", instrument(skip_all, fields(spec_hash = %hex::encode(spec.spec_hash))))]
 pub async fn execute_pipeline(
     ctx: &SessionContext,
     spec: &SemanticExecutionSpec,
@@ -127,56 +130,17 @@ pub async fn execute_pipeline(
     warnings.extend(compilation.warnings);
     let output_plans = compilation.outputs;
 
-    let view_deps: Vec<(String, Vec<String>)> = spec
-        .view_definitions
-        .iter()
-        .map(|view| (view.name.clone(), view.view_dependencies.clone()))
-        .collect();
-    let scan_deps: Vec<(String, Vec<String>)> = spec
-        .input_relations
-        .iter()
-        .map(|input| (input.logical_name.clone(), Vec::new()))
-        .collect();
-    let output_deps: Vec<(String, Vec<String>)> = spec
-        .output_targets
-        .iter()
-        .map(|target| (target.table_name.clone(), vec![target.source_view.clone()]))
-        .collect();
-    if let Ok(task_graph) = TaskGraph::from_inferred_deps(&view_deps, &scan_deps, &output_deps) {
-        let cost_outcome = derive_task_costs(&task_graph, None, &CostModelConfig::default());
-        warnings.extend(cost_outcome.warnings.clone());
-        let schedule = schedule_tasks_with_quality(
-            &task_graph,
-            &cost_outcome.costs,
-            cost_outcome.stats_quality,
-        );
-        stats_quality_label = Some(format!("{:?}", cost_outcome.stats_quality));
+    let (task_schedule, stats_quality) = build_task_graph_and_costs(spec, &mut warnings);
+    if let Some(value) = stats_quality {
+        stats_quality_label = Some(format!("{value:?}"));
+    }
+    if task_schedule.is_some() || stats_quality.is_some() {
         builder = builder
-            .with_task_schedule(Some(schedule))
-            .with_stats_quality(Some(cost_outcome.stats_quality));
+            .with_task_schedule(task_schedule)
+            .with_stats_quality(stats_quality);
     }
 
-    let mut pushdown_probe_map: BTreeMap<String, PushdownProbe> = BTreeMap::new();
-    let (pushdown_predicates, pushdown_warnings) = extract_input_filter_predicates(ctx, spec).await;
-    warnings.extend(pushdown_warnings);
-    for (table_name, filters) in pushdown_predicates {
-        if filters.is_empty() {
-            continue;
-        }
-        match probe_provider_pushdown(ctx, &table_name, &filters).await {
-            Ok(probe) => {
-                pushdown_probe_map.insert(table_name, probe);
-            }
-            Err(err) => warnings.push(
-                RunWarning::new(
-                    WarningCode::CompliancePushdownProbeFailed,
-                    WarningStage::Compliance,
-                    format!("Pushdown probe failed: {err}"),
-                )
-                .with_context("table_name", table_name),
-            ),
-        }
-    }
+    let pushdown_probe_map = probe_pushdown_contracts(ctx, spec, &mut warnings).await;
 
     // 2. Capture/evaluate plan bundles before execution.
     //
@@ -371,6 +335,68 @@ fn map_pushdown_mode(mode: PushdownEnforcementMode) -> ContractEnforcementMode {
         PushdownEnforcementMode::Strict => ContractEnforcementMode::Strict,
         PushdownEnforcementMode::Disabled => ContractEnforcementMode::Disabled,
     }
+}
+
+fn build_task_graph_and_costs(
+    spec: &SemanticExecutionSpec,
+    warnings: &mut Vec<RunWarning>,
+) -> (Option<TaskSchedule>, Option<StatsQuality>) {
+    let view_deps: Vec<(String, Vec<String>)> = spec
+        .view_definitions
+        .iter()
+        .map(|view| (view.name.clone(), view.view_dependencies.clone()))
+        .collect();
+    let scan_deps: Vec<(String, Vec<String>)> = spec
+        .input_relations
+        .iter()
+        .map(|input| (input.logical_name.clone(), Vec::new()))
+        .collect();
+    let output_deps: Vec<(String, Vec<String>)> = spec
+        .output_targets
+        .iter()
+        .map(|target| (target.table_name.clone(), vec![target.source_view.clone()]))
+        .collect();
+
+    let Ok(task_graph) = TaskGraph::from_inferred_deps(&view_deps, &scan_deps, &output_deps) else {
+        return (None, None);
+    };
+    let cost_outcome = derive_task_costs(&task_graph, None, &CostModelConfig::default());
+    warnings.extend(cost_outcome.warnings.clone());
+    let schedule = schedule_tasks_with_quality(
+        &task_graph,
+        &cost_outcome.costs,
+        cost_outcome.stats_quality,
+    );
+    (Some(schedule), Some(cost_outcome.stats_quality))
+}
+
+async fn probe_pushdown_contracts(
+    ctx: &SessionContext,
+    spec: &SemanticExecutionSpec,
+    warnings: &mut Vec<RunWarning>,
+) -> BTreeMap<String, PushdownProbe> {
+    let mut pushdown_probe_map: BTreeMap<String, PushdownProbe> = BTreeMap::new();
+    let (pushdown_predicates, pushdown_warnings) = extract_input_filter_predicates(ctx, spec).await;
+    warnings.extend(pushdown_warnings);
+    for (table_name, filters) in pushdown_predicates {
+        if filters.is_empty() {
+            continue;
+        }
+        match probe_provider_pushdown(ctx, &table_name, &filters).await {
+            Ok(probe) => {
+                pushdown_probe_map.insert(table_name, probe);
+            }
+            Err(err) => warnings.push(
+                RunWarning::new(
+                    WarningCode::CompliancePushdownProbeFailed,
+                    WarningStage::Compliance,
+                    format!("Pushdown probe failed: {err}"),
+                )
+                .with_context("table_name", table_name),
+            ),
+        }
+    }
+    pushdown_probe_map
 }
 
 fn enforce_pushdown_contracts(

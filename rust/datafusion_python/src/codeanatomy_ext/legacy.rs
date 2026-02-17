@@ -13,33 +13,15 @@ use super::helpers::extract_session_ctx;
 use crate::context::{PyRuntimeEnvBuilder, PySessionContext};
 use crate::dataframe::PyDataFrame;
 use crate::delta_control_plane::{
-    delta_add_actions as delta_add_actions_native, delta_cdf_provider as delta_cdf_provider_native,
     delta_provider_from_session_request as delta_provider_from_session_native,
-    delta_provider_with_files_request as delta_provider_with_files_native,
     scan_config_from_session as delta_scan_config_from_session_native,
-    snapshot_info_with_gate as delta_snapshot_info_native, DeltaCdfScanOptions,
-    DeltaProviderFromSessionRequest, DeltaProviderWithFilesRequest, DeltaScanOverrides,
+    DeltaProviderFromSessionRequest, DeltaScanOverrides,
 };
 use crate::delta_maintenance::{
-    delta_add_constraints_request as delta_add_constraints_native,
-    delta_add_features_request as delta_add_features_native,
-    delta_cleanup_metadata as delta_cleanup_metadata_native,
-    delta_create_checkpoint as delta_create_checkpoint_native,
-    delta_drop_constraints_request as delta_drop_constraints_native,
-    delta_optimize_compact_request as delta_optimize_compact_native,
-    delta_restore_request as delta_restore_native,
-    delta_set_properties_request as delta_set_properties_native,
-    delta_vacuum_request as delta_vacuum_native, DeltaAddConstraintsRequest,
-    DeltaAddFeaturesRequest, DeltaDropConstraintsRequest, DeltaMaintenanceReport,
-    DeltaOptimizeCompactRequest, DeltaRestoreRequest, DeltaSetPropertiesRequest,
-    DeltaVacuumRequest,
+    DeltaMaintenanceReport,
 };
 use crate::delta_mutations::{
-    delta_data_check_request as delta_data_check_native,
-    delta_delete_request as delta_delete_native, delta_merge_request as delta_merge_native,
-    delta_update_request as delta_update_native, delta_write_ipc_request as delta_write_ipc_native,
-    DeltaDataCheckRequest, DeltaDeleteRequest, DeltaMergeRequest, DeltaMutationReport,
-    DeltaUpdateRequest, DeltaWriteIpcRequest,
+    DeltaMutationReport,
 };
 use crate::delta_observability::{
     add_action_payloads, maintenance_report_payload, mutation_report_payload, scan_config_payload,
@@ -61,7 +43,6 @@ use datafusion::catalog::{
     TableFunctionImpl, TableProvider,
 };
 use datafusion::config::ConfigOptions;
-use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
 use datafusion::execution::config::SessionConfig;
 use datafusion::execution::context::SessionContext;
@@ -74,6 +55,7 @@ use datafusion::physical_expr_adapter::{
 };
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::DataFrame;
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_common::{
     Constraint, Constraints, DFSchema, DataFusionError, Result, ScalarValue, Statistics,
@@ -96,14 +78,13 @@ use datafusion_ext::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 use datafusion_ext::udf_expr as udf_expr_mod;
 use datafusion_ext::udf_registry;
 use datafusion_ext::{install_expr_planners_native, install_sql_macro_factory_native};
-use datafusion_ext::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
+use datafusion_ext::DeltaFeatureGate;
 use datafusion_ffi;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use deltalake::delta_datafusion::planner::DeltaPlanner;
 use deltalake::delta_datafusion::{
     DeltaLogicalCodec, DeltaPhysicalCodec, DeltaScanConfig, DeltaSessionConfig, DeltaTableFactory,
 };
-use deltalake::protocol::SaveMode;
 use df_plugin_common::{parse_major, schema_from_ipc, DELTA_SCAN_CONFIG_VERSION};
 use df_plugin_host::{load_plugin, PluginHandle};
 use df_plugin_host::{DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR};
@@ -122,14 +103,6 @@ use codeanatomy_engine::session::extraction::{
     build_extraction_session as build_extraction_session_native, ExtractionConfig,
 };
 
-macro_rules! register_pyfunctions {
-    ($module:expr, [$($func:path),* $(,)?]) => {
-        $(
-            $module.add_function(pyo3::wrap_pyfunction!($func, $module)?)?;
-        )*
-    };
-}
-
 macro_rules! register_pyclasses {
     ($module:expr, [$($class:ty),* $(,)?]) => {
         $(
@@ -143,13 +116,13 @@ fn decode_schema_ipc(schema_ipc: &[u8]) -> PyResult<SchemaRef> {
         .map_err(|err| PyValueError::new_err(format!("Failed to decode schema IPC: {err}")))
 }
 
-fn storage_options_map(
+pub(crate) fn storage_options_map(
     storage_options: Option<Vec<(String, String)>>,
 ) -> Option<HashMap<String, String>> {
     storage_options.map(|options| options.into_iter().collect())
 }
 
-fn delta_gate_from_params(
+pub(crate) fn delta_gate_from_params(
     min_reader_version: Option<i32>,
     min_writer_version: Option<i32>,
     required_reader_features: Option<Vec<String>>,
@@ -173,7 +146,7 @@ fn delta_gate_from_params(
     ))
 }
 
-fn table_version_from_options(
+pub(crate) fn table_version_from_options(
     version: Option<i64>,
     timestamp: Option<String>,
 ) -> PyResult<TableVersion> {
@@ -182,7 +155,7 @@ fn table_version_from_options(
     })
 }
 
-fn scan_overrides_from_params(
+pub(crate) fn scan_overrides_from_params(
     file_column_name: Option<String>,
     enable_parquet_pushdown: Option<bool>,
     schema_force_view_types: Option<bool>,
@@ -247,7 +220,7 @@ fn inject_delta_scan_defaults(
         .map_err(|err| format!("Failed to serialize options JSON for {provider_name}: {err}"))
 }
 
-fn runtime() -> PyResult<Runtime> {
+pub(crate) fn runtime() -> PyResult<Runtime> {
     Runtime::new()
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))
 }
@@ -322,7 +295,10 @@ struct DatasetProviderRequestPayload {
     required_writer_features: Option<Vec<String>>,
 }
 
-fn provider_capsule(py: Python<'_>, provider: Arc<dyn TableProvider>) -> PyResult<Py<PyAny>> {
+pub(crate) fn provider_capsule(
+    py: Python<'_>,
+    provider: Arc<dyn TableProvider>,
+) -> PyResult<Py<PyAny>> {
     let ffi_provider = FFI_TableProvider::new(provider, true, None);
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
@@ -330,7 +306,7 @@ fn provider_capsule(py: Python<'_>, provider: Arc<dyn TableProvider>) -> PyResul
     Ok(capsule.unbind().into())
 }
 
-fn json_to_py(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
+pub(crate) fn json_to_py(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
     match value {
         JsonValue::Null => Ok(py.None()),
         JsonValue::Bool(flag) => Ok(PyBool::new(py, *flag).to_owned().unbind().into()),
@@ -393,11 +369,17 @@ fn payload_to_pydict(py: Python<'_>, payload: HashMap<String, JsonValue>) -> PyR
     Ok(dict.into())
 }
 
-fn snapshot_to_pydict(py: Python<'_>, snapshot: &DeltaSnapshotInfo) -> PyResult<Py<PyAny>> {
+pub(crate) fn snapshot_to_pydict(
+    py: Python<'_>,
+    snapshot: &DeltaSnapshotInfo,
+) -> PyResult<Py<PyAny>> {
     payload_to_pydict(py, snapshot_payload(snapshot))
 }
 
-fn scan_config_to_pydict(py: Python<'_>, scan_config: &DeltaScanConfig) -> PyResult<Py<PyAny>> {
+pub(crate) fn scan_config_to_pydict(
+    py: Python<'_>,
+    scan_config: &DeltaScanConfig,
+) -> PyResult<Py<PyAny>> {
     let payload = scan_config_payload(scan_config).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to build Delta scan config payload: {err}"))
     })?;
@@ -417,57 +399,18 @@ fn scan_config_to_pydict(py: Python<'_>, scan_config: &DeltaScanConfig) -> PyRes
     Ok(dict.into())
 }
 
-fn mutation_report_to_pydict(py: Python<'_>, report: &DeltaMutationReport) -> PyResult<Py<PyAny>> {
+pub(crate) fn mutation_report_to_pydict(
+    py: Python<'_>,
+    report: &DeltaMutationReport,
+) -> PyResult<Py<PyAny>> {
     payload_to_pydict(py, mutation_report_payload(report))
 }
 
-fn maintenance_report_to_pydict(
+pub(crate) fn maintenance_report_to_pydict(
     py: Python<'_>,
     report: &DeltaMaintenanceReport,
 ) -> PyResult<Py<PyAny>> {
     payload_to_pydict(py, maintenance_report_payload(report))
-}
-
-fn save_mode_from_str(mode: &str) -> PyResult<SaveMode> {
-    match mode.to_ascii_lowercase().as_str() {
-        "append" => Ok(SaveMode::Append),
-        "overwrite" => Ok(SaveMode::Overwrite),
-        other => Err(PyValueError::new_err(format!(
-            "Unsupported Delta save mode: {other}. Expected 'append' or 'overwrite'."
-        ))),
-    }
-}
-
-fn commit_options_from_params(
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<DeltaCommitOptions> {
-    let metadata = commit_metadata
-        .map(|pairs| pairs.into_iter().collect::<HashMap<String, String>>())
-        .unwrap_or_default();
-    let app_transaction = match (app_id, app_version) {
-        (Some(app_id), Some(version)) => Some(DeltaAppTransaction {
-            app_id,
-            version,
-            last_updated: app_last_updated,
-        }),
-        (None, None) => None,
-        _ => {
-            return Err(PyValueError::new_err(
-                "Delta app transaction requires both app_id and app_version.",
-            ));
-        }
-    };
-    Ok(DeltaCommitOptions {
-        metadata,
-        app_transaction,
-        max_retries,
-        create_checkpoint,
-    })
 }
 
 fn now_unix_ms_or(fallback: i64) -> i64 {
@@ -568,7 +511,7 @@ fn udf_config_payload_from_ctx(ctx: &SessionContext) -> JsonValue {
 }
 
 #[pyfunction]
-fn install_codeanatomy_udf_config(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn install_codeanatomy_udf_config(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
     let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
@@ -579,7 +522,7 @@ fn install_codeanatomy_udf_config(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
 }
 
 #[pyfunction]
-fn install_function_factory(
+pub(crate) fn install_function_factory(
     ctx: &Bound<'_, PyAny>,
     policy_ipc: &Bound<'_, PyBytes>,
 ) -> PyResult<()> {
@@ -626,7 +569,7 @@ fn _dtype_for_param(
 }
 
 #[pyfunction]
-fn derive_function_factory_policy(
+pub(crate) fn derive_function_factory_policy(
     py: Python<'_>,
     snapshot: &Bound<'_, PyAny>,
     allow_async: bool,
@@ -695,7 +638,7 @@ fn derive_function_factory_policy(
 }
 
 #[pyfunction]
-fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
+pub(crate) fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to build registry snapshot: {err}"))
@@ -772,7 +715,7 @@ fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
 }
 
 #[pyfunction]
-fn replay_substrait_plan(
+pub(crate) fn replay_substrait_plan(
     ctx: &Bound<'_, PyAny>,
     payload_bytes: &Bound<'_, PyBytes>,
 ) -> PyResult<PyDataFrame> {
@@ -802,7 +745,7 @@ fn replay_substrait_plan(
 }
 
 #[pyfunction]
-fn lineage_from_substrait(
+pub(crate) fn lineage_from_substrait(
     py: Python<'_>,
     payload_bytes: &Bound<'_, PyBytes>,
 ) -> PyResult<Py<PyAny>> {
@@ -816,7 +759,7 @@ fn lineage_from_substrait(
 }
 
 #[pyfunction]
-fn build_extraction_session(
+pub(crate) fn build_extraction_session(
     py: Python<'_>,
     config_payload: &Bound<'_, PyAny>,
 ) -> PyResult<PySessionContext> {
@@ -853,7 +796,7 @@ fn build_extraction_session(
 }
 
 #[pyfunction]
-fn register_dataset_provider(
+pub(crate) fn register_dataset_provider(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
     request_payload: &Bound<'_, PyAny>,
@@ -918,7 +861,7 @@ fn register_dataset_provider(
 }
 
 #[pyfunction]
-fn arrow_stream_to_batches(py: Python<'_>, obj: Py<PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn arrow_stream_to_batches(py: Python<'_>, obj: Py<PyAny>) -> PyResult<Py<PyAny>> {
     let bound = obj.bind(py);
     let mut reader = ArrowArrayStreamReader::from_pyarrow_bound(&bound).map_err(|err| {
         PyValueError::new_err(format!(
@@ -947,7 +890,7 @@ fn arrow_stream_to_batches(py: Python<'_>, obj: Py<PyAny>) -> PyResult<Py<PyAny>
 
 #[pyfunction]
 #[pyo3(signature = (name, *args, ctx=None))]
-fn udf_expr(
+pub(crate) fn udf_expr(
     py: Python<'_>,
     name: String,
     args: &Bound<'_, PyTuple>,
@@ -985,7 +928,7 @@ fn udf_expr(
 
 #[pyfunction]
 #[pyo3(signature = (ctx, allow_ddl = None, allow_dml = None, allow_statements = None))]
-fn install_codeanatomy_policy_config(
+pub(crate) fn install_codeanatomy_policy_config(
     ctx: &Bound<'_, PyAny>,
     allow_ddl: Option<bool>,
     allow_dml: Option<bool>,
@@ -1011,7 +954,7 @@ fn install_codeanatomy_policy_config(
 
 #[pyfunction]
 #[pyo3(signature = (ctx, enabled = None))]
-fn install_codeanatomy_physical_config(
+pub(crate) fn install_codeanatomy_physical_config(
     ctx: &Bound<'_, PyAny>,
     enabled: Option<bool>,
 ) -> PyResult<()> {
@@ -1028,19 +971,19 @@ fn install_codeanatomy_physical_config(
 }
 
 #[pyfunction]
-fn install_planner_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn install_planner_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
     install_policy_rules_native(&extract_session_ctx(ctx)?)
         .map_err(|err| PyRuntimeError::new_err(format!("Planner rule install failed: {err}")))
 }
 
 #[pyfunction]
-fn install_physical_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn install_physical_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
     install_physical_rules_native(&extract_session_ctx(ctx)?)
         .map_err(|err| PyRuntimeError::new_err(format!("Physical rule install failed: {err}")))
 }
 
 #[pyfunction(name = "registry_snapshot")]
-fn registry_snapshot_py(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn registry_snapshot_py(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let snapshot = registry_snapshot::registry_snapshot(&extract_session_ctx(ctx)?.state());
     let payload = PyDict::new(py);
     payload.set_item("scalar", PyList::new(py, snapshot.scalar)?)?;
@@ -1127,7 +1070,7 @@ fn registry_snapshot_py(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<P
     async_udf_timeout_ms = None,
     async_udf_batch_size = None
 ))]
-fn register_codeanatomy_udfs(
+pub(crate) fn register_codeanatomy_udfs(
     ctx: &Bound<'_, PyAny>,
     enable_async: bool,
     async_udf_timeout_ms: Option<u64>,
@@ -1146,7 +1089,7 @@ fn register_codeanatomy_udfs(
 }
 
 #[pyfunction]
-fn session_context_contract_probe(
+pub(crate) fn session_context_contract_probe(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
@@ -1177,7 +1120,7 @@ fn session_context_contract_probe(
     async_udf_timeout_ms = None,
     async_udf_batch_size = None
 ))]
-fn install_codeanatomy_runtime(
+pub(crate) fn install_codeanatomy_runtime(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
     enable_async_udfs: bool,
@@ -1229,7 +1172,7 @@ fn install_codeanatomy_runtime(
 }
 
 #[pyfunction]
-fn udf_docs_snapshot(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn udf_docs_snapshot(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let payload = PyDict::new(py);
     let add_doc = |name: &str, doc: &datafusion_expr::Documentation| -> PyResult<()> {
         let entry = PyDict::new(py);
@@ -1269,7 +1212,7 @@ fn udf_docs_snapshot(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
 }
 
 #[pyfunction]
-fn load_df_plugin(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
+pub(crate) fn load_df_plugin(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
     let handle = load_plugin(Path::new(&path)).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to load DataFusion plugin {path:?}: {err}"))
     })?;
@@ -1280,7 +1223,7 @@ fn load_df_plugin(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 
 #[pyfunction]
 #[pyo3(signature = (ctx, plugin, options_json = None))]
-fn register_df_plugin_udfs(
+pub(crate) fn register_df_plugin_udfs(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
     plugin: Py<PyAny>,
@@ -1317,7 +1260,7 @@ fn register_df_plugin_udfs(
 }
 
 #[pyfunction]
-fn register_df_plugin_table_functions(
+pub(crate) fn register_df_plugin_table_functions(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
     plugin: Py<PyAny>,
@@ -1330,7 +1273,7 @@ fn register_df_plugin_table_functions(
 }
 
 #[pyfunction]
-fn create_df_plugin_table_provider(
+pub(crate) fn create_df_plugin_table_provider(
     py: Python<'_>,
     plugin: Py<PyAny>,
     provider_name: String,
@@ -1351,7 +1294,7 @@ fn create_df_plugin_table_provider(
 }
 
 #[pyfunction]
-fn register_df_plugin_table_providers(
+pub(crate) fn register_df_plugin_table_providers(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
     plugin: Py<PyAny>,
@@ -1394,7 +1337,7 @@ fn register_df_plugin_table_providers(
 }
 
 #[pyfunction]
-fn register_df_plugin(
+pub(crate) fn register_df_plugin(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
     plugin: Py<PyAny>,
@@ -1441,7 +1384,7 @@ fn plugin_library_filename(crate_name: &str) -> String {
 }
 
 #[pyfunction]
-fn plugin_library_path(py: Python<'_>) -> PyResult<String> {
+pub(crate) fn plugin_library_path(py: Python<'_>) -> PyResult<String> {
     let module = py.import("datafusion_ext")?;
     let module_file: String = module.getattr("__file__")?.extract()?;
     let module_path = PathBuf::from(module_file);
@@ -1458,7 +1401,7 @@ fn plugin_library_path(py: Python<'_>) -> PyResult<String> {
 
 #[pyfunction]
 #[pyo3(signature = (path = None))]
-fn plugin_manifest(py: Python<'_>, path: Option<String>) -> PyResult<Py<PyAny>> {
+pub(crate) fn plugin_manifest(py: Python<'_>, path: Option<String>) -> PyResult<Py<PyAny>> {
     let resolved = if let Some(value) = path {
         value
     } else {
@@ -1713,7 +1656,7 @@ fn listing_table_plan(
 }
 
 #[pyfunction]
-fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<Py<PyAny>> {
+pub(crate) fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let factory: Arc<dyn PhysicalExprAdapterFactory> =
         Arc::new(SchemaEvolutionAdapterFactory::default());
     let name = CString::new("datafusion_ext.SchemaEvolutionAdapterFactory")
@@ -1723,7 +1666,7 @@ fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<Py<PyAny>> {
 }
 
 #[pyfunction]
-fn parquet_listing_table_provider(
+pub(crate) fn parquet_listing_table_provider(
     py: Python<'_>,
     path: String,
     file_extension: String,
@@ -1835,75 +1778,14 @@ fn parquet_listing_table_provider(
 }
 
 #[pyfunction]
-fn delta_table_provider_with_files(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    files: Vec<String>,
-    file_column_name: Option<String>,
-    enable_parquet_pushdown: Option<bool>,
-    schema_force_view_types: Option<bool>,
-    wrap_partition_values: Option<bool>,
-    schema_ipc: Option<Vec<u8>>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let overrides = scan_overrides_from_params(
-        file_column_name,
-        enable_parquet_pushdown,
-        schema_force_view_types,
-        wrap_partition_values,
-        schema_ipc,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let (provider, snapshot, scan_config, add_actions) = runtime
-        .block_on(delta_provider_with_files_native(
-            DeltaProviderWithFilesRequest {
-                session_ctx: &extract_session_ctx(ctx)?,
-                table_uri: &table_uri,
-                storage_options: storage,
-                table_version,
-                overrides,
-                files,
-                gate,
-            },
-        ))
-        .map_err(|err| {
-            PyRuntimeError::new_err(format!(
-                "Failed to build Delta provider with file pruning: {err}"
-            ))
-        })?;
-    let payload = PyDict::new(py);
-    payload.set_item("provider", provider_capsule(py, provider)?)?;
-    payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
-    payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
-    let add_payload = add_action_payloads(&add_actions);
-    payload.set_item("add_actions", json_to_py(py, &add_payload)?)?;
-    Ok(payload.into())
-}
-
-#[pyfunction]
-fn install_expr_planners(ctx: &Bound<'_, PyAny>, planner_names: Vec<String>) -> PyResult<()> {
+pub(crate) fn install_expr_planners(ctx: &Bound<'_, PyAny>, planner_names: Vec<String>) -> PyResult<()> {
     let names: Vec<&str> = planner_names.iter().map(String::as_str).collect();
     install_expr_planners_native(&extract_session_ctx(ctx)?, &names)
         .map_err(|err| PyRuntimeError::new_err(format!("ExprPlanner install failed: {err}")))
 }
 
 #[pyfunction]
-fn install_tracing(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn install_tracing(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
     let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let new_state = SessionStateBuilder::new_from_existing(state.clone())
@@ -1914,7 +1796,7 @@ fn install_tracing(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
 }
 
 #[pyfunction]
-fn register_cache_tables(
+pub(crate) fn register_cache_tables(
     ctx: &Bound<'_, PyAny>,
     config: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
@@ -1926,7 +1808,7 @@ fn register_cache_tables(
 }
 
 #[pyfunction]
-fn table_logical_plan(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<String> {
+pub(crate) fn table_logical_plan(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<String> {
     let runtime = Runtime::new()
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))?;
     let df = runtime
@@ -1938,7 +1820,7 @@ fn table_logical_plan(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<St
 }
 
 #[pyfunction]
-fn table_dfschema_tree(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<String> {
+pub(crate) fn table_dfschema_tree(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<String> {
     let runtime = Runtime::new()
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))?;
     let df = runtime
@@ -1950,7 +1832,7 @@ fn table_dfschema_tree(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<S
 }
 
 #[pyfunction]
-fn install_schema_evolution_adapter_factory(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn install_schema_evolution_adapter_factory(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
     let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
@@ -1963,7 +1845,7 @@ fn install_schema_evolution_adapter_factory(ctx: &Bound<'_, PyAny>) -> PyResult<
 }
 
 #[pyfunction]
-fn registry_catalog_provider_factory(
+pub(crate) fn registry_catalog_provider_factory(
     py: Python<'_>,
     schema_name: Option<String>,
 ) -> PyResult<Py<PyAny>> {
@@ -2181,7 +2063,7 @@ fn register_cache_table_functions(ctx: &SessionContext, config: CacheSnapshotCon
 
 // Scope 1: Delta SQL DDL registration via DeltaTableFactory
 #[pyfunction]
-fn install_delta_table_factory(ctx: &Bound<'_, PyAny>, alias: String) -> PyResult<()> {
+pub(crate) fn install_delta_table_factory(ctx: &Bound<'_, PyAny>, alias: String) -> PyResult<()> {
     let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let factories = state.table_factories_mut();
@@ -2191,7 +2073,7 @@ fn install_delta_table_factory(ctx: &Bound<'_, PyAny>, alias: String) -> PyResul
 
 #[pyclass]
 #[derive(Clone)]
-struct DeltaRuntimeEnvOptions {
+pub(crate) struct DeltaRuntimeEnvOptions {
     #[pyo3(get, set)]
     max_spill_size: Option<usize>,
     #[pyo3(get, set)]
@@ -2211,7 +2093,7 @@ impl DeltaRuntimeEnvOptions {
 
 #[pyclass]
 #[derive(Clone)]
-struct DeltaSessionRuntimePolicyOptions {
+pub(crate) struct DeltaSessionRuntimePolicyOptions {
     #[pyo3(get, set)]
     memory_limit: Option<u64>,
     #[pyo3(get, set)]
@@ -2284,7 +2166,7 @@ fn apply_runtime_policy_options(
 
 #[pyfunction]
 #[pyo3(signature = (settings = None, runtime = None, delta_runtime = None, runtime_policy = None))]
-fn delta_session_context(
+pub(crate) fn delta_session_context(
     settings: Option<Vec<(String, String)>>,
     runtime: Option<PyRef<PyRuntimeEnvBuilder>>,
     delta_runtime: Option<PyRef<DeltaRuntimeEnvOptions>>,
@@ -2420,7 +2302,7 @@ fn runtime_execution_metrics_payload(ctx: &SessionContext) -> JsonValue {
 }
 
 #[pyfunction]
-fn runtime_execution_metrics_snapshot(
+pub(crate) fn runtime_execution_metrics_snapshot(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
@@ -2439,24 +2321,24 @@ fn install_delta_plan_codecs_inner(ctx: &SessionContext) -> PyResult<()> {
 
 // Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
 #[pyfunction]
-fn install_delta_plan_codecs(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn install_delta_plan_codecs(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
     install_delta_plan_codecs_inner(&extract_session_ctx(ctx)?)
 }
 
 // Scope 8: Native Delta CDF TableProvider integration
 #[pyclass]
 #[derive(Clone)]
-struct DeltaCdfOptions {
+pub(crate) struct DeltaCdfOptions {
     #[pyo3(get, set)]
-    starting_version: Option<i64>,
+    pub(crate) starting_version: Option<i64>,
     #[pyo3(get, set)]
-    ending_version: Option<i64>,
+    pub(crate) ending_version: Option<i64>,
     #[pyo3(get, set)]
-    starting_timestamp: Option<String>,
+    pub(crate) starting_timestamp: Option<String>,
     #[pyo3(get, set)]
-    ending_timestamp: Option<String>,
+    pub(crate) ending_timestamp: Option<String>,
     #[pyo3(get, set)]
-    allow_out_of_range: bool,
+    pub(crate) allow_out_of_range: bool,
 }
 
 #[pymethods]
@@ -2473,1099 +2355,7 @@ impl DeltaCdfOptions {
     }
 }
 
-#[pyfunction]
-fn delta_cdf_table_provider(
-    py: Python<'_>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    options: DeltaCdfOptions,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let cdf_options = DeltaCdfScanOptions {
-        starting_version: options.starting_version,
-        ending_version: options.ending_version,
-        starting_timestamp: options.starting_timestamp,
-        ending_timestamp: options.ending_timestamp,
-        allow_out_of_range: options.allow_out_of_range,
-    };
-    let runtime = runtime()?;
-    let (provider, snapshot) = runtime
-        .block_on(delta_cdf_provider_native(
-            &table_uri,
-            storage,
-            version,
-            timestamp,
-            cdf_options,
-            gate,
-        ))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta CDF provider failed: {err}")))?;
-    let ffi_provider = FFI_TableProvider::new(Arc::new(provider), true, None);
-    let name = CString::new("datafusion_table_provider")
-        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
-    let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
-    let payload = PyDict::new(py);
-    payload.set_item("provider", capsule)?;
-    payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
-    Ok(payload.into())
-}
-
-// Scope 9: DeltaScanConfig derived from session settings
-#[pyfunction]
-fn delta_table_provider_from_session(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    predicate: Option<String>,
-    file_column_name: Option<String>,
-    enable_parquet_pushdown: Option<bool>,
-    schema_force_view_types: Option<bool>,
-    wrap_partition_values: Option<bool>,
-    schema_ipc: Option<Vec<u8>>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let overrides = scan_overrides_from_params(
-        file_column_name,
-        enable_parquet_pushdown,
-        schema_force_view_types,
-        wrap_partition_values,
-        schema_ipc,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
-        .block_on(delta_provider_from_session_native(
-            DeltaProviderFromSessionRequest {
-                session_ctx: &extract_session_ctx(ctx)?,
-                table_uri: &table_uri,
-                storage_options: storage,
-                table_version,
-                predicate,
-                overrides,
-                gate,
-            },
-        ))
-        .map_err(|err| PyRuntimeError::new_err(format!("Failed to build Delta provider: {err}")))?;
-    let payload = PyDict::new(py);
-    payload.set_item("provider", provider_capsule(py, provider)?)?;
-    payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
-    payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
-    if let Some(add_actions) = add_actions {
-        let add_payload = add_action_payloads(&add_actions);
-        payload.set_item("add_actions", json_to_py(py, &add_payload)?)?;
-    }
-    if let Some(error) = predicate_error {
-        payload.set_item("predicate_error", error)?;
-    }
-    Ok(payload.into())
-}
-
-#[pyfunction]
-fn delta_scan_config_from_session(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    file_column_name: Option<String>,
-    enable_parquet_pushdown: Option<bool>,
-    schema_force_view_types: Option<bool>,
-    wrap_partition_values: Option<bool>,
-    schema_ipc: Option<Vec<u8>>,
-) -> PyResult<Py<PyAny>> {
-    let overrides = scan_overrides_from_params(
-        file_column_name,
-        enable_parquet_pushdown,
-        schema_force_view_types,
-        wrap_partition_values,
-        schema_ipc,
-    )?;
-    let session_state = extract_session_ctx(ctx)?.state();
-    let scan_config = delta_scan_config_from_session_native(&session_state, None, overrides)
-        .map_err(|err| {
-            PyRuntimeError::new_err(format!(
-                "Failed to resolve Delta scan config from session: {err}"
-            ))
-        })?;
-    scan_config_to_pydict(py, &scan_config)
-}
-
-#[pyfunction]
-fn delta_snapshot_info(
-    py: Python<'_>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let snapshot = runtime
-        .block_on(delta_snapshot_info_native(&table_uri, storage, table_version, gate))
-        .map_err(|err| PyRuntimeError::new_err(format!("Failed to load Delta snapshot: {err}")))?;
-    snapshot_to_pydict(py, &snapshot)
-}
-
-#[pyfunction]
-fn validate_protocol_gate(snapshot_msgpack: Vec<u8>, gate_msgpack: Vec<u8>) -> PyResult<()> {
-    crate::delta_protocol::validate_protocol_gate_payload(&snapshot_msgpack, &gate_msgpack).map_err(
-        |err| PyRuntimeError::new_err(format!("Delta protocol gate validation failed: {err}")),
-    )
-}
-
-#[pyfunction]
-fn delta_add_actions(
-    py: Python<'_>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let runtime = runtime()?;
-    let (snapshot, add_actions) = runtime
-        .block_on(delta_add_actions_native(
-            &table_uri, storage, version, timestamp, gate,
-        ))
-        .map_err(|err| {
-            PyRuntimeError::new_err(format!("Failed to list Delta add actions: {err}"))
-        })?;
-    let payload = PyDict::new(py);
-    payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
-    let add_payload = add_action_payloads(&add_actions);
-    payload.set_item("add_actions", json_to_py(py, &add_payload)?)?;
-    Ok(payload.into())
-}
-
-#[pyfunction]
-fn delta_write_ipc(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    data_ipc: Vec<u8>,
-    mode: String,
-    schema_mode: Option<String>,
-    partition_columns: Option<Vec<String>>,
-    target_file_size: Option<usize>,
-    extra_constraints: Option<Vec<String>>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let save_mode = save_mode_from_str(mode.as_str())?;
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_write_ipc_native(DeltaWriteIpcRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            data_ipc: data_ipc.as_slice(),
-            save_mode,
-            schema_mode_label: schema_mode,
-            partition_columns,
-            target_file_size,
-            gate,
-            commit_options: Some(commit_options),
-            extra_constraints,
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta write failed: {err}")))?;
-    mutation_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_delete(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    predicate: Option<String>,
-    _extra_constraints: Option<Vec<String>>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_delete_native(DeltaDeleteRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            predicate,
-            gate,
-            commit_options: Some(commit_options),
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta delete failed: {err}")))?;
-    mutation_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_update(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    predicate: Option<String>,
-    updates: Vec<(String, String)>,
-    _extra_constraints: Option<Vec<String>>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    if updates.is_empty() {
-        return Err(PyValueError::new_err(
-            "Delta update requires at least one column assignment.",
-        ));
-    }
-    let updates = updates.into_iter().collect::<HashMap<String, String>>();
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_update_native(DeltaUpdateRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            predicate,
-            updates,
-            gate,
-            commit_options: Some(commit_options),
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta update failed: {err}")))?;
-    mutation_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_merge(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    source_table: String,
-    predicate: String,
-    source_alias: Option<String>,
-    target_alias: Option<String>,
-    matched_predicate: Option<String>,
-    matched_updates: Option<Vec<(String, String)>>,
-    not_matched_predicate: Option<String>,
-    not_matched_inserts: Option<Vec<(String, String)>>,
-    not_matched_by_source_predicate: Option<String>,
-    delete_not_matched_by_source: Option<bool>,
-    extra_constraints: Option<Vec<String>>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    let matched_updates = matched_updates
-        .map(|entries| entries.into_iter().collect::<HashMap<String, String>>())
-        .unwrap_or_default();
-    let not_matched_inserts = not_matched_inserts
-        .map(|entries| entries.into_iter().collect::<HashMap<String, String>>())
-        .unwrap_or_default();
-    let delete_not_matched_by_source = delete_not_matched_by_source.unwrap_or(false);
-    if matched_updates.is_empty() && not_matched_inserts.is_empty() && !delete_not_matched_by_source
-    {
-        return Err(PyValueError::new_err(
-            "Delta merge requires a matched update, not-matched insert, or not-matched-by-source delete.",
-        ));
-    }
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_merge_native(DeltaMergeRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            source_table: &source_table,
-            predicate,
-            source_alias,
-            target_alias,
-            matched_predicate,
-            matched_updates,
-            not_matched_predicate,
-            not_matched_inserts,
-            not_matched_by_source_predicate,
-            delete_not_matched_by_source,
-            gate,
-            commit_options: Some(commit_options),
-            extra_constraints,
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta merge failed: {err}")))?;
-    mutation_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_optimize_compact(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    target_size: Option<i64>,
-    _max_concurrent_tasks: Option<i64>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let target_size = match target_size {
-        Some(size) => Some(u64::try_from(size).map_err(|err| {
-            PyValueError::new_err(format!("Delta optimize target_size is too large: {err}"))
-        })?),
-        None => None,
-    };
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_optimize_compact_native(DeltaOptimizeCompactRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            target_size,
-            gate,
-            commit_options: Some(commit_options),
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta optimize failed: {err}")))?;
-    maintenance_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_vacuum(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    retention_hours: Option<i64>,
-    dry_run: Option<bool>,
-    enforce_retention_duration: Option<bool>,
-    require_vacuum_protocol_check: Option<bool>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let dry_run = dry_run.unwrap_or(false);
-    let enforce_retention_duration = enforce_retention_duration.unwrap_or(true);
-    let require_vacuum_protocol_check = require_vacuum_protocol_check.unwrap_or(false);
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_vacuum_native(DeltaVacuumRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            retention_hours,
-            dry_run,
-            enforce_retention_duration,
-            require_vacuum_protocol_check,
-            gate,
-            commit_options: Some(commit_options),
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta vacuum failed: {err}")))?;
-    maintenance_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_restore(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    restore_version: Option<i64>,
-    restore_timestamp: Option<String>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let restore_target = table_version_from_options(restore_version, restore_timestamp)?;
-    let report = runtime
-        .block_on(delta_restore_native(DeltaRestoreRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            restore_target,
-            gate,
-            commit_options: Some(commit_options),
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta restore failed: {err}")))?;
-    maintenance_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_set_properties(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    properties: Vec<(String, String)>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    if properties.is_empty() {
-        return Err(PyValueError::new_err(
-            "Delta property update requires at least one key/value pair.",
-        ));
-    }
-    let properties = properties.into_iter().collect::<HashMap<String, String>>();
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_set_properties_native(DeltaSetPropertiesRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            properties,
-            gate,
-            commit_options: Some(commit_options),
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta set-properties failed: {err}")))?;
-    maintenance_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_add_features(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    features: Vec<String>,
-    allow_protocol_versions_increase: Option<bool>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    if features.is_empty() {
-        return Err(PyValueError::new_err(
-            "Delta add-features requires at least one feature name.",
-        ));
-    }
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let allow_protocol_versions_increase = allow_protocol_versions_increase.unwrap_or(true);
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_add_features_native(DeltaAddFeaturesRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            features,
-            allow_protocol_versions_increase,
-            gate,
-            commit_options: Some(commit_options),
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta add-features failed: {err}")))?;
-    maintenance_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_add_constraints(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    constraints: Vec<(String, String)>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    if constraints.is_empty() {
-        return Err(PyValueError::new_err(
-            "Delta add-constraints requires at least one constraint.",
-        ));
-    }
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_add_constraints_native(DeltaAddConstraintsRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            constraints,
-            gate,
-            commit_options: Some(commit_options),
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta add-constraints failed: {err}")))?;
-    maintenance_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_drop_constraints(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    constraints: Vec<String>,
-    raise_if_not_exists: Option<bool>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    commit_metadata: Option<Vec<(String, String)>>,
-    app_id: Option<String>,
-    app_version: Option<i64>,
-    app_last_updated: Option<i64>,
-    max_retries: Option<i64>,
-    create_checkpoint: Option<bool>,
-) -> PyResult<Py<PyAny>> {
-    if constraints.is_empty() {
-        return Err(PyValueError::new_err(
-            "Delta drop-constraints requires at least one constraint name.",
-        ));
-    }
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let commit_options = commit_options_from_params(
-        commit_metadata,
-        app_id,
-        app_version,
-        app_last_updated,
-        max_retries,
-        create_checkpoint,
-    )?;
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_drop_constraints_native(DeltaDropConstraintsRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            constraints,
-            raise_if_not_exists: raise_if_not_exists.unwrap_or(true),
-            gate,
-            commit_options: Some(commit_options),
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta drop-constraints failed: {err}")))?;
-    maintenance_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_create_checkpoint(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_create_checkpoint_native(
-            &extract_session_ctx(ctx)?, &table_uri, storage, table_version, gate,
-        ))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta checkpoint failed: {err}")))?;
-    maintenance_report_to_pydict(py, &report)
-}
-
-#[pyfunction]
-fn delta_cleanup_metadata(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-) -> PyResult<Py<PyAny>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    let report = runtime
-        .block_on(delta_cleanup_metadata_native(
-            &extract_session_ctx(ctx)?, &table_uri, storage, table_version, gate,
-        ))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta metadata cleanup failed: {err}")))?;
-    maintenance_report_to_pydict(py, &report)
-}
-
-// Scope 2: DeltaDataChecker integration
-#[pyfunction]
-fn delta_data_checker(
-    ctx: &Bound<'_, PyAny>,
-    table_uri: String,
-    storage_options: Option<Vec<(String, String)>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    data_ipc: Vec<u8>,
-    extra_constraints: Option<Vec<String>>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-) -> PyResult<Vec<String>> {
-    let storage = storage_options_map(storage_options);
-    let gate = delta_gate_from_params(
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    );
-    let runtime = runtime()?;
-    let table_version = table_version_from_options(version, timestamp)?;
-    runtime
-        .block_on(delta_data_check_native(DeltaDataCheckRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &table_uri,
-            storage_options: storage,
-            table_version,
-            gate,
-            data_ipc: data_ipc.as_slice(),
-            extra_constraints,
-        }))
-        .map_err(|err| PyRuntimeError::new_err(format!("Delta data check failed: {err}")))
-}
-
-pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_pyfunctions!(
-        module,
-        [
-            crate::codeanatomy_ext::legacy::capabilities_snapshot,
-            crate::codeanatomy_ext::legacy::replay_substrait_plan,
-            crate::codeanatomy_ext::legacy::lineage_from_substrait,
-            crate::codeanatomy_ext::legacy::build_extraction_session,
-            crate::codeanatomy_ext::legacy::register_dataset_provider,
-            crate::codeanatomy_ext::legacy::session_context_contract_probe,
-            crate::codeanatomy_ext::legacy::install_codeanatomy_runtime,
-            crate::codeanatomy_ext::legacy::install_function_factory,
-            crate::codeanatomy_ext::legacy::derive_function_factory_policy,
-            crate::codeanatomy_ext::legacy::udf_expr,
-        ]
-    );
-    register_pyfunctions!(
-        module,
-        [
-            crate::codeanatomy_ext::legacy::install_codeanatomy_udf_config,
-            crate::codeanatomy_ext::legacy::install_codeanatomy_policy_config,
-            crate::codeanatomy_ext::legacy::install_codeanatomy_physical_config,
-            crate::codeanatomy_ext::legacy::install_planner_rules,
-            crate::codeanatomy_ext::legacy::install_physical_rules,
-            crate::codeanatomy_ext::legacy::register_codeanatomy_udfs,
-            crate::codeanatomy_ext::legacy::registry_snapshot_py,
-            crate::codeanatomy_ext::legacy::udf_docs_snapshot,
-            crate::codeanatomy_ext::legacy::load_df_plugin,
-            crate::codeanatomy_ext::legacy::register_df_plugin_udfs,
-            crate::codeanatomy_ext::legacy::register_df_plugin_table_functions,
-            crate::codeanatomy_ext::legacy::create_df_plugin_table_provider,
-            crate::codeanatomy_ext::legacy::register_df_plugin_table_providers,
-            crate::codeanatomy_ext::legacy::register_df_plugin,
-            crate::codeanatomy_ext::legacy::plugin_library_path,
-            crate::codeanatomy_ext::legacy::plugin_manifest,
-            crate::codeanatomy_ext::legacy::schema_evolution_adapter_factory,
-            crate::codeanatomy_ext::legacy::parquet_listing_table_provider,
-            crate::codeanatomy_ext::legacy::delta_table_provider_with_files,
-            crate::codeanatomy_ext::legacy::install_expr_planners,
-            crate::codeanatomy_ext::legacy::install_tracing,
-            crate::codeanatomy_ext::legacy::register_cache_tables,
-            crate::codeanatomy_ext::legacy::table_logical_plan,
-            crate::codeanatomy_ext::legacy::table_dfschema_tree,
-            crate::codeanatomy_ext::legacy::install_schema_evolution_adapter_factory,
-            crate::codeanatomy_ext::legacy::registry_catalog_provider_factory,
-            crate::codeanatomy_ext::legacy::install_delta_table_factory,
-            crate::codeanatomy_ext::legacy::delta_session_context,
-            crate::codeanatomy_ext::legacy::install_delta_plan_codecs,
-            crate::codeanatomy_ext::legacy::delta_cdf_table_provider,
-            crate::codeanatomy_ext::legacy::delta_snapshot_info,
-            crate::codeanatomy_ext::legacy::validate_protocol_gate,
-            crate::codeanatomy_ext::legacy::delta_add_actions,
-            crate::codeanatomy_ext::legacy::delta_table_provider_from_session,
-            crate::codeanatomy_ext::legacy::delta_scan_config_from_session,
-            crate::codeanatomy_ext::legacy::delta_data_checker,
-            crate::codeanatomy_ext::legacy::delta_write_ipc,
-            crate::codeanatomy_ext::legacy::delta_delete,
-            crate::codeanatomy_ext::legacy::delta_update,
-            crate::codeanatomy_ext::legacy::delta_merge,
-            crate::codeanatomy_ext::legacy::delta_optimize_compact,
-            crate::codeanatomy_ext::legacy::delta_vacuum,
-            crate::codeanatomy_ext::legacy::delta_restore,
-            crate::codeanatomy_ext::legacy::delta_set_properties,
-            crate::codeanatomy_ext::legacy::delta_add_features,
-            crate::codeanatomy_ext::legacy::delta_add_constraints,
-            crate::codeanatomy_ext::legacy::delta_drop_constraints,
-            crate::codeanatomy_ext::legacy::delta_create_checkpoint,
-            crate::codeanatomy_ext::legacy::delta_cleanup_metadata,
-            crate::codeanatomy_ext::legacy::runtime_execution_metrics_snapshot,
-        ]
-    );
-    register_pyclasses!(
-        module,
-        [
-            DeltaCdfOptions,
-            DeltaRuntimeEnvOptions,
-            DeltaSessionRuntimePolicyOptions,
-        ]
-    );
-    Ok(())
-}
-
-pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_pyfunctions!(
-        module,
-        [
-            crate::codeanatomy_ext::legacy::install_function_factory,
-            crate::codeanatomy_ext::legacy::derive_function_factory_policy,
-            crate::codeanatomy_ext::legacy::capabilities_snapshot,
-            crate::codeanatomy_ext::legacy::replay_substrait_plan,
-            crate::codeanatomy_ext::legacy::lineage_from_substrait,
-            crate::codeanatomy_ext::legacy::build_extraction_session,
-            crate::codeanatomy_ext::legacy::register_dataset_provider,
-            crate::codeanatomy_ext::legacy::session_context_contract_probe,
-            crate::codeanatomy_ext::legacy::install_codeanatomy_runtime,
-            crate::codeanatomy_ext::legacy::arrow_stream_to_batches,
-            crate::codeanatomy_ext::legacy::udf_expr,
-            crate::codeanatomy_ext::legacy::install_codeanatomy_udf_config,
-            crate::codeanatomy_ext::legacy::install_codeanatomy_policy_config,
-            crate::codeanatomy_ext::legacy::install_codeanatomy_physical_config,
-            crate::codeanatomy_ext::legacy::install_expr_planners,
-            crate::codeanatomy_ext::legacy::install_delta_table_factory,
-            crate::codeanatomy_ext::legacy::delta_session_context,
-            crate::codeanatomy_ext::legacy::install_delta_plan_codecs,
-            crate::codeanatomy_ext::legacy::delta_cdf_table_provider,
-            crate::codeanatomy_ext::legacy::delta_snapshot_info,
-            crate::codeanatomy_ext::legacy::validate_protocol_gate,
-            crate::codeanatomy_ext::legacy::delta_add_actions,
-            crate::codeanatomy_ext::legacy::delta_table_provider_from_session,
-            crate::codeanatomy_ext::legacy::delta_table_provider_with_files,
-            crate::codeanatomy_ext::legacy::delta_scan_config_from_session,
-            crate::codeanatomy_ext::legacy::delta_data_checker,
-            crate::codeanatomy_ext::legacy::delta_write_ipc,
-            crate::codeanatomy_ext::legacy::delta_delete,
-            crate::codeanatomy_ext::legacy::delta_update,
-            crate::codeanatomy_ext::legacy::delta_merge,
-            crate::codeanatomy_ext::legacy::delta_optimize_compact,
-            crate::codeanatomy_ext::legacy::delta_vacuum,
-            crate::codeanatomy_ext::legacy::delta_restore,
-            crate::codeanatomy_ext::legacy::delta_set_properties,
-            crate::codeanatomy_ext::legacy::delta_add_features,
-            crate::codeanatomy_ext::legacy::delta_add_constraints,
-            crate::codeanatomy_ext::legacy::delta_drop_constraints,
-            crate::codeanatomy_ext::legacy::delta_create_checkpoint,
-            crate::codeanatomy_ext::legacy::delta_cleanup_metadata,
-            crate::codeanatomy_ext::legacy::runtime_execution_metrics_snapshot,
-            crate::codeanatomy_ext::legacy::create_df_plugin_table_provider,
-            crate::codeanatomy_ext::legacy::plugin_library_path,
-            crate::codeanatomy_ext::legacy::plugin_manifest,
-        ]
-    );
+pub(crate) fn register_shared_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
     register_pyclasses!(
         module,
         [

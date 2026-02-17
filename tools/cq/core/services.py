@@ -8,6 +8,10 @@ from typing import TYPE_CHECKING
 from tools.cq.core.schema import CqResult
 from tools.cq.core.structs import CqStruct
 from tools.cq.macros.contracts import CallsRequest
+from tools.cq.search.pipeline.enrichment_contracts import (
+    IncrementalEnrichmentModeV1,
+    parse_incremental_enrichment_mode,
+)
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -45,6 +49,8 @@ class SearchServiceRequest(CqStruct, frozen=True):
     tc: Toolchain | None = None
     argv: list[str] | None = None
     run_id: str | None = None
+    incremental_enrichment_enabled: bool = True
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1 = IncrementalEnrichmentModeV1.TS_SYM
 
 
 class EntityService:
@@ -101,6 +107,10 @@ class SearchService:
             tc=request.tc,
             argv=request.argv,
             run_id=request.run_id,
+            incremental_enrichment_enabled=request.incremental_enrichment_enabled,
+            incremental_enrichment_mode=parse_incremental_enrichment_mode(
+                request.incremental_enrichment_mode
+            ),
         )
 
 

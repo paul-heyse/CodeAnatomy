@@ -12,8 +12,8 @@
     "function: resolve",
     "function: resolve",
     "module: AsyncService",
+    "function: AsyncService",
     "module: AsyncService",
-    "class: AsyncService",
     "Query pack lint failed: 2 errors"
   ],
   "sections": [
@@ -30,18 +30,17 @@
       "count": 3,
       "messages": [
         "module: AsyncService",
-        "module: AsyncService",
-        "class: AsyncService"
+        "function: AsyncService",
+        "module: AsyncService"
       ],
       "title": "search_1: Target Candidates"
     },
     {
-      "count": 6,
+      "count": 5,
       "messages": [
-        "reference: AsyncService (1 occurrences) [object_id=obj_1fc61c023c3b3b39b0db1e83]",
-        "reference: AsyncService (1 occurrences) [object_id=obj_2c19640396c6f81730224ec7]",
+        "reference: AsyncService (2 occurrences) [object_id=obj_64fc5f784f881b63bbaa352c]",
         "module: AsyncService (1 occurrences) [object_id=obj_5122dd862cd2469ca48a865f]",
-        "reference: AsyncService (1 occurrences) [object_id=obj_667c8fd7887c2ec2ba72f358]",
+        "function: AsyncService (1 occurrences) [object_id=obj_519f0745ce1757af9dcae97e]",
         "module: AsyncService (1 occurrences) [object_id=obj_9d1c3d80a774abca2b657d74]",
         "class: AsyncService (1 occurrences) [object_id=obj_a8c41b319ce7a02bbc064830]"
       ],
@@ -52,8 +51,8 @@
       "messages": [
         "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:7:22 (block ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:1-11) [from_import] [object_id=obj_9d1c3d80a774abca2b657d74] [line_id=8c57617d74f6ecc4b3ca93fe]",
         "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:8:22 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:6-12) [from_import] [object_id=obj_5122dd862cd2469ca48a865f] [line_id=bba1806f5f0604af90700116]",
-        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:18:62 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:18-35) [annotation] [object_id=obj_1fc61c023c3b3b39b0db1e83] [line_id=117ed6c55a5ccfed5bc187e6]",
-        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:29:14 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:22-35) [reference] [object_id=obj_2c19640396c6f81730224ec7] [line_id=537a560aab6689ab068b9cee]",
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:18:62 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:18-35) [annotation] [object_id=obj_519f0745ce1757af9dcae97e] [line_id=fa4ad6b676a9705217646670]",
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:29:14 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:22-35) [reference] [object_id=obj_64fc5f784f881b63bbaa352c] [line_id=19db5db50c8267f02ca83ee6]",
         "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:22:6 (block ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:22-39) [reference] [object_id=obj_a8c41b319ce7a02bbc064830] [line_id=74ec48f139aa7cade837fb1a]"
       ],
       "title": "search_1: Occurrences"

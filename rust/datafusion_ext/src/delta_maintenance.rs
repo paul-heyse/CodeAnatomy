@@ -8,6 +8,7 @@ use deltalake::kernel::models::TableFeatures;
 use deltalake::protocol::checkpoints::{cleanup_metadata, create_checkpoint};
 use serde_json::json;
 use std::sync::Arc;
+use tracing::instrument;
 
 use crate::delta_common::{latest_operation_metrics, parse_rfc3339, snapshot_with_gate};
 use crate::delta_control_plane::load_delta_table;
@@ -113,6 +114,7 @@ fn retention_duration_hours(hours: Option<i64>) -> Option<Duration> {
     Some(Duration::hours(hours))
 }
 
+#[instrument(skip(request))]
 pub async fn delta_optimize_compact_request(
     request: DeltaOptimizeCompactRequest<'_>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
@@ -150,6 +152,7 @@ pub async fn delta_optimize_compact_request(
     })
 }
 
+#[instrument(skip(request))]
 pub async fn delta_vacuum_request(
     request: DeltaVacuumRequest<'_>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
@@ -203,6 +206,7 @@ pub async fn delta_vacuum_request(
     })
 }
 
+#[instrument(skip(request))]
 pub async fn delta_restore_request(
     request: DeltaRestoreRequest<'_>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
@@ -252,6 +256,7 @@ pub async fn delta_restore_request(
     })
 }
 
+#[instrument(skip(request))]
 pub async fn delta_set_properties_request(
     request: DeltaSetPropertiesRequest<'_>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
@@ -288,6 +293,7 @@ pub async fn delta_set_properties_request(
     })
 }
 
+#[instrument(skip(request))]
 pub async fn delta_add_features_request(
     request: DeltaAddFeaturesRequest<'_>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
@@ -333,6 +339,7 @@ pub async fn delta_add_features_request(
     })
 }
 
+#[instrument(skip(session_ctx, storage_options))]
 pub async fn delta_create_checkpoint(
     session_ctx: &SessionContext,
     table_uri: &str,
@@ -359,6 +366,7 @@ pub async fn delta_create_checkpoint(
     })
 }
 
+#[instrument(skip(session_ctx, storage_options))]
 pub async fn delta_cleanup_metadata(
     session_ctx: &SessionContext,
     table_uri: &str,
@@ -385,6 +393,7 @@ pub async fn delta_cleanup_metadata(
     })
 }
 
+#[instrument(skip(request))]
 pub async fn delta_add_constraints_request(
     request: DeltaAddConstraintsRequest<'_>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
@@ -433,6 +442,7 @@ pub async fn delta_add_constraints_request(
     })
 }
 
+#[instrument(skip(request))]
 pub async fn delta_drop_constraints_request(
     request: DeltaDropConstraintsRequest<'_>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {

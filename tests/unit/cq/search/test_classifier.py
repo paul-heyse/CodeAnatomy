@@ -12,7 +12,6 @@ from tools.cq.search.pipeline.classifier import (
     classify_heuristic,
     clear_caches,
     detect_query_mode,
-    enrich_with_symtable,
     get_def_lines_cached,
     get_node_index,
     get_sg_root,
@@ -363,108 +362,6 @@ class TestNodeIndex:
         index = get_node_index(source, sg_root, cache_context=cache_context)
         node = index.find_containing(2, 4)
         assert node is not None
-
-
-class TestSymtableEnrichment:
-    """Tests for symtable-based enrichment."""
-
-    @staticmethod
-    def test_parameter_detection() -> None:
-        """Test parameter detection."""
-        source = """\
-def foo(param):
-    return param
-"""
-        result = enrich_with_symtable(source, "test.py", "param", 2)
-        assert result is not None
-        assert result.is_parameter is True
-
-    @staticmethod
-    def test_local_detection() -> None:
-        """Test local variable detection."""
-        source = """\
-def foo():
-    local_var = 1
-    return local_var
-"""
-        result = enrich_with_symtable(source, "test.py", "local_var", 2)
-        assert result is not None
-        assert result.is_local is True
-        assert result.is_assigned is True
-
-    @staticmethod
-    def test_global_detection() -> None:
-        """Test global variable detection."""
-        source = """\
-GLOBAL = 1
-
-def foo():
-    global GLOBAL
-    return GLOBAL
-"""
-        result = enrich_with_symtable(source, "test.py", "GLOBAL", 5)
-        assert result is not None
-        assert result.is_global is True
-
-    @staticmethod
-    def test_imported_detection() -> None:
-        """Test imported symbol detection at module level."""
-        source = """\
-import os
-x = os.path
-"""
-        # Looking up at module level where os is directly imported
-        result = enrich_with_symtable(source, "test.py", "os", 1)
-        assert result is not None
-        assert result.is_imported is True
-
-    @staticmethod
-    def test_closure_detection() -> None:
-        """Test free variable (closure) detection."""
-        source = """\
-def outer():
-    captured = 1
-    def inner():
-        return captured
-    return inner
-"""
-        result = enrich_with_symtable(source, "test.py", "captured", 4)
-        assert result is not None
-        assert result.is_free is True
-
-    @staticmethod
-    def test_nonlocal_detection() -> None:
-        """Test nonlocal variable detection."""
-        source = """\
-def outer():
-    x = 1
-    def inner():
-        nonlocal x
-        x = 2
-    return inner
-"""
-        result = enrich_with_symtable(source, "test.py", "x", 5)
-        assert result is not None
-        # When using nonlocal, it's still "free" from the inner scope's perspective
-        # but also declared nonlocal
-        assert result.is_nonlocal is True
-
-    @staticmethod
-    def test_syntax_error_returns_none() -> None:
-        """Test that syntax errors return None."""
-        source = "def foo(:\n    pass"
-        result = enrich_with_symtable(source, "test.py", "foo", 1)
-        assert result is None
-
-    @staticmethod
-    def test_unknown_symbol_returns_none() -> None:
-        """Test that unknown symbols return None."""
-        source = """\
-def foo():
-    return 1
-"""
-        result = enrich_with_symtable(source, "test.py", "nonexistent", 1)
-        assert result is None
 
 
 class TestCacheManagement:

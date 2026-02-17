@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.types import QueryLanguage
-from tools.cq.search.pipeline.classifier import MatchCategory, SymtableEnrichment
+from tools.cq.search.pipeline.classifier import MatchCategory
 from tools.cq.search.pipeline.context_window import ContextWindow
 from tools.cq.search.pipeline.enrichment_contracts import (
+    IncrementalEnrichmentModeV1,
+    IncrementalEnrichmentV1,
     PythonEnrichmentV1,
-    PythonSemanticEnrichmentV1,
     RustTreeSitterEnrichmentV1,
 )
 
@@ -29,9 +30,6 @@ if TYPE_CHECKING:
     from tools.cq.core.summary_contract import SearchSummaryV1
     from tools.cq.search.objects.resolve import ObjectResolutionRuntime
     from tools.cq.search.pipeline.contracts import SearchConfig
-
-# Type aliases
-_PythonSemanticAnchorKey = tuple[str, int, int, str]
 
 
 class RawMatch(CqStruct, frozen=True):
@@ -127,22 +125,19 @@ class ResolvedNodeContext:
 class MatchEnrichment:
     """Match enrichment data."""
 
-    symtable: SymtableEnrichment | None
     context_window: ContextWindow | None
     context_snippet: str | None
     rust_tree_sitter: RustTreeSitterEnrichmentV1 | None
     python_enrichment: PythonEnrichmentV1 | None
-    python_semantic_enrichment: PythonSemanticEnrichmentV1 | None
+    incremental_enrichment: IncrementalEnrichmentV1 | None
 
 
 @dataclass(frozen=True, slots=True)
 class MatchClassifyOptions:
     """Classification options."""
 
-    enable_symtable: bool = True
-    force_semantic_enrichment: bool = False
-    enable_python_semantic: bool = False
-    enable_deep_enrichment: bool = True
+    incremental_enabled: bool = True
+    incremental_mode: IncrementalEnrichmentModeV1 = IncrementalEnrichmentModeV1.TS_SYM
 
 
 class SearchStats(CqStruct, frozen=True):
@@ -203,12 +198,12 @@ class EnrichedMatch(CqStruct, frozen=True):
         Line range for context.
     context_snippet
         Source code snippet.
-    symtable
-        Symtable enrichment data.
     rust_tree_sitter
         Optional best-effort Rust context details from tree-sitter-rust.
     python_enrichment
         Optional best-effort Python context details from python_enrichment.
+    incremental_enrichment
+        Optional incremental multi-plane enrichment bundle.
     """
 
     span: SourceSpan
@@ -221,10 +216,9 @@ class EnrichedMatch(CqStruct, frozen=True):
     containing_scope: str | None = None
     context_window: ContextWindow | None = None
     context_snippet: str | None = None
-    symtable: SymtableEnrichment | None = None
     rust_tree_sitter: RustTreeSitterEnrichmentV1 | None = None
     python_enrichment: PythonEnrichmentV1 | None = None
-    python_semantic_enrichment: PythonSemanticEnrichmentV1 | None = None
+    incremental_enrichment: IncrementalEnrichmentV1 | None = None
     language: QueryLanguage = "python"
 
     @property
@@ -249,6 +243,8 @@ class ClassificationBatchTask(CqStruct, frozen=True):
     root: str
     lang: QueryLanguage
     batch: list[tuple[int, RawMatch]]
+    incremental_enrichment_enabled: bool = True
+    incremental_enrichment_mode: IncrementalEnrichmentModeV1 = IncrementalEnrichmentModeV1.TS_SYM
 
 
 class ClassificationBatchResult(CqStruct, frozen=True):
@@ -268,32 +264,6 @@ class LanguageSearchResult:
     pattern: str
     enriched_matches: list[EnrichedMatch]
     dropped_by_scope: int
-    python_semantic_prefetch: _PythonSemanticPrefetchResult | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class _PythonSemanticPrefetchResult:
-    """Python semantic prefetch result."""
-
-    payloads: dict[_PythonSemanticAnchorKey, dict[str, object]] = dataclass_field(
-        default_factory=dict
-    )
-    attempted_keys: set[_PythonSemanticAnchorKey] = dataclass_field(default_factory=set)
-    telemetry: dict[str, int] = dataclass_field(default_factory=dict)
-    diagnostics: list[dict[str, object]] = dataclass_field(default_factory=list)
-
-
-@dataclass(slots=True)
-class _PythonSemanticOverviewAccumulator:
-    """Accumulator for Python semantic overview building."""
-
-    primary_symbol: str | None = None
-    enclosing_class: str | None = None
-    total_incoming: int = 0
-    total_outgoing: int = 0
-    total_implementations: int = 0
-    diagnostics: int = 0
-    enriched_count: int = 0
 
 
 @dataclass(slots=True)
@@ -344,9 +314,6 @@ class SearchResultAssembly:
     partition_results: list[LanguageSearchResult]
 
 
-PythonSemanticPrefetchResult = _PythonSemanticPrefetchResult
-
-
 __all__ = [
     "ClassificationBatchResult",
     "ClassificationBatchTask",
@@ -355,7 +322,6 @@ __all__ = [
     "LanguageSearchResult",
     "MatchClassifyOptions",
     "MatchEnrichment",
-    "PythonSemanticPrefetchResult",
     "RawMatch",
     "ResolvedNodeContext",
     "SearchResultAssembly",

@@ -69,7 +69,12 @@ def extract_instruction_facts(code: CodeType) -> list[InstructionFact]:
     """
     facts: list[InstructionFact] = []
 
-    for instr in dis.get_instructions(code, show_caches=False):
+    try:
+        instructions = dis.get_instructions(code, show_caches=False, adaptive=False)
+    except TypeError:
+        instructions = dis.get_instructions(code, show_caches=False)
+
+    for instr in instructions:
         # Get stack effect - may raise ValueError for some opcodes
         try:
             effect = dis.stack_effect(instr.opcode, instr.arg)

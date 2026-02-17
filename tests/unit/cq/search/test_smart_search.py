@@ -14,14 +14,6 @@ from tools.cq.search.pipeline.classifier import QueryMode, clear_caches
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.context_window import ContextWindow
 from tools.cq.search.pipeline.contracts import SearchConfig
-from tools.cq.search.pipeline.enrichment_contracts import (
-    PythonEnrichmentV1,
-    python_semantic_enrichment_payload,
-)
-from tools.cq.search.pipeline.python_semantic import (
-    _python_semantic_no_signal_diagnostic,
-    attach_python_semantic_enrichment,
-)
 from tools.cq.search.pipeline.smart_search import (
     SMART_SEARCH_LIMITS,
     _run_single_partition,
@@ -39,7 +31,6 @@ from tools.cq.search.pipeline.smart_search_types import (
     RawMatch,
     SearchStats,
     SearchSummaryInputs,
-    _PythonSemanticPrefetchResult,
 )
 from tools.cq.search.pipeline.worker_policy import resolve_search_worker_count
 from tools.cq.search.semantic.models import LanguageSemanticEnrichmentOutcome
@@ -380,8 +371,8 @@ class TestClassifyMatch:
         assert enriched.category == "import"
 
     @staticmethod
-    def test_classify_import_force_semantic_enrichment(sample_repo: Path) -> None:
-        """Forced semantic enrichment should attach Python enrichment for imports."""
+    def test_classify_import_enrichment_enabled(sample_repo: Path) -> None:
+        """Incremental/classification enrichment should attach incremental payloads for imports."""
         clear_caches()
         raw = RawMatch(
             span=_span("src/module_a.py", 1, 7, 18),
@@ -397,10 +388,9 @@ class TestClassifyMatch:
             raw,
             sample_repo,
             cache_context=ClassifierCacheContext(),
-            force_semantic_enrichment=True,
         )
         assert enriched.category == "import"
-        assert isinstance(enriched.python_enrichment, PythonEnrichmentV1)
+        assert enriched.incremental_enrichment is not None
 
 
 class TestBuildFinding:
@@ -1220,96 +1210,6 @@ class TestSmartSearchFiltersAndEnrichment:
         assert "python_semantic_diagnostics" in summary
 
     @staticmethod
-    def test_python_semantic_payload_key_attached_when_available(sample_repo: Path) -> None:
-        """Per-finding enrichment should expose a dedicated python_semantic payload key."""
-        clear_caches()
-        result = smart_search(sample_repo, "build_graph", lang_scope="python")
-        assert result.evidence
-        first = result.evidence[0]
-        enrichment = first.details.data.get("enrichment")
-        assert isinstance(enrichment, dict)
-        # Key is always present when PythonSemantic enrichment is materialized.
-        if "python_semantic" in enrichment:
-            assert isinstance(enrichment["python_semantic"], dict)
-
-    @staticmethod
-    def test_python_semantic_no_signal_diagnostic_normalizes_capability_reason() -> None:
-        """Capability-specific coverage reasons should remain explicit."""
-        diagnostic = _python_semantic_no_signal_diagnostic(
-            ("no_python_semantic_signal",),
-            coverage_reason="no_python_semantic_signal:unsupported_capability",
-        )
-        assert diagnostic["reason"] == "unsupported_capability"
-
-    @staticmethod
-    def test_python_semantic_no_signal_diagnostic_normalizes_request_interface_reason() -> None:
-        """Request-interface failures should not be collapsed into generic no-signal."""
-        diagnostic = _python_semantic_no_signal_diagnostic(
-            ("no_python_semantic_signal",),
-            coverage_reason="request_interface_unavailable",
-        )
-        assert diagnostic["reason"] == "request_interface_unavailable"
-
-    @staticmethod
-    def test_python_semantic_no_signal_diagnostic_defaults_to_no_signal() -> None:
-        """Unexpected/noisy reasons should collapse to canonical no_signal."""
-        diagnostic = _python_semantic_no_signal_diagnostic(("empty_payload",), coverage_reason=None)
-        assert diagnostic["reason"] == "no_signal"
-
-    @staticmethod
-    def test_attach_python_semantic_uses_prefetched_payload(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Prefetched PythonSemantic payloads should bypass synchronous fallback calls."""
-        clear_caches()
-        ctx = SearchConfig(
-            root=tmp_path,
-            query="target",
-            mode=QueryMode.IDENTIFIER,
-            limits=SMART_SEARCH_LIMITS,
-        )
-        match = EnrichedMatch(
-            span=_span("sample.py", 3, 4),
-            text="target()",
-            match_text="target",
-            category="callsite",
-            confidence=0.9,
-            evidence_kind="resolved_ast",
-            language="python",
-        )
-        key = ("sample.py", 3, 4, "target")
-        prefetched_payload: dict[str, object] = {
-            "call_graph": {"incoming_total": 1, "outgoing_total": 0}
-        }
-        prefetched = _PythonSemanticPrefetchResult(
-            payloads={key: prefetched_payload},
-            attempted_keys={key},
-            telemetry={"attempted": 1, "applied": 1, "failed": 0, "skipped": 0, "timed_out": 0},
-            diagnostics=[],
-        )
-
-        def _boom(*_args: object, **_kwargs: object) -> dict[str, object] | None:
-            msg = "fallback python_semantic call should not run when prefetched payload exists"
-            raise AssertionError(msg)
-
-        monkeypatch.setattr(
-            "tools.cq.search.pipeline.python_semantic._python_semantic_enrich_match", _boom
-        )
-        enriched, _overview, telemetry, diagnostics = attach_python_semantic_enrichment(
-            ctx=ctx,
-            matches=[match],
-            prefetched=prefetched,
-        )
-        assert not diagnostics
-        assert (
-            python_semantic_enrichment_payload(enriched[0].python_semantic_enrichment)
-            == prefetched_payload
-        )
-        telemetry_map = cast("Mapping[str, object]", telemetry)
-        assert telemetry_map.get("attempted") == 1
-        assert telemetry_map.get("applied") == 1
-
-    @staticmethod
     def test_run_single_partition_delegates_to_enrichment_phase(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1347,25 +1247,15 @@ class TestSmartSearchFiltersAndEnrichment:
                 pattern=r"\btarget\b",
                 enriched_matches=[],
                 dropped_by_scope=0,
-                python_semantic_prefetch=_PythonSemanticPrefetchResult(
-                    telemetry={
-                        "attempted": 1,
-                        "applied": 0,
-                        "failed": 0,
-                        "skipped": 0,
-                        "timed_out": 0,
-                    }
-                ),
             )
 
         monkeypatch.setattr(
             "tools.cq.search.pipeline.smart_search.run_enrichment_phase", _fake_enrichment_phase
         )
 
-        result = _run_single_partition(ctx, "python", mode=QueryMode.IDENTIFIER)
+        _run_single_partition(ctx, "python", mode=QueryMode.IDENTIFIER)
         assert captured["config"] is ctx
         assert captured["mode"] == QueryMode.IDENTIFIER
-        assert result.python_semantic_prefetch is not None
 
     @staticmethod
     def test_rust_tree_sitter_fail_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1430,17 +1320,19 @@ class TestCandidateSearcher:
         assert pattern == "build.*graph"
 
 
-def test_search_rust_front_door_uses_rust_semantic_adapter(
+def test_search_rust_front_door_semantic_is_skipped_by_design(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Rust searches should report non-unavailable semantic when adapter resolves payload."""
+    """Rust searches should skip semantic enrichment in hard-cutover mode."""
     (tmp_path / "lib.rs").write_text("pub fn compile_target() -> i32 { 1 }\n", encoding="utf-8")
     clear_caches()
 
-    monkeypatch.setattr(
-        "tools.cq.search.pipeline.search_semantic.enrich_with_language_semantics",
-        lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
+    calls = {"count": 0}
+
+    def _semantic_stub(*_args: object, **_kwargs: object) -> LanguageSemanticEnrichmentOutcome:
+        calls["count"] += 1
+        return LanguageSemanticEnrichmentOutcome(
             payload={
                 "call_graph": {
                     "incoming_total": 1,
@@ -1450,30 +1342,38 @@ def test_search_rust_front_door_uses_rust_semantic_adapter(
                 },
                 "symbol_grounding": {"references": [{"uri": "file:///x.rs"}]},
             }
-        ),
+        )
+
+    monkeypatch.setattr(
+        "tools.cq.search.pipeline.search_semantic.enrich_with_language_semantics",
+        _semantic_stub,
     )
 
     result = smart_search(tmp_path, "compile_target", lang_scope="rust")
     insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
     degradation = cast("dict[str, object]", insight.get("degradation", {}))
-    assert degradation.get("semantic") in {"ok", "partial"}
+    assert calls["count"] == 0
+    assert degradation.get("semantic") == "skipped"
     rust_semantic = result.summary.get("rust_semantic_telemetry")
     assert isinstance(rust_semantic, SemanticTelemetryV1)
-    assert rust_semantic.attempted >= 1
+    assert rust_semantic.attempted == 0
 
 
-def test_search_python_capability_probe_unavailable_is_non_fatal(
+def test_search_python_semantic_probe_is_not_attempted_by_design(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Python search should not fail solely due capability probe instability."""
+    """Python search should skip semantic probe in hard-cutover mode."""
     (tmp_path / "service.py").write_text(
         "def build_graph() -> int:\n    return 1\n",
         encoding="utf-8",
     )
     clear_caches()
 
+    calls = {"count": 0}
+
     def capability_stub(*_args: object, **_kwargs: object) -> LanguageSemanticEnrichmentOutcome:
+        calls["count"] += 1
         return LanguageSemanticEnrichmentOutcome(
             payload={
                 "coverage": {"status": "applied", "reason": None},
@@ -1487,10 +1387,6 @@ def test_search_python_capability_probe_unavailable_is_non_fatal(
         )
 
     monkeypatch.setattr(
-        "tools.cq.search.pipeline.python_semantic.enrich_with_language_semantics",
-        capability_stub,
-    )
-    monkeypatch.setattr(
         "tools.cq.search.pipeline.search_semantic.enrich_with_language_semantics",
         capability_stub,
     )
@@ -1498,25 +1394,29 @@ def test_search_python_capability_probe_unavailable_is_non_fatal(
     result = smart_search(tmp_path, "build_graph", lang_scope="python")
     insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
     degradation = cast("dict[str, object]", insight.get("degradation", {}))
-    assert degradation.get("semantic") in {"ok", "partial"}
+    assert calls["count"] == 0
+    assert degradation.get("semantic") == "skipped"
     python_semantic = result.summary.get("python_semantic_telemetry")
     assert isinstance(python_semantic, SemanticTelemetryV1)
-    assert python_semantic.attempted >= 1
-    assert python_semantic.applied >= 1
+    assert python_semantic.attempted == 0
+    assert python_semantic.applied == 0
 
 
-def test_search_python_timeout_reason_not_collapsed_to_session_unavailable(
+def test_search_python_semantic_timeout_stub_is_not_invoked_when_skipped(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Timeout outcomes should preserve request_timeout reason in diagnostics."""
+    """Python semantic diagnostics should remain empty when semantic is skipped."""
     (tmp_path / "service.py").write_text(
         "def build_graph() -> int:\n    return 1\n",
         encoding="utf-8",
     )
     clear_caches()
 
+    calls = {"count": 0}
+
     def timeout_stub(*_args: object, **_kwargs: object) -> LanguageSemanticEnrichmentOutcome:
+        calls["count"] += 1
         return LanguageSemanticEnrichmentOutcome(
             payload=None,
             timed_out=True,
@@ -1524,20 +1424,14 @@ def test_search_python_timeout_reason_not_collapsed_to_session_unavailable(
         )
 
     monkeypatch.setattr(
-        "tools.cq.search.pipeline.python_semantic.enrich_with_language_semantics",
-        timeout_stub,
-    )
-    monkeypatch.setattr(
         "tools.cq.search.pipeline.search_semantic.enrich_with_language_semantics",
         timeout_stub,
     )
 
     result = smart_search(tmp_path, "build_graph", lang_scope="python")
+    insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
+    degradation = cast("dict[str, object]", insight.get("degradation", {}))
     diagnostics = cast("list[object]", result.summary.get("python_semantic_diagnostics", []))
-    assert diagnostics
-    reasons = {
-        str(cast("dict[str, object]", row).get("reason"))
-        for row in diagnostics
-        if isinstance(row, dict)
-    }
-    assert "request_timeout" in reasons
+    assert calls["count"] == 0
+    assert degradation.get("semantic") == "skipped"
+    assert diagnostics == []

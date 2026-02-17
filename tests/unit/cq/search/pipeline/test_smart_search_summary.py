@@ -51,7 +51,6 @@ def test_build_search_summary_returns_summary_and_diagnostics() -> None:
             pattern="target",
             enriched_matches=[],
             dropped_by_scope=0,
-            python_semantic_prefetch=None,
         )
     ]
     summary, diagnostics = build_search_summary(

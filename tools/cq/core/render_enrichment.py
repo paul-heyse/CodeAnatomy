@@ -31,6 +31,7 @@ DETAILS_SUPPRESS_KEYS: frozenset[str] = frozenset(
         "context_snippet",
         "context_window",
         "enrichment",
+        "incremental_enrichment",
         "python_enrichment",
         "rust_tree_sitter",
     }
@@ -66,6 +67,16 @@ def extract_enrichment_payload(finding: Finding) -> dict[str, object] | None:
     python_payload = finding.details.get("python_enrichment")
     if isinstance(python_payload, dict) and python_payload:
         fallback["python"] = python_payload
+    incremental_payload = finding.details.get("incremental_enrichment")
+    if isinstance(incremental_payload, dict) and incremental_payload:
+        existing_python = fallback.get("python")
+        python_fallback: dict[str, object]
+        if isinstance(existing_python, dict):
+            python_fallback = existing_python
+        else:
+            python_fallback = {}
+            fallback["python"] = python_fallback
+        python_fallback["incremental"] = incremental_payload
     rust_payload = finding.details.get("rust_tree_sitter")
     if isinstance(rust_payload, dict) and rust_payload:
         fallback["rust"] = rust_payload

@@ -19,11 +19,10 @@ from tools.cq.search.objects.render import (
 )
 from tools.cq.search.pipeline.context_window import ContextWindow
 from tools.cq.search.pipeline.enrichment_contracts import (
+    incremental_enrichment_payload,
     python_enrichment_payload,
-    python_semantic_enrichment_payload,
     rust_enrichment_payload,
 )
-from tools.cq.search.python.evidence import evaluate_python_semantic_signal_from_mapping
 
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
@@ -43,6 +42,7 @@ _EMPTY_OBJECT_PAYLOAD: dict[str, object] = {}
 @dataclass(frozen=True, slots=True)
 class _PayloadViews:
     semantic: dict[str, object]
+    incremental: dict[str, object]
     python: dict[str, object]
     resolution: dict[str, object]
     structural: dict[str, object]
@@ -148,7 +148,9 @@ def build_object_resolved_view(
 
 
 def _payload_views(match: EnrichedMatch) -> _PayloadViews:
-    semantic = python_semantic_enrichment_payload(match.python_semantic_enrichment)
+    incremental = incremental_enrichment_payload(match.incremental_enrichment)
+    semantic_raw = incremental.get("semantic")
+    semantic = semantic_raw if isinstance(semantic_raw, dict) else _EMPTY_OBJECT_PAYLOAD
     python = python_enrichment_payload(match.python_enrichment)
     python_facts = parse_python_enrichment(python) if python else None
     resolution_raw = python.get("resolution")
@@ -179,6 +181,7 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
     agreement_raw = python.get("agreement")
     return _PayloadViews(
         semantic=semantic,
+        incremental=incremental,
         python=python,
         resolution=cast("dict[str, object]", resolution_raw)
         if isinstance(resolution_raw, dict)
@@ -264,7 +267,7 @@ def _resolution_key_payload(
     if definition_target is not None:
         return (
             {
-                "source": "python_semantic_definition_target",
+                "source": "incremental_definition_target",
                 "language": match.language,
                 "qualified_name": seed.qualified_name or seed.symbol,
                 "file": _as_optional_str(definition_target.get("file")),
@@ -374,7 +377,7 @@ def _resolve_object_ref(match: EnrichedMatch, *, query: str) -> ResolvedObjectRe
         canonical_file=canonical_file,
         canonical_line=canonical_line,
         resolution_quality=resolution_quality,
-        evidence_planes=tuple(_evidence_planes(match, views.python, views.semantic)),
+        evidence_planes=tuple(_evidence_planes(match, views.python, views.incremental)),
         agreement=_as_optional_str(views.agreement.get("status")),
         fallback_used=fallback_used,
     )
@@ -419,19 +422,12 @@ def _code_facts_for_match(match: EnrichedMatch) -> dict[str, object]:
     python_payload: dict[str, object] | None = None
     if match.python_enrichment:
         python_payload = python_enrichment_payload(match.python_enrichment)
+    if match.incremental_enrichment is not None:
+        if python_payload is None:
+            python_payload = {}
+        python_payload["incremental"] = incremental_enrichment_payload(match.incremental_enrichment)
     if python_payload is not None:
-        if match.python_semantic_enrichment:
-            python_payload.setdefault(
-                "python_semantic",
-                python_semantic_enrichment_payload(match.python_semantic_enrichment),
-            )
         enrichment["python"] = python_payload
-    if match.python_semantic_enrichment:
-        enrichment["python_semantic"] = python_semantic_enrichment_payload(
-            match.python_semantic_enrichment
-        )
-    if match.symtable is not None:
-        enrichment["symtable"] = msgspec.to_builtins(match.symtable)
     facts["enrichment"] = enrichment
     return facts
 
@@ -449,26 +445,20 @@ def _coverage_for_match(
     match: EnrichedMatch,
     object_ref: ResolvedObjectRef,
 ) -> tuple[str, dict[str, str], tuple[str, ...]]:
-    semantic_payload = python_semantic_enrichment_payload(match.python_semantic_enrichment)
+    incremental_payload = incremental_enrichment_payload(match.incremental_enrichment)
     python_payload = python_enrichment_payload(match.python_enrichment)
     reasons: list[str] = []
-    semantic_reasons: tuple[str, ...] = ()
-    if semantic_payload:
-        coverage = semantic_payload.get("coverage")
-        if isinstance(coverage, dict):
-            reason = _as_optional_str(coverage.get("reason"))
-            if reason:
-                reasons.append(reason)
-        has_semantic_signal, semantic_reasons = evaluate_python_semantic_signal_from_mapping(
-            semantic_payload
+    stage_errors = incremental_payload.get("stage_errors")
+    if isinstance(stage_errors, dict):
+        reasons.extend(
+            f"incremental:{key}:{value}"
+            for key, value in stage_errors.items()
+            if isinstance(key, str) and isinstance(value, str)
         )
-    else:
-        has_semantic_signal = False
-    reasons.extend(semantic_reasons)
 
-    has_semantic = bool(semantic_payload)
+    has_semantic = bool(incremental_payload)
     has_resolution = _has_resolution_signal(python_payload)
-    if has_semantic and has_semantic_signal:
+    if has_semantic and has_resolution:
         coverage_level = "full_signal"
     elif has_semantic or has_resolution:
         coverage_level = "partial_signal"
@@ -502,8 +492,6 @@ def _evidence_planes(
     semantic_payload: dict[str, object],
 ) -> list[str]:
     planes: list[str] = ["ast_grep"]
-    if match.symtable is not None:
-        planes.append("symtable")
     resolution = python_payload.get("resolution")
     if isinstance(resolution, dict) and resolution:
         planes.append("python_resolution")
@@ -515,7 +503,7 @@ def _evidence_planes(
         if isinstance(sources, list):
             planes.extend([source for source in sources if isinstance(source, str)])
     if semantic_payload:
-        planes.append("python_semantic")
+        planes.append("incremental")
     if match.rust_tree_sitter and rust_enrichment_payload(match.rust_tree_sitter):
         planes.append("tree_sitter")
     return sorted(set(planes))

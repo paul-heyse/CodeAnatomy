@@ -358,8 +358,8 @@ def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None
 
     output = render_markdown(result)
     assert "Code Facts:" in output
-    assert "Symbol Role:" in output
-    assert "Symbol Role: N/A - enrichment unavailable" not in output
+    assert "Incremental Enrichment" in output
+    assert "Enrichment Language: `python`" in output
 
 
 def test_render_query_finding_attaches_enrichment_without_context_by_default(

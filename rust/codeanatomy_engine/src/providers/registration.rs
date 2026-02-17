@@ -3,9 +3,6 @@
 //! All inputs are registered as native Delta providers. No Arrow Dataset fallback.
 //! Reuses `datafusion_ext::delta_control_plane` for registration.
 
-use std::sync::Arc;
-
-use datafusion::datasource::TableProvider;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result as DFResult;
 use datafusion_expr::Expr;

@@ -11,6 +11,7 @@ import symtable
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
+from types import CodeType
 from typing import TYPE_CHECKING, Any
 
 from tools.cq.search._shared.bounded_cache import BoundedCache
@@ -62,6 +63,7 @@ class PythonAnalysisSession:
     node_index: Any | None = None
     ast_tree: ast.Module | None = None
     symtable_table: symtable.SymbolTable | None = None
+    compiled_module: CodeType | None = None
     tree_sitter_tree: Any | None = None
     resolution_index: dict[str, object] | None = None
     ast_span_index: tuple[AstSpanEntry, ...] | None = None
@@ -172,6 +174,26 @@ class PythonAnalysisSession:
         finally:
             self._mark_stage("symtable", started)
         return self.symtable_table
+
+    def ensure_compiled_module(self) -> CodeType | None:
+        """Build or return cached compiled module code object.
+
+        Returns:
+        -------
+        CodeType | None
+            Cached compiled module code object when compilation succeeds.
+        """
+        if self.compiled_module is not None:
+            return self.compiled_module
+        started = perf_counter()
+        try:
+            self.compiled_module = compile(self.source, str(self.file_path), "exec")
+        except (SyntaxError, ValueError, TypeError) as exc:
+            self.stage_errors["compile"] = type(exc).__name__
+            self.compiled_module = None
+        finally:
+            self._mark_stage("compile", started)
+        return self.compiled_module
 
     def ensure_resolution_index(self) -> dict[str, object] | None:
         """Return cached native resolution index payload.

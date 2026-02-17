@@ -3,13 +3,11 @@
 Provides semantic enrichment of search matches through:
 1. Fast heuristic classification (O(1) line patterns)
 2. AST node classification (O(log n) with ast-grep)
-3. Symtable enrichment (O(parse) for high-value matches)
 """
 
 from __future__ import annotations
 
 import re
-import symtable
 from pathlib import Path
 from typing import Literal
 
@@ -92,39 +90,6 @@ class NodeClassification(msgspec.Struct, frozen=True, omit_defaults=True):
     node_kind: str
     containing_scope: str | None = None
     evidence_kind: str = "resolved_ast"
-
-
-class SymtableEnrichment(msgspec.Struct, frozen=True, omit_defaults=True):
-    """Additional binding information from symtable.
-
-    Parameters
-    ----------
-    is_imported
-        Symbol is imported.
-    is_assigned
-        Symbol is assigned to.
-    is_referenced
-        Symbol is used.
-    is_parameter
-        Symbol is a function parameter.
-    is_global
-        Symbol is declared global.
-    is_local
-        Symbol is local to its scope.
-    is_free
-        Symbol is a free variable (closure capture).
-    is_nonlocal
-        Symbol is declared nonlocal.
-    """
-
-    is_imported: bool = False
-    is_assigned: bool = False
-    is_referenced: bool = False
-    is_parameter: bool = False
-    is_global: bool = False
-    is_local: bool = False
-    is_free: bool = False
-    is_nonlocal: bool = False
 
 
 # Node kind to category mapping based on tree-sitter-python grammar
@@ -525,101 +490,6 @@ def classify_from_records(
     )
 
 
-def enrich_with_symtable(
-    source: str,
-    filename: str,
-    symbol_name: str,
-    line: int,
-) -> SymtableEnrichment | None:
-    """Add scope/binding info for a symbol.
-
-    Parameters
-    ----------
-    source
-        Full source code of the file.
-    filename
-        Filename for error messages.
-    symbol_name
-        The symbol to look up.
-    line
-        Line number for scope resolution.
-
-    Returns:
-    -------
-    SymtableEnrichment | None
-        Binding information, or None if lookup fails.
-    """
-    try:
-        table = symtable.symtable(source, filename, "exec")
-    except SyntaxError:
-        return None
-
-    return enrich_with_symtable_from_table(table, symbol_name, line)
-
-
-def enrich_with_symtable_from_table(
-    table: symtable.SymbolTable,
-    symbol_name: str,
-    line: int,
-) -> SymtableEnrichment | None:
-    """Add scope/binding info for a symbol using a cached symtable.
-
-    Parameters
-    ----------
-    table
-        Precomputed symtable for the file.
-    symbol_name
-        The symbol to look up.
-    line
-        Line number for scope resolution.
-
-    Returns:
-    -------
-    SymtableEnrichment | None
-        Binding information, or None if lookup fails.
-    """
-
-    def find_scope_for_line(
-        st: symtable.SymbolTable,
-        target_line: int,
-    ) -> symtable.SymbolTable | None:
-        """Find the innermost scope containing the line.
-
-        Used by ``enrich_with_symtable_from_table`` to locate the closest scope.
-
-        Returns:
-        -------
-        symtable.SymbolTable | None
-            Innermost scope containing ``target_line``.
-        """
-        # Check if this scope starts at or before target line
-        if st.get_lineno() <= target_line:
-            # Check children first (deeper scopes)
-            for child in st.get_children():
-                result = find_scope_for_line(child, target_line)
-                if result:
-                    return result
-            return st
-        return None
-
-    scope = find_scope_for_line(table, line) or table
-
-    try:
-        sym = scope.lookup(symbol_name)
-        return SymtableEnrichment(
-            is_imported=sym.is_imported(),
-            is_assigned=sym.is_assigned(),
-            is_referenced=sym.is_referenced(),
-            is_parameter=sym.is_parameter(),
-            is_global=sym.is_global(),
-            is_local=sym.is_local(),
-            is_free=sym.is_free(),
-            is_nonlocal=sym.is_nonlocal(),
-        )
-    except KeyError:
-        return None
-
-
 def clear_caches() -> None:
     """Clear per-file caches and dependent enrichment caches."""
     from tools.cq.search.cache.registry import CACHE_REGISTRY
@@ -633,15 +503,12 @@ __all__ = [
     "MatchCategory",
     "NodeClassification",
     "QueryMode",
-    "SymtableEnrichment",
     "classify_from_node",
     "classify_from_records",
     "classify_from_resolved_node",
     "classify_heuristic",
     "clear_caches",
     "detect_query_mode",
-    "enrich_with_symtable",
-    "enrich_with_symtable_from_table",
     "get_cached_source",
     "get_def_lines_cached",
     "get_node_index",

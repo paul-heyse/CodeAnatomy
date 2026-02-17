@@ -64,6 +64,10 @@ def empty_enrichment_telemetry() -> dict[str, object]:
                 "import_detail": {"applied": 0, "degraded": 0, "skipped": 0},
                 "python_resolution": {"applied": 0, "degraded": 0, "skipped": 0},
                 "tree_sitter": {"applied": 0, "degraded": 0, "skipped": 0},
+                "compile": {"applied": 0, "degraded": 0, "skipped": 0},
+                "symtable": {"applied": 0, "degraded": 0, "skipped": 0},
+                "dis": {"applied": 0, "degraded": 0, "skipped": 0},
+                "inspect": {"applied": 0, "degraded": 0, "skipped": 0},
             },
             "timings_ms": {
                 "ast_grep": 0.0,
@@ -71,6 +75,10 @@ def empty_enrichment_telemetry() -> dict[str, object]:
                 "import_detail": 0.0,
                 "python_resolution": 0.0,
                 "tree_sitter": 0.0,
+                "compile": 0.0,
+                "symtable": 0.0,
+                "dis": 0.0,
+                "inspect": 0.0,
             },
         },
         "rust": {

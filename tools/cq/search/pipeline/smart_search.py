@@ -53,6 +53,10 @@ from tools.cq.search.pipeline.contracts import (
     SearchPartitionPlanV1,
     SearchRequest,
 )
+from tools.cq.search.pipeline.enrichment_contracts import (
+    IncrementalEnrichmentModeV1,
+    parse_incremental_enrichment_mode,
+)
 from tools.cq.search.pipeline.enrichment_phase import run_enrichment_phase
 from tools.cq.search.pipeline.orchestration import (
     SearchPipeline,
@@ -60,9 +64,6 @@ from tools.cq.search.pipeline.orchestration import (
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.pipeline.runtime_context import build_search_runtime_context
 from tools.cq.search.pipeline.search_object_view_store import pop_search_object_view_for_run
-from tools.cq.search.pipeline.smart_search_telemetry import (
-    new_python_semantic_telemetry as _new_python_semantic_telemetry,
-)
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
     LanguageSearchResult,
@@ -70,8 +71,6 @@ from tools.cq.search.pipeline.smart_search_types import (
     SearchResultAssembly,
     SearchStats,
     SearchSummaryInputs,
-    _PythonSemanticAnchorKey,
-    _PythonSemanticPrefetchResult,
 )
 from tools.cq.search.rg.runner import build_rg_command
 from tools.cq.utils.uuid_factory import uuid7_str
@@ -392,6 +391,10 @@ def _build_search_context(request: SearchRequest) -> SearchConfig:
         tc=request.tc,
         started_ms=started,
         run_id=request.run_id or uuid7_str(),
+        incremental_enrichment_enabled=request.incremental_enrichment_enabled,
+        incremental_enrichment_mode=parse_incremental_enrichment_mode(
+            request.incremental_enrichment_mode
+        ),
     )
 
 
@@ -415,6 +418,12 @@ def _coerce_search_request(
         argv=_coerce_argv(kwargs.get("argv")),
         started_ms=_coerce_started_ms(kwargs.get("started_ms")),
         run_id=_coerce_run_id(kwargs.get("run_id")),
+        incremental_enrichment_enabled=_coerce_incremental_enrichment_enabled(
+            kwargs.get("incremental_enrichment_enabled")
+        ),
+        incremental_enrichment_mode=_coerce_incremental_enrichment_mode(
+            kwargs.get("incremental_enrichment_mode")
+        ),
     )
 
 
@@ -454,6 +463,16 @@ def _coerce_run_id(run_id_value: object) -> str | None:
     if isinstance(run_id_value, str) and run_id_value.strip():
         return run_id_value
     return None
+
+
+def _coerce_incremental_enrichment_enabled(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return True
+
+
+def _coerce_incremental_enrichment_mode(value: object) -> IncrementalEnrichmentModeV1:
+    return parse_incremental_enrichment_mode(value)
 
 
 def run_candidate_phase(
@@ -514,39 +533,10 @@ def _run_single_partition(
         exclude_globs=tuple(ctx.exclude_globs or ()),
         max_total_matches=ctx.limits.max_total_matches,
         run_id=ctx.run_id,
+        incremental_enrichment_enabled=ctx.incremental_enrichment_enabled,
+        incremental_enrichment_mode=ctx.incremental_enrichment_mode,
     )
     return run_enrichment_phase(plan, config=ctx, mode=mode)
-
-
-def _merge_python_semantic_prefetch_results(
-    partition_results: list[LanguageSearchResult],
-) -> _PythonSemanticPrefetchResult | None:
-    payloads: dict[_PythonSemanticAnchorKey, dict[str, object]] = {}
-    attempted_keys: set[_PythonSemanticAnchorKey] = set()
-    telemetry = _new_python_semantic_telemetry()
-    diagnostics: list[dict[str, object]] = []
-    saw_prefetch = False
-
-    for partition in partition_results:
-        prefetched = partition.python_semantic_prefetch
-        if prefetched is None:
-            continue
-        saw_prefetch = True
-        payloads.update(prefetched.payloads)
-        attempted_keys.update(prefetched.attempted_keys)
-        diagnostics.extend(prefetched.diagnostics)
-        for key, value in prefetched.telemetry.items():
-            if key in telemetry:
-                telemetry[key] += int(value)
-
-    if not saw_prefetch:
-        return None
-    return _PythonSemanticPrefetchResult(
-        payloads=payloads,
-        attempted_keys=attempted_keys,
-        telemetry=telemetry,
-        diagnostics=diagnostics,
-    )
 
 
 def _partition_total_matches(partition_results: list[LanguageSearchResult]) -> int:
@@ -566,11 +556,16 @@ def _should_fallback_to_literal(
     return _partition_total_matches(partition_results) == 0
 
 
-def _merge_language_matches(
+def merge_language_matches(
     *,
     partition_results: list[LanguageSearchResult],
     lang_scope: QueryLanguageScope,
 ) -> list[EnrichedMatch]:
+    """Merge per-language partition matches using scope-aware ordering.
+
+    Returns:
+        list[EnrichedMatch]: Merged and ranked matches across language partitions.
+    """
     partitions: dict[QueryLanguage, list[EnrichedMatch]] = {}
     for partition in partition_results:
         partitions.setdefault(partition.lang, []).extend(partition.enriched_matches)
@@ -742,6 +737,7 @@ __all__ = [
     "build_candidate_searcher",
     "collect_candidates",
     "compute_relevance_score",
+    "merge_language_matches",
     "pop_search_object_view_for_run",
     "run_smart_search_pipeline",
     "smart_search",

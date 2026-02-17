@@ -15,6 +15,7 @@ _STRUCTURED_KEYS: frozenset[str] = frozenset(
         "resolution",
         "behavior",
         "structural",
+        "incremental",
         "parse_quality",
         "agreement",
         "python_semantic",
@@ -410,6 +411,51 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Position Encoding",
                 paths=(("semantic_position_encoding",),),
+            ),
+        ),
+    ),
+    FactClusterSpec(
+        title="Incremental Enrichment",
+        fields=(
+            FactFieldSpec(
+                label="Mode",
+                paths=(
+                    ("incremental", "mode"),
+                    ("mode",),
+                ),
+            ),
+            FactFieldSpec(
+                label="Sym Scope Tables",
+                paths=(("incremental", "sym", "scope_graph", "tables_count"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Binding Resolve Status",
+                paths=(("incremental", "sym", "binding_resolution", "status"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="CFG Edges",
+                paths=(("incremental", "dis", "cfg", "edges_n"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Anchor Def/Use",
+                paths=(
+                    ("incremental", "dis", "anchor_metrics", "anchor_defs"),
+                    ("incremental", "dis", "anchor_metrics", "anchor_uses"),
+                ),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Inspect Object Kind",
+                paths=(("incremental", "inspect", "object_inventory", "object_kind"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Inspect Bind OK",
+                paths=(("incremental", "inspect", "callsite_bind_check", "bind_ok"),),
+                applicable_languages=frozenset({"python"}),
             ),
         ),
     ),

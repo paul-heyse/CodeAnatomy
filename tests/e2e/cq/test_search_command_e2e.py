@@ -1,4 +1,3 @@
-# ruff: noqa: FBT001
 """Command-level e2e tests for `cq search` over hermetic golden workspaces."""
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ _ALLOWED_INSIGHT_TARGET_KINDS = {
 @pytest.mark.e2e
 def test_search_python_workspace_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test search python workspace golden."""
@@ -61,6 +61,7 @@ def test_search_python_workspace_golden(
 @pytest.mark.e2e
 def test_search_rust_workspace_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test search rust workspace golden."""
@@ -114,6 +115,7 @@ def test_search_rust_workspace_golden(
 @pytest.mark.e2e
 def test_search_mixed_workspace_auto_lang_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test search mixed workspace auto lang golden."""
@@ -150,6 +152,7 @@ def test_search_mixed_workspace_auto_lang_golden(
 @pytest.mark.e2e
 def test_search_mixed_monorepo_rust_nested_workspace_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test search mixed monorepo rust nested workspace golden."""
@@ -187,6 +190,7 @@ def test_search_mixed_monorepo_rust_nested_workspace_golden(
 @pytest.mark.e2e
 def test_search_mixed_monorepo_python_nested_workspace_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test search mixed monorepo python nested workspace golden."""
@@ -219,3 +223,27 @@ def test_search_mixed_monorepo_python_nested_workspace_golden(
         result_snapshot_projection(result),
         update=update_golden,
     )
+
+
+@pytest.mark.e2e
+def test_search_cli_incremental_mode_roundtrip(
+    run_cq_result: Callable[..., CqResult],
+) -> None:
+    """Search CLI should propagate incremental enrichment flags to summary."""
+    result = run_cq_result(
+        [
+            "search",
+            "AsyncService",
+            "--in",
+            "tests/e2e/cq/_golden_workspace/python_project",
+            "--lang",
+            "python",
+            "--enrich",
+            "--enrich-mode",
+            "ts_sym_dis",
+            "--format",
+            "json",
+            "--no-save-artifact",
+        ]
+    )
+    assert result.summary.get("incremental_enrichment_mode") == "ts_sym_dis"

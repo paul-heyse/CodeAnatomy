@@ -252,6 +252,7 @@ app.command("tools.cq.cli_app.commands.search:search", group=analysis_group)
 app.command("tools.cq.cli_app.commands.report:report", group=analysis_group)
 app.command("tools.cq.cli_app.commands.run:run", group=analysis_group)
 app.command("tools.cq.cli_app.commands.chain:chain", group=analysis_group)
+app.command("tools.cq.cli_app.commands.expand:expand", group=analysis_group)
 app.command(
     "tools.cq.cli_app.commands.neighborhood:neighborhood",
     name="neighborhood",

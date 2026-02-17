@@ -327,12 +327,13 @@ impl TableFunctionImpl for ReadDeltaCdfTableFunction {
         };
 
         let resolved = async_runtime::block_on(delta_control_plane::delta_cdf_provider(
-            table_uri.as_str(),
-            None,
-            None,
-            None,
-            scan_options,
-            None,
+            delta_control_plane::DeltaCdfProviderRequest {
+                table_uri: table_uri.as_str(),
+                storage_options: None,
+                table_version: TableVersion::Latest,
+                options: scan_options,
+                gate: None,
+            },
         ))?;
         let (provider, _) =
             resolved.map_err(|err| map_delta_error(READ_DELTA_CDF_TABLE_FUNCTION, err))?;
@@ -385,11 +386,12 @@ impl TableFunctionImpl for DeltaAddActionsTableFunction {
         ensure_exact_args(args, 1, DELTA_ADD_ACTIONS_TABLE_FUNCTION)?;
         let table_uri = literal_string_arg(args, 0, DELTA_ADD_ACTIONS_TABLE_FUNCTION)?;
         let resolved = async_runtime::block_on(delta_control_plane::delta_add_actions(
-            table_uri.as_str(),
-            None,
-            None,
-            None,
-            None,
+            delta_control_plane::DeltaAddActionsRequest {
+                table_uri: table_uri.as_str(),
+                storage_options: None,
+                table_version: TableVersion::Latest,
+                gate: None,
+            },
         ))?;
         let (snapshot, actions) =
             resolved.map_err(|err| map_delta_error(DELTA_ADD_ACTIONS_TABLE_FUNCTION, err))?;

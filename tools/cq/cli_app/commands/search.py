@@ -39,6 +39,7 @@ def search(
     """
     from tools.cq.query.language import parse_query_language_scope
     from tools.cq.search._shared.types import QueryMode
+    from tools.cq.search.pipeline.enrichment_contracts import parse_incremental_enrichment_mode
     from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
 
     ctx = require_context(ctx)
@@ -74,6 +75,8 @@ def search(
             include_strings=options.include_strings,
             with_neighborhood=options.with_neighborhood,
             limits=SMART_SEARCH_LIMITS,
+            incremental_enrichment_enabled=options.enrich,
+            incremental_enrichment_mode=parse_incremental_enrichment_mode(options.enrich_mode),
         ),
     )
 

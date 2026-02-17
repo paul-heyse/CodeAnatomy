@@ -17,6 +17,8 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
 use datafusion_macros::user_doc;
 
+use crate::function_types::FunctionKind;
+use crate::registry::metadata::FunctionMetadata;
 use crate::udf::common::{signature_with_names, string_array_any};
 use crate::{aggregate_udfs, macros::AggregateUdfSpec};
 
@@ -1671,4 +1673,38 @@ fn list_state_from_values(
         builder.append(true);
     }
     builder.finish()
+}
+
+pub(crate) fn function_metadata(name: &str) -> Option<FunctionMetadata> {
+    let (rewrite_tags, has_groups_accumulator, has_retract_batch): (
+        &'static [&'static str],
+        bool,
+        bool,
+    ) = match name {
+        "list_unique" => (&["list"], true, true),
+        "collect_set" => (&["aggregate", "deterministic", "list"], true, true),
+        "count_if" => (&["aggregate", "deterministic"], true, true),
+        "any_value_det" => (&["aggregate", "deterministic"], false, true),
+        "arg_max" => (&["aggregate", "deterministic"], false, false),
+        "asof_select" => (&["aggregate", "asof"], false, false),
+        "arg_min" => (&["aggregate", "deterministic"], false, false),
+        "first_value_agg" => (&["aggregate"], false, false),
+        "last_value_agg" => (&["aggregate"], false, false),
+        "count_distinct_agg" => (&["aggregate"], true, true),
+        "string_agg" => (&["aggregate", "string"], false, true),
+        _ => return None,
+    };
+
+    Some(FunctionMetadata {
+        name: "",
+        kind: FunctionKind::Aggregate,
+        rewrite_tags,
+        has_simplify: false,
+        has_coerce_types: false,
+        has_short_circuits: false,
+        has_groups_accumulator,
+        has_retract_batch,
+        has_reverse_expr: false,
+        has_sort_options: false,
+    })
 }

@@ -30,7 +30,8 @@ use tokio::runtime::Runtime;
 
 use datafusion::execution::context::SessionContext;
 use datafusion_ext::delta_control_plane::{
-    add_actions_for_paths, delta_cdf_provider, load_delta_table, DeltaCdfScanOptions,
+    add_actions_for_paths, delta_cdf_provider, load_delta_table, DeltaCdfProviderRequest,
+    DeltaCdfScanOptions,
 };
 use datafusion_ext::delta_protocol::{gate_from_parts, protocol_gate, TableVersion};
 #[cfg(feature = "async-udf")]
@@ -204,6 +205,8 @@ fn config_options_from_udf_options(
     timeout_ms: Option<u64>,
     batch_size: Option<usize>,
 ) -> ConfigOptions {
+    #[cfg(not(feature = "async-udf"))]
+    let _ = (timeout_ms, batch_size);
     let mut config = ConfigOptions::default();
     let mut policy = CodeAnatomyUdfConfig::default();
     if let Some(overrides) = options.udf_config.as_ref() {
@@ -444,14 +447,14 @@ fn build_delta_cdf_provider(options: DeltaCdfProviderOptions) -> Result<FFI_Tabl
         allow_out_of_range: options.allow_out_of_range.unwrap_or(false),
     };
     let result: Result<DeltaCdfTableProvider, DeltaTableError> = runtime.block_on(async {
-        let (provider, _) = delta_cdf_provider(
-            &options.table_uri,
-            options.storage_options.clone(),
-            options.version,
-            options.timestamp.clone(),
-            cdf_options,
-            Some(gate),
-        )
+        let table_version = TableVersion::from_options(options.version, options.timestamp.clone())?;
+        let (provider, _) = delta_cdf_provider(DeltaCdfProviderRequest {
+            table_uri: &options.table_uri,
+            storage_options: options.storage_options.clone(),
+            table_version,
+            options: cdf_options,
+            gate: Some(gate),
+        })
         .await?;
         Ok(provider)
     });

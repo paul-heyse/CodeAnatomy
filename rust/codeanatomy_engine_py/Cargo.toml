@@ -22,10 +22,11 @@ hex = "0.4"
 tokio = { workspace = true }
 chrono = { workspace = true }
 blake3 = "1"
+tracing = { workspace = true, optional = true }
 
 [build-dependencies]
 pyo3-build-config = { workspace = true }
 
 [features]
 default = []
-tracing = ["codeanatomy-engine/tracing"]
+tracing = ["codeanatomy-engine/tracing", "dep:tracing"]

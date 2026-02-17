@@ -20,6 +20,7 @@ use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::{EagerSnapshot, LogDataHandler, LogicalFileView};
 use deltalake::{ensure_table_uri, DeltaTable, DeltaTableBuilder};
 use object_store::DynObjectStore;
+use tracing::instrument;
 use url::{Position, Url};
 
 use crate::delta_common::{eager_snapshot, parse_rfc3339, snapshot_with_gate};
@@ -77,6 +78,23 @@ pub struct DeltaProviderWithFilesRequest<'a> {
     pub gate: Option<DeltaFeatureGate>,
 }
 
+#[derive(Clone)]
+pub struct DeltaCdfProviderRequest<'a> {
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub table_version: TableVersion,
+    pub options: DeltaCdfScanOptions,
+    pub gate: Option<DeltaFeatureGate>,
+}
+
+#[derive(Clone)]
+pub struct DeltaAddActionsRequest<'a> {
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub table_version: TableVersion,
+    pub gate: Option<DeltaFeatureGate>,
+}
+
 fn decode_add_path(path: &str) -> String {
     urlencoding::decode(path)
         .map(|decoded| decoded.into_owned())
@@ -124,6 +142,7 @@ fn delta_table_builder(
     Ok(builder)
 }
 
+#[instrument(skip(storage_options, session_ctx))]
 pub async fn load_delta_table(
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
@@ -173,6 +192,7 @@ async fn build_table_provider(
     Ok(Arc::new(provider))
 }
 
+#[instrument(skip(storage_options, gate))]
 pub async fn snapshot_info_with_gate(
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
@@ -270,6 +290,7 @@ fn files_matching_predicate(
     }
 }
 
+#[instrument(skip(request))]
 pub async fn delta_provider_from_session_request(
     request: DeltaProviderFromSessionRequest<'_>,
 ) -> Result<
@@ -336,15 +357,17 @@ pub async fn delta_provider_from_session_request(
     ))
 }
 
+#[instrument(skip(request))]
 pub async fn delta_cdf_provider(
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    options: DeltaCdfScanOptions,
-    gate: Option<DeltaFeatureGate>,
+    request: DeltaCdfProviderRequest<'_>,
 ) -> Result<(DeltaCdfTableProvider, DeltaSnapshotInfo), DeltaTableError> {
-    let table_version = TableVersion::from_options(version, timestamp)?;
+    let DeltaCdfProviderRequest {
+        table_uri,
+        storage_options,
+        table_version,
+        options,
+        gate,
+    } = request;
     let table = load_delta_table(table_uri, storage_options, table_version, None).await?;
     let snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let mut cdf_builder = table.scan_cdf();
@@ -369,6 +392,7 @@ pub async fn delta_cdf_provider(
     Ok((provider, snapshot))
 }
 
+#[instrument(skip(request))]
 pub async fn delta_provider_with_files_request(
     request: DeltaProviderWithFilesRequest<'_>,
 ) -> Result<
@@ -450,14 +474,16 @@ fn add_actions_from_snapshot(snapshot: &EagerSnapshot) -> Vec<Add> {
         .collect()
 }
 
+#[instrument(skip(request))]
 pub async fn delta_add_actions(
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    gate: Option<DeltaFeatureGate>,
+    request: DeltaAddActionsRequest<'_>,
 ) -> Result<(DeltaSnapshotInfo, Vec<DeltaAddActionPayload>), DeltaTableError> {
-    let table_version = TableVersion::from_options(version, timestamp)?;
+    let DeltaAddActionsRequest {
+        table_uri,
+        storage_options,
+        table_version,
+        gate,
+    } = request;
     let table = load_delta_table(table_uri, storage_options, table_version, None).await?;
     let snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let eager = eager_snapshot(&table)?;

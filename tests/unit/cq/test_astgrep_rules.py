@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from tools.cq.astgrep.rulepack_loader import load_default_rulepacks
+from tools.cq.astgrep.rulepack_registry import RulePackRegistry
 from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import RuleSpec
 
@@ -225,7 +225,7 @@ class TestRustRuleSpecs:
 
     @staticmethod
     def _rust_rules() -> tuple[RuleSpec, ...]:
-        packs = load_default_rulepacks()
+        packs = RulePackRegistry().load_default()
         return packs.get("rust", ())
 
     @pytest.mark.smoke

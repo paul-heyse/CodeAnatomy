@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.schema import CqResult
     from tools.cq.core.toolchain import Toolchain
+    from tools.cq.query.enrichment import SymtableEnricher
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,8 @@ class CliContext(CqStruct, frozen=True):
         Resolved repository root path.
     toolchain
         Detected toolchain with available tools.
+    symtable_enricher
+        Shared symtable enrichment dependency for query execution paths.
     verbose
         Verbosity level (0=normal, 1=verbose, 2+=debug).
     output_format
@@ -89,6 +92,7 @@ class CliContext(CqStruct, frozen=True):
     argv: list[str]
     root: Path
     toolchain: Toolchain
+    symtable_enricher: SymtableEnricher
     services: CqRuntimeServices
     verbose: int = 0
     output_format: OutputFormat = OutputFormat.md
@@ -103,6 +107,7 @@ class CliContext(CqStruct, frozen=True):
         *,
         root: Path,
         toolchain: Toolchain,
+        symtable_enricher: SymtableEnricher | None = None,
         services: CqRuntimeServices,
         argv: list[str] | None = None,
         options: CliContextOptions | None = None,
@@ -113,10 +118,15 @@ class CliContext(CqStruct, frozen=True):
             CliContext: Fully initialized CLI context.
         """
         resolved_options = options or CliContextOptions()
+        if symtable_enricher is None:
+            from tools.cq.query.enrichment import SymtableEnricher as SymtableEnricherType
+
+            symtable_enricher = SymtableEnricherType(root)
         return cls(
             argv=list(argv or []),
             root=root,
             toolchain=toolchain,
+            symtable_enricher=symtable_enricher,
             services=services,
             verbose=resolved_options.verbose,
             output_format=resolved_options.output_format,

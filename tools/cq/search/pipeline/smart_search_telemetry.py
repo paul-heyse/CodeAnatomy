@@ -51,17 +51,6 @@ def status_from_enrichment(payload: dict[str, object] | None) -> str:
     return "applied"
 
 
-def empty_enrichment_telemetry() -> dict[str, object]:
-    """Create empty enrichment telemetry structure.
-
-    Returns:
-    -------
-    dict[str, object]
-        Empty telemetry dictionary with initialized counters.
-    """
-    return default_enrichment_telemetry_mapping()
-
-
 def accumulate_python_enrichment(
     lang_bucket: dict[str, object], payload: dict[str, object]
 ) -> None:
@@ -167,7 +156,7 @@ def build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, object
     """
     from typing import cast
 
-    telemetry: dict[str, object] = empty_enrichment_telemetry()
+    telemetry: dict[str, object] = default_enrichment_telemetry_mapping()
     for match in matches:
         adapter = get_language_adapter(match.language)
         if adapter is None:
@@ -208,7 +197,6 @@ __all__ = [
     "accumulate_rust_enrichment",
     "attach_enrichment_cache_stats",
     "build_enrichment_telemetry",
-    "empty_enrichment_telemetry",
     "new_python_semantic_telemetry",
     "status_from_enrichment",
 ]

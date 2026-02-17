@@ -6,14 +6,14 @@ import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal
 
 from datafusion import SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
-from datafusion_engine.io import format_write_handler
+from datafusion_engine.io import delta_write_handler, format_write_handler
 from datafusion_engine.io.write_core import (
     DeltaWriteOutcome,
     DeltaWriteSpec,
@@ -45,6 +45,7 @@ from storage.deltalake import (
 from storage.deltalake.delta_write import IdempotentWriteOptions
 
 if TYPE_CHECKING:
+    from datafusion_engine.delta.observability import DeltaOperationReport
     from datafusion_engine.lineage.diagnostics import DiagnosticsRecorder
     from datafusion_engine.obs.datafusion_runs import DataFusionRun
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -217,7 +218,11 @@ class WritePipeline:
         self,
         destination: str,
     ) -> tuple[str | None, DatasetLocation | None]:
-        """Resolve dataset name/location pair for destination."""
+        """Resolve dataset name/location pair for destination.
+
+        Returns:
+            tuple[str | None, DatasetLocation | None]: Dataset name/location, or `(None, None)`.
+        """
         binding = self._dataset_location_for_destination(destination)
         if binding is None:
             return None, None
@@ -335,7 +340,11 @@ class WritePipeline:
         self,
         request: WriteRequest,
     ) -> WriteResult:
-        """Write using DataFusion-native streaming and writer APIs."""
+        """Write using DataFusion-native streaming and writer APIs.
+
+        Returns:
+            WriteResult: Write artifact describing the executed operation.
+        """
         context = self._prepare_streaming_context(request)
         table_result = self._write_streaming_table_target(context)
         if table_result is not None:
@@ -347,14 +356,22 @@ class WritePipeline:
         self,
         request: WriteRequest,
     ) -> WriteResult:
-        """Write using the best available method for the request."""
+        """Write using the best available method for the request.
+
+        Returns:
+            WriteResult: Write artifact describing the executed operation.
+        """
         return self.write_via_streaming(request)
 
     def write_view(
         self,
         request: WriteViewRequest,
     ) -> WriteResult:
-        """Write a registered view using the unified pipeline."""
+        """Write a registered view using the unified pipeline.
+
+        Returns:
+            WriteResult: Write artifact describing the executed operation.
+        """
         write_request = WriteRequest(
             source=self.ctx.table(request.view_name),
             destination=request.destination,
@@ -451,16 +468,13 @@ class WritePipeline:
         mode: Literal["append", "overwrite"],
         options: Mapping[str, object],
     ) -> tuple[dict[str, str], IdempotentWriteOptions | None, DataFusionRun | None]:
-        return cast(
-            "tuple[dict[str, str], IdempotentWriteOptions | None, DataFusionRun | None]",
-            delta_write_handler.prepare_commit_metadata(
-                self,
-                commit_key=commit_key,
-                commit_metadata=commit_metadata,
-                method_label=method_label,
-                mode=mode,
-                options=options,
-            ),
+        return delta_write_handler.prepare_commit_metadata(
+            self,
+            commit_key=commit_key,
+            commit_metadata=commit_metadata,
+            method_label=method_label,
+            mode=mode,
+            options=options,
         )
 
     def _delta_write_spec(
@@ -485,17 +499,12 @@ class WritePipeline:
         method_label: str,
         mode: Literal["append", "overwrite"],
     ) -> tuple[IdempotentWriteOptions, DataFusionRun] | None:
-        from datafusion_engine.io import delta_write_handler
-
-        return cast(
-            "tuple[IdempotentWriteOptions, DataFusionRun] | None",
-            delta_write_handler.reserve_runtime_commit(
-                self,
-                commit_key=commit_key,
-                commit_metadata=commit_metadata,
-                method_label=method_label,
-                mode=mode,
-            ),
+        return delta_write_handler.reserve_runtime_commit(
+            self,
+            commit_key=commit_key,
+            commit_metadata=commit_metadata,
+            method_label=method_label,
+            mode=mode,
         )
 
     @dataclass(frozen=True)
@@ -541,7 +550,7 @@ class WritePipeline:
         spec: DeltaWriteSpec,
         delta_version: int,
         initial_version: int | None,
-        write_report: Mapping[str, object] | None,
+        write_report: DeltaOperationReport | None,
     ) -> None:
         from datafusion_engine.io import delta_write_handler
 

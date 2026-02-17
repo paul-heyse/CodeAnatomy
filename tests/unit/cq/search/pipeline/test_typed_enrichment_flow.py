@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from tools.cq.search.pipeline.smart_search_telemetry import (
-    build_enrichment_telemetry,
-    empty_enrichment_telemetry,
-)
+from tools.cq.search.enrichment.telemetry_schema import default_enrichment_telemetry_mapping
+from tools.cq.search.pipeline.smart_search_telemetry import build_enrichment_telemetry
 
 
 def test_empty_enrichment_telemetry_uses_typed_schema_defaults() -> None:
     """Verify empty telemetry helper returns the typed schema container shape."""
-    telemetry = empty_enrichment_telemetry()
+    telemetry = default_enrichment_telemetry_mapping()
 
     assert isinstance(telemetry, dict)
     assert isinstance(telemetry.get("python"), dict)

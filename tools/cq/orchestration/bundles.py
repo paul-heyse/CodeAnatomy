@@ -24,7 +24,6 @@ from tools.cq.macros.scopes import cmd_scopes
 from tools.cq.macros.side_effects import cmd_side_effects
 from tools.cq.macros.sig_impact import cmd_sig_impact
 from tools.cq.orchestration.request_factory import RequestContextV1, RequestFactory
-from tools.cq.query.enrichment import SymtableEnricher
 from tools.cq.query.executor_plan_dispatch import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.ir import Scope
 from tools.cq.query.parser import parse_query
@@ -33,6 +32,7 @@ from tools.cq.query.planner import compile_query
 if TYPE_CHECKING:
     from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.toolchain import Toolchain
+    from tools.cq.query.enrichment import SymtableEnricher
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,7 @@ class BundleContext:
 
     tc: Toolchain
     services: CqRuntimeServices
+    symtable_enricher: SymtableEnricher
     root: Path
     argv: list[str]
     target: TargetSpecV1
@@ -157,7 +158,7 @@ def resolve_target_scope(ctx: BundleContext) -> TargetScope:
             query=query,
             root=str(root),
             services=ctx.services,
-            symtable_enricher=SymtableEnricher(root),
+            symtable_enricher=ctx.symtable_enricher,
             argv=tuple(ctx.argv),
         ),
         tc=ctx.tc,

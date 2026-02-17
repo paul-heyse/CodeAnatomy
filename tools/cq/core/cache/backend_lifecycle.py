@@ -11,7 +11,24 @@ from tools.cq.core.cache.interface import CqCacheBackend, NoopCacheBackend
 from tools.cq.core.cache.policy import default_cache_policy
 
 _BACKEND_LOCK = threading.Lock()
-_BACKEND_REGISTRY = BackendRegistry()
+_DEFAULT_BACKEND_REGISTRY_LOCK = threading.Lock()
+_DEFAULT_BACKEND_REGISTRY_STATE: dict[str, BackendRegistry | None] = {"registry": None}
+
+
+def get_default_backend_registry() -> BackendRegistry:
+    """Return process-default workspace backend registry."""
+    with _DEFAULT_BACKEND_REGISTRY_LOCK:
+        registry = _DEFAULT_BACKEND_REGISTRY_STATE["registry"]
+        if registry is None:
+            registry = BackendRegistry()
+            _DEFAULT_BACKEND_REGISTRY_STATE["registry"] = registry
+        return registry
+
+
+def set_default_backend_registry(registry: BackendRegistry | None) -> None:
+    """Set or clear process-default backend registry."""
+    with _DEFAULT_BACKEND_REGISTRY_LOCK:
+        _DEFAULT_BACKEND_REGISTRY_STATE["registry"] = registry
 
 
 def _close_backends(backends: list[CqCacheBackend]) -> None:
@@ -19,12 +36,12 @@ def _close_backends(backends: list[CqCacheBackend]) -> None:
         backend.close()
 
 
-def _collect_stale_backends_locked() -> list[CqCacheBackend]:
+def _collect_stale_backends_locked(registry: BackendRegistry) -> list[CqCacheBackend]:
     stale: list[CqCacheBackend] = []
-    for workspace, backend in _BACKEND_REGISTRY.items():
+    for workspace, backend in registry.items():
         if not Path(workspace).exists():
             stale.append(backend)
-            _BACKEND_REGISTRY.pop(workspace)
+            registry.pop(workspace)
     return stale
 
 
@@ -42,13 +59,14 @@ def get_cq_cache_backend(*, root: Path) -> CqCacheBackend:
     workspace = str(root.resolve())
     stale: list[CqCacheBackend]
     with _BACKEND_LOCK:
-        stale = _collect_stale_backends_locked()
-        existing = _BACKEND_REGISTRY.get(workspace)
+        registry = get_default_backend_registry()
+        stale = _collect_stale_backends_locked(registry)
+        existing = registry.get(workspace)
         if existing is not None:
             backend: CqCacheBackend = existing
         else:
             backend = _build_workspace_backend(root=root)
-            _BACKEND_REGISTRY.set(workspace, backend)
+            registry.set(workspace, backend)
     _close_backends(stale)
     return backend
 
@@ -58,11 +76,12 @@ def set_cq_cache_backend(*, root: Path, backend: CqCacheBackend) -> None:
     workspace = str(root.resolve())
     stale: list[CqCacheBackend]
     with _BACKEND_LOCK:
-        stale = _collect_stale_backends_locked()
-        existing = _BACKEND_REGISTRY.get(workspace)
+        registry = get_default_backend_registry()
+        stale = _collect_stale_backends_locked(registry)
+        existing = registry.get(workspace)
         if existing is not None and existing is not backend:
             stale.append(existing)
-        _BACKEND_REGISTRY.set(workspace, backend)
+        registry.set(workspace, backend)
     _close_backends(stale)
 
 
@@ -70,12 +89,13 @@ def close_cq_cache_backend(*, root: Path | None = None) -> None:
     """Close and clear workspace-backed cache backend(s)."""
     backends: list[CqCacheBackend]
     with _BACKEND_LOCK:
+        registry = get_default_backend_registry()
         if root is None:
-            backends = _BACKEND_REGISTRY.values()
-            _BACKEND_REGISTRY.clear()
+            backends = registry.values()
+            registry.clear()
         else:
             workspace = str(root.resolve())
-            backend = _BACKEND_REGISTRY.pop(workspace)
+            backend = registry.pop(workspace)
             backends = [backend] if backend is not None else []
     for backend in backends:
         backend.close()
@@ -84,4 +104,10 @@ def close_cq_cache_backend(*, root: Path | None = None) -> None:
 atexit.register(close_cq_cache_backend)
 
 
-__all__ = ["close_cq_cache_backend", "get_cq_cache_backend", "set_cq_cache_backend"]
+__all__ = [
+    "close_cq_cache_backend",
+    "get_cq_cache_backend",
+    "get_default_backend_registry",
+    "set_cq_cache_backend",
+    "set_default_backend_registry",
+]

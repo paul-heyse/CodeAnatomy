@@ -64,6 +64,7 @@ def report(
     bundle_ctx = BundleContext(
         tc=ctx.toolchain,
         services=ctx.services,
+        symtable_enricher=ctx.symtable_enricher,
         root=ctx.root,
         argv=ctx.argv,
         target=target_spec,

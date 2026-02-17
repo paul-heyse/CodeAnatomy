@@ -56,7 +56,11 @@ def _delta_protocol_payload(
 
 
 def compute_plan_fingerprint(inputs: PlanFingerprintInputs) -> str:
-    """Compute stable fingerprint for a plan bundle."""
+    """Compute stable fingerprint for a plan bundle.
+
+    Returns:
+        str: Deterministic hash for plan identity and caching.
+    """
     settings_items = tuple(sorted(inputs.df_settings.items()))
     settings_hash = hash_msgpack_canonical(settings_items)
     planning_env_hash = inputs.planning_env_hash or ""

@@ -7,6 +7,7 @@ from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING
 
 import msgspec
+from datafusion import SessionContext
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -21,6 +22,7 @@ class EngineRuntime:
     """Unified runtime settings for engine execution surfaces."""
 
     datafusion_profile: DataFusionRuntimeProfile
+    session_context: SessionContext | None = None
 
     def with_datafusion_profile(
         self,
@@ -38,12 +40,17 @@ class EngineRuntime:
             datafusion_profile=profile,
         )
 
+    def with_session_context(self, ctx: SessionContext) -> EngineRuntime:
+        """Return a copy of the runtime with an explicit session context."""
+        return dataclass_replace(self, session_context=ctx)
+
 
 def build_engine_runtime(
     *,
     runtime_profile: DataFusionRuntimeProfile,
     diagnostics: DiagnosticsCollector | None = None,
     diagnostics_policy: DiagnosticsPolicy | None = None,
+    session_context: SessionContext | None = None,
 ) -> EngineRuntime:
     """Build the unified runtime bundle for engine execution.
 
@@ -69,6 +76,7 @@ def build_engine_runtime(
         )
     return EngineRuntime(
         datafusion_profile=datafusion_profile,
+        session_context=session_context,
     )
 
 

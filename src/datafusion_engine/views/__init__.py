@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING
 
 from utils.lazy_module import make_lazy_loader
@@ -35,19 +34,4 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "view_graph_registry": ("datafusion_engine.views.graph", "view_graph_registry"),
 }
 
-_lazy_getattr, _lazy_dir = make_lazy_loader(_EXPORT_MAP, __name__, globals())
-
-
-def __getattr__(name: str) -> object:
-    if name == "VIEW_SELECT_REGISTRY":
-        warnings.warn(
-            "VIEW_SELECT_REGISTRY is deprecated and has been removed.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        raise AttributeError(name)
-    return _lazy_getattr(name)
-
-
-def __dir__() -> list[str]:
-    return sorted([*_lazy_dir(), "VIEW_SELECT_REGISTRY"])
+__getattr__, __dir__ = make_lazy_loader(_EXPORT_MAP, __name__, globals())

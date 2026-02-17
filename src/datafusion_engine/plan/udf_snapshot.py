@@ -44,7 +44,11 @@ def collect_udf_artifacts(
     registry_snapshot: Mapping[str, object] | None,
     session_runtime: SessionRuntime | None,
 ) -> UdfArtifacts:
-    """Collect canonical UDF artifacts from runtime or the Rust extension."""
+    """Collect canonical UDF artifacts from runtime or the Rust extension.
+
+    Returns:
+        UdfArtifacts: Snapshot, hash, rewrite tags, and planner names.
+    """
     if registry_snapshot is not None:
         snapshot = registry_snapshot
     elif session_runtime is not None:
@@ -85,7 +89,11 @@ def required_udf_artifacts(
     snapshot: Mapping[str, object],
     rust_required_udfs: Sequence[str] | None = None,
 ) -> RequiredUdfArtifacts:
-    """Resolve required UDFs for a plan from Rust payload or lineage analysis."""
+    """Resolve required UDFs for a plan from Rust payload or lineage analysis.
+
+    Returns:
+        RequiredUdfArtifacts: Required UDF names and rewrite tags.
+    """
     if rust_required_udfs is not None:
         from datafusion_engine.udf.metadata import rewrite_tag_index
 
@@ -115,7 +123,11 @@ def collect_udf_snapshot_artifacts(
     *,
     session_runtime: SessionRuntime | None,
 ) -> UdfSnapshotArtifacts:
-    """Collect canonical UDF snapshot payload and hash for diagnostics/tests."""
+    """Collect canonical UDF snapshot payload and hash for diagnostics/tests.
+
+    Returns:
+        UdfSnapshotArtifacts: Snapshot payload and stable snapshot hash.
+    """
     artifacts = collect_udf_artifacts(
         ctx,
         registry_snapshot=None,

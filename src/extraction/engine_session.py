@@ -9,6 +9,7 @@ from datafusion import SessionContext
 
 from datafusion_engine.materialize_policy import MaterializationPolicy
 from datafusion_engine.session.facade import DataFusionExecutionFacade
+from datafusion_engine.session.runtime_session import session_runtime_for_context
 from extraction.engine_runtime import EngineRuntime
 
 if TYPE_CHECKING:
@@ -42,6 +43,8 @@ class EngineSession:
         datafusion.SessionContext | None
             Session context when available.
         """
+        if self.engine_runtime.session_context is not None:
+            return self.engine_runtime.session_context
         return self.engine_runtime.datafusion_profile.session_runtime().ctx
 
     def df_runtime(self) -> SessionRuntime:
@@ -52,6 +55,11 @@ class EngineSession:
         SessionRuntime | None
             Session runtime when available.
         """
+        ctx = self.engine_runtime.session_context
+        if ctx is not None:
+            runtime = session_runtime_for_context(self.engine_runtime.datafusion_profile, ctx)
+            if runtime is not None:
+                return runtime
         return self.engine_runtime.datafusion_profile.session_runtime()
 
     def datafusion_facade(self) -> DataFusionExecutionFacade:
@@ -62,7 +70,7 @@ class EngineSession:
         DataFusionExecutionFacade | None
             Execution facade when available.
         """
-        session_runtime = self.engine_runtime.datafusion_profile.session_runtime()
+        session_runtime = self.df_runtime()
         return DataFusionExecutionFacade(
             ctx=session_runtime.ctx,
             runtime_profile=self.engine_runtime.datafusion_profile,

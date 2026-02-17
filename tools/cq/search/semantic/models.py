@@ -15,9 +15,6 @@ from tools.cq.core.semantic_contracts import SemanticProvider
 from tools.cq.core.structs import CqOutputStruct, CqStruct
 from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.core import (
-    build_tree_sitter_diagnostic_rows,
-)
-from tools.cq.search.enrichment.core import (
     string_or_none as _string,
 )
 from tools.cq.search.enrichment.language_registry import get_language_adapter
@@ -123,43 +120,6 @@ def _string_list(value: object, *, limit: int = 16) -> list[str]:
         return []
     rows = [_string(item) for item in value]
     return [text for text in rows if text is not None][:limit]
-
-
-def _mapping_list(value: object, *, limit: int = 16) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        return []
-    rows = [dict(item) for item in value if isinstance(item, Mapping)]
-    return rows[:limit]
-
-
-def _python_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]]:
-    parse_quality = payload.get("parse_quality")
-    rows = build_tree_sitter_diagnostic_rows(payload.get("cst_diagnostics"))
-    if isinstance(parse_quality, Mapping):
-        rows.extend(
-            {"kind": kind, "message": text}
-            for kind in ("error_nodes", "missing_nodes")
-            for text in _string_list(parse_quality.get(kind), limit=8)
-        )
-    rows.extend(
-        {"kind": "degrade_reason", "message": reason}
-        for reason in _string_list(payload.get("degrade_reasons"), limit=8)
-    )
-    degrade_reason = _string(payload.get("degrade_reason"))
-    if degrade_reason is not None:
-        rows.append({"kind": "degrade_reason", "message": degrade_reason})
-    return rows[:16]
-
-
-def _rust_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]]:
-    rows = _mapping_list(payload.get("degrade_events"), limit=16)
-    rows.extend(build_tree_sitter_diagnostic_rows(payload.get("cst_diagnostics")))
-    if rows:
-        return rows
-    reason = _string(payload.get("degrade_reason"))
-    if reason is None:
-        return []
-    return [{"kind": "degrade_reason", "message": reason}]
 
 
 def _semantic_tokens_preview(payload: Mapping[str, object]) -> list[dict[str, object]]:

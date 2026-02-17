@@ -12,13 +12,15 @@ from datafusion_engine.plan.artifact_store_core import _plan_identity_payload
 from datafusion_engine.plan.bundle_artifact import (
     DataFusionPlanArtifact,
     PlanFingerprintInputs,
-    _hash_plan,
     _information_schema_hash,
     _planning_env_hash,
     _rulepack_hash,
 )
-from datafusion_engine.plan.bundle_artifact import (
+from datafusion_engine.plan.plan_fingerprint import (
     _delta_protocol_payload as plan_delta_protocol_payload,
+)
+from datafusion_engine.plan.plan_fingerprint import (
+    compute_plan_fingerprint,
 )
 from datafusion_engine.views.artifacts import _delta_inputs_payload, _plan_task_signature
 from extract.infrastructure.cache_utils import CACHE_VERSION, stable_cache_key, stable_cache_label
@@ -111,7 +113,7 @@ def test_hash_plan_matches_legacy_payload() -> None:
         ("delta_store_policy_hash", inputs.delta_store_policy_hash),
     )
     expected = hashlib.sha256(MSGPACK_ENCODER.encode(payload)).hexdigest()
-    assert _hash_plan(inputs) == expected
+    assert compute_plan_fingerprint(inputs) == expected
 
 
 def test_delta_scan_config_hash_matches_msgpack_encoder() -> None:

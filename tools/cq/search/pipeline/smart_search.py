@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -55,6 +56,7 @@ SMART_SEARCH_LIMITS = msgspec.structs.replace(
     timeout_seconds=30.0,
 )
 _CASE_SENSITIVE_DEFAULT = True
+logger = logging.getLogger(__name__)
 
 
 def _thaw_mapping_values(value: object) -> object:
@@ -203,12 +205,35 @@ def smart_search(
         Complete search results.
     """
     request = coerce_search_request(root=root, query=query, kwargs=kwargs)
+    logger.debug(
+        "smart_search.start query=%r root=%s mode=%s lang_scope=%s run_id=%s",
+        query,
+        root,
+        request.mode,
+        request.lang_scope,
+        request.run_id,
+    )
     clear_caches()
     ctx = _build_search_context(request)
     build_search_runtime_context(ctx)
     pipeline = SearchPipeline(ctx)
     partition_started = ms()
     partition_results = pipeline.run_partitions(_run_language_partitions)
+    logger.debug(
+        "smart_search.partitions mode=%s results=%s",
+        ctx.mode.value,
+        [
+            {
+                "lang": partition.lang,
+                "raw_matches": len(partition.raw_matches),
+                "enriched_matches": len(partition.enriched_matches),
+                "total_matches": partition.stats.total_matches,
+                "timed_out": partition.stats.timed_out,
+                "truncated": partition.stats.truncated,
+            }
+            for partition in partition_results
+        ],
+    )
     mode_chain = [ctx.mode]
     if _should_fallback_to_literal(
         request=request,
@@ -219,6 +244,11 @@ def smart_search(
             ctx,
             mode=QueryMode.LITERAL,
             fallback_applied=True,
+        )
+        logger.info(
+            "smart_search.fallback_to_literal query=%r lang_scope=%s",
+            query,
+            ctx.lang_scope,
         )
         fallback_partitions = SearchPipeline(fallback_ctx).run_partitions(_run_language_partitions)
         mode_chain.append(QueryMode.LITERAL)
@@ -243,6 +273,13 @@ def smart_search(
     if ctx.run_id:
         for language in expand_language_scope(ctx.lang_scope):
             maybe_evict_run_cache_tag(root=ctx.root, language=language, run_id=ctx.run_id)
+    logger.debug(
+        "smart_search.done query=%r mode_chain=%s matches=%s duration_ms=%.2f",
+        query,
+        [mode.value for mode in ctx.mode_chain],
+        result.summary.matches,
+        max(0.0, ms() - ctx.started_ms),
+    )
     return msgspec.structs.replace(
         result,
         summary=_thaw_summary_mappings(result.summary),

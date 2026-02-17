@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TypeVar
-
-T = TypeVar("T")
 
 
 def proto_serialization_enabled() -> bool:
@@ -18,7 +15,11 @@ def proto_serialization_enabled() -> bool:
 
 
 def plan_to_proto_bytes(plan: object | None, *, enabled: bool) -> bytes | None:
-    """Serialize a plan object to proto bytes when supported."""
+    """Serialize a plan object to proto bytes when supported.
+
+    Returns:
+        bytes | None: Serialized proto bytes when available, otherwise `None`.
+    """
     if plan is None:
         return None
     if not enabled or not proto_serialization_enabled():
@@ -36,13 +37,17 @@ def plan_to_proto_bytes(plan: object | None, *, enabled: bool) -> bytes | None:
     return None
 
 
-def plan_proto_payload(
+def plan_proto_payload[T](
     plan: object | None,
     wrapper: Callable[[bytes], T],
     *,
     enabled: bool,
 ) -> T | None:
-    """Serialize a plan and wrap proto bytes in a typed payload."""
+    """Serialize a plan and wrap proto bytes in a typed payload.
+
+    Returns:
+        T | None: Wrapped payload when serialization succeeds, otherwise `None`.
+    """
     payload = plan_to_proto_bytes(plan, enabled=enabled)
     if payload is None:
         return None

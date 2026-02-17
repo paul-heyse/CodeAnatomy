@@ -6,6 +6,7 @@ These types are used by the CLI, build orchestrator, and public API.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
 import msgspec
@@ -15,6 +16,8 @@ from planning_engine.spec_contracts import RuntimeConfig
 type EngineProfile = Literal["small", "medium", "large"]
 type RulepackProfile = Literal["Default", "LowLatency", "Replay", "Strict"]
 type TracingPreset = Literal["Maximal", "MaximalNoData", "ProductionLean"]
+type ExtractionConfig = Mapping[str, object]
+type IncrementalConfig = Mapping[str, object]
 
 
 class EngineConfigSpec(msgspec.Struct, frozen=True):
@@ -43,8 +46,8 @@ class EngineExecutionOptions(msgspec.Struct, frozen=True):
     engine_profile: EngineProfile = "medium"
     rulepack_profile: RulepackProfile = "Default"
     runtime_config: RuntimeConfig | None = None
-    extraction_config: object | None = None
-    incremental_config: object | None = None
+    extraction_config: ExtractionConfig | None = None
+    incremental_config: IncrementalConfig | None = None
 
 
 class CompiledPlanSummary(msgspec.Struct, frozen=True):
@@ -68,4 +71,6 @@ __all__ = [
     "EngineConfigSpec",
     "EngineExecutionOptions",
     "EngineProfile",
+    "ExtractionConfig",
+    "IncrementalConfig",
 ]

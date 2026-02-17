@@ -12,6 +12,7 @@ from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
 if TYPE_CHECKING:
     from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.toolchain import Toolchain
+    from tools.cq.query.enrichment import SymtableEnricher
 
 
 class RunContext(CqStruct, frozen=True):
@@ -98,6 +99,11 @@ class RunExecutionContext(Protocol):
     @property
     def services(self) -> CqRuntimeServices:
         """Runtime service bundle resolved at composition root."""
+        ...
+
+    @property
+    def symtable_enricher(self) -> SymtableEnricher:
+        """Injected symtable enricher used by q execution paths."""
         ...
 
 

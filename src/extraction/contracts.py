@@ -1,8 +1,4 @@
-"""Extraction-to-semantic dataset contract mapping.
-
-This module defines the compatibility bridge between extraction dataset names
-and canonical semantic input names expected by the semantic compiler.
-"""
+"""Extraction-to-semantic dataset contract mapping."""
 
 from __future__ import annotations
 
@@ -30,21 +26,6 @@ class RunExtractionRequestV1(msgspec.Struct, frozen=True):
     options: ExtractionRunOptions | Mapping[str, object] | None = None
 
 
-# Legacy compatibility aliases retained during migration.
-_COMPAT_ALIASES: dict[str, str] = {
-    "repo_files": "repo_files_v1",
-    "ast_imports": "ast_files",
-    "ast_symbols": "ast_files",
-    "cst_imports": "libcst_files",
-    "cst_symbols": "libcst_files",
-    "ts_imports": "tree_sitter_files",
-    "ts_symbols": "tree_sitter_files",
-    "symtable_files": "symtable_files_v1",
-    "bytecode_files": "bytecode_files_v1",
-    "python_external": "python_external_interfaces",
-    "scip_symbols": "scip_index",
-}
-
 # Canonical semantic input -> preferred extraction dataset candidates.
 _SEMANTIC_INPUT_CANDIDATES: dict[str, tuple[str, ...]] = {
     "cst_refs": ("cst_refs", "libcst_files", "libcst_files_v1"),
@@ -61,23 +42,6 @@ _SEMANTIC_INPUT_CANDIDATES: dict[str, tuple[str, ...]] = {
     "symtable_scopes": ("symtable_scopes", "symtable_files_v1", "symtable_files"),
     "symtable_symbols": ("symtable_symbols", "symtable_files_v1", "symtable_files"),
 }
-
-
-def with_compat_aliases(delta_locations: Mapping[str, str]) -> dict[str, str]:
-    """Return extraction locations extended with legacy aliases.
-
-    Returns:
-    -------
-    dict[str, str]
-        Input mapping plus compatibility aliases.
-    """
-    resolved = dict(delta_locations)
-    for alias, canonical in _COMPAT_ALIASES.items():
-        location = resolved.get(canonical)
-        if location is not None:
-            resolved.setdefault(alias, location)
-    return resolved
-
 
 def resolve_semantic_input_locations(delta_locations: Mapping[str, str]) -> dict[str, str]:
     """Resolve canonical semantic input table locations from extraction outputs.
@@ -101,5 +65,4 @@ __all__ = [
     "RunExtractionRequestV1",
     "ScipIndexConfig",
     "resolve_semantic_input_locations",
-    "with_compat_aliases",
 ]

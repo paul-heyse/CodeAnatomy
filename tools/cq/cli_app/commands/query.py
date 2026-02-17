@@ -37,7 +37,6 @@ def q(
     Raises:
         RuntimeError: If routing returns neither a parsed query nor fallback result.
     """
-    from tools.cq.query.enrichment import SymtableEnricher
     from tools.cq.query.executor_plan_dispatch import ExecutePlanRequestV1, execute_plan
     from tools.cq.query.planner import compile_query
 
@@ -74,7 +73,7 @@ def q(
             query=parsed_query,
             root=str(ctx.root),
             services=ctx.services,
-            symtable_enricher=SymtableEnricher(ctx.root),
+            symtable_enricher=ctx.symtable_enricher,
             argv=tuple(ctx.argv),
             query_text=query_string,
         ),

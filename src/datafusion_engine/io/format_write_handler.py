@@ -20,8 +20,8 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.io.write_core import WriteRequest
-    from datafusion_engine.session.streaming import StreamingExecutionResult
     from datafusion_engine.io.write_pipeline import WritePipeline
+    from datafusion_engine.session.streaming import StreamingExecutionResult
 
 
 class _FormatWritePipeline(Protocol):
@@ -38,6 +38,7 @@ class FormatWriteHandler:
     """Adapter wrapper for format-specific pipeline write entrypoints."""
 
     def __init__(self, pipeline: _FormatWritePipeline) -> None:
+        """Initialize handler with a pipeline implementing format writers."""
         self._pipeline = pipeline
 
     def write_csv(self, df: DataFrame, *, request: WriteRequest) -> None:
@@ -311,7 +312,6 @@ def table_target(pipeline: WritePipeline, request: WriteRequest) -> str | None:
 
 __all__ = [
     "FormatWriteHandler",
-    "_FormatWritePipeline",
     "prepare_destination",
     "table_target",
     "temp_view_name",

@@ -23,7 +23,6 @@ import msgspec
 from extraction.contracts import (
     RunExtractionRequestV1,
     resolve_semantic_input_locations,
-    with_compat_aliases,
 )
 from extraction.options import ExtractionRunOptions, normalize_extraction_options
 from obs.otel import SCOPE_EXTRACT, record_error, record_stage_duration, stage_span
@@ -398,7 +397,6 @@ def _run_python_external_stage(
 
 
 def _finalize_extraction_state(*, state: _ExtractionRunState, extraction_start: float) -> None:
-    state.delta_locations = with_compat_aliases(state.delta_locations)
     state.semantic_input_locations = resolve_semantic_input_locations(state.delta_locations)
     state.delta_locations.update(state.semantic_input_locations)
     extraction_elapsed = time.monotonic() - extraction_start

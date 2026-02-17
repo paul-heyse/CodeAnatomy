@@ -263,38 +263,6 @@ def _to_python_wrapper_data(payload: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in payload.items() if key not in _PY_FLAT_EXCLUDED_KEYS}
 
 
-def _partition_python_payload_fields(
-    flat_data: dict[str, object],
-) -> tuple[
-    dict[str, object], dict[str, object], dict[str, object], dict[str, object], dict[str, object]
-]:
-    resolution: dict[str, object] = {}
-    behavior: dict[str, object] = {}
-    structural: dict[str, object] = {}
-    parse_quality: dict[str, object] = {}
-    agreement: dict[str, object] = {"status": "partial", "conflicts": []}
-
-    for key, value in flat_data.items():
-        if key in _PY_RESOLUTION_KEYS:
-            resolution[key] = value
-            continue
-        if key in _PY_BEHAVIOR_KEYS:
-            behavior[key] = value
-            continue
-        if key in _PY_STRUCTURAL_KEYS:
-            structural[key] = value
-            continue
-        if key == "parse_quality" and isinstance(value, dict):
-            parse_quality = dict(value)
-            continue
-        if key == "agreement" and isinstance(value, dict):
-            agreement = dict(value)
-            continue
-        structural[key] = value
-
-    return resolution, behavior, structural, parse_quality, agreement
-
-
 def _derive_behavior_flags(behavior: dict[str, object], structural: dict[str, object]) -> None:
     if "awaits" in behavior and "has_await" not in behavior:
         behavior["has_await"] = bool(behavior["awaits"])
@@ -351,10 +319,28 @@ def normalize_python_payload(payload: dict[str, object] | None) -> dict[str, obj
         meta=_meta_from_flat(payload, language="python"),
         data=_to_python_wrapper_data(payload),
     )
-    flat_data = dict(wrapper.data)
-    resolution, behavior, structural, parse_quality, agreement = _partition_python_payload_fields(
-        flat_data
-    )
+    resolution: dict[str, object] = {}
+    behavior: dict[str, object] = {}
+    structural: dict[str, object] = {}
+    parse_quality: dict[str, object] = {}
+    agreement: dict[str, object] = {"status": "partial", "conflicts": []}
+    for key, value in wrapper.data.items():
+        if key in _PY_RESOLUTION_KEYS:
+            resolution[key] = value
+            continue
+        if key in _PY_BEHAVIOR_KEYS:
+            behavior[key] = value
+            continue
+        if key in _PY_STRUCTURAL_KEYS:
+            structural[key] = value
+            continue
+        if key == "parse_quality" and isinstance(value, dict):
+            parse_quality = dict(value)
+            continue
+        if key == "agreement" and isinstance(value, dict):
+            agreement = dict(value)
+            continue
+        structural[key] = value
     _derive_behavior_flags(behavior, structural)
     meta = _build_python_meta(payload=payload, meta=wrapper.meta)
 

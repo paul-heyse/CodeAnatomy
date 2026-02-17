@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from tools.cq.core.structs import CqStruct
 
 if TYPE_CHECKING:
     from tools.cq.core.ports import RenderEnrichmentPort
+    type RenderEnrichmentFactory = Callable[[], RenderEnrichmentPort | None]
+else:
+    RenderEnrichmentFactory = Callable[[], object | None]
+_DEFAULT_ENRICHMENT_FACTORY_LOCK = threading.Lock()
+_DEFAULT_ENRICHMENT_FACTORY_STATE: dict[str, RenderEnrichmentFactory | None] = {"factory": None}
+
+
+def get_default_render_enrichment_factory() -> RenderEnrichmentFactory | None:
+    """Return process-default render enrichment factory."""
+    with _DEFAULT_ENRICHMENT_FACTORY_LOCK:
+        return _DEFAULT_ENRICHMENT_FACTORY_STATE["factory"]
+
+
+def set_default_render_enrichment_factory(factory: RenderEnrichmentFactory | None) -> None:
+    """Install or clear process-default render enrichment factory."""
+    with _DEFAULT_ENRICHMENT_FACTORY_LOCK:
+        _DEFAULT_ENRICHMENT_FACTORY_STATE["factory"] = factory
 
 
 class RenderContext(CqStruct, frozen=True):
@@ -18,12 +37,18 @@ class RenderContext(CqStruct, frozen=True):
     @classmethod
     def minimal(cls) -> RenderContext:
         """Return default render context with best-effort enrichment adapter."""
+        factory = get_default_render_enrichment_factory()
+        if factory is None:
+            return cls(enrichment_port=None)
         try:
-            from tools.cq.orchestration.render_enrichment import SmartSearchRenderEnrichmentAdapter
-
-            return cls(enrichment_port=SmartSearchRenderEnrichmentAdapter())
-        except (ImportError, OSError, RuntimeError, ValueError, TypeError):
+            return cls(enrichment_port=factory())
+        except (OSError, RuntimeError, ValueError, TypeError):
             return cls(enrichment_port=None)
 
 
-__all__ = ["RenderContext"]
+__all__ = [
+    "RenderContext",
+    "RenderEnrichmentFactory",
+    "get_default_render_enrichment_factory",
+    "set_default_render_enrichment_factory",
+]

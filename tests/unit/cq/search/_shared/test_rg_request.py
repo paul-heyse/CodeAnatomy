@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.search._shared.rg_request import CandidateCollectionRequest, RgRunRequest
+from tools.cq.search._shared.requests import CandidateCollectionRequest, RgRunRequest
 from tools.cq.search._shared.types import QueryMode, SearchLimits
 
 

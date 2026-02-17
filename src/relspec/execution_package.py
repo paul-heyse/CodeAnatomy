@@ -24,31 +24,36 @@ from utils.hashing import hash_msgpack_canonical
 class SemanticIrHashLike(Protocol):
     """Protocol for semantic IR hash access."""
 
-    ir_hash: str
+    @property
+    def ir_hash(self) -> str: ...
 
 
 class ManifestHashLike(Protocol):
     """Protocol for manifest hash access."""
 
-    model_hash: str
+    @property
+    def model_hash(self) -> str | None: ...
 
 
 class ManifestWithSemanticIr(Protocol):
     """Protocol for manifest objects carrying semantic IR payloads."""
 
-    semantic_ir: SemanticIrHashLike | None
+    @property
+    def semantic_ir(self) -> SemanticIrHashLike | None: ...
 
 
 class PolicyFingerprintLike(Protocol):
     """Protocol for compiled policy fingerprint access."""
 
-    policy_fingerprint: str | None
+    @property
+    def policy_fingerprint(self) -> str | None: ...
 
 
 class SettingsHashValueLike(Protocol):
     """Protocol for settings hash attribute access."""
 
-    settings_hash: str
+    @property
+    def settings_hash(self) -> str: ...
 
 
 class SettingsHashCallableLike(Protocol):
@@ -75,7 +80,7 @@ class ExecutionPackageArtifact(StructBaseCompat, frozen=True):
 
 
 def _hash_manifest(
-    manifest: object | None,
+    manifest: ManifestHashLike | ManifestWithSemanticIr | None,
 ) -> str:
     if manifest is None:
         return ""
@@ -90,7 +95,7 @@ def _hash_manifest(
     raise TypeError(msg)
 
 
-def _hash_policy(compiled_policy: object | None) -> str:
+def _hash_policy(compiled_policy: PolicyFingerprintLike | None) -> str:
     if compiled_policy is None:
         return ""
     fingerprint = getattr(compiled_policy, "policy_fingerprint", None)
@@ -101,7 +106,7 @@ def _hash_policy(compiled_policy: object | None) -> str:
 
 
 def _hash_capability_snapshot(
-    capability_snapshot: object | None,
+    capability_snapshot: SettingsHashValueLike | None,
 ) -> str:
     if capability_snapshot is None:
         return ""
@@ -113,7 +118,7 @@ def _hash_capability_snapshot(
 
 
 def _hash_session_config(
-    session_config: object | str | None,
+    session_config: SettingsHashCallableLike | SettingsHashValueLike | str | None,
 ) -> str:
     if session_config is None:
         return ""
@@ -158,11 +163,11 @@ def _composite_fingerprint(
 
 def build_execution_package(
     *,
-    manifest: object | None = None,
-    compiled_policy: object | None = None,
-    capability_snapshot: object | None = None,
+    manifest: ManifestHashLike | ManifestWithSemanticIr | None = None,
+    compiled_policy: PolicyFingerprintLike | None = None,
+    capability_snapshot: SettingsHashValueLike | None = None,
     plan_bundle_fingerprints: Mapping[str, str] | None = None,
-    session_config: object | str | None = None,
+    session_config: SettingsHashCallableLike | SettingsHashValueLike | str | None = None,
 ) -> ExecutionPackageArtifact:
     """Build a reproducible execution package from pipeline components.
 

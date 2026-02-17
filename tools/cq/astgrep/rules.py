@@ -9,14 +9,7 @@ from tools.cq.astgrep.sgpy_scanner import RecordType, RuleSpec
 from tools.cq.core.types import QueryLanguage
 
 _DEFAULT_RULEPACK_REGISTRY_LOCK = threading.Lock()
-
-
-class _RulepackRegistryState:
-    def __init__(self) -> None:
-        self.registry = RulePackRegistry()
-
-
-_RULEPACK_STATE = _RulepackRegistryState()
+_DEFAULT_RULEPACK_REGISTRY_STATE: dict[str, RulePackRegistry | None] = {"registry": None}
 
 
 def _filter_rules_for_types(
@@ -51,12 +44,17 @@ def get_rules_for_types(
 def set_rulepack_registry(registry: RulePackRegistry | None) -> None:
     """Set or clear the process-default rulepack registry."""
     with _DEFAULT_RULEPACK_REGISTRY_LOCK:
-        _RULEPACK_STATE.registry = registry or RulePackRegistry()
+        _DEFAULT_RULEPACK_REGISTRY_STATE["registry"] = registry
 
 
 def get_default_rulepack_registry() -> RulePackRegistry:
     """Return process-default rulepack registry."""
-    return _RULEPACK_STATE.registry
+    with _DEFAULT_RULEPACK_REGISTRY_LOCK:
+        registry = _DEFAULT_RULEPACK_REGISTRY_STATE["registry"]
+        if registry is None:
+            registry = RulePackRegistry()
+            _DEFAULT_RULEPACK_REGISTRY_STATE["registry"] = registry
+        return registry
 
 
 __all__ = [

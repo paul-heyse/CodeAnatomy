@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from tools.cq.search._shared.timeout import search_async_with_timeout, search_sync_with_timeout
+from tools.cq.search._shared.timeouts import search_async_with_timeout, search_sync_with_timeout
 
 _SYNC_RESULT = 7
 _ASYNC_RESULT = 9

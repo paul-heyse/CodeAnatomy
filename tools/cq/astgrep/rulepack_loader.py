@@ -121,33 +121,11 @@ def load_rules_from_directory(
     return tuple(specs)
 
 
-def load_default_rulepacks(*, base: Path | None = None) -> dict[str, tuple[RuleSpec, ...]]:
-    """Load all built-in rule packs from ``tools/cq/astgrep/rules``.
-
-    Returns:
-    -------
-    dict[str, tuple[RuleSpec, ...]]
-        Mapping of language to loaded rule tuples.
-    """
-    resolved_base = (base or Path(__file__).parent).resolve()
-    rules_base = resolved_base / "rules"
-    utils = load_utils(resolved_base / "utils")
-
-    packs: dict[str, tuple[RuleSpec, ...]] = {}
-    for facts_dir in sorted(rules_base.glob("*_facts")):
-        lang = facts_dir.name.removesuffix("_facts")
-        rules = load_rules_from_directory(facts_dir, utils_by_language=utils)
-        if rules:
-            packs[lang] = rules
-    return packs
-
-
 __all__ = [
     "CliRuleFile",
     "CliRuleMetadata",
     "UtilityRuleFile",
     "load_cli_rule_file",
-    "load_default_rulepacks",
     "load_rules_from_directory",
     "load_utils",
 ]

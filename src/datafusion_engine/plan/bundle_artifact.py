@@ -10,9 +10,7 @@ import contextlib
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, cast
-from urllib.parse import urlparse
 
 import msgspec
 from datafusion import SessionContext
@@ -21,6 +19,30 @@ from datafusion.dataframe import DataFrame
 from core_types import JsonValue
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
 from datafusion_engine.delta.store_policy import delta_store_policy_hash
+from datafusion_engine.plan.bundle_environment import (
+    capture_udf_metadata_for_plan as _capture_udf_metadata_for_plan,
+)
+from datafusion_engine.plan.bundle_environment import (
+    df_settings_snapshot as _df_settings_snapshot,
+)
+from datafusion_engine.plan.bundle_environment import (
+    function_registry_hash as _function_registry_hash,
+)
+from datafusion_engine.plan.bundle_environment import (
+    information_schema_hash as _information_schema_hash,
+)
+from datafusion_engine.plan.bundle_environment import (
+    information_schema_snapshot as _information_schema_snapshot,
+)
+from datafusion_engine.plan.bundle_scan_inputs import (
+    cdf_window_snapshot as _cdf_window_snapshot,
+)
+from datafusion_engine.plan.bundle_scan_inputs import (
+    scan_units_for_bundle as _scan_units_for_bundle,
+)
+from datafusion_engine.plan.bundle_scan_inputs import (
+    snapshot_keys_for_manifest as _snapshot_keys_for_manifest,
+)
 from datafusion_engine.plan.cache import PlanProtoCacheEntry
 from datafusion_engine.plan.diagnostics import PlanPhaseDiagnostics, record_plan_phase_diagnostics
 from datafusion_engine.plan.plan_diagnostics import (
@@ -30,7 +52,6 @@ from datafusion_engine.plan.plan_diagnostics import (
 )
 from datafusion_engine.plan.plan_fingerprint import (
     PlanFingerprintInputs,
-    _delta_protocol_payload,
     compute_plan_fingerprint,
 )
 from datafusion_engine.plan.plan_proto import plan_proto_payload, proto_serialization_enabled
@@ -58,11 +79,9 @@ from utils.hashing import (
 if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
 
-    from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.runtime_session import SessionRuntime
-    from datafusion_engine.sql.options import SQLOptions
     from semantics.program_manifest import ManifestDatasetResolver
 
 # Type alias for DataFrame builder functions
@@ -385,7 +404,7 @@ class _BundleAssemblyState:
     proto_enabled: bool
     proto_status: PlanProtoStatus | None
     udf_artifacts: UdfArtifacts
-    registry_artifacts: _RegistryArtifacts
+    function_registry_hash: str
     environment: _EnvironmentArtifacts
     required: RequiredUdfArtifacts
     substrait_validation: Mapping[str, object] | None
@@ -449,7 +468,7 @@ class _PlanArtifactsInputs:
     plan_core: _PlanCoreComponents
     explain_artifacts: _ExplainArtifacts
     udf_artifacts: UdfArtifacts
-    registry_artifacts: _RegistryArtifacts
+    function_registry_hash: str
     environment: _EnvironmentArtifacts
     substrait_validation: Mapping[str, object] | None
     proto_enabled: bool = True
@@ -980,7 +999,7 @@ def _plan_artifacts_from_components(
             enabled=inputs.proto_enabled,
         ),
         udf_snapshot_hash=inputs.udf_artifacts.snapshot_hash,
-        function_registry_hash=inputs.registry_artifacts.registry_hash,
+        function_registry_hash=inputs.function_registry_hash,
         rewrite_tags=tuple(inputs.udf_artifacts.rewrite_tags),
         domain_planner_names=tuple(inputs.udf_artifacts.domain_planner_names),
         udf_snapshot=dict(inputs.udf_artifacts.snapshot),
@@ -1035,7 +1054,7 @@ def _collect_bundle_assembly_state(
         registry_snapshot=options.registry_snapshot,
         session_runtime=options.session_runtime,
     )
-    registry_artifacts = _function_registry_artifacts(
+    function_registry_hash = _function_registry_artifacts(
         ctx,
         session_runtime=options.session_runtime,
     )
@@ -1085,7 +1104,7 @@ def _collect_bundle_assembly_state(
             plan_core=plan_core,
             explain_artifacts=explain_artifacts,
             udf_artifacts=udf_artifacts,
-            registry_artifacts=registry_artifacts,
+            function_registry_hash=function_registry_hash,
             environment=environment,
             substrait_validation=substrait_validation,
             proto_enabled=proto_enabled,
@@ -1097,7 +1116,7 @@ def _collect_bundle_assembly_state(
         proto_enabled=proto_enabled,
         proto_status=proto_status,
         udf_artifacts=udf_artifacts,
-        registry_artifacts=registry_artifacts,
+        function_registry_hash=function_registry_hash,
         environment=environment,
         required=required,
         substrait_validation=substrait_validation,
@@ -1212,14 +1231,6 @@ def _finalize_bundle_components(
         required_rewrite_tags=state.required.required_rewrite_tags,
         plan_details=collect_plan_details(df, detail_inputs=detail_inputs),
     )
-
-
-@dataclass(frozen=True)
-class _RegistryArtifacts:
-    """Function registry metadata hash."""
-
-    registry_hash: str
-
 
 def _merge_delta_inputs(
     explicit: Sequence[DeltaInputPin],
@@ -1518,298 +1529,6 @@ def _substrait_validation_payload(
     return validation
 
 
-def _information_schema_sql_options(
-    session_runtime: SessionRuntime,
-) -> SQLOptions | None:
-    try:
-        from datafusion_engine.sql.options import planning_sql_options
-
-        return planning_sql_options(session_runtime.profile)
-    except (RuntimeError, TypeError, ValueError, ImportError):
-        return None
-
-
-def _build_introspector(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None,
-) -> SchemaIntrospector | None:
-    try:
-        return SchemaIntrospector(ctx, sql_options=sql_options)
-    except (RuntimeError, TypeError, ValueError):
-        return None
-
-
-def _table_definitions_snapshot(
-    introspector: SchemaIntrospector,
-    *,
-    tables: Sequence[Mapping[str, object]],
-) -> dict[str, str]:
-    table_definitions: dict[str, str] = {}
-    for row in tables:
-        name = row.get("table_name")
-        if name is None:
-            continue
-        definition = introspector.table_definition(str(name))
-        if definition:
-            table_definitions[str(name)] = definition
-    return table_definitions
-
-
-def _safe_introspection_rows(
-    fetch: Callable[[], Sequence[Mapping[str, object]]],
-) -> list[Mapping[str, object]]:
-    try:
-        return list(fetch())
-    except (RuntimeError, TypeError, ValueError, Warning):
-        return []
-
-
-def _routine_metadata_snapshot(
-    introspector: SchemaIntrospector,
-    *,
-    capture_udf_metadata: bool,
-) -> tuple[list[Mapping[str, object]], list[Mapping[str, object]], list[Mapping[str, object]]]:
-    if not capture_udf_metadata:
-        return [], [], []
-    routines = _safe_introspection_rows(introspector.routines_snapshot)
-    parameters = _safe_introspection_rows(introspector.parameters_snapshot)
-    function_catalog = _safe_introspection_rows(
-        lambda: introspector.function_catalog_snapshot(include_parameters=True)
-    )
-    return routines, parameters, function_catalog
-
-
-def _information_schema_snapshot(
-    ctx: SessionContext,
-    *,
-    session_runtime: SessionRuntime | None,
-) -> Mapping[str, object]:
-    """Return a full information_schema snapshot for plan artifacts.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context used for introspection.
-    session_runtime
-        Optional session runtime for policy-aware introspection.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Snapshot payload containing settings, tables, columns, and routines.
-    """
-    if session_runtime is None:
-        return {}
-    sql_options = _information_schema_sql_options(session_runtime)
-    introspector = _build_introspector(ctx, sql_options=sql_options)
-    if introspector is None:
-        return {}
-    tables = introspector.tables_snapshot()
-    table_definitions = _table_definitions_snapshot(introspector, tables=tables)
-    capture_udf_metadata = _capture_udf_metadata_for_plan(session_runtime)
-    routines, parameters, function_catalog = _routine_metadata_snapshot(
-        introspector,
-        capture_udf_metadata=capture_udf_metadata,
-    )
-    return {
-        "df_settings": _df_settings_snapshot(ctx, session_runtime=session_runtime),
-        "settings": introspector.settings_snapshot(),
-        "tables": tables,
-        "schemata": introspector.schemata_snapshot(),
-        "columns": introspector.columns_snapshot(),
-        "routines": routines,
-        "parameters": parameters,
-        "function_catalog": function_catalog,
-        "table_definitions": table_definitions,
-    }
-
-
-def _information_schema_hash(snapshot: Mapping[str, object]) -> str:
-    """Return a stable hash for an information_schema snapshot.
-
-    Parameters
-    ----------
-    snapshot
-        Information schema snapshot payload.
-
-    Returns:
-    -------
-    str
-        SHA-256 hash of the snapshot payload.
-    """
-    canonical = _canonicalize_snapshot(snapshot)
-    return hash_msgpack_canonical(canonical)
-
-
-def _canonical_sort_key(value: object) -> str:
-    return hash_msgpack_canonical(value)
-
-
-def _canonicalize_snapshot(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {key: _canonicalize_snapshot(val) for key, val in sorted(value.items())}
-    if isinstance(value, Sequence) and not isinstance(
-        value,
-        (str, bytes, bytearray, memoryview),
-    ):
-        normalized = [_canonicalize_snapshot(item) for item in value]
-        return sorted(normalized, key=_canonical_sort_key)
-    return value
-
-
-def _scan_units_for_bundle(
-    ctx: SessionContext,
-    *,
-    plan: object,
-    session_runtime: SessionRuntime | None,
-    dataset_resolver: ManifestDatasetResolver | None = None,
-) -> tuple[ScanUnit, ...]:
-    scan_units: tuple[ScanUnit, ...] = ()
-    if session_runtime is None or plan is None:
-        return scan_units
-    try:
-        from datafusion_engine.lineage.reporting import extract_lineage
-        from datafusion_engine.lineage.scheduling import plan_scan_units
-    except ImportError:
-        return scan_units
-    lineage = extract_lineage(plan)
-    lineage_scans = getattr(lineage, "scans", ())
-    if lineage_scans:
-        locations = _manifest_dataset_locations(
-            dataset_resolver=dataset_resolver,
-            session_runtime=session_runtime,
-        )
-        if locations:
-            try:
-                scan_units, _ = plan_scan_units(
-                    ctx,
-                    dataset_locations=locations,
-                    scans_by_task={"plan_bundle": lineage_scans},
-                    runtime_profile=session_runtime.profile,
-                )
-            except (RuntimeError, TypeError, ValueError):
-                scan_units = ()
-    return scan_units
-
-
-def _manifest_dataset_locations(
-    *,
-    dataset_resolver: ManifestDatasetResolver | None,
-    session_runtime: SessionRuntime | None,
-) -> dict[str, DatasetLocation]:
-    if dataset_resolver is None:
-        if session_runtime is None:
-            return {}
-        locations = dict(session_runtime.profile.data_sources.dataset_templates)
-        locations.update(session_runtime.profile.data_sources.extract_output.dataset_locations)
-        return locations
-    locations: dict[str, DatasetLocation] = {}
-    for name in dataset_resolver.names():
-        location = dataset_resolver.location(name)
-        if location is None:
-            continue
-        locations[name] = location
-    return locations
-
-
-def _cdf_window_snapshot(
-    session_runtime: SessionRuntime | None,
-    *,
-    dataset_resolver: ManifestDatasetResolver | None = None,
-) -> tuple[dict[str, object], ...]:
-    if session_runtime is None:
-        return ()
-    locations = _manifest_dataset_locations(
-        dataset_resolver=dataset_resolver,
-        session_runtime=session_runtime,
-    )
-    payloads: list[dict[str, object]] = []
-    for name, location in sorted(locations.items(), key=lambda item: item[0]):
-        options = location.delta_cdf_options
-        if options is None:
-            continue
-        payloads.append(
-            {
-                "dataset_name": name,
-                "table_uri": str(location.path),
-                "starting_version": options.starting_version,
-                "ending_version": options.ending_version,
-                "starting_timestamp": options.starting_timestamp,
-                "ending_timestamp": options.ending_timestamp,
-                "allow_out_of_range": options.allow_out_of_range,
-            }
-        )
-    return tuple(payloads)
-
-
-def _canonical_table_uri_for_manifest(table_uri: str) -> str:
-    raw = str(table_uri).strip()
-    parsed = urlparse(raw)
-    if not parsed.scheme:
-        return str(Path(raw).expanduser().resolve())
-    scheme = parsed.scheme.lower()
-    if scheme in {"s3a", "s3n"}:
-        scheme = "s3"
-    netloc = parsed.netloc
-    if scheme in {"s3", "gs", "az", "abfs", "abfss", "http", "https"}:
-        netloc = netloc.lower()
-    path = parsed.path or ""
-    if netloc and path and not path.startswith("/"):
-        path = f"/{path}"
-    return parsed._replace(scheme=scheme, netloc=netloc, path=path).geturl()
-
-
-def _snapshot_keys_for_manifest(
-    *,
-    delta_inputs: Sequence[DeltaInputPin],
-    session_runtime: SessionRuntime | None,
-    dataset_resolver: ManifestDatasetResolver | None = None,
-) -> tuple[dict[str, object], ...]:
-    if session_runtime is None:
-        return ()
-    locations = _manifest_dataset_locations(
-        dataset_resolver=dataset_resolver,
-        session_runtime=session_runtime,
-    )
-    payloads: list[dict[str, object]] = []
-    seen: set[tuple[str, str, int]] = set()
-    for pin in delta_inputs:
-        if pin.version is None:
-            continue
-        location = locations.get(pin.dataset_name)
-        if location is None:
-            continue
-        canonical_uri = _canonical_table_uri_for_manifest(str(location.path))
-        resolved_version = int(pin.version)
-        key = (pin.dataset_name, canonical_uri, resolved_version)
-        if key in seen:
-            continue
-        seen.add(key)
-        payloads.append(
-            {
-                "dataset_name": pin.dataset_name,
-                "canonical_uri": canonical_uri,
-                "resolved_version": resolved_version,
-            }
-        )
-    payloads.sort(
-        key=lambda row: (
-            str(row["dataset_name"]),
-            str(row["canonical_uri"]),
-            _manifest_resolved_version(row),
-        )
-    )
-    return tuple(payloads)
-
-
-def _manifest_resolved_version(row: Mapping[str, object]) -> int:
-    value = row.get("resolved_version")
-    if isinstance(value, int):
-        return value
-    return 0
-
-
 def _plan_display(plan: object | None, *, method: str) -> str | None:
     """Extract a display string from a plan object.
 
@@ -1831,67 +1550,14 @@ def _plan_display(plan: object | None, *, method: str) -> str | None:
     return str(plan)
 
 
-def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    for row in rows:
-        name = row.get("name") or row.get("setting_name") or row.get("key")
-        if name is None:
-            continue
-        value = row.get("value")
-        mapping[str(name)] = "" if value is None else str(value)
-    return mapping
-
-
-def _df_settings_snapshot(
-    ctx: SessionContext,
-    *,
-    session_runtime: SessionRuntime | None,
-) -> Mapping[str, str]:
-    if session_runtime is not None and session_runtime.ctx is ctx:
-        return dict(session_runtime.df_settings)
-    from datafusion_engine.schema.introspection_core import SchemaIntrospector
-
-    try:
-        sql_options = None
-        if session_runtime is not None:
-            try:
-                from datafusion_engine.sql.options import planning_sql_options
-
-                sql_options = planning_sql_options(session_runtime.profile)
-            except (RuntimeError, TypeError, ValueError, ImportError):
-                sql_options = None
-        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
-        rows = introspector.settings_snapshot()
-        if not rows:
-            return {}
-        return _settings_rows_to_mapping(rows)
-    except (RuntimeError, TypeError, ValueError):
-        return {}
-
-
-def _function_registry_hash(snapshot: Mapping[str, object]) -> str:
-    canonical = _canonicalize_snapshot(snapshot)
-    return hash_msgpack_canonical(canonical)
-
-
-def _capture_udf_metadata_for_plan(session_runtime: SessionRuntime | None) -> bool:
-    if session_runtime is None:
-        return False
-    profile = session_runtime.profile
-    return profile.catalog.enable_information_schema and profile.features.enable_udfs
-
-
 def _function_registry_artifacts(
     ctx: SessionContext,
     *,
     session_runtime: SessionRuntime | None,
-) -> _RegistryArtifacts:
-    from datafusion_engine.schema.introspection_core import SchemaIntrospector
+) -> str:
 
     if not _capture_udf_metadata_for_plan(session_runtime):
-        return _RegistryArtifacts(
-            registry_hash=_function_registry_hash({"functions": []}),
-        )
+        return _function_registry_hash({"functions": []})
 
     functions: Sequence[Mapping[str, object]] = ()
     try:
@@ -1908,78 +1574,7 @@ def _function_registry_artifacts(
     except (RuntimeError, TypeError, ValueError, Warning):
         functions = ()
     snapshot: Mapping[str, object] = {"functions": list(functions)}
-    return _RegistryArtifacts(
-        registry_hash=_function_registry_hash(snapshot),
-    )
-
-
-def _udf_artifacts(
-    ctx: SessionContext,
-    *,
-    registry_snapshot: Mapping[str, object] | None,
-    session_runtime: SessionRuntime | None,
-) -> _UdfArtifacts:
-    if registry_snapshot is not None:
-        snapshot = registry_snapshot
-    elif session_runtime is not None:
-        return _UdfArtifacts(
-            snapshot=session_runtime.udf_snapshot,
-            snapshot_hash=session_runtime.udf_snapshot_hash,
-            rewrite_tags=session_runtime.udf_rewrite_tags,
-            domain_planner_names=session_runtime.domain_planner_names,
-        )
-    else:
-        from datafusion_engine.udf.extension_core import rust_udf_snapshot
-
-        snapshot = rust_udf_snapshot(ctx)
-    from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.extension_core import (
-        rust_udf_snapshot_hash,
-        validate_rust_udf_snapshot,
-    )
-    from datafusion_engine.udf.metadata import rewrite_tag_index
-
-    validate_rust_udf_snapshot(snapshot)
-    snapshot_hash = rust_udf_snapshot_hash(snapshot)
-    tag_index = rewrite_tag_index(snapshot)
-    rewrite_tags = tuple(sorted(tag_index))
-    planner_names = domain_planner_names_from_snapshot(snapshot)
-    return _UdfArtifacts(
-        snapshot=snapshot,
-        snapshot_hash=snapshot_hash,
-        rewrite_tags=rewrite_tags,
-        domain_planner_names=planner_names,
-    )
-
-
-def _required_udf_artifacts(
-    plan: object | None,
-    *,
-    snapshot: Mapping[str, object],
-    rust_required_udfs: Sequence[str] | None = None,
-) -> _RequiredUdfArtifacts:
-    if rust_required_udfs is not None:
-        from datafusion_engine.udf.metadata import rewrite_tag_index
-
-        required_udfs = tuple(sorted({str(name) for name in rust_required_udfs if str(name)}))
-        tag_index = rewrite_tag_index(snapshot)
-        required_tags = tuple(
-            sorted({tag for name in required_udfs for tag in tag_index.get(name, ())})
-        )
-        return _RequiredUdfArtifacts(
-            required_udfs=required_udfs,
-            required_rewrite_tags=required_tags,
-        )
-    if plan is None:
-        return _RequiredUdfArtifacts(required_udfs=(), required_rewrite_tags=())
-    from datafusion_engine.lineage.reporting import extract_lineage
-
-    lineage = extract_lineage(plan, udf_snapshot=snapshot)
-    return _RequiredUdfArtifacts(
-        required_udfs=lineage.required_udfs,
-        required_rewrite_tags=lineage.required_rewrite_tags,
-    )
-
+    return _function_registry_hash(snapshot)
 
 __all__ = [
     "DataFrameBuilder",

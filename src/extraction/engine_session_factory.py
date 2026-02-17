@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 
 import msgspec
+from datafusion import SessionContext
 
 from datafusion_engine.dataset.registration_core import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.dataset.registry import DatasetCatalog, registry_snapshot
@@ -18,6 +19,7 @@ from extraction.runtime_profile import (
     engine_runtime_artifact,
     runtime_profile_snapshot,
 )
+from extraction.rust_session_bridge import build_extraction_session, extraction_session_payload
 from obs.diagnostics import DiagnosticsCollector
 from obs.otel import OtelBootstrapOptions, configure_otel
 from relspec.pipeline_policy import DiagnosticsPolicy
@@ -56,6 +58,23 @@ class EngineSessionOptions:
     otel_options: OtelBootstrapOptions | None = None
 
 
+def _build_rust_session_context(runtime_spec: RuntimeProfileSpec) -> SessionContext | None:
+    """Build a SessionContext through the Rust extraction bridge when available.
+
+    Returns:
+        SessionContext | None: Rust-backed session context, or `None` on fallback.
+    """
+    payload = extraction_session_payload(
+        parallelism=runtime_spec.datafusion.execution.target_partitions,
+        batch_size=runtime_spec.datafusion.execution.batch_size,
+        memory_limit_bytes=runtime_spec.datafusion.execution.memory_limit_bytes,
+    )
+    try:
+        return build_extraction_session(payload)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return None
+
+
 def build_engine_session(
     *,
     runtime_spec: RuntimeProfileSpec,
@@ -84,10 +103,12 @@ def build_engine_session(
         service_name="codeanatomy",
         options=dataclass_replace(effective_otel, resource_overrides=resource_overrides),
     )
+    rust_session_context = _build_rust_session_context(runtime_spec)
     engine_runtime = build_engine_runtime(
         runtime_profile=runtime_spec.datafusion,
         diagnostics=resolved.diagnostics,
         diagnostics_policy=resolved.diagnostics_policy,
+        session_context=rust_session_context,
     )
     df_profile = engine_runtime.datafusion_profile
     profile_name = runtime_spec.name

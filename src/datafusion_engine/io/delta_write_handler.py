@@ -13,10 +13,10 @@ from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.io.write_core import (
     DeltaWriteOutcome,
     DeltaWriteSpec,
-    _DeltaWriteSpecInputs,
     WriteMode,
     WriteRequest,
     _DeltaCommitContext,
+    _DeltaWriteSpecInputs,
     _require_runtime_profile,
     _stats_decision_from_policy,
 )
@@ -45,6 +45,7 @@ from storage.deltalake.delta_runtime_ops import commit_metadata_from_properties
 from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
+    from datafusion_engine.delta.observability import DeltaOperationReport
     from datafusion_engine.io.write_pipeline import WritePipeline
     from datafusion_engine.obs.datafusion_runs import DataFusionRun
     from datafusion_engine.session.streaming import StreamingExecutionResult
@@ -52,12 +53,23 @@ if TYPE_CHECKING:
 
 
 class _DeltaCommitFinalizeContextLike(Protocol):
-    spec: DeltaWriteSpec
-    delta_version: int
-    duration_ms: float | None
-    row_count: int | None
-    status: str
-    error: str | None
+    @property
+    def spec(self) -> DeltaWriteSpec: ...
+
+    @property
+    def delta_version(self) -> int: ...
+
+    @property
+    def duration_ms(self) -> float | None: ...
+
+    @property
+    def row_count(self) -> int | None: ...
+
+    @property
+    def status(self) -> str: ...
+
+    @property
+    def error(self) -> str | None: ...
 
 
 class _DeltaBootstrapPipeline(Protocol):
@@ -73,6 +85,7 @@ class DeltaWriteHandler:
     """Adapter wrapper for delta-write bootstrap delegation."""
 
     def __init__(self, pipeline: _DeltaBootstrapPipeline) -> None:
+        """Initialize handler with a pipeline implementing bootstrap writes."""
         self._pipeline = pipeline
 
     def write_bootstrap(
@@ -81,7 +94,11 @@ class DeltaWriteHandler:
         *,
         spec: DeltaWriteSpec,
     ) -> DeltaWriteResult:
-        """Delegate bootstrap writing to the injected pipeline."""
+        """Delegate bootstrap writing to the injected pipeline.
+
+        Returns:
+            DeltaWriteResult: Result produced by the pipeline bootstrap write.
+        """
         return self._pipeline.write_delta_bootstrap(result, spec=spec)
 
 
@@ -119,6 +136,7 @@ def prepare_commit_metadata(
     if commit_run is not None:
         metadata["commit_run_id"] = commit_run.run_id
     return metadata, idempotent, commit_run
+
 
 def delta_write_spec(
     pipeline: WritePipeline,
@@ -236,6 +254,7 @@ def delta_write_spec(
         extra_constraints=extra_constraints,
     )
 
+
 def reserve_runtime_commit(
     pipeline: WritePipeline,
     *,
@@ -263,6 +282,7 @@ def reserve_runtime_commit(
     )
     return commit_options, commit_run
 
+
 def finalize_delta_commit(
     pipeline: WritePipeline,
     context: _DeltaCommitFinalizeContextLike,
@@ -288,6 +308,7 @@ def finalize_delta_commit(
             metadata=metadata,
         )
     persist_write_artifact(pipeline, context)
+
 
 def persist_write_artifact(
     pipeline: WritePipeline,
@@ -346,6 +367,7 @@ def persist_write_artifact(
         cast("dict[str, object]", to_builtins(validated, str_keys=True)),
     )
 
+
 def record_delta_mutation(
     pipeline: WritePipeline,
     *,
@@ -393,13 +415,14 @@ def record_delta_mutation(
         ctx=pipeline.ctx,
     )
 
+
 def run_post_write_maintenance(
     pipeline: WritePipeline,
     *,
     spec: DeltaWriteSpec,
     delta_version: int,
     initial_version: int | None,
-    write_report: Mapping[str, object] | None,
+    write_report: DeltaOperationReport | None,
 ) -> None:
     """Resolve and run Delta maintenance policy after writes."""
     if pipeline.runtime_profile is None:
@@ -418,7 +441,7 @@ def run_post_write_maintenance(
     metrics: WriteOutcomeMetrics | None = None
     if write_report is not None:
         metrics = build_write_outcome_metrics(
-            write_report,
+            write_report.to_payload(),
             initial_version=initial_version,
         )
         if metrics.final_version is None:
@@ -459,6 +482,7 @@ def run_post_write_maintenance(
         return
     run_delta_maintenance(pipeline.ctx, plan=plan, runtime_profile=pipeline.runtime_profile)
 
+
 def write_delta(
     pipeline: WritePipeline,
     result: StreamingExecutionResult,
@@ -475,6 +499,8 @@ def write_delta(
     Returns:
         DeltaWriteOutcome: Finalized Delta write outcome with feature metadata.
     """
+    from datafusion_engine.delta.observability import DeltaOperationReport
+
     runtime_profile = _require_runtime_profile(
         pipeline.runtime_profile,
         operation="delta writes",
@@ -573,12 +599,17 @@ def write_delta(
             delta_version=final_version,
         ),
     )
+    operation_report = DeltaOperationReport.from_payload(
+        delta_result.report,
+        operation="write",
+        commit_metadata=spec.commit_metadata,
+    )
     run_post_write_maintenance(
         pipeline,
         spec=spec,
         delta_version=final_version,
         initial_version=existing_version,
-        write_report=delta_result.report,
+        write_report=operation_report,
     )
     canonical_uri = canonical_table_uri(spec.table_uri)
     return DeltaWriteOutcome(
@@ -592,6 +623,7 @@ def write_delta(
         commit_app_id=spec.commit_app_id,
         commit_version=spec.commit_version,
     )
+
 
 def write_delta_bootstrap(
     pipeline: WritePipeline,
@@ -655,12 +687,14 @@ def write_delta_bootstrap(
         report=report,
     )
 
+
 def delta_insert_table_name(spec: DeltaWriteSpec) -> str:
     """Return deterministic temporary insert table name for Delta writes."""
     base = spec.commit_key or "delta_write"
     normalized = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in base)
     digest = hash_sha256_hex(spec.table_uri.encode("utf-8"))[:8]
     return f"{normalized}_{digest}"
+
 
 @dataclass(frozen=True, slots=True)
 class DeltaCommitFinalizeContext:
@@ -672,6 +706,7 @@ class DeltaCommitFinalizeContext:
     row_count: int | None = None
     status: str = "success"
     error: str | None = None
+
 
 def register_delta_insert_target(
     pipeline: WritePipeline, spec: DeltaWriteSpec, *, table_name: str
@@ -725,10 +760,10 @@ def register_delta_insert_target(
         overwrite=True,
     )
 
+
 __all__ = [
-    "DeltaWriteHandler",
-    "_DeltaBootstrapPipeline",
     "DeltaCommitFinalizeContext",
+    "DeltaWriteHandler",
     "delta_insert_table_name",
     "delta_write_spec",
     "finalize_delta_commit",

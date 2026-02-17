@@ -6,6 +6,7 @@ This is the CANONICAL schema authority for all downstream SNB operations.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
 from tools.cq.core.structs import CqStruct
@@ -286,7 +287,7 @@ class SemanticNeighborhoodBundleV1(CqStruct, frozen=True):
         Relationship slices.
     graph : NeighborhoodGraphSummaryV1 | None
         Graph summary statistics.
-    node_index : dict[str, SemanticNodeRefV1] | None
+    node_index : Mapping[str, SemanticNodeRefV1] | None
         Full node index (node_id -> node).
     artifacts : tuple[ArtifactPointerV1, ...]
         Related artifacts.
@@ -302,7 +303,7 @@ class SemanticNeighborhoodBundleV1(CqStruct, frozen=True):
     meta: BundleMetaV1 | None = None
     slices: tuple[NeighborhoodSliceV1, ...] = ()
     graph: NeighborhoodGraphSummaryV1 | None = None
-    node_index: dict[str, SemanticNodeRefV1] | None = None
+    node_index: Mapping[str, SemanticNodeRefV1] | None = None
     artifacts: tuple[ArtifactPointerV1, ...] = ()
     diagnostics: tuple[DegradeEventV1, ...] = ()
     schema_version: str = "cq.snb.v1"

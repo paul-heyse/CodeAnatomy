@@ -9,6 +9,7 @@ from tools.cq.cli_app.protocol_output import emit_payload, json_result, text_res
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.toolchain import Toolchain
+from tools.cq.query.enrichment import SymtableEnricher
 
 ERROR_EXIT_CODE = 2
 _TEST_ROOT = Path("/tmp")
@@ -20,6 +21,7 @@ def _ctx(*, output_format: OutputFormat | None = None) -> CliContext:
         argv=["cq", "test"],
         root=_TEST_ROOT,
         toolchain=Toolchain.detect(),
+        symtable_enricher=SymtableEnricher(_TEST_ROOT),
         services=resolve_runtime_services(_TEST_ROOT),
         output_format=resolved_output,
     )

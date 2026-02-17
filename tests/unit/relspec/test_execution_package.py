@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
+from dataclasses import dataclass
 from unittest.mock import MagicMock
 
 import msgspec
@@ -17,6 +17,27 @@ from tests.test_helpers.immutability import assert_immutable_assignment
 FIXED_CREATED_AT_UNIX_MS = 1_700_000_000_000
 EXPECTED_PLAN_BUNDLE_COUNT = 3
 SCHEMA_FINGERPRINT_LENGTH = 32
+
+
+@dataclass(frozen=True)
+class _SemanticIrStub:
+    ir_hash: str
+
+
+@dataclass(frozen=True)
+class _ManifestStub:
+    model_hash: str | None = None
+    semantic_ir: _SemanticIrStub | None = None
+
+
+@dataclass(frozen=True)
+class _PolicyStub:
+    policy_fingerprint: str | None
+
+
+@dataclass(frozen=True)
+class _CapabilityStub:
+    settings_hash: str
 
 
 class TestExecutionPackageArtifactConstruction:
@@ -68,9 +89,9 @@ class TestBuildExecutionPackageDeterminism:
     @staticmethod
     def test_same_inputs_same_fingerprint() -> None:
         """Identical inputs produce identical package fingerprints."""
-        manifest = SimpleNamespace(model_hash="hash_abc")
-        policy = SimpleNamespace(policy_fingerprint="policy_xyz")
-        capability = SimpleNamespace(settings_hash="cap_123")
+        manifest = _ManifestStub(model_hash="hash_abc")
+        policy = _PolicyStub(policy_fingerprint="policy_xyz")
+        capability = _CapabilityStub(settings_hash="cap_123")
         bundles = {"view_a": "fp_a", "view_b": "fp_b"}
 
         pkg1 = build_execution_package(
@@ -95,8 +116,8 @@ class TestBuildExecutionPackageDeterminism:
     @staticmethod
     def test_different_manifest_different_fingerprint() -> None:
         """Different manifest produces a different package fingerprint."""
-        manifest_a = SimpleNamespace(model_hash="hash_a")
-        manifest_b = SimpleNamespace(model_hash="hash_b")
+        manifest_a = _ManifestStub(model_hash="hash_a")
+        manifest_b = _ManifestStub(model_hash="hash_b")
 
         pkg_a = build_execution_package(manifest=manifest_a)
         pkg_b = build_execution_package(manifest=manifest_b)
@@ -106,8 +127,8 @@ class TestBuildExecutionPackageDeterminism:
     @staticmethod
     def test_different_policy_different_fingerprint() -> None:
         """Different compiled policy produces a different fingerprint."""
-        policy_a = SimpleNamespace(policy_fingerprint="fp_a")
-        policy_b = SimpleNamespace(policy_fingerprint="fp_b")
+        policy_a = _PolicyStub(policy_fingerprint="fp_a")
+        policy_b = _PolicyStub(policy_fingerprint="fp_b")
 
         pkg_a = build_execution_package(compiled_policy=policy_a)
         pkg_b = build_execution_package(compiled_policy=policy_b)
@@ -116,8 +137,8 @@ class TestBuildExecutionPackageDeterminism:
     @staticmethod
     def test_different_capability_different_fingerprint() -> None:
         """Different capability snapshot produces a different fingerprint."""
-        cap_a = SimpleNamespace(settings_hash="cap_a")
-        cap_b = SimpleNamespace(settings_hash="cap_b")
+        cap_a = _CapabilityStub(settings_hash="cap_a")
+        cap_b = _CapabilityStub(settings_hash="cap_b")
 
         pkg_a = build_execution_package(capability_snapshot=cap_a)
         pkg_b = build_execution_package(capability_snapshot=cap_b)
@@ -206,8 +227,8 @@ class TestBuildExecutionPackageGracefulDegradation:
     @staticmethod
     def test_manifest_fallback_to_ir_hash() -> None:
         """Manifest without model_hash falls back to ir_hash."""
-        ir = SimpleNamespace(ir_hash="ir_hash_value")
-        manifest = SimpleNamespace(model_hash=None, semantic_ir=ir)
+        ir = _SemanticIrStub(ir_hash="ir_hash_value")
+        manifest = _ManifestStub(model_hash=None, semantic_ir=ir)
         pkg = build_execution_package(manifest=manifest)
         assert pkg.manifest_hash == "ir_hash_value"
 

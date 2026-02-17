@@ -6,9 +6,14 @@ import atexit
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.interface import CqCacheBackend
+from tools.cq.core.render_context import (
+    get_default_render_enrichment_factory,
+    set_default_render_enrichment_factory,
+)
 from tools.cq.core.runtime import RuntimeExecutionPolicy
 from tools.cq.core.schema import CqResult
 from tools.cq.core.services import (
@@ -21,6 +26,9 @@ from tools.cq.core.services import (
 )
 from tools.cq.core.settings_factory import SettingsFactory
 
+if TYPE_CHECKING:
+    from tools.cq.core.ports import RenderEnrichmentPort
+
 
 @dataclass(frozen=True)
 class CqRuntimeServices:
@@ -31,6 +39,12 @@ class CqRuntimeServices:
     calls: CallsService
     cache: CqCacheBackend
     policy: RuntimeExecutionPolicy
+
+
+def _build_render_enrichment_adapter() -> RenderEnrichmentPort | None:
+    from tools.cq.orchestration.render_enrichment import SmartSearchRenderEnrichmentAdapter
+
+    return SmartSearchRenderEnrichmentAdapter()
 
 
 def build_runtime_services(*, root: Path) -> CqRuntimeServices:
@@ -90,6 +104,9 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
                 request.incremental_enrichment_mode
             ),
         )
+
+    if get_default_render_enrichment_factory() is None:
+        set_default_render_enrichment_factory(_build_render_enrichment_adapter)
 
     return CqRuntimeServices(
         search=SearchService(execute_fn=_execute_search),

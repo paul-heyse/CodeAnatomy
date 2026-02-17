@@ -65,6 +65,7 @@ def build_perf_smoke_report(*, workspace: Path) -> PerfSmokeReport:
     """
     tc = Toolchain.detect()
     services = resolve_runtime_services(workspace.resolve())
+    symtable_enricher = SymtableEnricher(workspace)
 
     search_measurement = _measure_pair(
         lambda: smart_search(
@@ -94,7 +95,7 @@ def build_perf_smoke_report(*, workspace: Path) -> PerfSmokeReport:
                 query=query_obj,
                 root=str(workspace),
                 services=services,
-                symtable_enricher=SymtableEnricher(workspace),
+                symtable_enricher=symtable_enricher,
                 argv=(),
             ),
             tc=tc,

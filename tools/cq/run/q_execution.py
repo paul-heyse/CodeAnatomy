@@ -15,7 +15,6 @@ from tools.cq.core.schema import CqResult, update_result_summary
 from tools.cq.core.types import QueryLanguage
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
 from tools.cq.query.batch_spans import collect_span_filters
-from tools.cq.query.enrichment import SymtableEnricher
 from tools.cq.query.execution_requests import EntityQueryRequest, PatternQueryRequest
 from tools.cq.query.executor_entity_impl import execute_entity_query_from_records
 from tools.cq.query.executor_pattern_impl import execute_pattern_query_with_files
@@ -213,7 +212,7 @@ def execute_entity_q_steps(
         paths=union_paths,
         record_types=record_types,
         lang=lang,
-        symtable=SymtableEnricher(ctx.root),
+        symtable=ctx.symtable_enricher,
     )
 
     allowed_files = [
@@ -303,7 +302,7 @@ def execute_pattern_q_steps(
         files_by_rel[rel] = path
 
     results: list[tuple[str, CqResult]] = []
-    symtable = SymtableEnricher(ctx.root)
+    symtable = ctx.symtable_enricher
     for step in steps:
         allowed_rel = filter_files_for_scope(pattern_files, ctx.root, step.plan.scope)
         files = select_files_by_rel(files_by_rel, allowed_rel)

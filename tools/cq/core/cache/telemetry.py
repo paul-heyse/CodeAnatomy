@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from tools.cq.core.cache.telemetry_store import CacheTelemetryStore
 from tools.cq.core.structs import CqStruct
 
@@ -31,19 +33,36 @@ class CacheNamespaceTelemetry(CqStruct, frozen=True):
     cull_removed: int = 0
 
 
-_TELEMETRY_STORE = CacheTelemetryStore()
+_DEFAULT_TELEMETRY_STORE_LOCK = threading.Lock()
+_DEFAULT_TELEMETRY_STORE_STATE: dict[str, CacheTelemetryStore | None] = {"store": None}
 _MAX_KEY_SIZE_64 = 64
 _MAX_KEY_SIZE_128 = 128
 _MAX_KEY_SIZE_256 = 256
 
 
 def _incr(namespace: str, field: str, amount: int = 1) -> None:
-    _TELEMETRY_STORE.incr(namespace, field, amount)
+    get_default_cache_telemetry_store().incr(namespace, field, amount)
+
+
+def get_default_cache_telemetry_store() -> CacheTelemetryStore:
+    """Return process-default cache telemetry store."""
+    with _DEFAULT_TELEMETRY_STORE_LOCK:
+        store = _DEFAULT_TELEMETRY_STORE_STATE["store"]
+        if store is None:
+            store = CacheTelemetryStore()
+            _DEFAULT_TELEMETRY_STORE_STATE["store"] = store
+        return store
+
+
+def set_default_cache_telemetry_store(store: CacheTelemetryStore | None) -> None:
+    """Set or clear process-default telemetry store."""
+    with _DEFAULT_TELEMETRY_STORE_LOCK:
+        _DEFAULT_TELEMETRY_STORE_STATE["store"] = store
 
 
 def record_cache_key(*, namespace: str, key: str) -> None:
     """Record key cardinality and key-size telemetry."""
-    _TELEMETRY_STORE.record_cache_key(
+    get_default_cache_telemetry_store().record_cache_key(
         namespace=namespace,
         key=key,
         max_key_size_64=_MAX_KEY_SIZE_64,
@@ -104,7 +123,7 @@ def record_cache_abort(*, namespace: str) -> None:
 
 def record_cache_volume(*, namespace: str, volume_bytes: int) -> None:
     """Record backend volume snapshot for namespace."""
-    _TELEMETRY_STORE.set_volume(namespace=namespace, volume_bytes=volume_bytes)
+    get_default_cache_telemetry_store().set_volume(namespace=namespace, volume_bytes=volume_bytes)
 
 
 def record_cache_cull(*, namespace: str, removed: int) -> None:
@@ -115,7 +134,7 @@ def record_cache_cull(*, namespace: str, removed: int) -> None:
 
 def snapshot_cache_telemetry() -> dict[str, CacheNamespaceTelemetry]:
     """Return a snapshot of namespace counters."""
-    snapshot = _TELEMETRY_STORE.snapshot()
+    snapshot = get_default_cache_telemetry_store().snapshot()
     output: dict[str, CacheNamespaceTelemetry] = {}
     for namespace, bucket in snapshot.items():
         output[namespace] = CacheNamespaceTelemetry(
@@ -145,11 +164,12 @@ def snapshot_cache_telemetry() -> dict[str, CacheNamespaceTelemetry]:
 
 def reset_cache_telemetry() -> None:
     """Reset all namespace telemetry counters."""
-    _TELEMETRY_STORE.reset()
+    get_default_cache_telemetry_store().reset()
 
 
 __all__ = [
     "CacheNamespaceTelemetry",
+    "get_default_cache_telemetry_store",
     "record_cache_abort",
     "record_cache_cull",
     "record_cache_decode_failure",
@@ -161,5 +181,6 @@ __all__ = [
     "record_cache_timeout",
     "record_cache_volume",
     "reset_cache_telemetry",
+    "set_default_cache_telemetry_store",
     "snapshot_cache_telemetry",
 ]

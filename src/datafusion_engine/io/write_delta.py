@@ -69,12 +69,12 @@ def _resolve_delta_schema_policy(
     options: Mapping[str, object],
     *,
     dataset_location: DatasetLocation | None,
-) -> object | None:
+) -> DeltaSchemaPolicy | None:
     """Resolve effective Delta schema policy for write execution.
 
     Returns:
     -------
-    object | None
+    DeltaSchemaPolicy | None
         Effective schema policy override, if any.
     """
     schema_policy = _delta_schema_policy_override(options)

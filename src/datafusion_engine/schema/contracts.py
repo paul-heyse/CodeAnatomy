@@ -8,23 +8,46 @@ schema evolution policies.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any
 
-import msgspec
 import pyarrow as pa
 from datafusion import SessionContext
 
 from core.config_base import config_fingerprint
 from datafusion_engine.identity import schema_identity_hash
+from datafusion_engine.schema.constraints import (
+    ConstraintSpec,
+    ConstraintType,
+    TableConstraints,
+    constraint_key_fields,
+    delta_check_constraints,
+    delta_constraints_for_location,
+    merge_constraint_expressions,
+    normalize_column_names,
+    table_constraint_definitions,
+    table_constraints_from_location,
+    table_constraints_from_spec,
+)
+from datafusion_engine.schema.contract_builders import (
+    field_spec_from_arrow_field as _field_spec_from_arrow_field,
+)
+from datafusion_engine.schema.contract_builders import (
+    schema_contract_from_contract_spec,
+    schema_contract_from_dataset_spec,
+    schema_contract_from_table_schema_contract,
+)
+from datafusion_engine.schema.divergence import (
+    SchemaDivergence,
+    compute_schema_divergence,
+)
 from datafusion_engine.schema.introspection_core import schema_from_table
+from datafusion_engine.schema.type_normalization import normalize_contract_type
 from datafusion_engine.schema.type_resolution import arrow_type_to_sql as _arrow_type_to_sql
 from schema_spec.arrow_types import arrow_type_from_pyarrow
-from schema_spec.dataset_spec import ContractSpec, DatasetSpec, TableSchemaContract
 from schema_spec.field_spec import FieldSpec
-from schema_spec.specs import TableSchemaSpec
 from utils.registry_protocol import MutableRegistry, Registry
 from validation.violations import ValidationViolation, ViolationType
 
@@ -32,389 +55,7 @@ SCHEMA_ABI_FINGERPRINT_META: bytes = b"schema_abi_fingerprint"
 
 if TYPE_CHECKING:
     from datafusion_engine.catalog.introspection import IntrospectionSnapshot
-    from datafusion_engine.dataset.registry import DatasetLocation
     from semantics.types import AnnotatedSchema
-
-
-ConstraintType = Literal["pk", "not_null", "check", "unique"]
-
-
-def normalize_column_names(values: Iterable[str] | None) -> tuple[str, ...]:
-    """Return normalized column names in stable order.
-
-    Returns:
-    -------
-    tuple[str, ...]
-        Normalized column names without duplicates.
-    """
-    if values is None:
-        return ()
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for value in values:
-        name = str(value).strip()
-        if not name or name in seen:
-            continue
-        ordered.append(name)
-        seen.add(name)
-    return tuple(ordered)
-
-
-def merge_constraint_expressions(*parts: Iterable[str]) -> tuple[str, ...]:
-    """Return normalized constraint expressions from multiple sources.
-
-    Returns:
-    -------
-    tuple[str, ...]
-        Normalized constraint expressions without duplicates.
-    """
-    merged: list[str] = []
-    seen: set[str] = set()
-    for part in parts:
-        for entry in part:
-            normalized = str(entry).strip()
-            if not normalized or normalized in seen:
-                continue
-            merged.append(normalized)
-            seen.add(normalized)
-    return tuple(merged)
-
-
-def _extract_inner_type(text: str, open_char: str, close_char: str) -> str:
-    start = text.find(open_char)
-    if start < 0:
-        return ""
-    depth = 0
-    for idx in range(start, len(text)):
-        ch = text[idx]
-        if ch == open_char:
-            depth += 1
-        elif ch == close_char:
-            depth -= 1
-            if depth == 0:
-                return text[start + 1 : idx]
-    return text[start + 1 :]
-
-
-def _split_top_level_types(text: str) -> list[str]:
-    parts: list[str] = []
-    depth = 0
-    start = 0
-    for idx, ch in enumerate(text):
-        if ch in "<(":
-            depth += 1
-        elif ch in ">)":
-            depth = max(depth - 1, 0)
-        elif ch == "," and depth == 0:
-            parts.append(text[start:idx])
-            start = idx + 1
-    tail = text[start:]
-    if tail:
-        parts.append(tail)
-    return parts
-
-
-def _strip_type_prefix(text: str) -> str:
-    if ":" in text:
-        prefix, rest = text.split(":", 1)
-        if prefix in {"item", "field", "key", "value", "element"}:
-            return rest
-    return text
-
-
-def _normalize_contract_type(text: str) -> str:
-    if text.startswith(("list(", "list<")):
-        open_char = "(" if text.startswith("list(") else "<"
-        close_char = ")" if open_char == "(" else ">"
-        inner = _extract_inner_type(text, open_char, close_char)
-        parts = _split_top_level_types(inner)
-        if parts:
-            inner = parts[0]
-        inner = _strip_type_prefix(inner)
-        return f"list<{_normalize_contract_type(inner)}>"
-    if text.startswith(("map(", "map<")):
-        return "map"
-    if text.startswith(("struct(", "struct<")):
-        return "struct"
-    return text
-
-
-class ConstraintSpec(msgspec.Struct, frozen=True):
-    """Constraint specification for governance policies.
-
-    Attributes:
-    ----------
-    constraint_type : Literal["pk", "not_null", "check", "unique"]
-        Constraint type identifier.
-    column : str | None
-        Single-column constraint target, when applicable.
-    columns : tuple[str, ...] | None
-        Multi-column constraint targets, when applicable.
-    expression : str | None
-        Optional SQL expression for CHECK constraints.
-    """
-
-    constraint_type: ConstraintType
-    column: str | None = None
-    columns: tuple[str, ...] | None = None
-    expression: str | None = None
-
-    def normalized_columns(self) -> tuple[str, ...]:
-        """Return normalized column names from the constraint spec.
-
-        Returns:
-        -------
-        tuple[str, ...]
-            Normalized column names for the constraint.
-        """
-        if self.columns:
-            return normalize_column_names(self.columns)
-        if self.column:
-            return normalize_column_names((self.column,))
-        return ()
-
-    def normalized_expression(self) -> str | None:
-        """Return a normalized expression string, if present.
-
-        Returns:
-        -------
-        str | None
-            Normalized expression, or None if unavailable.
-        """
-        if self.expression is None:
-            return None
-        normalized = self.expression.strip()
-        return normalized or None
-
-
-class TableConstraints(msgspec.Struct, frozen=True):
-    """Governance constraints for a table.
-
-    Attributes:
-    ----------
-    primary_key : tuple[str, ...] | None
-        Ordered primary key column names.
-    not_null : tuple[str, ...] | None
-        Column names that must be non-null.
-    checks : tuple[ConstraintSpec, ...] | None
-        Structured CHECK constraints.
-    unique : tuple[tuple[str, ...], ...] | None
-        Unique constraint column groups.
-    """
-
-    primary_key: tuple[str, ...] | None = None
-    not_null: tuple[str, ...] | None = None
-    checks: tuple[ConstraintSpec, ...] | None = None
-    unique: tuple[tuple[str, ...], ...] | None = None
-
-    def required_non_null(self) -> tuple[str, ...]:
-        """Return normalized non-null column names.
-
-        Returns:
-        -------
-        tuple[str, ...]
-            Columns required to be non-null.
-        """
-        return normalize_column_names((*(self.not_null or ()), *(self.primary_key or ())))
-
-    def check_expressions(self) -> tuple[str, ...]:
-        """Return normalized check expressions.
-
-        Returns:
-        -------
-        tuple[str, ...]
-            Check expressions for the constraint bundle.
-        """
-        expressions: list[str] = []
-        for check in self.checks or ():
-            if check.constraint_type != "check":
-                continue
-            normalized = check.normalized_expression()
-            if normalized:
-                expressions.append(normalized)
-        return merge_constraint_expressions(expressions)
-
-
-def table_constraints_from_spec(
-    spec: TableSchemaSpec,
-    *,
-    checks: Iterable[str] = (),
-    unique: Iterable[Iterable[str]] = (),
-) -> TableConstraints:
-    """Build a TableConstraints payload from a schema spec.
-
-    Parameters
-    ----------
-    spec : TableSchemaSpec
-        Table schema specification to translate.
-    checks : Iterable[str]
-        CHECK constraint expressions to include.
-    unique : Iterable[Iterable[str]]
-        Unique constraint column groups.
-
-    Returns:
-    -------
-    TableConstraints
-        Constraint bundle derived from the schema spec.
-    """
-    primary_key = normalize_column_names(spec.key_fields)
-    not_null = normalize_column_names(spec.required_non_null)
-    check_specs = tuple(
-        ConstraintSpec(constraint_type="check", expression=expression)
-        for expression in merge_constraint_expressions(checks)
-    )
-    unique_specs: list[tuple[str, ...]] = []
-    for entry in unique:
-        normalized = normalize_column_names(entry)
-        if normalized:
-            unique_specs.append(normalized)
-    return TableConstraints(
-        primary_key=primary_key or None,
-        not_null=not_null or None,
-        checks=check_specs or None,
-        unique=tuple(unique_specs) or None,
-    )
-
-
-def constraint_key_fields(constraints: TableConstraints) -> tuple[str, ...]:
-    """Return key fields derived from constraint metadata.
-
-    Parameters
-    ----------
-    constraints : TableConstraints
-        Constraints bundle to inspect.
-
-    Returns:
-    -------
-    tuple[str, ...]
-        Key fields resolved from primary or unique constraints.
-    """
-    if constraints.primary_key:
-        return constraints.primary_key
-    if constraints.unique:
-        return constraints.unique[0]
-    return ()
-
-
-def delta_check_constraints(constraints: TableConstraints) -> tuple[str, ...]:
-    """Return Delta CHECK constraint expressions for a constraint bundle.
-
-    Parameters
-    ----------
-    constraints : TableConstraints
-        Constraints bundle to translate.
-
-    Returns:
-    -------
-    tuple[str, ...]
-        Delta CHECK constraint expressions.
-    """
-    not_null_exprs = tuple(f"{name} IS NOT NULL" for name in constraints.required_non_null())
-    return merge_constraint_expressions(not_null_exprs, constraints.check_expressions())
-
-
-def table_constraint_definitions(constraints: TableConstraints) -> tuple[str, ...]:
-    """Return DDL-style constraint definitions for metadata snapshots.
-
-    Parameters
-    ----------
-    constraints : TableConstraints
-        Constraints bundle to translate.
-
-    Returns:
-    -------
-    tuple[str, ...]
-        Constraint definitions for information_schema metadata.
-    """
-    definitions: list[str] = []
-    primary_key = normalize_column_names(constraints.primary_key)
-    if primary_key:
-        definitions.append(f"PRIMARY KEY ({', '.join(primary_key)})")
-    for unique_cols in constraints.unique or ():
-        normalized = normalize_column_names(unique_cols)
-        if normalized:
-            definitions.append(f"UNIQUE ({', '.join(normalized)})")
-    definitions.extend(delta_check_constraints(constraints))
-    return merge_constraint_expressions(definitions)
-
-
-def table_constraints_from_location(
-    location: DatasetLocation | None,
-    *,
-    extra_checks: Iterable[str] = (),
-) -> TableConstraints:
-    """Resolve TableConstraints for a dataset location.
-
-    Parameters
-    ----------
-    location : DatasetLocation | None
-        Dataset location to inspect.
-    extra_checks : Iterable[str]
-        Additional CHECK constraint expressions to merge.
-
-    Returns:
-    -------
-    TableConstraints
-        Resolved constraints for the dataset.
-    """
-    if location is None:
-        return TableConstraints(
-            checks=tuple(
-                ConstraintSpec(constraint_type="check", expression=expression)
-                for expression in merge_constraint_expressions(extra_checks)
-            )
-            or None,
-        )
-    dataset_spec = location.dataset_spec
-    resolved = location.resolved
-    table_spec = resolved.table_spec or (
-        dataset_spec.table_spec if dataset_spec is not None else None
-    )
-    resolved_checks: tuple[str, ...]
-    if resolved.delta_constraints:
-        resolved_checks = merge_constraint_expressions(resolved.delta_constraints, extra_checks)
-    elif dataset_spec is not None:
-        from schema_spec.dataset_spec import dataset_spec_delta_constraints
-
-        resolved_checks = merge_constraint_expressions(
-            dataset_spec_delta_constraints(dataset_spec),
-            extra_checks,
-        )
-    else:
-        resolved_checks = merge_constraint_expressions(extra_checks)
-    if table_spec is None:
-        return TableConstraints(
-            checks=tuple(
-                ConstraintSpec(constraint_type="check", expression=expression)
-                for expression in resolved_checks
-            )
-            or None,
-        )
-    return table_constraints_from_spec(table_spec, checks=resolved_checks)
-
-
-def delta_constraints_for_location(
-    location: DatasetLocation | None,
-    *,
-    extra_checks: Iterable[str] = (),
-) -> tuple[str, ...]:
-    """Return Delta CHECK constraints resolved from a dataset location.
-
-    Parameters
-    ----------
-    location : DatasetLocation | None
-        Dataset location to inspect.
-    extra_checks : Iterable[str]
-        Additional CHECK constraint expressions to merge.
-
-    Returns:
-    -------
-    tuple[str, ...]
-        Delta CHECK constraint expressions.
-    """
-    return delta_check_constraints(
-        table_constraints_from_location(location, extra_checks=extra_checks)
-    )
 
 
 class EvolutionPolicy(Enum):
@@ -443,29 +84,6 @@ class EvolutionPolicy(Enum):
             Deterministic fingerprint for the policy.
         """
         return config_fingerprint(self.fingerprint_payload())
-
-
-def _decode_field_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
-    if not metadata:
-        return {}
-    return {
-        key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
-        for key, value in metadata.items()
-    }
-
-
-def _field_spec_from_arrow_field(field: pa.Field) -> FieldSpec:
-    metadata = _decode_field_metadata(field.metadata)
-    encoding_value = metadata.get("encoding")
-    encoding = "dictionary" if encoding_value == "dictionary" else None
-    return FieldSpec(
-        name=field.name,
-        dtype=arrow_type_from_pyarrow(field.type),
-        nullable=field.nullable,
-        metadata=metadata,
-        default_value=metadata.get("default_value"),
-        encoding=encoding,
-    )
 
 
 @dataclass(frozen=True)
@@ -878,7 +496,7 @@ class SchemaContract:
         normalized = normalized.replace("non-null", "")
         normalized = normalized.replace("nonnull", "")
         normalized = normalized.replace("'", "").replace('"', "")
-        return _normalize_contract_type(normalized)
+        return normalize_contract_type(normalized)
 
     @staticmethod
     def _types_compatible(expected: str, actual: str) -> bool:
@@ -1011,209 +629,6 @@ class ContractRegistry(Registry[str, SchemaContract]):
             for _, contract in self.registry.items()
             for violation in contract.validate_against_introspection(snapshot)
         ]
-
-
-def schema_contract_from_table_schema_contract(
-    *,
-    table_name: str,
-    contract: TableSchemaContract,
-    evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT,
-    enforce_columns: bool = True,
-) -> SchemaContract:
-    """Build a SchemaContract from a TableSchemaContract.
-
-    Parameters
-    ----------
-    table_name
-        Name of the table the contract applies to.
-    contract
-        Table schema contract containing file schema and partition columns.
-    evolution_policy
-        Evolution policy for the contract.
-    enforce_columns
-        Whether to enforce column-level schema matching.
-
-    Returns:
-    -------
-    SchemaContract
-        Schema contract constructed from the table schema contract.
-    """
-    columns = tuple(_field_spec_from_arrow_field(field) for field in contract.file_schema)
-    partition_cols = tuple(name for name, _dtype in contract.partition_cols)
-    if contract.partition_cols:
-        partition_fields = tuple(
-            FieldSpec(
-                name=name,
-                dtype=arrow_type_from_pyarrow(dtype),
-                nullable=False,
-            )
-            for name, dtype in contract.partition_cols
-        )
-        columns = (*columns, *partition_fields)
-    schema_metadata = dict(contract.file_schema.metadata or {})
-    return SchemaContract(
-        table_name=table_name,
-        columns=columns,
-        partition_cols=partition_cols,
-        evolution_policy=evolution_policy,
-        schema_metadata=schema_metadata,
-        enforce_columns=enforce_columns,
-    )
-
-
-def _should_enforce_columns(spec: DatasetSpec) -> bool:
-    if spec.view_specs:
-        return False
-    return spec.query_spec is None
-
-
-def schema_contract_from_dataset_spec(
-    *,
-    name: str,
-    spec: DatasetSpec,
-    evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT,
-    enforce_columns: bool | None = None,
-) -> SchemaContract:
-    """Build a SchemaContract from a DatasetSpec.
-
-    Parameters
-    ----------
-    name
-        Dataset name to bind into the contract.
-    spec
-        DatasetSpec providing schema and scan settings.
-    evolution_policy
-        Evolution policy for the contract.
-    enforce_columns
-        Override column enforcement; defaults to view/query-aware behavior.
-
-    Returns:
-    -------
-    SchemaContract
-        Schema contract derived from the dataset specification.
-    """
-    from schema_spec.dataset_spec import dataset_spec_datafusion_scan, dataset_spec_schema
-
-    table_schema = cast("pa.Schema", dataset_spec_schema(spec))
-    partition_cols = ()
-    datafusion_scan = dataset_spec_datafusion_scan(spec)
-    if datafusion_scan is not None:
-        partition_cols = datafusion_scan.partition_cols
-    table_contract = TableSchemaContract(
-        file_schema=table_schema,
-        partition_cols=partition_cols,
-    )
-    resolved_enforce = _should_enforce_columns(spec) if enforce_columns is None else enforce_columns
-    return schema_contract_from_table_schema_contract(
-        table_name=name,
-        contract=table_contract,
-        evolution_policy=evolution_policy,
-        enforce_columns=resolved_enforce,
-    )
-
-
-def schema_contract_from_contract_spec(
-    *,
-    name: str,
-    spec: ContractSpec,
-    evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT,
-    enforce_columns: bool = True,
-) -> SchemaContract:
-    """Build a SchemaContract from a ContractSpec.
-
-    Parameters
-    ----------
-    name
-        Dataset name to bind into the contract.
-    spec
-        ContractSpec providing a table schema specification.
-    evolution_policy
-        Evolution policy for the contract.
-    enforce_columns
-        Whether to enforce column-level schema matching.
-
-    Returns:
-    -------
-    SchemaContract
-        Schema contract derived from the contract specification.
-    """
-    table_schema = spec.table_schema.to_arrow_schema()
-    table_contract = TableSchemaContract(file_schema=table_schema, partition_cols=())
-    return schema_contract_from_table_schema_contract(
-        table_name=name,
-        contract=table_contract,
-        evolution_policy=evolution_policy,
-        enforce_columns=enforce_columns,
-    )
-
-
-@dataclass(frozen=True)
-class SchemaDivergence:
-    """Result of comparing a spec schema against a plan-derived schema.
-
-    Parameters
-    ----------
-    has_divergence
-        True when any structural difference exists between the schemas.
-    added_columns
-        Column names present in the plan schema but absent from the spec.
-    removed_columns
-        Column names present in the spec schema but absent from the plan.
-    type_mismatches
-        Columns with type differences: ``(column_name, spec_type, plan_type)``.
-    """
-
-    has_divergence: bool
-    added_columns: tuple[str, ...]
-    removed_columns: tuple[str, ...]
-    type_mismatches: tuple[tuple[str, str, str], ...]
-
-
-def compute_schema_divergence(
-    spec_schema: pa.Schema,
-    plan_schema: pa.Schema,
-) -> SchemaDivergence:
-    """Compare a spec-declared schema against a plan-derived schema.
-
-    Identify added columns, removed columns, and type mismatches to
-    detect schema drift between the dataset specification and the
-    actual DataFusion plan output.
-
-    Parameters
-    ----------
-    spec_schema
-        Expected schema from the dataset specification.
-    plan_schema
-        Actual schema derived from the DataFusion plan.
-
-    Returns:
-    -------
-    SchemaDivergence
-        Divergence result with structural differences.
-    """
-    spec_names = {field.name for field in spec_schema}
-    plan_names = {field.name for field in plan_schema}
-
-    added = tuple(sorted(plan_names - spec_names))
-    removed = tuple(sorted(spec_names - plan_names))
-
-    type_mismatches: list[tuple[str, str, str]] = []
-    for name in sorted(spec_names & plan_names):
-        spec_field = spec_schema.field(name)
-        plan_field = plan_schema.field(name)
-        spec_type = str(spec_field.type)
-        plan_type = str(plan_field.type)
-        if spec_type != plan_type:
-            type_mismatches.append((name, spec_type, plan_type))
-
-    has_divergence = bool(added or removed or type_mismatches)
-    return SchemaDivergence(
-        has_divergence=has_divergence,
-        added_columns=added,
-        removed_columns=removed,
-        type_mismatches=tuple(type_mismatches),
-    )
-
 
 __all__ = [
     "ConstraintSpec",

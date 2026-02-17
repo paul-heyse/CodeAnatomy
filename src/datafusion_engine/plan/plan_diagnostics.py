@@ -72,7 +72,11 @@ def collect_plan_details(
     *,
     detail_inputs: PlanDetailInputs,
 ) -> dict[str, object]:
-    """Collect plan details for diagnostics."""
+    """Collect plan details for diagnostics.
+
+    Returns:
+        dict[str, object]: Serialized plan-details payload.
+    """
     context = detail_inputs.detail_context or PlanDetailContext()
     display_section = _plan_display_section(detail_inputs)
     builder = _PlanDetailsBuilder()

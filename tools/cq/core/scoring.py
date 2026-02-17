@@ -6,14 +6,11 @@ Provides standardized scoring for cq findings based on impact and confidence sig
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Literal
+from typing import Literal, cast
 
 from tools.cq.core.schema import DetailPayload, ScoreDetails
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.type_coercion import coerce_float_optional
-
-if TYPE_CHECKING:
-    from tools.cq.macros.contracts import ScoringDetailsV1
 
 # Bucket thresholds
 _HIGH_THRESHOLD = 0.7
@@ -215,7 +212,7 @@ def build_detail_payload(
     *,
     data: Mapping[str, object] | None = None,
     score: ScoreDetails | None = None,
-    scoring: Mapping[str, object] | ScoringDetailsV1 | None = None,
+    scoring: Mapping[str, object] | object | None = None,
     kind: str | None = None,
 ) -> DetailPayload:
     """Construct a DetailPayload from scoring signals and data.
@@ -236,18 +233,21 @@ def build_detail_payload(
 
 
 def _score_details_from_mapping(
-    scoring: Mapping[str, object] | ScoringDetailsV1,
+    scoring: Mapping[str, object] | object,
 ) -> ScoreDetails | None:
     import msgspec
 
     if not scoring:
         return None
 
-    # Convert ScoringDetailsV1 to dict if needed
+    # Convert typed scoring payloads to mapping; reject unknown opaque objects.
+    scoring_dict: Mapping[str, object]
     if isinstance(scoring, msgspec.Struct):
-        scoring_dict = msgspec.structs.asdict(scoring)
+        scoring_dict = cast("Mapping[str, object]", msgspec.structs.asdict(scoring))
+    elif isinstance(scoring, Mapping):
+        scoring_dict = cast("Mapping[str, object]", scoring)
     else:
-        scoring_dict = scoring
+        return None
 
     def _coerce_str(value: object) -> str | None:
         if value is None:

@@ -19,6 +19,18 @@ from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import build_cache_key
 from tools.cq.core.cache.namespaces import resolve_namespace_ttl_seconds
 from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
+from tools.cq.core.cache.search_artifact_index import (
+    global_index_path as _global_index_path,
+)
+from tools.cq.core.cache.search_artifact_index import (
+    global_order_path as _global_order_path,
+)
+from tools.cq.core.cache.search_artifact_index import (
+    run_index_path as _run_index_path,
+)
+from tools.cq.core.cache.search_artifact_index import (
+    run_order_path as _run_order_path,
+)
 from tools.cq.core.cache.telemetry import (
     record_cache_decode_failure,
     record_cache_get,
@@ -51,26 +63,6 @@ _NAMESPACE: Final[str] = "search_artifacts"
 _VERSION: Final[str] = "v2"
 _MAX_INDEX_ROWS: Final[int] = 1000
 _BLOB_THRESHOLD_BYTES: Final[int] = 64 * 1024
-
-
-def _store_root(policy: CqCachePolicyV1) -> Path:
-    return Path(policy.directory).expanduser() / "stores" / _NAMESPACE
-
-
-def _global_order_path(policy: CqCachePolicyV1) -> Path:
-    return _store_root(policy) / "deque" / "global_order"
-
-
-def _global_index_path(policy: CqCachePolicyV1) -> Path:
-    return _store_root(policy) / "index" / "global"
-
-
-def _run_order_path(policy: CqCachePolicyV1, run_id: str) -> Path:
-    return _store_root(policy) / "deque" / f"run_{run_id}"
-
-
-def _run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
-    return _store_root(policy) / "index" / f"run_{run_id}"
 
 
 def _open_deque(path: Path) -> _SearchArtifactDequeLike | None:

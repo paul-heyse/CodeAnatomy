@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast
 
 from tools.cq.cli_app.context import CliResult, FilterConfig
+
+if TYPE_CHECKING:
+    from tools.cq.cli_app.protocols import ConsolePort
+    from tools.cq.cli_app.types import OutputFormat
 
 ResultActionCallable = Callable[[Any], Any]
 ResultActionLiteral = str
@@ -16,22 +21,36 @@ ResultAction = (
 )
 
 
-def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) -> int:
-    """Handle a CLI result using context-based configuration.
+@dataclass(frozen=True, slots=True)
+class PreparedOutput:
+    """Pure output payload prepared for emission."""
+
+    exit_code: int
+    output: str | None = None
+    output_format: OutputFormat | None = None
+    emit_raw: bool = False
+    console: ConsolePort | None = None
+
+
+def prepare_output(
+    cli_result: CliResult,
+    filters: FilterConfig | None = None,
+) -> PreparedOutput:
+    """Prepare output payload for a CLI result without side effects.
 
     Returns:
-        Normalized process exit code.
+        PreparedOutput: Prepared output payload for command emission.
     """
     from tools.cq.cli_app.result_filter import apply_result_filters
     from tools.cq.cli_app.result_persist import persist_result_artifacts
-    from tools.cq.cli_app.result_render import emit_output, render_result
+    from tools.cq.cli_app.result_render import render_result
     from tools.cq.cli_app.types import OutputFormat
     from tools.cq.core.schema import CqResult, assign_result_finding_ids
     from tools.cq.search.pipeline.smart_search import pop_search_object_view_for_run
 
-    non_cq_exit = _handle_non_cq_result(cli_result)
-    if non_cq_exit is not None:
-        return non_cq_exit
+    non_cq_output = _prepare_non_cq_output(cli_result)
+    if non_cq_output is not None:
+        return non_cq_output
 
     ctx = cli_result.context
     result = cast("CqResult", cli_result.result)
@@ -50,26 +69,65 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
         pop_search_object_view_for_run=pop_search_object_view_for_run,
     )
     output = render_result(result, output_format)
-    emit_output(output, output_format=output_format)
-    return 0
+    return PreparedOutput(
+        exit_code=0,
+        output=output,
+        output_format=output_format,
+        console=ctx.console,
+    )
 
 
-def _handle_non_cq_result(cli_result: CliResult) -> int | None:
-    from tools.cq.cli_app.app import console
+def emit_prepared_output(prepared: PreparedOutput) -> int:
+    """Emit one prepared output payload to configured output streams.
+
+    Returns:
+    -------
+    int
+        Process exit code for the emitted output.
+    """
+    from tools.cq.cli_app.result_render import emit_output
+    from tools.cq.cli_app.types import OutputFormat
+
+    if prepared.output is None:
+        return prepared.exit_code
+
+    console = prepared.console
+    if console is None:
+        from rich.console import Console
+
+        console = Console(highlight=False, stderr=False)
+
+    if prepared.emit_raw:
+        stream = console.file
+        stream.write(prepared.output)
+        if not prepared.output.endswith("\n"):
+            stream.write("\n")
+        stream.flush()
+        return prepared.exit_code
+
+    output_format = prepared.output_format
+    if not isinstance(output_format, OutputFormat):
+        output_format = OutputFormat.md
+    emit_output(prepared.output, output_format=output_format, console=cast("ConsolePort", console))
+    return prepared.exit_code
+
+
+def _prepare_non_cq_output(cli_result: CliResult) -> PreparedOutput | None:
     from tools.cq.cli_app.context import CliTextResult
+    from tools.cq.cli_app.types import OutputFormat
 
     if cli_result.is_cq_result:
         return None
     if isinstance(cli_result.result, CliTextResult):
-        if cli_result.result.media_type == "application/json":
-            stream = console.file
-            stream.write(cli_result.result.text)
-            if not cli_result.result.text.endswith("\n"):
-                stream.write("\n")
-            stream.flush()
-        else:
-            console.print(cli_result.result.text)
-    return cli_result.get_exit_code()
+        is_json = cli_result.result.media_type == "application/json"
+        return PreparedOutput(
+            exit_code=cli_result.get_exit_code(),
+            output=cli_result.result.text,
+            output_format=OutputFormat.json if is_json else OutputFormat.md,
+            emit_raw=is_json,
+            console=cli_result.context.console,
+        )
+    return PreparedOutput(exit_code=cli_result.get_exit_code())
 
 
 def _return_int_as_exit_code_else_zero(result: Any) -> int:
@@ -117,7 +175,8 @@ def cq_result_action(result: Any) -> int:
         int: Normalized exit code for CLI processing.
     """
     if isinstance(result, CliResult):
-        return handle_result(result, result.filters or FilterConfig())
+        prepared = prepare_output(result, result.filters or FilterConfig())
+        return emit_prepared_output(prepared)
     if isinstance(result, int):
         return result
     return 0
@@ -131,7 +190,9 @@ CQ_DEFAULT_RESULT_ACTION: tuple[ResultActionCallable | ResultActionLiteral, ...]
 
 __all__ = [
     "CQ_DEFAULT_RESULT_ACTION",
+    "PreparedOutput",
     "apply_result_action",
     "cq_result_action",
-    "handle_result",
+    "emit_prepared_output",
+    "prepare_output",
 ]

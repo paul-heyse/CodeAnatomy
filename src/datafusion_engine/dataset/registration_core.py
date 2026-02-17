@@ -52,6 +52,7 @@ from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.catalog.introspection import (
     invalidate_introspection_cache,
 )
+from datafusion_engine.dataset.ddl_types import ddl_type_alias
 from datafusion_engine.dataset.registration_delta_helpers import (
     _cache_prefix_for_registration,
     _delta_cdf_artifact_payload,
@@ -127,28 +128,14 @@ if TYPE_CHECKING:
 
 _INPUT_PLUGIN_PREFIXES = ("artifact://", "dataset://", "repo://")
 _DDL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_DDL_TYPE_ALIASES: dict[str, str] = {
-    "Int8": "TINYINT",
-    "Int16": "SMALLINT",
-    "Int32": "INT",
-    "Int64": "BIGINT",
-    "UInt8": "TINYINT",
-    "UInt16": "SMALLINT",
-    "UInt32": "INT",
-    "UInt64": "BIGINT",
-    "Float32": "FLOAT",
-    "Float64": "DOUBLE",
-    "Utf8": "VARCHAR",
-    "LargeUtf8": "VARCHAR",
-    "Boolean": "BOOLEAN",
-}
 
 logger = logging.getLogger(__name__)
 
 
 def _sql_type_name(dtype: pa.DataType) -> str:
     dtype_name = _datafusion_type_name(dtype)
-    return _DDL_TYPE_ALIASES.get(dtype_name, dtype_name)
+    alias = ddl_type_alias(dtype_name)
+    return alias or dtype_name
 
 
 @dataclass(frozen=True)

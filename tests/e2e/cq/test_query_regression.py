@@ -8,7 +8,8 @@ import pytest
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.enrichment import SymtableEnricher
+from tools.cq.query.executor_plan_dispatch import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.search.pipeline.smart_search import smart_search
@@ -63,6 +64,7 @@ def _execute_query(query_text: str, toolchain: Toolchain, repo_root: Path) -> Cq
             query=query,
             root=str(repo_root),
             services=resolve_runtime_services(repo_root),
+            symtable_enricher=SymtableEnricher(repo_root),
             argv=(),
             query_text=query_text,
         ),
@@ -80,7 +82,7 @@ def test_regression_known_callers(toolchain: Toolchain, repo_root: Path) -> None
     repo_root : Path
         Repository root path.
     """
-    # Query for execute_plan function which we know exists in query/executor_runtime.py
+    # Query for execute_plan function in query/executor_plan_dispatch.py
     result = _execute_query("entity=function name=execute_plan", toolchain, repo_root)
 
     assert result is not None
@@ -298,7 +300,7 @@ def test_q_explicit_lang_summary_preserves_scope_and_query_text(
 ) -> None:
     """Explicit language q queries should retain full query text and lang scope."""
     query_text = (
-        "entity=function name=execute_plan lang=python in=tools/cq/query/executor_runtime.py"
+        "entity=function name=execute_plan lang=python in=tools/cq/query/executor_plan_dispatch.py"
     )
     query = parse_query(query_text)
     plan = compile_query(query)
@@ -308,6 +310,7 @@ def test_q_explicit_lang_summary_preserves_scope_and_query_text(
             query=query,
             root=str(repo_root),
             services=resolve_runtime_services(repo_root),
+            symtable_enricher=SymtableEnricher(repo_root),
             argv=(),
             query_text=query_text,
         ),

@@ -2,65 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Annotated
 
-from cyclopts import App, Parameter, validators
+from cyclopts import App, Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import analysis_group, require_context
-from tools.cq.cli_app.types import NeighborhoodLanguageToken
-from tools.cq.neighborhood.executor import NeighborhoodExecutionRequest, execute_neighborhood
-from tools.cq.search.pipeline.enrichment_contracts import parse_incremental_enrichment_mode
+from tools.cq.cli_app.params import NeighborhoodParams
+from tools.cq.cli_app.schema_projection import neighborhood_options_from_projected_params
+from tools.cq.neighborhood.executor import NeighborhoodExecutionRequestV1, execute_neighborhood
+from tools.cq.search._shared.enrichment_contracts import parse_incremental_enrichment_mode
 
 neighborhood_app = App(
     name="neighborhood",
     help="Analyze semantic neighborhood of a target",
     group=analysis_group,
 )
-
-
-@dataclass(kw_only=True)
-class NeighborhoodParams:
-    """Options for the neighborhood command."""
-
-    lang: Annotated[
-        NeighborhoodLanguageToken,
-        Parameter(name="--lang", help="Query language (python, rust)"),
-    ] = NeighborhoodLanguageToken.python
-    top_k: Annotated[
-        int,
-        Parameter(
-            name="--top-k",
-            help="Max items per slice",
-            validator=validators.Number(gte=1, lte=10_000),
-        ),
-    ] = 10
-    semantic_enrichment: Annotated[
-        bool,
-        Parameter(
-            name="--semantic-enrichment",
-            negative="--no-semantic-enrichment",
-            negative_bool=(),
-            help="Enable semantic enrichment",
-        ),
-    ] = True
-    enrich: Annotated[
-        bool,
-        Parameter(
-            name="--enrich",
-            negative="--no-enrich",
-            negative_bool=(),
-            help="Enable incremental enrichment for neighborhood target analysis",
-        ),
-    ] = True
-    enrich_mode: Annotated[
-        str,
-        Parameter(
-            name="--enrich-mode",
-            help="Incremental enrichment mode (ts_only, ts_sym, ts_sym_dis, full)",
-        ),
-    ] = "ts_sym"
 
 
 @neighborhood_app.default
@@ -76,9 +33,9 @@ def neighborhood(
         CLI result containing rendered neighborhood findings.
     """
     ctx = require_context(ctx)
-    params = opts if opts is not None else NeighborhoodParams()
+    params = neighborhood_options_from_projected_params(opts)
     result = execute_neighborhood(
-        NeighborhoodExecutionRequest(
+        NeighborhoodExecutionRequestV1(
             target=target,
             root=ctx.root,
             argv=ctx.argv,

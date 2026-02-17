@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 from ast_grep_py import SgRoot
@@ -67,6 +67,10 @@ from tools.cq.search.rust.extractors_shared import (
     scope_name as _scope_name_shared,
 )
 from tools.cq.search.rust.node_access import SgRustNodeAccess
+from tools.cq.search.rust.runtime_context import (
+    ensure_rust_cache_registered,
+    get_default_rust_runtime_context,
+)
 from tools.cq.search.tree_sitter.rust_lane.runtime import (
     RustLaneEnrichmentSettingsV1,
     is_tree_sitter_rust_available,
@@ -77,12 +81,6 @@ from tools.cq.search.tree_sitter.rust_lane.runtime import (
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode
-
-_MAX_AST_CACHE_ENTRIES = 64
-_AST_CACHE: BoundedCache[str, tuple[SgRoot, str]] = BoundedCache(
-    max_size=_MAX_AST_CACHE_ENTRIES, policy="fifo"
-)
-CACHE_REGISTRY.register_cache("rust", "rust_enrichment:ast", _AST_CACHE)
 
 _DEFAULT_SCOPE_DEPTH = 24
 _CROSSCHECK_ENV = "CQ_RUST_ENRICHMENT_CROSSCHECK"
@@ -97,27 +95,34 @@ def _source_hash(source_bytes: bytes) -> str:
     return shared_source_hash(source_bytes)
 
 
+def _rust_ast_cache() -> BoundedCache[str, tuple[SgRoot, str]]:
+    ctx = get_default_rust_runtime_context()
+    ensure_rust_cache_registered(ctx)
+    return cast("BoundedCache[str, tuple[SgRoot, str]]", ctx.ast_cache)
+
+
 def _get_sg_root(source: str, *, cache_key: str | None) -> SgRoot:
     source_bytes = source.encode("utf-8", errors="replace")
     if cache_key is None:
         return SgRoot(source, "rust")
 
     content_hash = _source_hash(source_bytes)
-    cached = _AST_CACHE.get(cache_key)
+    ast_cache = _rust_ast_cache()
+    cached = ast_cache.get(cache_key)
     if cached is not None:
         root, cached_hash = cached
         if cached_hash == content_hash:
             return root
 
     root = SgRoot(source, "rust")
-    _AST_CACHE.put(cache_key, (root, content_hash))
+    ast_cache.put(cache_key, (root, content_hash))
     return root
 
 
 def clear_rust_enrichment_cache() -> None:
     """Clear ast-grep parse cache for Rust enrichment."""
     logger.debug("Clearing Rust ast-grep enrichment cache")
-    _AST_CACHE.clear()
+    _rust_ast_cache().clear()
 
 
 CACHE_REGISTRY.register_clear_callback("rust", clear_rust_enrichment_cache)

@@ -15,14 +15,19 @@ from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.codec import RgAnyEvent, decode_rg_event
 
 if TYPE_CHECKING:
-    from tools.cq.search.rg.contracts import RgProcessResultV1, RgRunSettingsV1
+    from tools.cq.search.rg.contracts import (
+        RgProcessResultV1 as RgProcessContractV1,
+    )
+    from tools.cq.search.rg.contracts import (
+        RgRunSettingsV1,
+    )
 
 _LOOKAROUND_RE = re.compile(r"\(\?(?:[=!]|<[=!])")
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class RgProcessResult:
+class RgProcessRuntimeResultV1:
     """Result from executing a native ripgrep process."""
 
     command: list[str]
@@ -31,6 +36,10 @@ class RgProcessResult:
     returncode: int
     stderr: str
     stdout_lines: list[str]
+
+
+# Backward-compatible runtime alias consumed by adapters/tests.
+RgProcessResultV1 = RgProcessRuntimeResultV1
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,11 +231,15 @@ def _decode_stdout_lines(stdout_bytes: bytes) -> list[str]:
     return [line for line in text.splitlines() if line.strip()]
 
 
-def run_rg_json(request: RgRunRequest, *, pcre2_available: bool = False) -> RgProcessResult:
+def run_rg_json(
+    request: RgRunRequest,
+    *,
+    pcre2_available: bool = False,
+) -> RgProcessRuntimeResultV1:
     """Run native ``rg`` and decode structured output when requested.
 
     Returns:
-        RgProcessResult: Function return value.
+        RgProcessResultV1: Function return value.
     """
     command = build_rg_command(request, pcre2_available=pcre2_available)
     logger.debug(
@@ -263,7 +276,7 @@ def run_rg_json(request: RgRunRequest, *, pcre2_available: bool = False) -> RgPr
     else:
         stdout_lines = _decode_stdout_lines(stdout_bytes)
 
-    result = RgProcessResult(
+    result = RgProcessRuntimeResultV1(
         command=command,
         events=events,
         timed_out=timed_out,
@@ -276,7 +289,7 @@ def run_rg_json(request: RgRunRequest, *, pcre2_available: bool = False) -> RgPr
     return result
 
 
-def run_rg_json_contract(request: RgRunRequest) -> RgProcessResultV1:
+def run_rg_json_contract(request: RgRunRequest) -> RgProcessContractV1:
     """Run rg and return the consolidated serializable result contract.
 
     Returns:
@@ -319,7 +332,7 @@ def run_with_settings(
     limits: SearchLimits,
     settings: RgRunSettingsV1,
     pcre2_available: bool = False,
-) -> RgProcessResultV1:
+) -> RgProcessContractV1:
     """Execute rg with serialized settings and return output contract.
 
     Returns:
@@ -342,7 +355,7 @@ def run_with_settings(
     return result_from_process(run_rg_json(request, pcre2_available=pcre2_available))
 
 
-def run_with_request(request: RgRunRequest) -> RgProcessResultV1:
+def run_with_request(request: RgRunRequest) -> RgProcessContractV1:
     """Execute rg from the legacy request contract and normalize output.
 
     Returns:
@@ -426,7 +439,8 @@ def run_rg_files_with_matches(request: RgFilesWithMatchesRequest) -> list[str] |
 __all__ = [
     "RgCountRequest",
     "RgFilesWithMatchesRequest",
-    "RgProcessResult",
+    "RgProcessResultV1",
+    "RgProcessRuntimeResultV1",
     "build_command_from_settings",
     "build_rg_command",
     "detect_rg_types",

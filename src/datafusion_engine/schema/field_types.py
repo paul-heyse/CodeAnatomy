@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from datafusion_engine.schema.type_resolution import resolve_arrow_type
+
 # ---------------------------------------------------------------------------
 # Canonical identity field types
 # ---------------------------------------------------------------------------
@@ -19,19 +21,6 @@ _IDENTITY_FIELD_TYPES: dict[str, pa.DataType] = {
     "repo": pa.string(),
     "index_id": pa.string(),
     "index_path": pa.string(),
-}
-
-# ---------------------------------------------------------------------------
-# Type hint string -> DataType resolver
-# ---------------------------------------------------------------------------
-
-_TYPE_HINT_MAP: dict[str, pa.DataType] = {
-    "string": pa.string(),
-    "int32": pa.int32(),
-    "int64": pa.int64(),
-    "float64": pa.float64(),
-    "bool": pa.bool_(),
-    "map<string, string>": pa.map_(pa.string(), pa.string()),
 }
 
 
@@ -60,11 +49,7 @@ def resolve_field_type(field_name: str, type_hint: str) -> pa.DataType:
     if field_name in _IDENTITY_FIELD_TYPES:
         return _IDENTITY_FIELD_TYPES[field_name]
 
-    # 2. Exact scalar / map match.
-    if type_hint in _TYPE_HINT_MAP:
-        return _TYPE_HINT_MAP[type_hint]
-
-    # 3. Parameterized composite types.
+    # 2. Parameterized composite types.
     if type_hint == "list<struct>":
         # Placeholder list-of-struct; the element struct is opaque here.
         return pa.list_(pa.struct([]))
@@ -73,8 +58,12 @@ def resolve_field_type(field_name: str, type_hint: str) -> pa.DataType:
         # Placeholder struct; child fields are opaque here.
         return pa.struct([])
 
-    msg = f"Cannot resolve field type for {field_name!r} with hint {type_hint!r}."
-    raise ValueError(msg)
+    # 3. Canonical scalar/map hint resolution.
+    try:
+        return resolve_arrow_type(type_hint)
+    except ValueError as exc:
+        msg = f"Cannot resolve field type for {field_name!r} with hint {type_hint!r}."
+        raise ValueError(msg) from exc
 
 
 __all__ = [

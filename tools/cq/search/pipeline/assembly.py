@@ -107,8 +107,8 @@ def _assemble_search_insight(
     FrontDoorInsightV1
         Assembled insight card with semantic enrichment.
     """
-    from tools.cq.core.front_door_assembly import build_search_insight
     from tools.cq.core.front_door_contracts import SearchInsightBuildRequestV1
+    from tools.cq.core.front_door_search import build_search_insight
 
     insight = build_search_insight(
         SearchInsightBuildRequestV1(
@@ -183,7 +183,9 @@ def _prepare_search_assembly_inputs(
         object_runtime=object_runtime,
     )
     if all_diagnostics:
-        sections.append(Section(title="Cross-Language Diagnostics", findings=all_diagnostics))
+        sections.append(
+            Section(title="Cross-Language Diagnostics", findings=tuple(all_diagnostics))
+        )
     definition_matches, candidate_findings = _collect_definition_candidates(ctx, object_runtime)
     from tools.cq.search.pipeline.orchestration import insert_target_candidates
 

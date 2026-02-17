@@ -28,6 +28,8 @@ from serde_msgspec import (
 from utils.file_io import decode_bytes
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
+
     from core_types import DeterminismTier
     from extract.scanning.scope_manifest import ScopeManifest
 
@@ -162,6 +164,10 @@ class ExtractExecutionContext:
             Determinism tier for extract execution.
         """
         return self.ensure_session().determinism_tier
+
+    def session_context(self) -> SessionContext:
+        """Return the DataFusion SessionContext for extract execution."""
+        return self.ensure_session().session_runtime.ctx
 
 
 @dataclass(frozen=True)

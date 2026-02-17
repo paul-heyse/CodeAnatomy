@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from tools.cq.macros.shared import (
@@ -9,10 +10,12 @@ from tools.cq.macros.shared import (
     macro_score_payload,
     macro_scoring_details,
     resolve_target_files,
+    scan_python_files,
     scope_filter_applied,
 )
 
 MAX_FILES_LIMIT = 3
+EXPECTED_FILES_SCANNED = 2
 
 
 def test_scope_filter_applied_detects_include() -> None:
@@ -78,3 +81,30 @@ def test_iter_files_respects_max_files(tmp_path: Path) -> None:
         max_files=MAX_FILES_LIMIT,
     )
     assert len(result) <= MAX_FILES_LIMIT
+
+
+class _FunctionCountVisitor(ast.NodeVisitor):
+    def __init__(self, file: str) -> None:
+        self.file = file
+        self.function_count = 0
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> object:
+        self.function_count += 1
+        return self.generic_visit(node)
+
+
+def test_scan_python_files_visits_parsed_files(tmp_path: Path) -> None:
+    """scan_python_files should parse files and run visitors."""
+    (tmp_path / "a.py").write_text("def one():\n    pass\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("def two():\n    pass\n", encoding="utf-8")
+
+    visitors, files_scanned = scan_python_files(
+        tmp_path,
+        include=None,
+        exclude=None,
+        visitor_factory=_FunctionCountVisitor,
+    )
+
+    assert files_scanned == EXPECTED_FILES_SCANNED
+    assert len(visitors) == EXPECTED_FILES_SCANNED
+    assert sum(visitor.function_count for visitor in visitors) == EXPECTED_FILES_SCANNED

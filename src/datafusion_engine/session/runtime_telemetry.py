@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
@@ -18,14 +17,18 @@ from datafusion_engine.plan.perf_policy import (
 )
 from datafusion_engine.session._session_constants import CACHE_PROFILES
 from datafusion_engine.session.contracts import (
-    IdentifierNormalizationMode,
     TelemetryEnrichmentPolicy,
 )
 from datafusion_engine.session.features import named_args_supported
+from datafusion_engine.session.runtime_compile import (
+    _effective_ident_normalization,
+    _identifier_normalization_mode,
+)
 from datafusion_engine.session.runtime_config_policies import (
     DATAFUSION_MAJOR_VERSION,
     DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
     _ansi_mode,
+    _effective_catalog_autoload_for_profile,
 )
 from schema_spec.policies import DataFusionWritePolicy
 from serde_msgspec import MSGPACK_ENCODER
@@ -364,40 +367,6 @@ def _delta_protocol_support_payload(
     }
 
 
-# ---------------------------------------------------------------------------
-# Catalog Autoload Helpers
-# ---------------------------------------------------------------------------
-def _catalog_autoload_settings() -> dict[str, str]:
-    location = os.environ.get("CODEANATOMY_DATAFUSION_CATALOG_LOCATION", "").strip()
-    file_format = os.environ.get("CODEANATOMY_DATAFUSION_CATALOG_FORMAT", "").strip()
-    settings: dict[str, str] = {}
-    if location:
-        settings["datafusion.catalog.location"] = location
-    if file_format:
-        settings["datafusion.catalog.format"] = file_format
-    return settings
-
-
-def _effective_catalog_autoload_for_profile(
-    profile: DataFusionRuntimeProfile,
-) -> tuple[str | None, str | None]:
-    if not profile.catalog.catalog_auto_load_enabled:
-        return (None, None)
-    if (
-        profile.catalog.catalog_auto_load_location is not None
-        or profile.catalog.catalog_auto_load_format is not None
-    ):
-        return (
-            profile.catalog.catalog_auto_load_location,
-            profile.catalog.catalog_auto_load_format,
-        )
-    env_settings = _catalog_autoload_settings()
-    return (
-        env_settings.get("datafusion.catalog.location"),
-        env_settings.get("datafusion.catalog.format"),
-    )
-
-
 def _supports_explain_analyze_level() -> bool:
     if DATAFUSION_MAJOR_VERSION is None:
         return False
@@ -604,26 +573,6 @@ def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, st
         else:
             payload[key] = str(value)
     return payload
-
-
-def _identifier_normalization_mode(
-    profile: DataFusionRuntimeProfile,
-) -> IdentifierNormalizationMode:
-    mode = profile.features.identifier_normalization_mode
-    if (
-        profile.features.enable_delta_session_defaults
-        and mode != IdentifierNormalizationMode.STRICT
-    ):
-        return IdentifierNormalizationMode.RAW
-    return mode
-
-
-def _effective_ident_normalization(profile: DataFusionRuntimeProfile) -> bool:
-    mode = _identifier_normalization_mode(profile)
-    return mode in {
-        IdentifierNormalizationMode.SQL_SAFE,
-        IdentifierNormalizationMode.STRICT,
-    }
 
 
 def _telemetry_enrichment_policy_for_profile(

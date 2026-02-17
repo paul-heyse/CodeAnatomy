@@ -56,12 +56,6 @@ def delta_delete(
     return ensure_mapping(response, label="delta_delete")
 
 
-def _validate_update_constraints(ctx: SessionContext, request: DeltaUpdateRequest) -> None:
-    if not request.extra_constraints:
-        return
-    _ = ctx
-
-
 def delta_update(
     ctx: SessionContext,
     *,
@@ -77,7 +71,6 @@ def delta_update(
     if not request.updates:
         msg = "Delta update requires at least one column assignment."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    _validate_update_constraints(ctx, request)
     update_fn = _require_internal_entrypoint("delta_update_request_payload")
     payload = msgspec.msgpack.encode(request)
     response = update_fn(_internal_ctx(ctx, entrypoint="delta_update_request_payload"), payload)

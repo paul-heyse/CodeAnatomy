@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import msgspec
@@ -29,6 +28,14 @@ from tools.cq.core.scoring import (
 )
 from tools.cq.core.structs import CqStruct
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
+from tools.cq.query.import_utils import (
+    extract_from_import_alias,
+    extract_from_import_name,
+    extract_from_module_name,
+    extract_rust_use_import_name,
+    extract_simple_import_alias,
+    extract_simple_import_name,
+)
 from tools.cq.query.scan import ScanContext
 from tools.cq.query.shared_utils import extract_def_name
 
@@ -49,9 +56,8 @@ def process_import_query(
     import_records: list[SgRecord],
     query: Query,
     result: CqResult,
-    root: Path,
     *,
-    symtable: SymtableEnricher | None = None,
+    symtable: SymtableEnricher,
 ) -> CqResult:
     """Process an import entity query.
 
@@ -63,10 +69,8 @@ def process_import_query(
         Query with filters
     result
         Result to populate
-    root
-        Repository root
     symtable
-        Optional symtable enricher
+        Symtable enricher
 
     Returns:
     -------
@@ -80,11 +84,10 @@ def process_import_query(
 
     # Apply scope filter if present
     if query.scope_filter and matching_imports:
-        enricher = symtable if symtable is not None else SymtableEnricher(root)
         filtered = filter_by_scope(
             result.key_findings,
             query.scope_filter,
-            enricher,
+            symtable,
             matching_imports,
         )
         result = msgspec.structs.replace(result, key_findings=tuple(filtered))
@@ -127,7 +130,6 @@ def process_def_query(
     state = ctx.state
     result = ctx.result
     scan_ctx = state.scan
-    root = state.ctx.root
 
     candidate_records = (
         list(def_candidates) if def_candidates is not None else list(scan_ctx.def_records)
@@ -143,11 +145,10 @@ def process_def_query(
 
     # Apply scope filter if present
     if query.scope_filter:
-        enricher = ctx.symtable if ctx.symtable is not None else SymtableEnricher(root)
         filtered = filter_by_scope(
             result.key_findings,
             query.scope_filter,
-            enricher,
+            ctx.symtable,
             matching_defs,
         )
         result = msgspec.structs.replace(result, key_findings=tuple(filtered))
@@ -157,9 +158,17 @@ def process_def_query(
         query=query,
         matching_defs=matching_defs,
         scan_ctx=scan_ctx,
-        root=root,
+        root=state.ctx.root,
+        symtable=ctx.symtable,
     )
-    result = append_expander_sections(result, matching_defs, scan_ctx, root, query)
+    result = append_expander_sections(
+        result,
+        matching_defs,
+        scan_ctx,
+        state.ctx.root,
+        query,
+        symtable=ctx.symtable,
+    )
     return finalize_def_query_summary(result, scan_ctx)
 
 
@@ -439,137 +448,18 @@ def extract_import_name(record: SgRecord) -> str | None:
     kind = record.kind
 
     extractor_by_kind: dict[str, Callable[[str], str | None]] = {
-        "import": extract_simple_import,
-        "import_as": extract_import_alias,
-        "from_import": extract_from_import,
+        "import": extract_simple_import_name,
+        "import_as": extract_simple_import_alias,
+        "from_import": extract_from_import_name,
         "from_import_as": extract_from_import_alias,
-        "from_import_multi": extract_from_module,
-        "from_import_paren": extract_from_module,
-        "use_declaration": extract_rust_use_name,
+        "from_import_multi": extract_from_module_name,
+        "from_import_paren": extract_from_module_name,
+        "use_declaration": extract_rust_use_import_name,
     }
     extractor = extractor_by_kind.get(kind)
     if extractor is None:
         return None
     return extractor(text)
-
-
-def extract_simple_import(text: str) -> str | None:
-    """Extract name from 'import foo' or 'import foo.bar'.
-
-    Parameters
-    ----------
-    text
-        Import statement text
-
-    Returns:
-    -------
-    str | None
-        Imported module name when found
-    """
-    # Import statements don't contain string literals; stripping inline comments
-    # prevents commas/parentheses in comments from affecting extraction.
-    text = text.split("#", maxsplit=1)[0].strip()
-    match = re.match(r"import\s+([\w.]+)", text)
-    return match.group(1) if match else None
-
-
-def extract_import_alias(text: str) -> str | None:
-    """Extract alias from 'import foo as bar'.
-
-    Parameters
-    ----------
-    text
-        Import statement text
-
-    Returns:
-    -------
-    str | None
-        Alias name when found
-    """
-    text = text.split("#", maxsplit=1)[0].strip()
-    match = re.match(r"import\s+[\w.]+\s+as\s+(\w+)", text)
-    return match.group(1) if match else None
-
-
-def extract_from_import(text: str) -> str | None:
-    """Extract name from 'from x import y' (single import only).
-
-    Parameters
-    ----------
-    text
-        Import statement text
-
-    Returns:
-    -------
-    str | None
-        Imported name or module name when extractable
-    """
-    text = text.split("#", maxsplit=1)[0].strip()
-    if "," not in text:
-        match = re.search(r"import\s+(\w+)\s*$", text)
-        if match:
-            return match.group(1)
-    # Fall back to module name for multi-imports
-    return extract_from_module(text)
-
-
-def extract_from_import_alias(text: str) -> str | None:
-    """Extract alias from 'from x import y as z'.
-
-    Parameters
-    ----------
-    text
-        Import statement text
-
-    Returns:
-    -------
-    str | None
-        Alias name when found
-    """
-    text = text.split("#", maxsplit=1)[0].strip()
-    match = re.search(r"as\s+(\w+)\s*$", text)
-    return match.group(1) if match else None
-
-
-def extract_from_module(text: str) -> str | None:
-    """Extract module name from 'from x import ...'.
-
-    Parameters
-    ----------
-    text
-        Import statement text
-
-    Returns:
-    -------
-    str | None
-        Module name when found
-    """
-    text = text.split("#", maxsplit=1)[0].strip()
-    match = re.match(r"from\s+([\w.]+)", text)
-    return match.group(1) if match else None
-
-
-def extract_rust_use_name(text: str) -> str | None:
-    """Extract import target from Rust use declarations.
-
-    Parameters
-    ----------
-    text
-        Use declaration text
-
-    Returns:
-    -------
-    str | None
-        Imported Rust symbol name or alias when extractable
-    """
-    text = text.split("//", maxsplit=1)[0].strip()
-    match = re.match(r"use\s+([^;]+);?", text)
-    if not match:
-        return None
-    use_target = match.group(1).strip()
-    if " as " in use_target:
-        return use_target.rsplit(" as ", maxsplit=1)[1].strip()
-    return use_target.rsplit("::", maxsplit=1)[-1].strip("{} ").strip()
 
 
 def def_to_finding(
@@ -697,13 +587,7 @@ __all__ = [
     "dedupe_import_matches",
     "def_to_finding",
     "definition_relationship_detail",
-    "extract_from_import",
-    "extract_from_import_alias",
-    "extract_from_module",
-    "extract_import_alias",
     "extract_import_name",
-    "extract_rust_use_name",
-    "extract_simple_import",
     "filter_to_matching",
     "finalize_def_query_summary",
     "import_match_key",

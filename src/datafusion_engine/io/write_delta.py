@@ -673,7 +673,14 @@ def _delta_idempotent_options(options: Mapping[str, object]) -> IdempotentWriteO
     return IdempotentWriteOptions(app_id=normalized_app_id, version=version)
 
 
-def _commit_metadata_from_properties(commit_properties: CommitProperties) -> dict[str, str]:
+def commit_metadata_from_properties(commit_properties: CommitProperties) -> dict[str, str]:
+    """Extract custom commit metadata from Delta ``CommitProperties``.
+
+    Returns:
+    -------
+    dict[str, str]
+        Stringified commit metadata mapping.
+    """
     custom_metadata = getattr(commit_properties, "custom_metadata", None)
     if not isinstance(custom_metadata, Mapping):
         return {}
@@ -724,7 +731,6 @@ __all__ = [
     "_apply_explicit_delta_features",
     "_apply_policy_commit_metadata",
     "_base_commit_metadata",
-    "_commit_metadata_from_properties",
     "_dataset_location_commit_metadata",
     "_delta_commit_metadata",
     "_delta_configuration",
@@ -755,4 +761,5 @@ __all__ = [
     "_strip_qualifier",
     "_validate_delta_protocol_support",
     "_writer_properties_from_policy",
+    "commit_metadata_from_properties",
 ]

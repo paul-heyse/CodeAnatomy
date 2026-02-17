@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import msgspec
 import pyarrow as pa
 import pyarrow.dataset as ds
 from opentelemetry import trace
@@ -127,6 +128,67 @@ class DeltaMutationArtifact(StructBaseStrict, frozen=True):
     commit_run_id: str | None = None
     constraint_status: str | None = None
     constraint_violations: Sequence[str] = ()
+
+
+class DeltaOperationReport(StructBaseStrict, frozen=True):
+    """Structured Delta operation report payload."""
+
+    rows_affected: int | None = None
+    version: int | None = None
+    operation: str | None = None
+    duration_ms: float | None = None
+    commit_metadata: Mapping[str, str] = msgspec.field(default_factory=dict)
+    payload: Mapping[str, object] = msgspec.field(default_factory=dict)
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, object] | None,
+        *,
+        operation: str | None = None,
+        commit_metadata: Mapping[str, str] | None = None,
+    ) -> DeltaOperationReport:
+        """Build a normalized operation report from an arbitrary payload.
+
+        Returns:
+        -------
+        DeltaOperationReport
+            Structured operation report with normalized counters and metadata.
+        """
+        resolved = dict(payload or {})
+        rows_affected = coerce_int(
+            resolved.get("rows_affected")
+            or resolved.get("rows_written")
+            or resolved.get("num_output_rows")
+        )
+        version = coerce_int(resolved.get("version") or resolved.get("delta_version"))
+        duration_value = resolved.get("duration_ms")
+        duration_ms = float(duration_value) if isinstance(duration_value, (int, float)) else None
+        return cls(
+            rows_affected=rows_affected,
+            version=version,
+            operation=operation,
+            duration_ms=duration_ms,
+            commit_metadata=dict(commit_metadata or {}),
+            payload=resolved,
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        """Serialize the report to a JSON-friendly payload.
+
+        Returns:
+        -------
+        dict[str, object]
+            Report payload with canonical top-level operation fields.
+        """
+        payload = dict(self.payload)
+        payload.setdefault("rows_affected", self.rows_affected)
+        payload.setdefault("version", self.version)
+        payload.setdefault("operation", self.operation)
+        payload.setdefault("duration_ms", self.duration_ms)
+        if self.commit_metadata:
+            payload.setdefault("commit_metadata", dict(self.commit_metadata))
+        return payload
 
 
 class DeltaScanPlanArtifact(StructBaseStrict, frozen=True):
@@ -766,11 +828,10 @@ def _bootstrap_observability_table(
     schema: pa.Schema,
     operation: str,
 ) -> None:
-    _ = (ctx, profile)
+    _ = profile
     table_path.parent.mkdir(parents=True, exist_ok=True)
     bootstrap_row = _bootstrap_observability_row(schema)
     empty = pa.Table.from_pylist([bootstrap_row], schema=schema)
-    from deltalake import CommitProperties
     from deltalake.exceptions import (
         CommitFailedError,
         DeltaError,
@@ -778,22 +839,35 @@ def _bootstrap_observability_table(
         SchemaMismatchError,
         TableNotFoundError,
     )
-    from deltalake.writer import write_deltalake
 
-    commit_properties = CommitProperties(
-        custom_metadata=_observability_commit_metadata(
+    from datafusion_engine.delta.transactions import write_transaction
+    from datafusion_engine.delta.write_ipc_payload import (
+        DeltaWriteRequestOptions,
+        build_delta_write_request,
+    )
+    from storage.deltalake.delta_runtime_ops import delta_commit_options
+
+    commit_options = delta_commit_options(
+        commit_properties=None,
+        commit_metadata=_observability_commit_metadata(
             operation,
             {"table": table_path.name},
         ),
+        app_id=None,
+        app_version=None,
     )
-    try:
-        write_deltalake(
-            str(table_path),
-            empty,
+    request = build_delta_write_request(
+        table_uri=str(table_path),
+        table=empty,
+        options=DeltaWriteRequestOptions(
             mode="overwrite",
             schema_mode="overwrite",
-            commit_properties=commit_properties,
-        )
+            storage_options=None,
+            commit_options=commit_options,
+        ),
+    )
+    try:
+        write_transaction(ctx, request=request)
     except (
         CommitFailedError,
         DeltaError,
@@ -810,13 +884,7 @@ def _bootstrap_observability_table(
         with contextlib.suppress(OSError):
             shutil.rmtree(table_path)
         table_path.parent.mkdir(parents=True, exist_ok=True)
-        write_deltalake(
-            str(table_path),
-            empty,
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_properties=commit_properties,
-        )
+        write_transaction(ctx, request=request)
 
 
 def _bootstrap_observability_row(schema: pa.Schema) -> dict[str, object]:
@@ -1110,6 +1178,7 @@ __all__ = [
     "DeltaFeatureStateArtifact",
     "DeltaMaintenanceArtifact",
     "DeltaMutationArtifact",
+    "DeltaOperationReport",
     "DeltaScanPlanArtifact",
     "DeltaSnapshotArtifact",
     "ensure_delta_observability_tables",

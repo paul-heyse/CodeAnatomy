@@ -89,30 +89,6 @@ def _runtime_language(language: str) -> object | None:
     return load_tree_sitter_language(language)
 
 
-def _extract_provenance(
-    runtime_language_obj: object | None,
-) -> tuple[str | None, tuple[int, int, int] | None, int | None]:
-    from tools.cq.search.tree_sitter.core.language_registry import normalize_semantic_version
-
-    if runtime_language_obj is None:
-        return None, None, None
-    grammar_name = getattr(runtime_language_obj, "name", None)
-    semantic_version = normalize_semantic_version(
-        getattr(runtime_language_obj, "semantic_version", None)
-    )
-    abi_version_raw = getattr(runtime_language_obj, "abi_version", None)
-    abi_version = (
-        int(abi_version_raw)
-        if isinstance(abi_version_raw, int) and not isinstance(abi_version_raw, bool)
-        else None
-    )
-    return (
-        grammar_name if isinstance(grammar_name, str) and grammar_name else None,
-        semantic_version,
-        abi_version,
-    )
-
-
 def _safe_bool_call(obj: object, method: str, *args: object) -> bool | None:
     fn = getattr(obj, method, None)
     if not callable(fn):
@@ -241,7 +217,9 @@ def load_grammar_schema(language: str) -> GrammarSchemaV1 | None:
     runtime = _load_runtime_node_types(language)
     if runtime:
         runtime_language_obj = _runtime_language(language)
-        grammar_name, semantic_version, abi_version = _extract_provenance(runtime_language_obj)
+        from tools.cq.search.tree_sitter.core.language_registry import extract_provenance
+
+        grammar_name, semantic_version, abi_version = extract_provenance(runtime_language_obj)
         return GrammarSchemaV1(
             language=language,
             node_types=runtime,

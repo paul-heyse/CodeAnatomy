@@ -64,6 +64,7 @@ _COMPARISON_OPS: tuple[Literal["!=", "<", "<=", "=", ">", ">="], ...] = (
     ">=",
 )
 _MIN_QUALIFIED_PARTS = 2
+type StatsFilterValue = int | float | str | bool
 
 
 @dataclass(frozen=True)
@@ -255,21 +256,14 @@ def _resolve_delta_scan_resolution(
     )
     if location is None or location.format != "delta":
         return resolution
-    (
-        candidate_files,
-        delta_version,
-        snapshot_timestamp,
-        delta_protocol,
-        total_files,
-        candidate_file_count,
-        pruned_file_count,
-    ) = _delta_scan_candidates(
+    candidate_result = _delta_scan_candidates(
         ctx,
         location=location,
         lineage=lineage,
         dataset_name=dataset_name,
         runtime_profile=runtime_profile,
     )
+    delta_protocol = candidate_result.delta_protocol
     protocol_compatibility = _delta_protocol_compatibility(
         delta_protocol,
         runtime_profile,
@@ -282,14 +276,14 @@ def _resolve_delta_scan_resolution(
         protocol_compatibility=protocol_compatibility,
     )
     return _DeltaScanResolution(
-        candidate_files=candidate_files,
-        delta_version=delta_version,
+        candidate_files=candidate_result.candidate_files,
+        delta_version=candidate_result.delta_version,
         delta_timestamp=delta_timestamp,
-        snapshot_timestamp=snapshot_timestamp,
-        delta_protocol=delta_protocol,
-        total_files=total_files,
-        candidate_file_count=candidate_file_count,
-        pruned_file_count=pruned_file_count,
+        snapshot_timestamp=candidate_result.snapshot_timestamp,
+        delta_protocol=candidate_result.delta_protocol,
+        total_files=candidate_result.total_files,
+        candidate_file_count=candidate_result.candidate_file_count,
+        pruned_file_count=candidate_result.pruned_file_count,
         protocol_compatibility=protocol_compatibility,
         protocol_compatible=protocol_compatible,
     )
@@ -389,6 +383,19 @@ _DELTA_EXTERNAL_INDEX_PROVIDERS: tuple[ExternalIndexProvider, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class DeltaScanCandidateResult:
+    """Structured scan candidate selection outcome for Delta sources."""
+
+    candidate_files: tuple[Path, ...]
+    delta_version: int | None
+    snapshot_timestamp: int | None
+    delta_protocol: DeltaProtocolSnapshot | None
+    total_files: int
+    candidate_file_count: int
+    pruned_file_count: int
+
+
 def _delta_scan_candidates(
     ctx: SessionContext,
     *,
@@ -396,15 +403,7 @@ def _delta_scan_candidates(
     lineage: ScanLineage,
     dataset_name: str,
     runtime_profile: DataFusionRuntimeProfile | None,
-) -> tuple[
-    tuple[Path, ...],
-    int | None,
-    int | None,
-    DeltaProtocolSnapshot | None,
-    int,
-    int,
-    int,
-]:
+) -> DeltaScanCandidateResult:
     empty_candidates: tuple[Path, ...] = ()
     selection = select_candidates_with_external_indexes(
         ctx,
@@ -417,14 +416,14 @@ def _delta_scan_candidates(
         providers=_DELTA_EXTERNAL_INDEX_PROVIDERS,
     )[0]
     if selection is None:
-        return (
-            empty_candidates,
-            None,
-            None,
-            None,
-            0,
-            0,
-            0,
+        return DeltaScanCandidateResult(
+            candidate_files=empty_candidates,
+            delta_version=None,
+            snapshot_timestamp=None,
+            delta_protocol=None,
+            total_files=0,
+            candidate_file_count=0,
+            pruned_file_count=0,
         )
     delta_version = _metadata_int(selection.metadata.get("delta_version"))
     snapshot_timestamp = _metadata_int(selection.metadata.get("snapshot_timestamp"))
@@ -432,14 +431,14 @@ def _delta_scan_candidates(
         "DeltaProtocolSnapshot | None",
         selection.metadata.get("delta_protocol"),
     )
-    return (
-        selection.candidate_files,
-        delta_version,
-        snapshot_timestamp,
-        delta_protocol,
-        selection.total_files,
-        selection.candidate_file_count,
-        selection.pruned_file_count,
+    return DeltaScanCandidateResult(
+        candidate_files=selection.candidate_files,
+        delta_version=delta_version,
+        snapshot_timestamp=snapshot_timestamp,
+        delta_protocol=delta_protocol,
+        total_files=selection.total_files,
+        candidate_file_count=selection.candidate_file_count,
+        pruned_file_count=selection.pruned_file_count,
     )
 
 
@@ -787,7 +786,7 @@ def _normalize_stats_op(value: str) -> Literal["!=", "<", "<=", "=", ">", ">="] 
     return None
 
 
-def _parse_filter_value(value: str) -> tuple[object, str | None]:
+def _parse_filter_value(value: str) -> tuple[StatsFilterValue, str | None]:
     lowered = value.strip().lower()
     if lowered in {"true", "false"}:
         return lowered == "true", "Boolean"

@@ -256,7 +256,6 @@ __all__ = [
     "SearchConfig",
     "SearchResultAssembly",
     "SearchStats",
-    "_run_candidate_phase",
     "assemble_smart_search_result",
     "build_finding",
     "build_followups",

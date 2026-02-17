@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from tools.cq.core.contract_codec import (
     decode_json_result,
     decode_msgpack,
@@ -44,7 +42,7 @@ def loads_json(payload: bytes | str) -> CqResult:
     return decode_json_result(payload)
 
 
-def dumps_msgpack(value: Any) -> bytes:
+def dumps_msgpack(value: object) -> bytes:
     """Serialize an arbitrary value to msgpack bytes.
 
     Returns:
@@ -55,12 +53,12 @@ def dumps_msgpack(value: Any) -> bytes:
     return encode_msgpack(value)
 
 
-def loads_msgpack(payload: bytes | bytearray | memoryview) -> Any:
+def loads_msgpack(payload: bytes | bytearray | memoryview) -> object:
     """Deserialize msgpack bytes to a Python value.
 
     Returns:
     -------
-    Any
+    object
         Decoded Python value.
     """
     return decode_msgpack(payload)
@@ -77,12 +75,12 @@ def loads_msgpack_result(payload: bytes | bytearray | memoryview) -> CqResult:
     return decode_msgpack_result(payload)
 
 
-def to_builtins(value: Any) -> Any:
+def to_builtins(value: object) -> object:
     """Convert a value to builtins for generic JSON handling.
 
     Returns:
     -------
-    Any
+    object
         Builtins-only representation.
     """
     return to_contract_builtins(value)

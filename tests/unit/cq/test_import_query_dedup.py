@@ -9,7 +9,8 @@ from types import MappingProxyType
 import pytest
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.enrichment import SymtableEnricher
+from tools.cq.query.executor_plan_dispatch import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 
@@ -41,6 +42,7 @@ def test_import_query_does_not_duplicate_from_import_multi(tmp_path: Path) -> No
             query=query,
             root=str(repo),
             services=resolve_runtime_services(repo),
+            symtable_enricher=SymtableEnricher(repo),
             argv=("cq", "q", "entity=import"),
         ),
         tc=tc,
@@ -81,6 +83,7 @@ def test_import_query_ignores_commas_in_inline_comments(tmp_path: Path) -> None:
             query=query,
             root=str(repo),
             services=resolve_runtime_services(repo),
+            symtable_enricher=SymtableEnricher(repo),
             argv=("cq", "q", "entity=import"),
         ),
         tc=tc,

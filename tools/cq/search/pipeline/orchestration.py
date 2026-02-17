@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
@@ -41,25 +41,25 @@ def assemble_result(assembly: SearchResultAssembly) -> CqResult:
 def insert_target_candidates(
     sections: list[Section],
     *,
-    candidates: list[Finding],
+    candidates: Sequence[Finding],
 ) -> None:
     """Insert Target Candidates section at top when candidates exist."""
     if not candidates:
         return
-    sections.insert(0, Section(title="Target Candidates", findings=candidates))
+    sections.insert(0, Section(title="Target Candidates", findings=tuple(candidates)))
 
 
 def insert_neighborhood_preview(
     sections: list[Section],
     *,
-    findings: list[Finding],
+    findings: Sequence[Finding],
     has_target_candidates: bool,
 ) -> None:
     """Insert Neighborhood Preview section after candidates when present."""
     if not findings:
         return
     insert_idx = 1 if has_target_candidates else 0
-    sections.insert(insert_idx, Section(title="Neighborhood Preview", findings=findings))
+    sections.insert(insert_idx, Section(title="Neighborhood Preview", findings=tuple(findings)))
 
 
 # --- From legacy.py ---

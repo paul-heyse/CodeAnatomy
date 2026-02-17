@@ -33,7 +33,6 @@ from tools.cq.search.rg.contracts import (
     settings_from_request,
 )
 from tools.cq.search.rg.runner import (
-    RgProcessResult,
     build_command_from_settings,
     build_rg_command,
     detect_rg_types,
@@ -50,7 +49,6 @@ __all__ = [
     "RgMatchData",
     "RgMatchEvent",
     "RgPath",
-    "RgProcessResult",
     "RgProcessResultV1",
     "RgRunSettingsV1",
     "RgSubmatch",

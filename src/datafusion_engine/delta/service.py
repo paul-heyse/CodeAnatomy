@@ -435,18 +435,25 @@ class DeltaService:
             entrypoint="delta_provider_from_session",
             require_non_fallback=self.profile.features.enforce_delta_ffi_provider,
         )
-        payload = self._provider_artifact_payload(
+        payload = self.provider_artifact_payload(
             request=request,
             compatibility=compatibility,
         )
         record_artifact(self.profile, DELTA_SERVICE_PROVIDER_SPEC, payload)
 
-    def _provider_artifact_payload(
+    def provider_artifact_payload(
         self,
         *,
         request: _ProviderArtifactRecordRequest,
         compatibility: DeltaExtensionCompatibility,
     ) -> dict[str, object]:
+        """Build the provider artifact payload for diagnostics emission.
+
+        Returns:
+        -------
+        dict[str, object]
+            Serialized provider diagnostics payload.
+        """
         resolution = request.resolution
         snapshot = resolution.delta_snapshot
         snapshot_mapping = snapshot if isinstance(snapshot, Mapping) else None

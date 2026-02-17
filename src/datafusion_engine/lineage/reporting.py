@@ -88,7 +88,6 @@ class LineageReport(StructBaseStrict, frozen=True):
     aggregations: tuple[str, ...] = ()
     window_functions: tuple[str, ...] = ()
     subqueries: tuple[str, ...] = ()
-    referenced_udfs: tuple[str, ...] = ()
 
     @property
     def referenced_tables(self) -> tuple[str, ...]:
@@ -146,7 +145,6 @@ def extract_lineage(
         filters=filters,
         aggregations=aggregations,
         window_functions=window_functions,
-        referenced_udfs=required_udfs,
     )
 
 

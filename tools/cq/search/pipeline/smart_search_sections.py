@@ -6,6 +6,11 @@ from pathlib import Path
 
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails, Section
 from tools.cq.core.types import is_python_language
+from tools.cq.search._shared.enrichment_contracts import (
+    incremental_enrichment_payload,
+    python_enrichment_payload,
+    rust_enrichment_payload,
+)
 from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.objects.render import (
     SearchOccurrenceV1,
@@ -18,11 +23,6 @@ from tools.cq.search.objects.render import (
 )
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime, build_object_resolved_view
 from tools.cq.search.pipeline.classifier import MatchCategory
-from tools.cq.search.pipeline.enrichment_contracts import (
-    incremental_enrichment_payload,
-    python_enrichment_payload,
-    rust_enrichment_payload,
-)
 from tools.cq.search.pipeline.smart_search_followups import build_followups
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
@@ -155,7 +155,7 @@ def _build_followups_section(
     followup_findings = build_followups(matches, query, mode)
     if not followup_findings:
         return None
-    return Section(title="Suggested Follow-ups", findings=followup_findings)
+    return Section(title="Suggested Follow-ups", findings=tuple(followup_findings))
 
 
 def build_sections(

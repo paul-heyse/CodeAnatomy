@@ -6,8 +6,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.backend_lifecycle import get_cq_cache_backend
 from tools.cq.search.tree_sitter.contracts.core_models import AdaptiveRuntimeSnapshotV1
+from tools.cq.search.tree_sitter.core.cache_protocol import CacheBackendProtocol
 
 _RUNTIME_TTL_SECONDS = 300
 
@@ -16,7 +17,7 @@ def _stats_key(language: str) -> str:
     return f"tree_sitter:runtime_stats:{language}"
 
 
-def _resolve_backend(cache_backend: object | None = None) -> object:
+def _resolve_backend(cache_backend: CacheBackendProtocol | None = None) -> CacheBackendProtocol:
     if cache_backend is not None:
         return cache_backend
     return get_cq_cache_backend(root=Path.cwd())
@@ -27,7 +28,7 @@ def memoized_value[T](
     key: str,
     compute: Callable[[], T],
     ttl_seconds: int = _RUNTIME_TTL_SECONDS,
-    cache_backend: object | None = None,
+    cache_backend: CacheBackendProtocol | None = None,
 ) -> T:
     """Resolve cached value using cache protocol get/set.
 
@@ -35,24 +36,21 @@ def memoized_value[T](
         T: Cached value when present, otherwise computed value.
     """
     backend = _resolve_backend(cache_backend)
-    get_fn = getattr(backend, "get", None)
-    set_fn = getattr(backend, "set", None)
-    if not callable(get_fn) or not callable(set_fn):
-        return compute()
-    hit = get_fn(key)
+    hit = backend.get(key)
     if hit is not None:
         return cast("T", hit)
     value = compute()
-    set_fn(key, value, expire=ttl_seconds)
+    backend.set(key, value, expire=ttl_seconds)
     return value
 
 
-def _read_runtime_stats(language: str, *, cache_backend: object | None = None) -> dict[str, object]:
+def _read_runtime_stats(
+    language: str,
+    *,
+    cache_backend: CacheBackendProtocol | None = None,
+) -> dict[str, object]:
     backend = _resolve_backend(cache_backend)
-    get_fn = getattr(backend, "get", None)
-    if not callable(get_fn):
-        return {"count": 0, "sum_ms": 0.0}
-    raw = get_fn(_stats_key(language))
+    raw = backend.get(_stats_key(language))
     if not isinstance(raw, dict):
         return {"count": 0, "sum_ms": 0.0}
     return raw
@@ -62,13 +60,10 @@ def _write_runtime_stats(
     language: str,
     stats: dict[str, object],
     *,
-    cache_backend: object | None = None,
+    cache_backend: CacheBackendProtocol | None = None,
 ) -> None:
     backend = _resolve_backend(cache_backend)
-    set_fn = getattr(backend, "set", None)
-    if not callable(set_fn):
-        return
-    set_fn(
+    backend.set(
         _stats_key(language),
         stats,
         expire=_RUNTIME_TTL_SECONDS,
@@ -80,7 +75,7 @@ def record_runtime_sample(
     language: str,
     elapsed_ms: float,
     *,
-    cache_backend: object | None = None,
+    cache_backend: CacheBackendProtocol | None = None,
 ) -> None:
     """Record per-language latency sample for adaptive budgeting."""
     if elapsed_ms <= 0:
@@ -99,7 +94,11 @@ def record_runtime_sample(
     )
 
 
-def _cached_average_ms(language: str, *, cache_backend: object | None = None) -> float | None:
+def _cached_average_ms(
+    language: str,
+    *,
+    cache_backend: CacheBackendProtocol | None = None,
+) -> float | None:
     stats = _read_runtime_stats(language, cache_backend=cache_backend)
     count = stats.get("count")
     sum_ms = stats.get("sum_ms")
@@ -110,7 +109,11 @@ def _cached_average_ms(language: str, *, cache_backend: object | None = None) ->
     return float(sum_ms) / float(count)
 
 
-def _cached_sample_count(language: str, *, cache_backend: object | None = None) -> int | None:
+def _cached_sample_count(
+    language: str,
+    *,
+    cache_backend: CacheBackendProtocol | None = None,
+) -> int | None:
     stats = _read_runtime_stats(language, cache_backend=cache_backend)
     count = stats.get("count")
     if isinstance(count, int):
@@ -122,7 +125,7 @@ def adaptive_query_budget_ms(
     *,
     language: str,
     fallback_budget_ms: int,
-    cache_backend: object | None = None,
+    cache_backend: CacheBackendProtocol | None = None,
 ) -> int:
     """Return adaptive query budget derived from recent runtime latency."""
     cached_average = _cached_average_ms(language, cache_backend=cache_backend)
@@ -136,7 +139,7 @@ def runtime_snapshot(
     language: str,
     *,
     fallback_budget_ms: int,
-    cache_backend: object | None = None,
+    cache_backend: CacheBackendProtocol | None = None,
 ) -> AdaptiveRuntimeSnapshotV1:
     """Return current adaptive runtime snapshot for one language lane."""
     cached_average = _cached_average_ms(language, cache_backend=cache_backend)

@@ -372,10 +372,10 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
             merged_sections.append(
                 Section(
                     title=title,
-                    findings=[
+                    findings=tuple(
                         _clone_finding_with_language(finding, lang=lang)
                         for finding in section.findings
-                    ],
+                    ),
                     collapsed=section.collapsed,
                 )
             )
@@ -410,13 +410,15 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
         list(request.diagnostics) if request.diagnostics is not None else []
     )
     if diag_findings:
-        merged_sections.append(Section(title="Cross-Language Diagnostics", findings=diag_findings))
+        merged_sections.append(
+            Section(title="Cross-Language Diagnostics", findings=tuple(diag_findings))
+        )
     merged = msgspec.structs.replace(
         merged,
-        key_findings=merged_key_findings,
-        evidence=merged_evidence,
-        sections=merged_sections,
-        artifacts=merged_artifacts,
+        key_findings=tuple(merged_key_findings),
+        evidence=tuple(merged_evidence),
+        sections=tuple(merged_sections),
+        artifacts=tuple(merged_artifacts),
     )
     summary_diagnostics = request.diagnostic_payloads
     if summary_diagnostics is None:

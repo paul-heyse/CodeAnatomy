@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 from tools.cq.core.schema import CqResult
-from tools.cq.query import executor_entity
+from tools.cq.query import executor_entity_impl
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import EntityQueryRequest
 
@@ -23,11 +23,11 @@ def test_execute_entity_query_delegates_to_executor(
         return sentinel_result
 
     monkeypatch.setattr(
-        "tools.cq.query.executor_entity.runtime_execute_entity_query",
+        "tools.cq.query.executor_entity_impl._execute_entity_query_impl",
         _fake_execute,
     )
 
-    assert executor_entity.execute_entity_query(sentinel_ctx) is sentinel_result
+    assert executor_entity_impl.execute_entity_query(sentinel_ctx) is sentinel_result
 
 
 def test_execute_entity_query_from_records_delegates(
@@ -42,8 +42,10 @@ def test_execute_entity_query_from_records_delegates(
         return sentinel_result
 
     monkeypatch.setattr(
-        "tools.cq.query.executor_entity.runtime_execute_entity_query_from_records",
+        "tools.cq.query.executor_entity_impl._execute_entity_query_from_records_impl",
         _fake_execute,
     )
 
-    assert executor_entity.execute_entity_query_from_records(sentinel_request) is sentinel_result
+    assert (
+        executor_entity_impl.execute_entity_query_from_records(sentinel_request) is sentinel_result
+    )

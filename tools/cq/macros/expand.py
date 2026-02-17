@@ -102,7 +102,7 @@ def cmd_expand(
         tc=tc,
     )
     builder.add_findings([finding])
-    builder.add_section(Section(title="Expanded Details", findings=[finding]))
+    builder.add_section(Section(title="Expanded Details", findings=(finding,)))
     builder.set_summary(mode="expand", query=kind)
     return builder.build()
 

@@ -474,14 +474,14 @@ def rehydrate_result(original: CqResult, filtered_df: pl.DataFrame) -> CqResult:
 
     # First add sections in original order if they have findings
     sections.extend(
-        Section(title=title, findings=sections_map.pop(title))
+        Section(title=title, findings=tuple(sections_map.pop(title)))
         for title in original_section_order
         if title in sections_map
     )
 
     # Then add any new sections that weren't in original (shouldn't happen, but safety)
     for title, findings in sections_map.items():
-        sections.append(Section(title=title, findings=findings))
+        sections.append(Section(title=title, findings=tuple(findings)))
 
     return CqResult(
         run=original.run,

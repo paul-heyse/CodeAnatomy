@@ -246,31 +246,6 @@ def compile_options_for_profile(
         capture_plan_artifacts=resolution.capture_plan_artifacts,
         capture_semantic_diff=resolution.capture_semantic_diff,
     )
-    unchanged = (
-        resolution.cache == resolved.cache,
-        resolution.cache_max_columns == resolved.cache_max_columns,
-        resolution.params == resolved.params,
-        profile.features.enforce_preflight == resolved.enforce_preflight,
-        resolution.capture_explain == resolved.capture_explain,
-        resolution.explain_analyze == resolved.explain_analyze,
-        hooks.explain_hook == resolved.explain_hook,
-        resolution.substrait_validation == resolved.substrait_validation,
-        resolution.capture_plan_artifacts == resolved.capture_plan_artifacts,
-        hooks.plan_artifacts_hook == resolved.plan_artifacts_hook,
-        resolution.capture_semantic_diff == resolved.capture_semantic_diff,
-        hooks.semantic_diff_hook == resolved.semantic_diff_hook,
-        hooks.sql_ingest_hook == resolved.sql_ingest_hook,
-        hooks.cache_event_hook == resolved.cache_event_hook,
-        hooks.substrait_fallback_hook == resolved.substrait_fallback_hook,
-        resolution.sql_policy == resolved.sql_policy,
-        resolution.sql_policy_name == resolved.sql_policy_name,
-        resolution.param_allowlist == resolved.param_identifier_allowlist,
-        resolution.prepared_param_types == resolved.prepared_param_types,
-        resolution.prepared_statements == resolved.prepared_statements,
-        resolution.dynamic_projection == resolved.dynamic_projection,
-    )
-    if all(unchanged) and execution_policy is None and execution_label is None:
-        return resolved
     updated = replace(
         resolved,
         cache=resolution.cache,
@@ -293,6 +268,8 @@ def compile_options_for_profile(
         sql_policy_name=resolution.sql_policy_name,
         prepared_param_types=resolution.prepared_param_types,
     )
+    if execution_policy is None and execution_label is None and updated == resolved:
+        return resolved
     if execution_label is not None:
         updated = apply_execution_label(
             updated,

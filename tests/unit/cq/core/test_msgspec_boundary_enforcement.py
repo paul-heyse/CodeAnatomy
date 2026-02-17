@@ -10,7 +10,7 @@ def test_hot_paths_do_not_import_core_to_builtins() -> None:
     repo_root = Path(__file__).resolve().parents[4]
     hot_paths = [
         repo_root / "tools" / "cq" / "search" / "pipeline" / "smart_search.py",
-        repo_root / "tools" / "cq" / "query" / "executor_runtime.py",
+        repo_root / "tools" / "cq" / "query" / "executor_plan_dispatch.py",
         repo_root / "tools" / "cq" / "macros" / "calls_target.py",
         repo_root / "tools" / "cq" / "search" / "enrichment" / "core.py",
     ]

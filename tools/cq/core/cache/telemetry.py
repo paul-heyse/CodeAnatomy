@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import threading
-
+from tools.cq.core.cache.telemetry_store import CacheTelemetryStore
 from tools.cq.core.structs import CqStruct
 
 
@@ -32,44 +31,25 @@ class CacheNamespaceTelemetry(CqStruct, frozen=True):
     cull_removed: int = 0
 
 
-_TELEMETRY_LOCK = threading.Lock()
-_TELEMETRY: dict[str, dict[str, int]] = {}
-_SEEN_KEYS: dict[str, set[str]] = {}
+_TELEMETRY_STORE = CacheTelemetryStore()
 _MAX_KEY_SIZE_64 = 64
 _MAX_KEY_SIZE_128 = 128
 _MAX_KEY_SIZE_256 = 256
 
 
-def _bucket(namespace: str) -> dict[str, int]:
-    bucket = _TELEMETRY.get(namespace)
-    if bucket is None:
-        bucket = {}
-        _TELEMETRY[namespace] = bucket
-    return bucket
-
-
 def _incr(namespace: str, field: str, amount: int = 1) -> None:
-    with _TELEMETRY_LOCK:
-        bucket = _bucket(namespace)
-        bucket[field] = int(bucket.get(field, 0)) + int(amount)
+    _TELEMETRY_STORE.incr(namespace, field, amount)
 
 
 def record_cache_key(*, namespace: str, key: str) -> None:
     """Record key cardinality and key-size telemetry."""
-    key_len = len(key)
-    with _TELEMETRY_LOCK:
-        seen = _SEEN_KEYS.setdefault(namespace, set())
-        seen.add(key)
-        bucket = _bucket(namespace)
-        bucket["key_cardinality"] = len(seen)
-    if key_len <= _MAX_KEY_SIZE_64:
-        _incr(namespace, "key_size_le_64")
-    elif key_len <= _MAX_KEY_SIZE_128:
-        _incr(namespace, "key_size_le_128")
-    elif key_len <= _MAX_KEY_SIZE_256:
-        _incr(namespace, "key_size_le_256")
-    else:
-        _incr(namespace, "key_size_gt_256")
+    _TELEMETRY_STORE.record_cache_key(
+        namespace=namespace,
+        key=key,
+        max_key_size_64=_MAX_KEY_SIZE_64,
+        max_key_size_128=_MAX_KEY_SIZE_128,
+        max_key_size_256=_MAX_KEY_SIZE_256,
+    )
 
 
 def record_cache_get(*, namespace: str, hit: bool, key: str | None = None) -> None:
@@ -124,9 +104,7 @@ def record_cache_abort(*, namespace: str) -> None:
 
 def record_cache_volume(*, namespace: str, volume_bytes: int) -> None:
     """Record backend volume snapshot for namespace."""
-    with _TELEMETRY_LOCK:
-        bucket = _bucket(namespace)
-        bucket["last_volume_bytes"] = max(0, int(volume_bytes))
+    _TELEMETRY_STORE.set_volume(namespace=namespace, volume_bytes=volume_bytes)
 
 
 def record_cache_cull(*, namespace: str, removed: int) -> None:
@@ -137,8 +115,7 @@ def record_cache_cull(*, namespace: str, removed: int) -> None:
 
 def snapshot_cache_telemetry() -> dict[str, CacheNamespaceTelemetry]:
     """Return a snapshot of namespace counters."""
-    with _TELEMETRY_LOCK:
-        snapshot = {namespace: dict(bucket) for namespace, bucket in _TELEMETRY.items()}
+    snapshot = _TELEMETRY_STORE.snapshot()
     output: dict[str, CacheNamespaceTelemetry] = {}
     for namespace, bucket in snapshot.items():
         output[namespace] = CacheNamespaceTelemetry(
@@ -168,9 +145,7 @@ def snapshot_cache_telemetry() -> dict[str, CacheNamespaceTelemetry]:
 
 def reset_cache_telemetry() -> None:
     """Reset all namespace telemetry counters."""
-    with _TELEMETRY_LOCK:
-        _TELEMETRY.clear()
-        _SEEN_KEYS.clear()
+    _TELEMETRY_STORE.reset()
 
 
 __all__ = [

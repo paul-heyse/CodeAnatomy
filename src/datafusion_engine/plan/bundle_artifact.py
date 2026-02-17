@@ -26,7 +26,6 @@ from datafusion_engine.delta.store_policy import delta_store_policy_hash
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.plan.cache import PlanProtoCacheEntry
 from datafusion_engine.plan.diagnostics import PlanPhaseDiagnostics, record_plan_phase_diagnostics
-from datafusion_engine.plan.normalization import normalize_substrait_plan
 from datafusion_engine.plan.profiler import ExplainCapture, capture_explain
 from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from obs.otel import SCOPE_PLANNING, stage_span
@@ -54,11 +53,6 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime_session import SessionRuntime
     from datafusion_engine.sql.options import SQLOptions
     from semantics.program_manifest import ManifestDatasetResolver
-
-try:
-    from datafusion.substrait import Producer as SubstraitProducer
-except ImportError:
-    SubstraitProducer = None
 
 # Type alias for DataFrame builder functions
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
@@ -329,6 +323,9 @@ def build_plan_artifact(
             required_rewrite_tags=components.required_rewrite_tags,
             plan_details=components.plan_details,
         )
+        if not bundle.plan_fingerprint:
+            msg = "Plan bundle build produced an empty plan_fingerprint."
+            raise ValueError(msg)
         _store_plan_cache_entry(
             bundle=bundle,
             runtime_profile=resolved.session_runtime.profile,
@@ -530,7 +527,11 @@ def _plan_core_components(
         msg = "Substrait bytes are required for plan bundle construction."
         raise ValueError(msg)
     t3 = time.perf_counter()
-    substrait_bytes = _to_substrait_bytes(ctx, optimized)
+    substrait_bytes = _substrait_bytes_from_rust_bundle(
+        ctx,
+        df,
+        session_runtime=options.session_runtime,
+    )
     substrait_ms = (time.perf_counter() - t3) * 1000.0
     return _PlanCoreComponents(
         logical=logical,
@@ -1508,59 +1509,49 @@ def _safe_execution_plan(df: DataFrame) -> object | None:
         raise
 
 
-def _encode_substrait_bytes(plan_obj: object) -> bytes:
-    encode = getattr(plan_obj, "encode", None)
-    if not callable(encode):
-        msg = "Substrait plan missing encode method."
-        raise TypeError(msg)
-    try:
-        encoded = encode()
-    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-        msg = f"Failed to encode Substrait plan bytes: {exc}"
-        raise ValueError(msg) from exc
-    if not isinstance(encoded, (bytes, bytearray)):
-        msg = f"Substrait encode returned {type(encoded).__name__}, expected bytes."
-        raise TypeError(msg)
-    return bytes(encoded)
-
-
-def _public_substrait_bytes(
+def _substrait_bytes_from_rust_bundle(
     ctx: SessionContext,
-    normalized: object,
+    df: DataFrame,
+    *,
+    session_runtime: SessionRuntime | None,
 ) -> bytes:
-    to_substrait = getattr(SubstraitProducer, "to_substrait_plan", None)
-    if not callable(to_substrait):
-        msg = "Substrait producer missing to_substrait_plan."
-        raise TypeError(msg)
-    try:
-        substrait_plan = to_substrait(normalized, ctx)
-    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-        msg = f"Failed to encode Substrait plan bytes: {exc}"
-        raise ValueError(msg) from exc
-    return _encode_substrait_bytes(substrait_plan)
-
-
-def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
-    """Convert an optimized plan to Substrait bytes.
-
-    Args:
-        ctx: DataFusion session context.
-        optimized: Optimized logical plan object.
+    """Build Substrait bytes from the canonical Rust plan-bundle bridge.
 
     Returns:
-        bytes: Result.
+        bytes: Canonical Substrait bytes from the Rust bridge artifact payload.
 
     Raises:
-        ValueError: If substrait generation prerequisites are not met.
+        TypeError: If bridge payload is structurally invalid.
+        ValueError: If bridge payload is missing artifact bytes.
     """
-    if SubstraitProducer is None:
-        msg = "Substrait producer is unavailable."
-        raise ValueError(msg)
-    if optimized is None:
-        msg = "Substrait serialization requires an optimized logical plan."
-        raise ValueError(msg)
-    normalized = normalize_substrait_plan(ctx, cast("DataFusionLogicalPlan", optimized))
-    return _public_substrait_bytes(ctx, normalized)
+    from datafusion_engine.plan.rust_bundle_bridge import build_plan_bundle_artifact_with_warnings
+
+    payload: dict[str, object] = {
+        "capture_substrait": True,
+        "capture_sql": False,
+        "capture_delta_codec": False,
+        "deterministic_inputs": True,
+        "no_volatile_udfs": True,
+        "deterministic_optimizer": True,
+    }
+    if session_runtime is not None:
+        payload["stats_quality"] = "runtime_profile"
+    response = build_plan_bundle_artifact_with_warnings(ctx, payload, df=df)
+    artifact = response.get("artifact")
+    if not isinstance(artifact, Mapping):
+        msg = "Rust plan-bundle bridge returned a non-mapping artifact payload."
+        raise TypeError(msg)
+    raw = artifact.get("substrait_bytes")
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw)
+    if isinstance(raw, list):
+        try:
+            return bytes(int(item) for item in raw)
+        except (TypeError, ValueError):
+            msg = "Rust plan-bundle bridge returned malformed substrait byte values."
+            raise ValueError(msg) from None
+    msg = "Rust plan-bundle artifact is missing substrait_bytes."
+    raise ValueError(msg)
 
 
 def _capture_explain_analyze(

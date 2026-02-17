@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import pyarrow as pa
 
@@ -17,7 +18,13 @@ from datafusion_engine.cache.commit_metadata import (
 )
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import (
+    WriteFormat,
+    WriteMode,
+    WriteRequest,
+    WriteResult,
+    build_write_pipeline,
+)
 from datafusion_engine.session.facade import DataFusionExecutionFacade
 from obs.otel import get_run_id
 from utils.uuid_factory import uuid7_hex
@@ -34,6 +41,19 @@ CACHE_SNAPSHOT_REGISTRY_TABLE_NAME = "datafusion_cache_snapshot_registry_v1"
 
 def _append_source_name(table_name: str) -> str:
     return f"{table_name}_append_{uuid7_hex()}"
+
+
+class _WriterPort(Protocol):
+    """Minimal writer surface for cache-ledger writes."""
+
+    def write(self, request: WriteRequest) -> WriteResult: ...
+
+
+def _default_write_pipeline(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+) -> _WriterPort:
+    return build_write_pipeline(ctx=ctx, runtime_profile=profile)
 
 
 @dataclass(frozen=True)
@@ -104,6 +124,9 @@ class CacheSnapshotRegistryEntry:
 def ensure_cache_run_summary_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
+    *,
+    write_pipeline_factory: Callable[[SessionContext, DataFusionRuntimeProfile], _WriterPort]
+    | None = None,
 ) -> DatasetLocation | None:
     """Ensure the cache run summary table exists and is registered.
 
@@ -120,6 +143,7 @@ def ensure_cache_run_summary_table(
             table_path=table_path,
             schema=_cache_run_summary_schema(),
             operation="cache_run_summary_bootstrap",
+            write_pipeline_factory=write_pipeline_factory,
         )
     location = DatasetLocation(path=str(table_path), format="delta")
     DataFusionExecutionFacade(
@@ -138,6 +162,8 @@ def record_cache_run_summary(
     *,
     summary: CacheRunSummary,
     ctx: SessionContext | None = None,
+    write_pipeline_factory: Callable[[SessionContext, DataFusionRuntimeProfile], _WriterPort]
+    | None = None,
 ) -> int | None:
     """Append a cache run summary into the ledger table.
 
@@ -149,7 +175,12 @@ def record_cache_run_summary(
     if profile is None:
         return None
     active_ctx = ctx or profile.session_context()
-    location = ensure_cache_run_summary_table(active_ctx, profile)
+    pipeline_factory = write_pipeline_factory or _default_write_pipeline
+    location = ensure_cache_run_summary_table(
+        active_ctx,
+        profile,
+        write_pipeline_factory=pipeline_factory,
+    )
     if location is None:
         return None
     table = pa.Table.from_pylist([summary.to_row()], schema=_cache_run_summary_schema())
@@ -167,7 +198,7 @@ def record_cache_run_summary(
             result="write",
         )
     )
-    pipeline = WritePipeline(ctx=active_ctx, runtime_profile=profile)
+    pipeline = pipeline_factory(active_ctx, profile)
     result = pipeline.write(
         WriteRequest(
             source=df,
@@ -198,6 +229,9 @@ def record_cache_run_summary(
 def ensure_cache_snapshot_registry_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
+    *,
+    write_pipeline_factory: Callable[[SessionContext, DataFusionRuntimeProfile], _WriterPort]
+    | None = None,
 ) -> DatasetLocation | None:
     """Ensure the cache snapshot registry table exists and is registered.
 
@@ -214,6 +248,7 @@ def ensure_cache_snapshot_registry_table(
             table_path=table_path,
             schema=_cache_snapshot_registry_schema(),
             operation="cache_snapshot_registry_bootstrap",
+            write_pipeline_factory=write_pipeline_factory,
         )
     location = DatasetLocation(path=str(table_path), format="delta")
     DataFusionExecutionFacade(
@@ -232,6 +267,8 @@ def record_cache_snapshot_registry(
     *,
     entry: CacheSnapshotRegistryEntry,
     ctx: SessionContext | None = None,
+    write_pipeline_factory: Callable[[SessionContext, DataFusionRuntimeProfile], _WriterPort]
+    | None = None,
 ) -> int | None:
     """Append a cache snapshot registry entry.
 
@@ -243,7 +280,12 @@ def record_cache_snapshot_registry(
     if profile is None:
         return None
     active_ctx = ctx or profile.session_context()
-    location = ensure_cache_snapshot_registry_table(active_ctx, profile)
+    pipeline_factory = write_pipeline_factory or _default_write_pipeline
+    location = ensure_cache_snapshot_registry_table(
+        active_ctx,
+        profile,
+        write_pipeline_factory=pipeline_factory,
+    )
     if location is None:
         return None
     table = pa.Table.from_pylist([entry.to_row()], schema=_cache_snapshot_registry_schema())
@@ -262,7 +304,7 @@ def record_cache_snapshot_registry(
             extra={"cache_table": entry.cache_table},
         )
     )
-    pipeline = WritePipeline(ctx=active_ctx, runtime_profile=profile)
+    pipeline = pipeline_factory(active_ctx, profile)
     result = pipeline.write(
         WriteRequest(
             source=df,
@@ -297,6 +339,8 @@ def _bootstrap_cache_ledger_table(
     table_path: Path,
     schema: pa.Schema,
     operation: str,
+    write_pipeline_factory: Callable[[SessionContext, DataFusionRuntimeProfile], _WriterPort]
+    | None = None,
 ) -> None:
     table_path.parent.mkdir(parents=True, exist_ok=True)
     empty = empty_table_for_schema(schema)
@@ -310,7 +354,8 @@ def _bootstrap_cache_ledger_table(
             result="write",
         )
     )
-    pipeline = WritePipeline(ctx=ctx, runtime_profile=profile)
+    pipeline_factory = write_pipeline_factory or _default_write_pipeline
+    pipeline = pipeline_factory(ctx, profile)
     pipeline.write(
         WriteRequest(
             source=df,

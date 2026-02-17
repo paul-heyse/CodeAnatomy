@@ -19,6 +19,7 @@ from tools.cq.core.schema import (
     CqResult,
     Finding,
     Section,
+    append_section_finding,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
@@ -95,23 +96,25 @@ def _append_bucket_sections(
             continue
         section = Section(title=bucket_name.replace("_", " ").title() + " Sites")
         for site, reason in bucket_sites[:_MAX_SITES_DISPLAY]:
-            section.findings.append(
+            section = append_section_finding(
+                section,
                 Finding(
                     category=bucket_name,
                     message=f"{symbol}({site.arg_preview}): {reason}",
                     anchor=Anchor(file=site.file, line=site.line),
                     severity=severity_map[bucket_name],
                     details=build_detail_payload(scoring=scoring_details),
-                )
+                ),
             )
         if len(bucket_sites) > _MAX_SITES_DISPLAY:
-            section.findings.append(
+            section = append_section_finding(
+                section,
                 Finding(
                     category="truncated",
                     message=f"... and {len(bucket_sites) - _MAX_SITES_DISPLAY} more",
                     severity="info",
                     details=build_detail_payload(scoring=scoring_details),
-                )
+                ),
             )
         builder.add_section(section)
 

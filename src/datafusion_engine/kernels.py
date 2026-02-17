@@ -113,14 +113,9 @@ MIN_JOIN_PARTITIONS: int = 2
 
 
 def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> SessionContext:
-    if runtime_profile is None:
-        from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-        profile = DataFusionRuntimeProfile()
-    else:
-        profile = runtime_profile
-    session_runtime = profile.session_runtime()
-    return session_runtime.ctx
+    if runtime_profile is not None:
+        return runtime_profile.session_runtime().ctx
+    return SessionContext()
 
 
 def _ensure_required_udfs(
@@ -177,7 +172,7 @@ def _arrow_ingest_hook(
 
     if runtime_profile is None:
         return None
-    diagnostics = runtime_profile.diagnostics.diagnostics_sink
+    diagnostics = runtime_profile.diagnostics_sink()
     if diagnostics is None:
         return None
     return diagnostics_arrow_ingest_hook(diagnostics)

@@ -10,6 +10,7 @@ import pyarrow as pa
 
 from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import DeterminismTier
+from datafusion_engine.arrow.coercion import coerce_to_recordbatch_reader
 from datafusion_engine.arrow.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
@@ -30,10 +31,9 @@ from datafusion_engine.session.streaming import StreamingExecutionResult
 from datafusion_engine.tables.param import resolve_param_bindings, scalar_param_signature
 from extraction.diagnostics import EngineEventRecorder, ExtractQualityEvent, ExtractWriteEvent
 from extraction.plan_product import PlanProduct
-from extraction.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
 from obs.otel import OtelBootstrapOptions, configure_otel
+from semantics.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
 from utils.uuid_factory import uuid7_hex
-from utils.value_coercion import coerce_to_recordbatch_reader
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.scheduling import ScanUnit
@@ -57,7 +57,7 @@ def _cache_event_reporter(
 ) -> Callable[[Mapping[str, object]], None] | None:
     if runtime_profile is None:
         return None
-    diagnostics = runtime_profile.diagnostics.diagnostics_sink
+    diagnostics = runtime_profile.diagnostics_sink()
     if diagnostics is None:
         return None
     record_events = diagnostics.record_events
@@ -343,7 +343,7 @@ def build_view_product(
     semantic_cache_policy: SemanticCachePolicy | None = (
         profile.view_registry.entries[view_name].cache_policy
         if profile.view_registry is not None and view_name in profile.view_registry.entries
-        else profile.data_sources.semantic_output.cache_overrides.get(view_name)
+        else profile.semantic_cache_overrides().get(view_name)
     )
     prefer_reader = _resolve_prefer_reader(policy=policy)
     cache_decision = resolve_materialization_cache_decision(

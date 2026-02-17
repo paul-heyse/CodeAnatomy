@@ -15,11 +15,10 @@ from tools.cq.core.schema import CqResult, update_result_summary
 from tools.cq.core.types import QueryLanguage
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
 from tools.cq.query.batch_spans import collect_span_filters
+from tools.cq.query.enrichment import SymtableEnricher
 from tools.cq.query.execution_requests import EntityQueryRequest, PatternQueryRequest
-from tools.cq.query.executor_runtime import (
-    execute_entity_query_from_records,
-    execute_pattern_query_with_files,
-)
+from tools.cq.query.executor_entity_impl import execute_entity_query_from_records
+from tools.cq.query.executor_pattern_impl import execute_pattern_query_with_files
 from tools.cq.query.ir import Query
 from tools.cq.query.parser import QueryParseError, has_query_tokens, parse_query
 from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
@@ -303,6 +302,7 @@ def execute_pattern_q_steps(
         files_by_rel[rel] = path
 
     results: list[tuple[str, CqResult]] = []
+    symtable = SymtableEnricher(ctx.root)
     for step in steps:
         allowed_rel = filter_files_for_scope(pattern_files, ctx.root, step.plan.scope)
         files = select_files_by_rel(files_by_rel, allowed_rel)
@@ -314,6 +314,7 @@ def execute_pattern_q_steps(
             files=files,
             argv=ctx.argv,
             services=ctx.services,
+            symtable=symtable,
             run_id=run_id,
             query_text=step.step.query,
         )

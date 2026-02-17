@@ -15,6 +15,7 @@ from tools.cq.core.schema import (
     CqResult,
     Finding,
     Section,
+    append_section_finding,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
@@ -27,7 +28,7 @@ _MAX_FILES_ANALYZED = 50
 _MAX_SCOPES_DISPLAY = 30
 
 
-class ScopeInfo(msgspec.Struct):
+class ScopeInfo(msgspec.Struct, frozen=True):
     """Scope information for a symbol table entry.
 
     Parameters
@@ -190,24 +191,26 @@ def _append_scope_section(
             detail_parts.append(f"nonlocals: {', '.join(scope.nonlocals)}")
 
         severity = "warning" if scope.free_vars or scope.nonlocals else "info"
-        section.findings.append(
+        section = append_section_finding(
+            section,
             Finding(
                 category="scope",
                 message=f"{scope.name}: {'; '.join(detail_parts)}",
                 anchor=Anchor(file=scope.file, line=scope.line),
                 severity=severity,
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
 
     if len(all_scopes) > _MAX_SCOPES_DISPLAY:
-        section.findings.append(
+        section = append_section_finding(
+            section,
             Finding(
                 category="truncated",
                 message=f"... and {len(all_scopes) - _MAX_SCOPES_DISPLAY} more",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
     return section
 

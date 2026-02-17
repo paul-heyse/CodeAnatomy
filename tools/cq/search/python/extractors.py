@@ -45,13 +45,7 @@ from tools.cq.search.enrichment.core import (
     append_source as _append_enrichment_source,
 )
 from tools.cq.search.enrichment.core import (
-    enforce_payload_budget as _enforce_shared_payload_budget,
-)
-from tools.cq.search.enrichment.core import (
     has_value as _has_enrichment_value,
-)
-from tools.cq.search.enrichment.core import (
-    payload_size_hint as _shared_payload_size_hint,
 )
 from tools.cq.search.enrichment.python_facts import (
     PythonBehaviorFacts,
@@ -66,6 +60,10 @@ from tools.cq.search.enrichment.python_facts import (
     PythonStructureFacts,
 )
 from tools.cq.search.python.analysis_session import PythonAnalysisSession
+from tools.cq.search.python.constants import MAX_PARENT_DEPTH
+from tools.cq.search.python.extractors_agreement import (
+    build_agreement_section as _build_agreement_section_shared,
+)
 from tools.cq.search.python.extractors_analysis import (
     extract_behavior_summary as _extract_behavior_summary,
 )
@@ -76,6 +74,12 @@ from tools.cq.search.python.extractors_analysis import (
     extract_import_detail as _extract_import_detail,
 )
 from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function
+from tools.cq.search.python.extractors_budget import (
+    enforce_payload_budget as _enforce_payload_budget_shared,
+)
+from tools.cq.search.python.extractors_budget import (
+    payload_size_hint as _payload_size_hint_shared,
+)
 from tools.cq.search.python.extractors_classification import (
     _is_class_node,
     _is_function_node,
@@ -97,16 +101,14 @@ from tools.cq.search.python.extractors_structure import (
     find_enclosing_class as _find_enclosing_class,
 )
 from tools.cq.search.python.resolution_index import enrich_python_resolution_by_byte_range
+from tools.cq.search.python.runtime_context import (
+    ensure_python_cache_registered,
+    get_default_python_runtime_context,
+)
 from tools.cq.search.tree_sitter.python_lane.facts import build_python_tree_sitter_facts
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
-
-# ---------------------------------------------------------------------------
-# Cache infrastructure
-# ---------------------------------------------------------------------------
-
-_MAX_TREE_CACHE_ENTRIES = 64
 
 # ---------------------------------------------------------------------------
 # Payload bounds (mirror Rust pattern)
@@ -124,11 +126,6 @@ _MAX_PAYLOAD_BYTES = 4096
 _FULL_AGREEMENT_SOURCE_COUNT = 3
 _PYTHON_ENRICHMENT_CROSSCHECK_ENV = "CQ_PY_ENRICHMENT_CROSSCHECK"
 
-# ---------------------------------------------------------------------------
-# Parent-chain traversal depth limit
-# ---------------------------------------------------------------------------
-
-_MAX_PARENT_DEPTH = 20
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -268,14 +265,10 @@ def _try_extract(
         return result, None
 
 
-# ---------------------------------------------------------------------------
-# Python ast cache (per-file, hash-verified)
-# ---------------------------------------------------------------------------
-
-_AST_CACHE: BoundedCache[str, tuple[ast.Module, str]] = BoundedCache(
-    max_size=_MAX_TREE_CACHE_ENTRIES, policy="fifo"
-)
-CACHE_REGISTRY.register_cache("python", "python_enrichment:ast", _AST_CACHE)
+def _python_ast_cache() -> BoundedCache[str, tuple[ast.Module, str]]:
+    ctx = get_default_python_runtime_context()
+    ensure_python_cache_registered(ctx)
+    return cast("BoundedCache[str, tuple[ast.Module, str]]", ctx.ast_cache)
 
 
 def _get_ast(source_bytes: bytes, *, cache_key: str) -> ast.Module | None:
@@ -294,7 +287,8 @@ def _get_ast(source_bytes: bytes, *, cache_key: str) -> ast.Module | None:
         Parsed AST, or None on syntax error.
     """
     content_hash = shared_source_hash(source_bytes)
-    cached = _AST_CACHE.get(cache_key)
+    ast_cache = _python_ast_cache()
+    cached = ast_cache.get(cache_key)
     if cached is not None:
         cached_tree, cached_hash = cached
         if cached_hash == content_hash:
@@ -303,7 +297,7 @@ def _get_ast(source_bytes: bytes, *, cache_key: str) -> ast.Module | None:
         tree = ast.parse(source_bytes)
     except SyntaxError:
         return None
-    _AST_CACHE.put(cache_key, (tree, content_hash))
+    ast_cache.put(cache_key, (tree, content_hash))
     return tree
 
 
@@ -618,7 +612,7 @@ def _extract_scope_chain(node: SgNode) -> dict[str, object]:
     chain: list[str] = []
     current = node.parent()
     depth = 0
-    while current is not None and depth < _MAX_PARENT_DEPTH:
+    while current is not None and depth < MAX_PARENT_DEPTH:
         kind = current.kind()
         if kind in {"function_definition", "class_definition"}:
             name_node = current.field("name")
@@ -661,7 +655,7 @@ def _extract_structural_context(node: SgNode) -> dict[str, object]:
     """
     current = node.parent()
     depth = 0
-    while current is not None and depth < _MAX_PARENT_DEPTH:
+    while current is not None and depth < MAX_PARENT_DEPTH:
         kind = current.kind()
         # Stop at function/class boundaries
         if kind in _SCOPE_BOUNDARY_NODE_KINDS:
@@ -938,7 +932,7 @@ def _promote_enrichment_node(node: SgNode) -> SgNode:
     """
     current = node
     depth = 0
-    while current is not None and depth < _MAX_PARENT_DEPTH:
+    while current is not None and depth < MAX_PARENT_DEPTH:
         if current.kind() in _PREFERRED_ENRICHMENT_KINDS:
             return current
         parent = current.parent()
@@ -962,7 +956,7 @@ def _payload_size_hint(payload: dict[str, object]) -> int:
     int
         Encoded payload size in bytes.
     """
-    return _shared_payload_size_hint(payload)
+    return _payload_size_hint_shared(payload)
 
 
 def _enforce_payload_budget(payload: dict[str, object]) -> tuple[list[str], int]:
@@ -973,21 +967,7 @@ def _enforce_payload_budget(payload: dict[str, object]) -> tuple[list[str], int]
     tuple[list[str], int]
         Removed keys and final payload size.
     """
-    drop_order = (
-        "scope_chain",
-        "decorators",
-        "base_classes",
-        "property_names",
-        "import_names",
-        "signature",
-        "call_target",
-        "structural_context",
-    )
-    return _enforce_shared_payload_budget(
-        payload,
-        max_payload_bytes=_MAX_PAYLOAD_BYTES,
-        drop_order=drop_order,
-    )
+    return _enforce_payload_budget_shared(payload, max_payload_bytes=_MAX_PAYLOAD_BYTES)
 
 
 @dataclass(slots=True)
@@ -1030,41 +1010,12 @@ def _build_agreement_section(
     dict[str, object]
         Agreement status, source presence, and conflict details.
     """
-    ast_fields = ast_stage.as_fields()
-    python_resolution_fields = python_resolution_stage.as_fields()
-    tree_sitter_fields = tree_sitter_stage.as_fields()
-    conflicts: list[dict[str, object]] = []
-    comparison_sources = {
-        "ast_grep": ast_fields,
-        "python_resolution": python_resolution_fields,
-        "tree_sitter": tree_sitter_fields,
-    }
-    present_sources = [name for name, values in comparison_sources.items() if values]
-
-    for key in sorted(set(ast_fields).intersection(python_resolution_fields)):
-        left = ast_fields.get(key)
-        right = python_resolution_fields.get(key)
-        if left != right:
-            conflicts.append({"field": key, "ast_grep": left, "python_resolution": right})
-
-    for key in sorted(set(python_resolution_fields).intersection(tree_sitter_fields)):
-        left = python_resolution_fields.get(key)
-        right = tree_sitter_fields.get(key)
-        if left != right:
-            conflicts.append({"field": key, "python_resolution": left, "tree_sitter": right})
-
-    if conflicts:
-        status = "conflict"
-    elif len(present_sources) >= _FULL_AGREEMENT_SOURCE_COUNT:
-        status = "full"
-    else:
-        status = "partial"
-
-    return {
-        "status": status,
-        "sources": present_sources,
-        "conflicts": conflicts,
-    }
+    return _build_agreement_section_shared(
+        ast_fields=ast_stage.as_fields(),
+        python_resolution_fields=python_resolution_stage.as_fields(),
+        tree_sitter_fields=tree_sitter_stage.as_fields(),
+        full_agreement_source_count=_FULL_AGREEMENT_SOURCE_COUNT,
+    )
 
 
 @dataclass(slots=True)
@@ -1780,7 +1731,7 @@ def enrich_python_context_by_byte_range(
 
 def clear_python_enrichment_cache() -> None:
     """Clear per-process Python enrichment caches."""
-    _AST_CACHE.clear()
+    _python_ast_cache().clear()
 
 
 CACHE_REGISTRY.register_clear_callback("python", clear_python_enrichment_cache)

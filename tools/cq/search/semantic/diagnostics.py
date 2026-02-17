@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Literal, cast
 
 from tools.cq.core.schema import Finding
 from tools.cq.core.scoring import build_detail_payload
@@ -30,7 +31,7 @@ _PYTHON_QUERY_HINTS: tuple[str, ...] = (
 
 CapabilityLevel = Literal["full", "partial", "none"]
 
-CAPABILITY_MATRIX: dict[str, dict[QueryLanguage, CapabilityLevel]] = {
+_CAPABILITY_MATRIX_MUTABLE: dict[str, dict[QueryLanguage, CapabilityLevel]] = {
     "entity:function": {"python": "full", "rust": "full"},
     "entity:class": {"python": "full", "rust": "full"},
     "entity:import": {"python": "full", "rust": "full"},
@@ -54,6 +55,10 @@ CAPABILITY_MATRIX: dict[str, dict[QueryLanguage, CapabilityLevel]] = {
     "search": {"python": "full", "rust": "full"},
     "run_q_steps": {"python": "full", "rust": "full"},
 }
+CAPABILITY_MATRIX = MappingProxyType(
+    {feature: MappingProxyType(levels) for feature, levels in _CAPABILITY_MATRIX_MUTABLE.items()}
+)
+_DEFAULT_LEVELS: dict[QueryLanguage, CapabilityLevel] = {"python": "none", "rust": "none"}
 
 _SUMMARY_CAPABILITY_FEATURES: dict[str, str] = {
     "entity_query": "entity:function",
@@ -73,8 +78,9 @@ def _code_for_feature(feature: str) -> str:
     return f"ML_CAP_{feature.replace(':', '_').replace('-', '_').upper()}"
 
 
-def _language_levels(feature: str) -> dict[QueryLanguage, CapabilityLevel]:
-    return CAPABILITY_MATRIX.get(feature, {"python": "none", "rust": "none"})
+def _language_levels(feature: str) -> Mapping[QueryLanguage, CapabilityLevel]:
+    levels = CAPABILITY_MATRIX.get(feature)
+    return levels if levels is not None else _DEFAULT_LEVELS
 
 
 def is_python_oriented_query_text(query: str) -> bool:
@@ -275,7 +281,10 @@ def build_language_capabilities(
         rust=rust_caps,
         shared=shared_caps,
     )
-    return dict(to_builtins(capabilities))
+    builtins_capabilities = to_builtins(capabilities)
+    if isinstance(builtins_capabilities, dict):
+        return cast("dict[str, object]", builtins_capabilities)
+    return {"python": {}, "rust": {}, "shared": {}}
 
 
 def features_from_query(query: Query) -> list[str]:

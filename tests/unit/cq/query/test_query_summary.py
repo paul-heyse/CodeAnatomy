@@ -10,6 +10,7 @@ from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.schema import Anchor, Finding, mk_result
 from tools.cq.core.summary_contract import apply_summary_mapping
 from tools.cq.core.toolchain import Toolchain
+from tools.cq.query.enrichment import SymtableEnricher
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -43,6 +44,7 @@ def test_finalize_single_scope_summary_builds_language_partition(tmp_path: Path)
         started_ms=0.0,
         run_id="run-1",
         services=resolve_runtime_services(tmp_path),
+        symtable_enricher=SymtableEnricher(tmp_path),
     )
 
     result = mk_result(build_runmeta(ctx))

@@ -31,13 +31,9 @@ from utils.env_utils import env_bool
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_profile_config import ExplainRows
     from serde_schema_registry import ArtifactSpec
-
-    ExplainRows = TableLike | RecordBatchReaderLike
-else:
-    ExplainRows = object
 
 _COMPILE_RESOLVER_STRICT_ENV = "CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT"
 _CI_ENV = "CI"

@@ -1,0 +1,46 @@
+"""Runtime cache context for Rust ast-grep enrichment."""
+
+from __future__ import annotations
+
+import msgspec
+
+from tools.cq.search._shared.bounded_cache import BoundedCache
+from tools.cq.search.cache.registry import CACHE_REGISTRY
+
+_MAX_AST_CACHE_ENTRIES = 64
+
+
+class RustEnrichmentRuntimeContext(msgspec.Struct):
+    """Mutable runtime state for Rust enrichment internals."""
+
+    ast_cache: BoundedCache[str, tuple[object, str]] = msgspec.field(
+        default_factory=lambda: BoundedCache(max_size=_MAX_AST_CACHE_ENTRIES, policy="fifo")
+    )
+    cache_registered: bool = False
+
+
+_DEFAULT_CONTEXT_STATE: dict[str, RustEnrichmentRuntimeContext | None] = {"context": None}
+
+
+def get_default_rust_runtime_context() -> RustEnrichmentRuntimeContext:
+    """Return process-default runtime context for Rust enrichment."""
+    context = _DEFAULT_CONTEXT_STATE["context"]
+    if context is None:
+        context = RustEnrichmentRuntimeContext()
+        _DEFAULT_CONTEXT_STATE["context"] = context
+    return context
+
+
+def ensure_rust_cache_registered(ctx: RustEnrichmentRuntimeContext) -> None:
+    """Register cache handle with global cache registry once per context."""
+    if ctx.cache_registered:
+        return
+    CACHE_REGISTRY.register_cache("rust", "rust_enrichment:ast", ctx.ast_cache)
+    ctx.cache_registered = True
+
+
+__all__ = [
+    "RustEnrichmentRuntimeContext",
+    "ensure_rust_cache_registered",
+    "get_default_rust_runtime_context",
+]

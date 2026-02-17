@@ -39,13 +39,13 @@ def _build_result(*, run_id: str) -> CqResult:
         sections=(
             Section(
                 title="Preview",
-                findings=[
+                findings=(
                     Finding(
                         category="context",
                         message="inside module",
                         anchor=Anchor(file="a.py", line=1, col=0),
-                    )
-                ],
+                    ),
+                ),
             ),
         ),
     )

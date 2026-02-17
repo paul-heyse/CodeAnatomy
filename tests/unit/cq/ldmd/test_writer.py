@@ -51,9 +51,9 @@ def _sample_result() -> CqResult:
         sections=(
             Section(
                 title="Definitions",
-                findings=[
+                findings=tuple(
                     Finding(category="context", message=f"context-{index}") for index in range(1, 8)
-                ],
+                ),
             ),
         ),
     )

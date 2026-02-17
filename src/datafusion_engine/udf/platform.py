@@ -13,7 +13,8 @@ The platform installation pattern:
         install_rust_udf_platform,
     )
 
-    ctx = DataFusionRuntimeProfile().session_context()
+    profile = existing_profile
+    ctx = profile.session_context()
     options = RustUdfPlatformOptions(
         enable_udfs=True,
         enable_function_factory=True,

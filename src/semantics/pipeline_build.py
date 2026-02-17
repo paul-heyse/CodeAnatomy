@@ -8,9 +8,6 @@ The entire pipeline in ~50 lines:
 2. Build relationships (Rule 5 + 7 or Rule 6 + 7)
 3. Union to final outputs (Rule 8)
 """
-# NOTE(size-exception): This module is temporarily >800 LOC during hard-cutover
-# decomposition. Remaining extraction and contraction work is tracked in
-# docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
 
 from __future__ import annotations
 
@@ -29,20 +26,13 @@ from semantics.output_materialization import (
     materialize_semantic_outputs,
 )
 from semantics.pipeline_builders import (
-    _CONSOLIDATED_BUILDER_HANDLERS,
-    _builder_for_project_kind,
     _bundle_for_builder,
     _cache_policy_for,
-    _diagnostic_registry,
-    _dispatch_from_registry,
-    _finalize_df_to_contract,
     _finalize_output_builder,
     _normalize_cache_policy,
     _ordered_semantic_specs,
     _semantic_view_specs,
     _SemanticSpecContext,
-    _span_unnest_registry,
-    _symtable_registry,
 )
 from semantics.pipeline_diagnostics import (
     SemanticQualityDiagnosticsRequest,
@@ -375,7 +365,7 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
             compiled_policy=request.compiled_cache_policy,
         )
     )
-    cache_overrides = request.runtime_profile.data_sources.semantic_output.cache_overrides
+    cache_overrides = request.runtime_profile.semantic_cache_overrides()
     if cache_overrides:
         normalized_overrides: dict[str, CachePolicy] = {
             name: _normalize_cache_policy(value) for name, value in cache_overrides.items()
@@ -734,19 +724,12 @@ def _has_cdf_inputs(
 
 __all__ = [
     "CPG_INPUT_TABLES",
-    "_CONSOLIDATED_BUILDER_HANDLERS",
     "CachePolicy",
     "CpgBuildOptions",
     "CpgViewNodesRequest",
     "CpgViewSpecsRequest",
     "RelationshipSpec",
     "SemanticOutputWriteContext",
-    "_builder_for_project_kind",
-    "_diagnostic_registry",
-    "_dispatch_from_registry",
-    "_finalize_df_to_contract",
-    "_span_unnest_registry",
-    "_symtable_registry",
     "build_cpg",
     "build_cpg_from_inferred_deps",
     "cpg_view_specs",

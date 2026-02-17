@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
 import msgspec
@@ -128,8 +127,7 @@ class QueryWindowSetV1(CqStruct, frozen=True):
     windows: tuple[QueryWindowSourceV1, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class TreeSitterInputEditV1:
+class TreeSitterInputEditV1(CqStruct, frozen=True):
     """One ``Tree.edit`` payload for incremental parsing."""
 
     start_byte: int

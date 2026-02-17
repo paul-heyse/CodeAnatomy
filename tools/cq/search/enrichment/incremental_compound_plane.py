@@ -4,16 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-
-def _coerce_count(value: object) -> int:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            return 0
-    return 0
+from tools.cq.search._shared.helpers import coerce_count
 
 
 def build_binding_join(
@@ -34,7 +25,7 @@ def build_binding_join(
             binding_id,
             {"binding_id": binding_id, "ts": 0, "dis_defs": 0, "dis_uses": 0},
         )
-        bucket["ts"] = _coerce_count(bucket.get("ts")) + 1
+        bucket["ts"] = coerce_count(bucket.get("ts")) + 1
     for row in dis_events:
         binding_id = row.get("binding_id")
         if not isinstance(binding_id, str) or not binding_id:
@@ -45,9 +36,9 @@ def build_binding_join(
         )
         event = row.get("event")
         if event == "def":
-            bucket["dis_defs"] = _coerce_count(bucket.get("dis_defs")) + 1
+            bucket["dis_defs"] = coerce_count(bucket.get("dis_defs")) + 1
         elif event == "use":
-            bucket["dis_uses"] = _coerce_count(bucket.get("dis_uses")) + 1
+            bucket["dis_uses"] = coerce_count(bucket.get("dis_uses")) + 1
     return {"binding_join": by_binding}
 
 
@@ -97,9 +88,9 @@ def build_compound_bundle(
     for binding_id, row in binding_join.items():
         if not isinstance(binding_id, str) or not isinstance(row, dict):
             continue
-        ts_count = _coerce_count(row.get("ts"))
-        dis_defs = _coerce_count(row.get("dis_defs"))
-        dis_uses = _coerce_count(row.get("dis_uses"))
+        ts_count = coerce_count(row.get("ts"))
+        dis_defs = coerce_count(row.get("dis_defs"))
+        dis_uses = coerce_count(row.get("dis_uses"))
         dis_total = dis_defs + dis_uses
         if ts_count > 0 and dis_total > 0:
             coverage["joined"] += 1

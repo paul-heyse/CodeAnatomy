@@ -19,7 +19,11 @@ from tools.cq.core.definition_parser import extract_symbol_name
 from tools.cq.core.python_ast_utils import get_call_name, safe_unparse
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.macros.calls.context_snippet import _extract_context_snippet
+from tools.cq.macros.calls.enrichment import enrich_call_site as enrich_call_site_module
 from tools.cq.macros.calls.neighborhood import _compute_context_window
+from tools.cq.macros.calls.rust_calls import (
+    collect_rust_call_sites as collect_rust_call_sites_module,
+)
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file
 from tools.cq.search.pipeline.context_window import ContextWindow
 from tools.cq.search.rg.adapter import find_def_lines
@@ -536,7 +540,14 @@ def _collect_call_sites_from_records(
     all_sites: list[CallSite] = []
     for rel_path, file_records in by_file.items():
         if Path(rel_path).suffix == ".rs":
-            all_sites.extend(_collect_rust_call_sites(rel_path, file_records, function_name))
+            all_sites.extend(
+                collect_rust_call_sites_module(
+                    rel_path,
+                    file_records,
+                    function_name,
+                    make_call_site=CallSite,
+                )
+            )
             continue
         filepath = root / rel_path
         if not filepath.exists():
@@ -676,7 +687,7 @@ def _build_call_site_from_record(
     context = _get_containing_function(ctx.tree, record.start_line)
     callee, _is_method, receiver = get_call_name(call_node.func)
     hazards = _detect_hazards(call_node, info)
-    enrichment = _enrich_call_site(ctx.source, context, ctx.rel_path)
+    enrichment = enrich_call_site_module(ctx.source, context, ctx.rel_path)
     context_window = _compute_context_window(record.start_line, ctx.def_lines, ctx.total_lines)
     context_snippet = _extract_context_snippet(
         ctx.source_lines,

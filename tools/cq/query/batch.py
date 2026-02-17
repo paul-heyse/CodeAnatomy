@@ -47,6 +47,7 @@ def build_batch_session(
     paths: list[Path],
     record_types: Iterable[str] | Iterable[RecordType],
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+    symtable: SymtableEnricher | None = None,
 ) -> BatchEntityQuerySession:
     """Build a shared scan session for multiple entity queries.
 
@@ -79,7 +80,7 @@ def build_batch_session(
         records=records,
         scan=scan_ctx,
         candidates=candidates,
-        symtable=SymtableEnricher(root),
+        symtable=symtable if symtable is not None else SymtableEnricher(root),
     )
 
 

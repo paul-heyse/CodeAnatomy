@@ -9,7 +9,7 @@ from tools.cq.search.pipeline.classifier import QueryMode
 from tools.cq.search.pipeline.profiles import SearchLimits
 from tools.cq.search.rg.codec import RgEvent
 from tools.cq.search.rg.contracts import result_from_process, settings_from_request
-from tools.cq.search.rg.runner import RgProcessResult
+from tools.cq.search.rg.runner import RgProcessResultV1
 
 
 def test_settings_from_request() -> None:
@@ -37,7 +37,7 @@ def test_settings_from_request() -> None:
 
 def test_result_from_process() -> None:
     """Test result from process."""
-    process = RgProcessResult(
+    process = RgProcessResultV1(
         command=["rg", "--json"],
         events=[RgEvent(type="summary", data={"stats": {"matches": 1}})],
         timed_out=False,

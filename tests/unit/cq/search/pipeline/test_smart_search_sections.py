@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import cast
 
 from tools.cq.core.locations import SourceSpan
-from tools.cq.search._shared.types import QueryMode
-from tools.cq.search.pipeline.classifier import MatchCategory
-from tools.cq.search.pipeline.enrichment_contracts import (
+from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentModeV1,
     IncrementalEnrichmentV1,
 )
+from tools.cq.search._shared.types import QueryMode
+from tools.cq.search.pipeline.classifier import MatchCategory
 from tools.cq.search.pipeline.smart_search_sections import build_finding, build_sections
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 

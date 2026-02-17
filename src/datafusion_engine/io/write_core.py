@@ -73,13 +73,14 @@ from storage.deltalake.config import (
 )
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
     from deltalake import CommitProperties, WriterProperties
 
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.io.write_pipeline import WritePipeline
+    from datafusion_engine.obs.datafusion_runs import DataFusionRun
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from obs.datafusion_runs import DataFusionRun
 else:
 
     @lru_cache(maxsize=1)
@@ -102,6 +103,19 @@ else:
             return _resolve_write_pipeline_class()(*args, **kwargs)
 
     WritePipeline = _WritePipelineProxyMeta("WritePipeline", (WritePipeline,), {})
+
+
+def build_write_pipeline(
+    *,
+    ctx: SessionContext,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> WritePipeline:
+    """Construct the canonical write-pipeline implementation.
+
+    Returns:
+        WritePipeline: Pipeline bound to the provided context and profile.
+    """
+    return WritePipeline(ctx=ctx, runtime_profile=runtime_profile)
 
 
 class WriteFormat(Enum):

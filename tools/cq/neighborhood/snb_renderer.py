@@ -110,13 +110,13 @@ def _populate_findings(
             Section(
                 title=section_v1.title,
                 collapsed=section_v1.collapsed,
-                findings=[
+                findings=tuple(
                     Finding(
                         category="neighborhood",
                         message=item,
                     )
                     for item in section_v1.items
-                ],
+                ),
             )
             for section_v1 in view.sections
         ]

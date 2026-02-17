@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.astgrep.rulepack_loader import clear_rulepack_cache, load_default_rulepacks
+from tools.cq.astgrep.rulepack_loader import load_default_rulepacks
 from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import RecordType, RuleSpec
 
@@ -15,7 +15,6 @@ EXCEPT_RULE_COUNT = 3
 
 
 def _python_rules() -> tuple[RuleSpec, ...]:
-    clear_rulepack_cache()
     packs = load_default_rulepacks()
     return packs.get("python", ())
 

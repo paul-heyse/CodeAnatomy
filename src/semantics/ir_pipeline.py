@@ -27,7 +27,7 @@ from semantics.naming import canonical_output_name
 from semantics.output_names import RELATION_OUTPUT_NAME
 from semantics.registry import SEMANTIC_MODEL, SemanticModel, SemanticOutputSpec
 from semantics.types.annotated_schema import AnnotatedSchema
-from semantics.types.core import CompatibilityGroup
+from semantics.types.core import FILE_IDENTITY_COLUMN_NAMES, CompatibilityGroup
 from semantics.view_kinds import VIEW_KIND_ORDER
 from utils.hashing import hash64_from_text, hash_msgpack_canonical
 
@@ -207,7 +207,7 @@ def _resolve_keys_from_inferred(
     for left_col, right_col in props.inferred_join_keys:
         if left_col != right_col:
             continue
-        if left_col in _FILE_IDENTITY_NAMES:
+        if left_col in FILE_IDENTITY_COLUMN_NAMES:
             left_cols.append(left_col)
             right_cols.append(right_col)
     if not left_cols:
@@ -964,7 +964,6 @@ def emit_semantics(ir: SemanticIR, model: SemanticModel) -> SemanticIR:
     )
 
 
-_FILE_IDENTITY_NAMES: frozenset[str] = frozenset({"file_id", "path"})
 _MIN_BINARY_INPUTS = 2
 _HIGH_FAN_OUT_THRESHOLD = 3
 

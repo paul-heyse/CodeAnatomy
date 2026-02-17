@@ -15,14 +15,11 @@ from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow.chunking import ChunkPolicy
 from datafusion_engine.arrow.coercion import ensure_arrow_table
 from datafusion_engine.arrow.encoding import EncodingPolicy
-from datafusion_engine.arrow.interop import (
-    DataTypeLike,
-    TableLike,
-)
+from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.arrow.types import DEFAULT_DICTIONARY_INDEX_TYPE
 from datafusion_engine.expr.cast import safe_cast
+from datafusion_engine.schema.type_resolution import ensure_arrow_dtype
 from datafusion_engine.session.helpers import temp_table
-from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_to_pyarrow
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -130,8 +127,8 @@ def _encoding_select_expr(
             index_type = DEFAULT_DICTIONARY_INDEX_TYPE
         ordered = policy.dictionary_ordered_flags.get(name, policy.dictionary_ordered)
         dict_type = pa.dictionary(
-            _ensure_arrow_dtype(index_type),
-            _ensure_arrow_dtype(schema_field.type),
+            ensure_arrow_dtype(index_type),
+            ensure_arrow_dtype(schema_field.type),
             ordered=ordered,
         )
         selections.append(safe_cast(col(name), dict_type).alias(name))
@@ -139,19 +136,7 @@ def _encoding_select_expr(
 
 
 def _datafusion_context() -> SessionContext:
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-    profile = DataFusionRuntimeProfile()
-    return profile.session_runtime().ctx
-
-
-def _ensure_arrow_dtype(dtype: DataTypeLike | ArrowTypeSpec) -> pa.DataType:
-    if isinstance(dtype, pa.DataType):
-        return dtype
-    if isinstance(dtype, ArrowTypeBase):
-        return arrow_type_to_pyarrow(dtype)
-    msg = f"Expected pyarrow.DataType, got {type(dtype)!r}."
-    raise TypeError(msg)
+    return SessionContext()
 
 
 __all__ = [

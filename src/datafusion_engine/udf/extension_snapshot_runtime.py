@@ -7,8 +7,8 @@ from collections.abc import Mapping, Sequence
 from datafusion import SessionContext
 
 from datafusion_engine.udf.extension_core import (
-    _EXPR_SURFACE_SNAPSHOT_ENTRIES,
     EXTENSION_MODULE_LABEL,
+    AsyncUdfPolicy,
     ExtensionRegistries,
     _build_registry_snapshot,
     _datafusion_internal,
@@ -40,127 +40,6 @@ def _empty_registry_snapshot() -> dict[str, object]:
         "config_defaults": {},
         "custom_udfs": [],
     }
-
-
-def _coerce_nonstring_sequence(value: object) -> tuple[object, ...] | None:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return None
-    return tuple(value)
-
-
-def _coerce_signature_inputs(value: object) -> tuple[tuple[str, ...], ...] | None:
-    entries = _coerce_nonstring_sequence(value)
-    if entries is None:
-        return None
-    normalized: list[tuple[str, ...]] = []
-    for entry in entries:
-        signature_entry = _coerce_nonstring_sequence(entry)
-        if signature_entry is None:
-            continue
-        normalized.append(tuple(str(item) for item in signature_entry))
-    return tuple(normalized)
-
-
-def _normalize_expr_surface_metadata(
-    metadata: Mapping[str, object],
-) -> (
-    tuple[tuple[object, ...], tuple[str, ...], tuple[tuple[str, ...], ...], tuple[str, ...], str]
-    | None
-):
-    probe_args = _coerce_nonstring_sequence(metadata.get("probe_args"))
-    parameter_names = _coerce_nonstring_sequence(metadata.get("parameter_names"))
-    signature_inputs = _coerce_signature_inputs(metadata.get("signature_inputs"))
-    return_types = _coerce_nonstring_sequence(metadata.get("return_types"))
-    volatility_value = metadata.get("volatility")
-    if (
-        probe_args is None
-        or parameter_names is None
-        or signature_inputs is None
-        or return_types is None
-        or not isinstance(volatility_value, str)
-    ):
-        return None
-    return (
-        probe_args,
-        tuple(str(value) for value in parameter_names),
-        signature_inputs,
-        tuple(str(value) for value in return_types),
-        volatility_value,
-    )
-
-
-def _probe_expr_surface_udf(
-    *,
-    name: str,
-    probe_args: tuple[object, ...],
-    ctx: SessionContext,
-) -> bool:
-    try:
-        from datafusion import lit
-
-        from datafusion_engine.udf.expr import udf_expr
-    except ImportError:
-        return False
-    except (RuntimeError, TypeError, ValueError):
-        return False
-    try:
-        _ = udf_expr(name, *(lit(arg) for arg in probe_args), ctx=ctx)
-    except (RuntimeError, TypeError, ValueError):
-        return False
-    return True
-
-
-def _supplement_expr_surface_snapshot(
-    payload: dict[str, object],
-    *,
-    ctx: SessionContext,
-) -> dict[str, object]:
-    """Augment registry snapshots with expression-surface UDF metadata.
-
-    Some UDF-like expression entrypoints are available through extension
-    expression builders but are omitted from ``registry_snapshot``.
-    Including these names keeps downstream required-UDF validation aligned
-    with what the runtime can actually build.
-
-    Returns:
-    -------
-    dict[str, object]
-        Snapshot payload augmented with available expression-surface metadata.
-    """
-    scalar_values = payload.get("scalar")
-    scalar: list[str] = []
-    existing = _coerce_nonstring_sequence(scalar_values)
-    if existing is not None:
-        scalar.extend(value for value in existing if isinstance(value, str))
-    names = set(scalar)
-    param_names = _mutable_mapping(payload, "parameter_names")
-    volatility = _mutable_mapping(payload, "volatility")
-    signature_inputs = _mutable_mapping(payload, "signature_inputs")
-    return_types = _mutable_mapping(payload, "return_types")
-
-    for name, metadata in _EXPR_SURFACE_SNAPSHOT_ENTRIES.items():
-        if name in names:
-            continue
-        normalized = _normalize_expr_surface_metadata(metadata)
-        if normalized is None:
-            continue
-        probe_args, parameter_names, signature, returns, volatility_value = normalized
-        if not _probe_expr_surface_udf(name=name, probe_args=probe_args, ctx=ctx):
-            continue
-
-        scalar.append(name)
-        names.add(name)
-        param_names[name] = parameter_names
-        signature_inputs[name] = signature
-        return_types[name] = returns
-        volatility[name] = volatility_value
-
-    payload["scalar"] = scalar
-    payload["parameter_names"] = param_names
-    payload["volatility"] = volatility
-    payload["signature_inputs"] = signature_inputs
-    payload["return_types"] = return_types
-    return payload
 
 
 def _mutable_mapping(payload: Mapping[str, object], key: str) -> dict[str, object]:
@@ -568,7 +447,7 @@ def _async_udf_policy(
     enable_async: bool,
     async_udf_timeout_ms: int | None,
     async_udf_batch_size: int | None,
-) -> tuple[bool, int | None, int | None]:
+) -> AsyncUdfPolicy:
     if not enable_async and (async_udf_timeout_ms is not None or async_udf_batch_size is not None):
         msg = "Async UDF policy provided but enable_async is False."
         raise ValueError(msg)
@@ -579,13 +458,17 @@ def _async_udf_policy(
         if async_udf_batch_size is None or async_udf_batch_size <= 0:
             msg = "async_udf_batch_size must be a positive integer when async UDFs are enabled."
             raise ValueError(msg)
-    return (enable_async, async_udf_timeout_ms, async_udf_batch_size)
+    return AsyncUdfPolicy(
+        enabled=enable_async,
+        timeout_ms=async_udf_timeout_ms,
+        batch_size=async_udf_batch_size,
+    )
 
 
 def _registered_snapshot(
     ctx: SessionContext,
     *,
-    policy: tuple[bool, int | None, int | None],
+    policy: AsyncUdfPolicy,
     registries: ExtensionRegistries,
 ) -> Mapping[str, object] | None:
     if ctx not in registries.udf_contexts:
@@ -603,17 +486,13 @@ __all__ = [
     "_build_docs_snapshot",
     "_build_registry_snapshot",
     "_coerce_config_default_value",
-    "_coerce_nonstring_sequence",
-    "_coerce_signature_inputs",
     "_empty_registry_snapshot",
     "_install_rust_udfs",
     "_iter_snapshot_values",
     "_mutable_mapping",
-    "_normalize_expr_surface_metadata",
     "_normalize_registry_snapshot",
     "_normalize_snapshot_value",
     "_notify_udf_snapshot",
-    "_probe_expr_surface_udf",
     "_registered_snapshot",
     "_require_bool_mapping",
     "_require_config_defaults",
@@ -622,7 +501,6 @@ __all__ = [
     "_require_snapshot_metadata",
     "_snapshot_alias_names",
     "_snapshot_names",
-    "_supplement_expr_surface_snapshot",
     "_validate_required_snapshot_keys",
     "_validate_signature_metadata",
     "_validate_udf_entries",

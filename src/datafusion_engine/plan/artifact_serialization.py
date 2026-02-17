@@ -23,8 +23,11 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
     class PipelineEventRowLike(Protocol):
-        event_name: str
-        run_id: str
+        @property
+        def event_name(self) -> str: ...
+
+        @property
+        def run_id(self) -> str: ...
 
 
 def bundle_payload(bundle: DataFusionPlanArtifact) -> Mapping[str, object]:
@@ -148,7 +151,6 @@ def lineage_payload(report: LineageReport) -> dict[str, object]:
         {
             "kind": expr.kind,
             "referenced_columns": [list(pair) for pair in expr.referenced_columns],
-            "referenced_udfs": list(expr.referenced_udfs),
             "text": expr.text,
         }
         for expr in report.exprs
@@ -167,7 +169,6 @@ def lineage_payload(report: LineageReport) -> dict[str, object]:
         "aggregations": list(report.aggregations),
         "window_functions": list(report.window_functions),
         "subqueries": list(report.subqueries),
-        "referenced_udfs": list(report.referenced_udfs),
         "referenced_tables": list(report.referenced_tables),
         "all_required_columns": [list(pair) for pair in report.all_required_columns],
     }

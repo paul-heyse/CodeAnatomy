@@ -81,9 +81,15 @@ def _normalize_int(value: object) -> int | None:
     return int(value)
 
 
-def _extract_provenance(
+def extract_provenance(
     language_obj: object | None,
 ) -> tuple[str | None, tuple[int, int, int] | None, int | None]:
+    """Extract grammar provenance fields from a tree-sitter language object.
+
+    Returns:
+        tuple[str | None, tuple[int, int, int] | None, int | None]:
+            Grammar name, semantic version tuple, and ABI version.
+    """
     if language_obj is None:
         return None, None, None
     grammar_name = getattr(language_obj, "name", None)
@@ -198,7 +204,7 @@ def load_language_registry(language: str) -> TreeSitterLanguageRegistryV1 | None
     if schema is None:
         return None
     language_obj = load_tree_sitter_language(normalized)
-    grammar_name, semantic_version, abi_version = _extract_provenance(language_obj)
+    grammar_name, semantic_version, abi_version = extract_provenance(language_obj)
     node_kinds = tuple(sorted({row.type for row in schema.node_types}))
     named_node_kinds = tuple(sorted({row.type for row in schema.node_types if row.named}))
     field_names = tuple(sorted({field for row in schema.node_types for field in row.fields}))
@@ -276,6 +282,7 @@ def load_tree_sitter_capabilities(language: str) -> TreeSitterRuntimeCapabilitie
 __all__ = [
     "TreeSitterLanguageRegistryV1",
     "TreeSitterRuntimeCapabilitiesV1",
+    "extract_provenance",
     "load_language_registry",
     "load_tree_sitter_capabilities",
     "load_tree_sitter_language",

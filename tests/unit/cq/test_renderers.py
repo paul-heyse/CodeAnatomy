@@ -85,7 +85,7 @@ class TestMermaidFlowchart:
             anchor=Anchor(file="test.py", line=10),
             details=DetailPayload.from_legacy({"caller": "bar", "callee": "foo"}),
         )
-        section = Section(title="Callers", findings=[caller])
+        section = Section(title="Callers", findings=(caller,))
         result = _make_result(key_findings=[definition], sections=[section])
         output = render_mermaid_flowchart(result)
 
@@ -215,7 +215,7 @@ class TestDotRenderer:
             anchor=Anchor(file="test.py", line=10),
             details=DetailPayload.from_legacy({"caller": "bar", "callee": "foo"}),
         )
-        section = Section(title="Callers", findings=[caller])
+        section = Section(title="Callers", findings=(caller,))
         result = _make_result(key_findings=[definition], sections=[section])
         output = render_dot(result)
 

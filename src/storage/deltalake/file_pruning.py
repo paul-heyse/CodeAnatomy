@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 from datafusion import SessionContext, col, lit
@@ -19,6 +19,8 @@ from obs.otel import SCOPE_STORAGE, stage_span
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
+
+type StatsFilterValue = int | float | str | bool
 
 
 @dataclass(frozen=True)
@@ -36,7 +38,7 @@ class StatsFilter:
 
     column: str
     op: Literal["=", "!=", ">", ">=", "<", "<="]
-    value: Any
+    value: StatsFilterValue
     cast_type: str | None = None
 
 
@@ -260,13 +262,13 @@ def select_candidate_files(
 
     for i in range(index.num_rows):
         path = str(path_col[i].as_py())
-        partition_values: dict[str, Any] | None = partition_values_col[i].as_py()
+        partition_values: dict[str, object] | None = partition_values_col[i].as_py()
 
         if partition_values is None:
             partition_values = {}
 
-        stats_min: dict[str, Any] | None = stats_min_col[i].as_py()
-        stats_max: dict[str, Any] | None = stats_max_col[i].as_py()
+        stats_min: dict[str, object] | None = stats_min_col[i].as_py()
+        stats_max: dict[str, object] | None = stats_max_col[i].as_py()
         if stats_min is None:
             stats_min = {}
         if stats_max is None:
@@ -384,24 +386,75 @@ def _stats_filter_expr(filter_spec: StatsFilter) -> Expr:
     raise ValueError(msg)
 
 
-def _resolve_filter_value(value: Any, cast_type: str | None) -> Any:
-    if value is None or cast_type is None:
-        return value
-    if cast_type in {"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"}:
-        with contextlib.suppress(TypeError, ValueError):
-            return int(value)
-    if cast_type in {"Float32", "Float64"}:
-        with contextlib.suppress(TypeError, ValueError):
-            return float(value)
-    if cast_type == "Boolean":
-        if isinstance(value, str):
-            return value.lower() == "true"
+def _resolve_filter_value(value: object, cast_type: str | None) -> StatsFilterValue | None:
+    if value is None:
+        return None
+    resolved: StatsFilterValue | None
+    if cast_type is None:
+        resolved = value if isinstance(value, (bool, int, float, str)) else str(value)
+    elif cast_type in {"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"}:
+        resolved = _coerce_int_value(value)
+    elif cast_type in {"Float32", "Float64"}:
+        resolved = _coerce_float_value(value)
+    elif cast_type == "Boolean":
+        resolved = _coerce_bool_value(value)
+    else:
+        resolved = str(value)
+    return resolved
+
+
+def _coerce_int_value(value: object) -> int | None:
+    if not isinstance(value, (bool, int, float, str)):
+        return None
+    with contextlib.suppress(TypeError, ValueError):
+        return int(value)
+    return None
+
+
+def _coerce_float_value(value: object) -> float | None:
+    if not isinstance(value, (bool, int, float, str)):
+        return None
+    with contextlib.suppress(TypeError, ValueError):
+        return float(value)
+    return None
+
+
+def _coerce_bool_value(value: object) -> bool | None:
+    if isinstance(value, str):
+        return value.lower() == "true"
+    if isinstance(value, (bool, int, float)):
         return bool(value)
-    return str(value)
+    return None
+
+
+def _ordered_stats_numeric_values(
+    *,
+    min_value: StatsFilterValue,
+    max_value: StatsFilterValue,
+    target: StatsFilterValue,
+) -> tuple[float, float, float] | None:
+    if (
+        isinstance(min_value, (int, float, bool))
+        and isinstance(max_value, (int, float, bool))
+        and isinstance(target, (int, float, bool))
+    ):
+        return float(min_value), float(max_value), float(target)
+    return None
+
+
+def _ordered_stats_text_values(
+    *,
+    min_value: StatsFilterValue,
+    max_value: StatsFilterValue,
+    target: StatsFilterValue,
+) -> tuple[str, str, str] | None:
+    if isinstance(min_value, str) and isinstance(max_value, str) and isinstance(target, str):
+        return min_value, max_value, target
+    return None
 
 
 def _matches_partition_filters(
-    partition_values: dict[str, Any],
+    partition_values: dict[str, object],
     filters: Sequence[PartitionFilter],
 ) -> bool:
     for filter_spec in filters:
@@ -429,36 +482,80 @@ def _matches_partition_filters(
 
 
 def _matches_stats_filters(
-    stats_min: dict[str, Any],
-    stats_max: dict[str, Any],
+    stats_min: dict[str, object],
+    stats_max: dict[str, object],
     filters: Sequence[StatsFilter],
 ) -> bool:
-    matched = True
     for filter_spec in filters:
         min_value = _resolve_filter_value(stats_min.get(filter_spec.column), filter_spec.cast_type)
         max_value = _resolve_filter_value(stats_max.get(filter_spec.column), filter_spec.cast_type)
         target = _resolve_filter_value(filter_spec.value, filter_spec.cast_type)
         if min_value is None or max_value is None or target is None:
             continue
-        if filter_spec.op == ">" and not (max_value > target):
-            matched = False
+        if filter_spec.op == "!=":
+            if min_value == target and max_value == target:
+                return False
             continue
-        if filter_spec.op == ">=" and not (max_value >= target):
-            matched = False
+        numeric_values = _ordered_stats_numeric_values(
+            min_value=min_value,
+            max_value=max_value,
+            target=target,
+        )
+        text_values = _ordered_stats_text_values(
+            min_value=min_value,
+            max_value=max_value,
+            target=target,
+        )
+        if numeric_values is not None:
+            if not _matches_numeric_range_op(filter_spec.op, *numeric_values):
+                return False
             continue
-        if filter_spec.op == "<" and not (min_value < target):
-            matched = False
+        if text_values is not None:
+            if not _matches_text_range_op(filter_spec.op, *text_values):
+                return False
             continue
-        if filter_spec.op == "<=" and not (min_value <= target):
-            matched = False
-            continue
-        if filter_spec.op == "=" and not (min_value <= target <= max_value):
-            matched = False
-            continue
-        if filter_spec.op == "!=" and min_value == target and max_value == target:
-            matched = False
-            continue
-    return matched
+        return False
+    return True
+
+
+def _matches_numeric_range_op(
+    op: str,
+    min_value: float,
+    max_value: float,
+    target: float,
+) -> bool:
+    if op == ">":
+        return max_value > target
+    if op == ">=":
+        return max_value >= target
+    if op == "<":
+        return min_value < target
+    if op == "<=":
+        return min_value <= target
+    if op == "=":
+        return min_value <= target <= max_value
+    msg = f"Unsupported stats filter op: {op}"
+    raise ValueError(msg)
+
+
+def _matches_text_range_op(
+    op: str,
+    min_value: str,
+    max_value: str,
+    target: str,
+) -> bool:
+    if op == ">":
+        return max_value > target
+    if op == ">=":
+        return max_value >= target
+    if op == "<":
+        return min_value < target
+    if op == "<=":
+        return min_value <= target
+    if op == "=":
+        return min_value <= target <= max_value
+    msg = f"Unsupported stats filter op: {op}"
+    raise ValueError(msg)
 
 
 __all__ = [

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import msgspec
 
@@ -17,15 +17,18 @@ from tools.cq.core.schema import (
     CqResult,
     Finding,
     Section,
+    append_section_finding,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.summary_contract import summary_from_mapping
-from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
-from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
+from tools.cq.macros.shared import macro_scoring_details, scan_python_files, scope_filter_applied
+
+if TYPE_CHECKING:
+    from tools.cq.analysis.visitors.side_effect_visitor import SideEffectVisitor
 
 _MAX_EFFECTS_DISPLAY = 40
 
@@ -70,7 +73,7 @@ SAFE_TOP_LEVEL = {
 }
 
 
-class SideEffect(msgspec.Struct):
+class SideEffect(msgspec.Struct, frozen=True):
     """A detected side effect.
 
     Parameters
@@ -125,108 +128,17 @@ def _is_main_guard(node: ast.If) -> bool:
     )
 
 
-class SideEffectVisitor(ast.NodeVisitor):
-    """Detect side effects at module top level."""
+def _side_effect_visitor_factory(file: str) -> SideEffectVisitor[SideEffect]:
+    from tools.cq.analysis.visitors.side_effect_visitor import SideEffectVisitor
 
-    def __init__(self, file: str) -> None:
-        """__init__."""
-        self.file = file
-        self.effects: list[SideEffect] = []
-        self._in_def = 0  # Nesting depth in function/class
-        self._in_main_guard = False  # Inside if __name__ == "__main__"
-
-    def visit_If(self, node: ast.If) -> None:
-        """Visit an if statement, checking for main guard."""
-        if _is_main_guard(node) and self._in_def == 0:
-            # Skip the body of if __name__ == "__main__":
-            self._in_main_guard = True
-            self.generic_visit(node)
-            self._in_main_guard = False
-        else:
-            self.generic_visit(node)
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        """Visit a function definition."""
-        self._in_def += 1
-        self.generic_visit(node)
-        self._in_def -= 1
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        """Visit an async function definition."""
-        self._in_def += 1
-        self.generic_visit(node)
-        self._in_def -= 1
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        """Visit a class definition."""
-        self._in_def += 1
-        self.generic_visit(node)
-        self._in_def -= 1
-
-    def visit_Call(self, node: ast.Call) -> None:
-        """Visit a call expression for import-time calls."""
-        if self._in_def == 0 and not self._in_main_guard:
-            callee = safe_unparse(node.func, default="<unknown>")
-
-            # Skip decorators and type-related calls
-            if callee not in SAFE_TOP_LEVEL:
-                self.effects.append(
-                    SideEffect(
-                        file=self.file,
-                        line=node.lineno,
-                        kind="top_level_call",
-                        description=f"Import-time call: {callee}(...)",
-                    )
-                )
-        self.generic_visit(node)
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        """Visit an assignment for module-level mutations."""
-        if self._in_def == 0 and not self._in_main_guard:
-            for target in node.targets:
-                if isinstance(target, ast.Subscript):
-                    # Dict/list mutation at module level
-                    target_str = safe_unparse(target, default="<unknown>")
-                    self.effects.append(
-                        SideEffect(
-                            file=self.file,
-                            line=node.lineno,
-                            kind="global_write",
-                            description=f"Module-level mutation: {target_str} = ...",
-                        )
-                    )
-        self.generic_visit(node)
-
-    def visit_AugAssign(self, node: ast.AugAssign) -> None:
-        """Visit an augmented assignment for module-level mutations."""
-        if self._in_def == 0 and not self._in_main_guard:
-            target_str = safe_unparse(node.target, default="<unknown>")
-            self.effects.append(
-                SideEffect(
-                    file=self.file,
-                    line=node.lineno,
-                    kind="global_write",
-                    description=f"Module-level augmented assign: {target_str} {ast.dump(node.op)} ...",
-                )
-            )
-        self.generic_visit(node)
-
-    def visit_Attribute(self, node: ast.Attribute) -> None:
-        """Visit attribute access for ambient reads."""
-        if self._in_def == 0 and not self._in_main_guard:
-            full = safe_unparse(node, default="<unknown>")
-            for pattern, category in AMBIENT_PATTERNS.items():
-                if full.endswith(pattern) or pattern in full:
-                    self.effects.append(
-                        SideEffect(
-                            file=self.file,
-                            line=node.lineno,
-                            kind="ambient_read",
-                            description=f"Ambient {category} access: {full}",
-                        )
-                    )
-                    break
-        self.generic_visit(node)
+    return SideEffectVisitor(
+        file,
+        make_side_effect=SideEffect,
+        safe_unparse=safe_unparse,
+        safe_top_level=SAFE_TOP_LEVEL,
+        ambient_patterns=AMBIENT_PATTERNS,
+        is_main_guard=_is_main_guard,
+    )
 
 
 class SideEffectsRequest(ScopedMacroRequestBase, frozen=True):
@@ -242,28 +154,16 @@ def _scan_side_effects(
     include: list[str] | None = None,
     exclude: list[str] | None = None,
 ) -> tuple[list[SideEffect], int]:
-    repo_context = resolve_repo_context(root)
-    repo_root = repo_context.repo_root
     all_effects: list[SideEffect] = []
-    files_scanned = 0
-
-    for pyfile in iter_files(
-        root=repo_root,
+    visitors, files_scanned = scan_python_files(
+        root,
         include=include,
         exclude=exclude,
-        extensions=(".py",),
         max_files=max_files,
-    ):
-        rel = pyfile.relative_to(repo_root)
-        try:
-            source = pyfile.read_text(encoding="utf-8")
-            tree = ast.parse(source, filename=str(rel))
-        except (SyntaxError, OSError, UnicodeDecodeError):
-            continue
-        visitor = SideEffectVisitor(str(rel))
-        visitor.visit(tree)
+        visitor_factory=_side_effect_visitor_factory,
+    )
+    for visitor in visitors:
         all_effects.extend(visitor.effects)
-        files_scanned += 1
 
     return all_effects, files_scanned
 
@@ -297,23 +197,25 @@ def _append_kind_sections(
             continue
         section = Section(title=kind_titles[kind])
         for effect in effects[:_MAX_EFFECTS_DISPLAY]:
-            section.findings.append(
+            section = append_section_finding(
+                section,
                 Finding(
                     category=kind,
                     message=effect.description,
                     anchor=Anchor(file=effect.file, line=effect.line),
                     severity=severity_map[kind],
                     details=build_detail_payload(scoring=scoring_details),
-                )
+                ),
             )
         if len(effects) > _MAX_EFFECTS_DISPLAY:
-            section.findings.append(
+            section = append_section_finding(
+                section,
                 Finding(
                     category="truncated",
                     message=f"... and {len(effects) - _MAX_EFFECTS_DISPLAY} more",
                     severity="info",
                     details=build_detail_payload(scoring=scoring_details),
-                )
+                ),
             )
         sections.append(section)
     return sections

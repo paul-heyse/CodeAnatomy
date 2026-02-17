@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
+from tools.cq.search._shared.enrichment_contracts import PythonEnrichmentV1
 from tools.cq.search.enrichment.python_adapter import PythonEnrichmentAdapter
-from tools.cq.search.pipeline.enrichment_contracts import PythonEnrichmentV1
 
 _TIMING_MS = 1.5
 

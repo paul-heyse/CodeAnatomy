@@ -6,10 +6,20 @@ from smart_search.py for better modularity.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from tools.cq.search._shared.helpers import safe_int_counter
 from tools.cq.search.enrichment.language_registry import get_language_adapter
+from tools.cq.search.enrichment.telemetry import (
+    accumulate_rust_bundle_drift as _accumulate_rust_bundle_drift,
+)
+from tools.cq.search.enrichment.telemetry import (
+    accumulate_stage_status as _accumulate_stage_status,
+)
+from tools.cq.search.enrichment.telemetry import (
+    accumulate_stage_timings as _accumulate_stage_timings,
+)
+from tools.cq.search.enrichment.telemetry_schema import default_enrichment_telemetry_mapping
 
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
@@ -49,93 +59,7 @@ def empty_enrichment_telemetry() -> dict[str, object]:
     dict[str, object]
         Empty telemetry dictionary with initialized counters.
     """
-    return {
-        "python": {
-            "applied": 0,
-            "degraded": 0,
-            "skipped": 0,
-            "query_runtime": {
-                "did_exceed_match_limit": 0,
-                "cancelled": 0,
-            },
-            "stages": {
-                "ast_grep": {"applied": 0, "degraded": 0, "skipped": 0},
-                "python_ast": {"applied": 0, "degraded": 0, "skipped": 0},
-                "import_detail": {"applied": 0, "degraded": 0, "skipped": 0},
-                "python_resolution": {"applied": 0, "degraded": 0, "skipped": 0},
-                "tree_sitter": {"applied": 0, "degraded": 0, "skipped": 0},
-                "compile": {"applied": 0, "degraded": 0, "skipped": 0},
-                "symtable": {"applied": 0, "degraded": 0, "skipped": 0},
-                "dis": {"applied": 0, "degraded": 0, "skipped": 0},
-                "inspect": {"applied": 0, "degraded": 0, "skipped": 0},
-            },
-            "timings_ms": {
-                "ast_grep": 0.0,
-                "python_ast": 0.0,
-                "import_detail": 0.0,
-                "python_resolution": 0.0,
-                "tree_sitter": 0.0,
-                "compile": 0.0,
-                "symtable": 0.0,
-                "dis": 0.0,
-                "inspect": 0.0,
-            },
-        },
-        "rust": {
-            "applied": 0,
-            "degraded": 0,
-            "skipped": 0,
-            "query_runtime": {
-                "did_exceed_match_limit": 0,
-                "cancelled": 0,
-            },
-            "query_pack_tags": 0,
-            "distribution_profile_hits": 0,
-            "drift_breaking_profile_hits": 0,
-            "drift_removed_node_kinds": 0,
-            "drift_removed_fields": 0,
-        },
-    }
-
-
-def accumulate_stage_status(
-    stages_bucket: dict[str, object], stage_status: dict[str, object]
-) -> None:
-    """Accumulate stage status counters.
-
-    Parameters
-    ----------
-    stages_bucket
-        Bucket to accumulate status into.
-    stage_status
-        Stage status to accumulate.
-    """
-    for stage, stage_state in stage_status.items():
-        if not isinstance(stage, str) or not isinstance(stage_state, str):
-            continue
-        stage_bucket = stages_bucket.get(stage)
-        if isinstance(stage_bucket, dict) and stage_state in {"applied", "degraded", "skipped"}:
-            stage_bucket[stage_state] = int(stage_bucket.get(stage_state, 0)) + 1
-
-
-def accumulate_stage_timings(
-    timings_bucket: dict[str, object],
-    stage_timings: dict[str, object],
-) -> None:
-    """Accumulate stage timing data.
-
-    Parameters
-    ----------
-    timings_bucket
-        Bucket to accumulate timings into.
-    stage_timings
-        Stage timings to accumulate.
-    """
-    for stage, stage_ms in stage_timings.items():
-        if isinstance(stage, str) and isinstance(stage_ms, (int, float)):
-            existing = timings_bucket.get(stage)
-            base_ms = float(existing) if isinstance(existing, (int, float)) else 0.0
-            timings_bucket[stage] = base_ms + float(stage_ms)
+    return default_enrichment_telemetry_mapping()
 
 
 def accumulate_python_enrichment(
@@ -156,11 +80,11 @@ def accumulate_python_enrichment(
     stage_status = meta.get("stage_status")
     stages_bucket = lang_bucket.get("stages")
     if isinstance(stage_status, dict) and isinstance(stages_bucket, dict):
-        accumulate_stage_status(stages_bucket, stage_status)
+        _accumulate_stage_status(stages_bucket=stages_bucket, stage_status=stage_status)
     stage_timings = meta.get("stage_timings_ms")
     timings_bucket = lang_bucket.get("timings_ms")
     if isinstance(stage_timings, dict) and isinstance(timings_bucket, dict):
-        accumulate_stage_timings(timings_bucket, stage_timings)
+        _accumulate_stage_timings(timings_bucket=timings_bucket, stage_timings_ms=stage_timings)
     runtime_payload = payload.get("query_runtime")
     runtime_bucket = lang_bucket.get("query_runtime")
     if isinstance(runtime_payload, dict) and isinstance(runtime_bucket, dict):
@@ -207,92 +131,25 @@ def accumulate_rust_enrichment(
     payload
         Enrichment payload to accumulate from.
     """
-
-    def int_counter(value: object) -> int:
-        """Convert value to an integer counter with a safe default.
-
-        Returns:
-            int: ``value`` when it is a non-bool ``int``; otherwise ``0``.
-        """
-        return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
     tags = payload.get("query_pack_tags")
     if isinstance(tags, list):
-        lang_bucket["query_pack_tags"] = int_counter(lang_bucket.get("query_pack_tags")) + len(tags)
-    accumulate_rust_runtime(lang_bucket=lang_bucket, payload=payload, counter=int_counter)
-    accumulate_rust_bundle(lang_bucket=lang_bucket, payload=payload, counter=int_counter)
-
-
-def accumulate_rust_runtime(
-    *,
-    lang_bucket: dict[str, object],
-    payload: dict[str, object],
-    counter: Callable[[object], int],
-) -> None:
-    """Accumulate Rust runtime telemetry.
-
-    Parameters
-    ----------
-    lang_bucket
-        Language bucket to accumulate into.
-    payload
-        Enrichment payload to accumulate from.
-    counter
-        Counter function for int coercion.
-    """
+        lang_bucket["query_pack_tags"] = safe_int_counter(lang_bucket.get("query_pack_tags")) + len(
+            tags
+        )
     runtime_payload = payload.get("query_runtime")
     runtime_bucket = lang_bucket.get("query_runtime")
-    if not isinstance(runtime_payload, dict) or not isinstance(runtime_bucket, dict):
-        return
-    if bool(runtime_payload.get("did_exceed_match_limit")):
-        runtime_bucket["did_exceed_match_limit"] = (
-            counter(runtime_bucket.get("did_exceed_match_limit")) + 1
-        )
-    if bool(runtime_payload.get("cancelled")):
-        runtime_bucket["cancelled"] = counter(runtime_bucket.get("cancelled")) + 1
+    if isinstance(runtime_payload, dict) and isinstance(runtime_bucket, dict):
+        if bool(runtime_payload.get("did_exceed_match_limit")):
+            runtime_bucket["did_exceed_match_limit"] = (
+                safe_int_counter(runtime_bucket.get("did_exceed_match_limit")) + 1
+            )
+        if bool(runtime_payload.get("cancelled")):
+            runtime_bucket["cancelled"] = safe_int_counter(runtime_bucket.get("cancelled")) + 1
 
-
-def accumulate_rust_bundle(
-    *,
-    lang_bucket: dict[str, object],
-    payload: dict[str, object],
-    counter: Callable[[object], int],
-) -> None:
-    """Accumulate Rust bundle telemetry.
-
-    Parameters
-    ----------
-    lang_bucket
-        Language bucket to accumulate into.
-    payload
-        Enrichment payload to accumulate from.
-    counter
-        Counter function for int coercion.
-    """
-    bundle = payload.get("query_pack_bundle")
-    if not isinstance(bundle, dict):
-        return
-    if bool(bundle.get("distribution_included")):
-        lang_bucket["distribution_profile_hits"] = (
-            counter(lang_bucket.get("distribution_profile_hits")) + 1
-        )
-    if bundle.get("drift_compatible") is False:
-        lang_bucket["drift_breaking_profile_hits"] = (
-            counter(lang_bucket.get("drift_breaking_profile_hits")) + 1
-        )
-    schema_diff = bundle.get("drift_schema_diff")
-    if not isinstance(schema_diff, dict):
-        return
-    removed_nodes = schema_diff.get("removed_node_kinds")
-    removed_fields = schema_diff.get("removed_fields")
-    if isinstance(removed_nodes, list):
-        lang_bucket["drift_removed_node_kinds"] = counter(
-            lang_bucket.get("drift_removed_node_kinds")
-        ) + len(removed_nodes)
-    if isinstance(removed_fields, list):
-        lang_bucket["drift_removed_fields"] = counter(
-            lang_bucket.get("drift_removed_fields")
-        ) + len(removed_fields)
+    _accumulate_rust_bundle_drift(
+        lang_bucket=lang_bucket,
+        bundle=payload.get("query_pack_bundle"),
+    )
 
 
 def build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, object]:
@@ -348,11 +205,7 @@ def new_python_semantic_telemetry() -> dict[str, int]:
 
 __all__ = [
     "accumulate_python_enrichment",
-    "accumulate_rust_bundle",
     "accumulate_rust_enrichment",
-    "accumulate_rust_runtime",
-    "accumulate_stage_status",
-    "accumulate_stage_timings",
     "attach_enrichment_cache_stats",
     "build_enrichment_telemetry",
     "empty_enrichment_telemetry",

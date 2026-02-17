@@ -12,15 +12,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from types import CodeType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from tools.cq.search._shared.bounded_cache import BoundedCache
 from tools.cq.search._shared.helpers import source_hash
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
-from tools.cq.search.python.ast_utils import ast_node_priority, node_byte_span
+from tools.cq.search.python.ast_utils import (
+    ast_node_priority,
+    iter_nodes_with_parents,
+    node_byte_span,
+)
 
 if TYPE_CHECKING:
     from ast_grep_py import SgRoot
+    from tree_sitter import Tree as TreeSitterTree
+
+    from tools.cq.search.pipeline.classifier_runtime import NodeIntervalIndex
 
 _MAX_SESSION_CACHE_ENTRIES = 64
 _SESSION_CACHE: BoundedCache[str, PythonAnalysisSession] = BoundedCache(
@@ -39,17 +46,6 @@ class AstSpanEntry:
     priority: int
 
 
-def _iter_nodes_with_parents(tree: ast.AST) -> list[tuple[ast.AST, tuple[ast.AST, ...]]]:
-    nodes: list[tuple[ast.AST, tuple[ast.AST, ...]]] = []
-    stack: list[tuple[ast.AST, tuple[ast.AST, ...]]] = [(tree, ())]
-    while stack:
-        node, parents = stack.pop()
-        nodes.append((node, parents))
-        children = tuple(ast.iter_child_nodes(node))
-        stack.extend((child, (*parents, node)) for child in reversed(children))
-    return nodes
-
-
 @dataclass(slots=True)
 class PythonAnalysisSession:
     """Reusable analysis artifacts for one Python file snapshot."""
@@ -60,11 +56,11 @@ class PythonAnalysisSession:
     content_hash: str
     classifier_cache: ClassifierCacheContext = field(default_factory=ClassifierCacheContext)
     sg_root: SgRoot | None = None
-    node_index: Any | None = None
+    node_index: NodeIntervalIndex | None = None
     ast_tree: ast.Module | None = None
     symtable_table: symtable.SymbolTable | None = None
     compiled_module: CodeType | None = None
-    tree_sitter_tree: Any | None = None
+    tree_sitter_tree: TreeSitterTree | None = None
     resolution_index: dict[str, object] | None = None
     ast_span_index: tuple[AstSpanEntry, ...] | None = None
     stage_timings_ms: dict[str, float] = field(default_factory=dict)
@@ -101,12 +97,12 @@ class PythonAnalysisSession:
             self._mark_stage("ast_grep", started)
         return self.sg_root
 
-    def ensure_node_index(self) -> Any | None:
+    def ensure_node_index(self) -> NodeIntervalIndex | None:
         """Build or return cached ast-grep interval index.
 
         Returns:
         -------
-        Any | None
+        NodeIntervalIndex | None
             Cached or newly constructed interval index.
         """
         if self.node_index is not None:
@@ -221,7 +217,7 @@ class PythonAnalysisSession:
         started = perf_counter()
         rows: list[AstSpanEntry] = []
         try:
-            for node, parents in _iter_nodes_with_parents(tree):
+            for node, parents in iter_nodes_with_parents(tree):
                 span = node_byte_span(node, self.source_bytes)
                 if span is None:
                     continue
@@ -245,12 +241,12 @@ class PythonAnalysisSession:
             self._mark_stage("ast_span_index", started)
         return self.ast_span_index
 
-    def ensure_tree_sitter_tree(self) -> Any | None:
+    def ensure_tree_sitter_tree(self) -> TreeSitterTree | None:
         """Build or return cached tree-sitter Python tree.
 
         Returns:
         -------
-        Any | None
+        TreeSitterTree | None
             Cached or newly parsed tree-sitter syntax tree.
         """
         if self.tree_sitter_tree is not None:

@@ -6,19 +6,12 @@ import atexit
 import threading
 from pathlib import Path
 
+from tools.cq.core.cache.backend_registry import BackendRegistry
 from tools.cq.core.cache.interface import CqCacheBackend, NoopCacheBackend
 from tools.cq.core.cache.policy import default_cache_policy
 
-
-class _BackendState:
-    """Mutable holder for process-global cache backend singletons."""
-
-    def __init__(self) -> None:
-        self.backends: dict[str, CqCacheBackend] = {}
-
-
 _BACKEND_LOCK = threading.Lock()
-_BACKEND_STATE = _BackendState()
+_BACKEND_REGISTRY = BackendRegistry()
 
 
 def _close_backends(backends: list[CqCacheBackend]) -> None:
@@ -28,10 +21,10 @@ def _close_backends(backends: list[CqCacheBackend]) -> None:
 
 def _collect_stale_backends_locked() -> list[CqCacheBackend]:
     stale: list[CqCacheBackend] = []
-    for workspace, backend in list(_BACKEND_STATE.backends.items()):
+    for workspace, backend in _BACKEND_REGISTRY.items():
         if not Path(workspace).exists():
             stale.append(backend)
-            _BACKEND_STATE.backends.pop(workspace, None)
+            _BACKEND_REGISTRY.pop(workspace)
     return stale
 
 
@@ -50,12 +43,12 @@ def get_cq_cache_backend(*, root: Path) -> CqCacheBackend:
     stale: list[CqCacheBackend]
     with _BACKEND_LOCK:
         stale = _collect_stale_backends_locked()
-        existing = _BACKEND_STATE.backends.get(workspace)
+        existing = _BACKEND_REGISTRY.get(workspace)
         if existing is not None:
             backend: CqCacheBackend = existing
         else:
             backend = _build_workspace_backend(root=root)
-            _BACKEND_STATE.backends[workspace] = backend
+            _BACKEND_REGISTRY.set(workspace, backend)
     _close_backends(stale)
     return backend
 
@@ -66,10 +59,10 @@ def set_cq_cache_backend(*, root: Path, backend: CqCacheBackend) -> None:
     stale: list[CqCacheBackend]
     with _BACKEND_LOCK:
         stale = _collect_stale_backends_locked()
-        existing = _BACKEND_STATE.backends.get(workspace)
+        existing = _BACKEND_REGISTRY.get(workspace)
         if existing is not None and existing is not backend:
             stale.append(existing)
-        _BACKEND_STATE.backends[workspace] = backend
+        _BACKEND_REGISTRY.set(workspace, backend)
     _close_backends(stale)
 
 
@@ -78,11 +71,11 @@ def close_cq_cache_backend(*, root: Path | None = None) -> None:
     backends: list[CqCacheBackend]
     with _BACKEND_LOCK:
         if root is None:
-            backends = list(_BACKEND_STATE.backends.values())
-            _BACKEND_STATE.backends.clear()
+            backends = _BACKEND_REGISTRY.values()
+            _BACKEND_REGISTRY.clear()
         else:
             workspace = str(root.resolve())
-            backend = _BACKEND_STATE.backends.pop(workspace, None)
+            backend = _BACKEND_REGISTRY.pop(workspace)
             backends = [backend] if backend is not None else []
     for backend in backends:
         backend.close()

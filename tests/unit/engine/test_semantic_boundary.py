@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from datafusion import SessionContext
 
-from extraction.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
 from semantics.registry import SEMANTIC_MODEL
+from semantics.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
 
 
 def test_ensure_semantic_views_registered_raises_for_missing_view() -> None:

@@ -3,6 +3,7 @@
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.arrow.coercion import coerce_to_recordbatch_reader
 from utils.value_coercion import (
     CoercionError,
     coerce_bool,
@@ -12,7 +13,6 @@ from utils.value_coercion import (
     coerce_str,
     coerce_str_list,
     coerce_str_tuple,
-    coerce_to_recordbatch_reader,
     raise_for_bool,
     raise_for_float,
     raise_for_int,

@@ -73,7 +73,7 @@ def test_full_query_syntax(
     for section in result.sections:
         all_findings.extend(section.findings)
 
-    # Should find some results (execute_plan in executor_runtime.py)
+    # Should find some results (execute_plan in executor_plan_dispatch.py)
     definitions = [f for f in all_findings if f.category == "definition"]
     assert len(definitions) > 0, "Expected to find functions matching 'execute' in tools/cq/"
 

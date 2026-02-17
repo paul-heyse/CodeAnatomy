@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
 
 
-class NeighborhoodExecutionRequest(CqStruct, frozen=True):
+class NeighborhoodExecutionRequestV1(CqStruct, frozen=True):
     """Input contract for shared neighborhood execution."""
 
     target: str
@@ -69,7 +69,7 @@ def _coerce_neighborhood_summary(result: CqResult) -> CqResult:
     return msgspec.structs.replace(result, summary=coerced)
 
 
-def execute_neighborhood(request: NeighborhoodExecutionRequest) -> CqResult:
+def execute_neighborhood(request: NeighborhoodExecutionRequestV1) -> CqResult:
     """Execute the neighborhood workflow for CLI and run-step callsites.
 
     Returns:
@@ -143,4 +143,4 @@ def execute_neighborhood(request: NeighborhoodExecutionRequest) -> CqResult:
     return result
 
 
-__all__ = ["NeighborhoodExecutionRequest", "execute_neighborhood"]
+__all__ = ["NeighborhoodExecutionRequestV1", "execute_neighborhood"]

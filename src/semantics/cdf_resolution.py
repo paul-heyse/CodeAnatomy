@@ -72,7 +72,7 @@ def cdf_changed_inputs(
     if dataset_resolver is None:
         msg = "dataset_resolver is required for cdf_changed_inputs."
         raise ValueError(msg)
-    cursor_store = runtime_profile.data_sources.cdf_cursor_store
+    cursor_store = runtime_profile.cdf_cursor_store()
     if cursor_store is None:
         return None
     if not isinstance(cursor_store, CdfCursorStore):

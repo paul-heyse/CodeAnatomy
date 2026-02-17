@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -105,8 +104,10 @@ def snapshot_datafusion_caches(
                 },
             ) as (_span, set_result):
                 source: DataFrame | None = None
-                with suppress(Exception):
+                try:
                     source = ctx.sql(sql)
+                except (AttributeError, RuntimeError, TypeError, ValueError):
+                    source = None
                 if source is None:
                     source = ctx.from_arrow(
                         _fallback_cache_snapshot_source(ctx, table_name=table_name)

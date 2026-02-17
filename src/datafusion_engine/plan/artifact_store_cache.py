@@ -10,14 +10,14 @@ from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.plan.artifact_store_core import (
     PIPELINE_EVENTS_TABLE_NAME,
     PLAN_ARTIFACTS_TABLE_NAME,
-    _bootstrap_pipeline_events_table,
-    _bootstrap_plan_artifacts_table,
-    _delta_schema_available,
-    _pipeline_events_location,
-    _plan_artifacts_location,
-    _refresh_pipeline_events_registration,
-    _refresh_plan_artifacts_registration,
-    _reset_artifacts_table_path,
+    bootstrap_pipeline_events_table,
+    bootstrap_plan_artifacts_table,
+    delta_schema_available,
+    pipeline_events_location,
+    plan_artifacts_location,
+    refresh_pipeline_events_registration,
+    refresh_plan_artifacts_registration,
+    reset_artifacts_table_path,
 )
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
@@ -33,29 +33,29 @@ def ensure_plan_artifacts_table(
     DatasetLocation | None
         Resolved artifacts table location when configured.
     """
-    location = _plan_artifacts_location(profile)
+    location = plan_artifacts_location(profile)
     if location is None:
         return None
     table_path = Path(location.path)
     existing_version = profile.delta_ops.delta_service().table_version(path=str(table_path))
     if existing_version is None:
         if table_path.exists():
-            _reset_artifacts_table_path(
+            reset_artifacts_table_path(
                 profile,
                 table_path,
                 table_name=PLAN_ARTIFACTS_TABLE_NAME,
                 reason="delta_table_version_unavailable",
             )
-        _bootstrap_plan_artifacts_table(ctx, profile, table_path)
-    elif not _delta_schema_available(location, profile=profile):
-        _reset_artifacts_table_path(
+        bootstrap_plan_artifacts_table(ctx, profile, table_path)
+    elif not delta_schema_available(location, profile=profile):
+        reset_artifacts_table_path(
             profile,
             table_path,
             table_name=PLAN_ARTIFACTS_TABLE_NAME,
             reason="delta_schema_unavailable",
         )
-        _bootstrap_plan_artifacts_table(ctx, profile, table_path)
-    _refresh_plan_artifacts_registration(ctx, profile, location)
+        bootstrap_plan_artifacts_table(ctx, profile, table_path)
+    refresh_plan_artifacts_registration(ctx, profile, location)
     return location
 
 
@@ -70,29 +70,29 @@ def ensure_pipeline_events_table(
     DatasetLocation | None
         Resolved pipeline-events table location when configured.
     """
-    location = _pipeline_events_location(profile)
+    location = pipeline_events_location(profile)
     if location is None:
         return None
     table_path = Path(location.path)
     existing_version = profile.delta_ops.delta_service().table_version(path=str(table_path))
     if existing_version is None:
         if table_path.exists():
-            _reset_artifacts_table_path(
+            reset_artifacts_table_path(
                 profile,
                 table_path,
                 table_name=PIPELINE_EVENTS_TABLE_NAME,
                 reason="delta_table_version_unavailable",
             )
-        _bootstrap_pipeline_events_table(ctx, profile, table_path)
-    elif not _delta_schema_available(location, profile=profile):
-        _reset_artifacts_table_path(
+        bootstrap_pipeline_events_table(ctx, profile, table_path)
+    elif not delta_schema_available(location, profile=profile):
+        reset_artifacts_table_path(
             profile,
             table_path,
             table_name=PIPELINE_EVENTS_TABLE_NAME,
             reason="delta_schema_unavailable",
         )
-        _bootstrap_pipeline_events_table(ctx, profile, table_path)
-    _refresh_pipeline_events_registration(ctx, profile, location)
+        bootstrap_pipeline_events_table(ctx, profile, table_path)
+    refresh_pipeline_events_registration(ctx, profile, location)
     return location
 
 

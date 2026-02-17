@@ -159,7 +159,7 @@ def _semantic_cache_policy_for_row(
     Literal["none", "delta_staging", "delta_output"]
         Cache policy for the semantic dataset row.
     """
-    override = runtime_profile.data_sources.semantic_output.cache_overrides.get(row.name)
+    override = runtime_profile.semantic_cache_overrides().get(row.name)
     if override is not None:
         if override in {"none", "delta_staging", "delta_output"}:
             return override
@@ -523,7 +523,7 @@ def _build_semantic_view_node(
 
     row = dataset_row(name, strict=False)
     if row is None:
-        override = context.runtime_profile.data_sources.semantic_output.cache_overrides.get(name)
+        override = context.runtime_profile.semantic_cache_overrides().get(name)
         cache_policy = override if override in {"none", "delta_staging", "delta_output"} else "none"
     else:
         cache_policy = _semantic_cache_policy_for_row(

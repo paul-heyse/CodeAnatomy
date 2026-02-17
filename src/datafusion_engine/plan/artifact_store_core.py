@@ -19,6 +19,12 @@ from datafusion_engine.dataset.registry import (
 )
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.plan.artifact_serialization import (
+    commit_metadata_for_pipeline_events as _commit_metadata_for_pipeline_events,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    commit_metadata_for_rows as _commit_metadata_for_rows,
+)
+from datafusion_engine.plan.artifact_serialization import (
     delta_inputs_payload as _delta_inputs_payload,
 )
 from datafusion_engine.plan.artifact_serialization import (
@@ -390,7 +396,7 @@ def persist_write_artifact(
     """
     row = WriteArtifactRow(
         event_time_unix_ms=int(time.time() * 1000),
-        profile_name=_profile_name(profile),
+        profile_name=profile_name(profile),
         event_kind=_WRITE_EVENT_KIND,
         destination=request.destination,
         format=request.write_format,
@@ -512,17 +518,21 @@ def persist_plan_artifact_rows(
     Raises:
         RuntimeError: If the resulting Delta version cannot be resolved.
     """
-    if not rows:
+    deduped_rows = _dedupe_plan_artifact_rows(rows)
+    if not deduped_rows:
         return ()
     resolved_location = location or ensure_plan_artifacts_table(ctx, profile)
     if resolved_location is None:
         return ()
     table_path = Path(resolved_location.path)
     arrow_table = pa.Table.from_pylist(
-        [row.to_row() for row in rows],
-        schema=_plan_artifacts_schema(),
+        [row.to_row() for row in deduped_rows],
+        schema=plan_artifacts_schema(),
     )
-    commit_metadata = _commit_metadata_for_rows(rows)
+    commit_metadata = _commit_metadata_for_rows(
+        event_kinds=[row.event_kind for row in deduped_rows],
+        view_names=[row.view_name for row in deduped_rows],
+    )
     final_version = _write_artifact_table(
         ctx,
         profile,
@@ -538,9 +548,27 @@ def persist_plan_artifact_rows(
     if final_version is None:
         msg = f"Failed to resolve Delta version for plan artifacts: {table_path}."
         raise RuntimeError(msg)
-    _refresh_plan_artifacts_registration(ctx, profile, resolved_location)
-    _record_plan_artifact_summary(profile, rows=rows, path=str(table_path), version=final_version)
-    return tuple(rows)
+    refresh_plan_artifacts_registration(ctx, profile, resolved_location)
+    record_plan_artifact_summary(
+        profile,
+        rows=deduped_rows,
+        path=str(table_path),
+        version=final_version,
+    )
+    return tuple(deduped_rows)
+
+
+def _dedupe_plan_artifact_rows(rows: Sequence[PlanArtifactRow]) -> tuple[PlanArtifactRow, ...]:
+    seen: set[str] = set()
+    deduped: list[PlanArtifactRow] = []
+    for row in rows:
+        plan_identity_hash = row.plan_identity_hash
+        if plan_identity_hash and plan_identity_hash in seen:
+            continue
+        if plan_identity_hash:
+            seen.add(plan_identity_hash)
+        deduped.append(row)
+    return tuple(deduped)
 
 
 def persist_pipeline_events(
@@ -582,7 +610,7 @@ def persist_pipeline_events(
             rows.append(
                 PipelineEventRow(
                     event_time_unix_ms=event_time_unix_ms,
-                    profile_name=_profile_name(profile),
+                    profile_name=profile_name(profile),
                     run_id=request.run_id,
                     event_name=event_name,
                     plan_signature=request.plan_signature,
@@ -625,7 +653,7 @@ def persist_pipeline_event_rows(
     table_path = Path(resolved_location.path)
     arrow_table = pa.Table.from_pylist(
         [row.to_row() for row in rows],
-        schema=_pipeline_events_schema(),
+        schema=pipeline_events_schema(),
     )
     commit_metadata = _commit_metadata_for_pipeline_events(rows)
     final_version = _write_artifact_table(
@@ -643,8 +671,8 @@ def persist_pipeline_event_rows(
     if final_version is None:
         msg = f"Failed to resolve Delta version for pipeline events: {table_path}."
         raise RuntimeError(msg)
-    _refresh_pipeline_events_registration(ctx, profile, resolved_location)
-    _record_pipeline_events_summary(profile, rows=rows, path=str(table_path), version=final_version)
+    refresh_pipeline_events_registration(ctx, profile, resolved_location)
+    record_pipeline_events_summary(profile, rows=rows, path=str(table_path), version=final_version)
     return tuple(rows)
 
 
@@ -692,7 +720,7 @@ def build_plan_artifact_row(
     signals_payload = plan_signals_payload(signals)
     return PlanArtifactRow(
         event_time_unix_ms=int(time.time() * 1000),
-        profile_name=_profile_name(profile),
+        profile_name=profile_name(profile),
         event_kind=request.event_kind,
         view_name=request.view_name,
         plan_fingerprint=request.bundle.plan_fingerprint,
@@ -743,21 +771,19 @@ def build_plan_artifact_row(
 
 
 from datafusion_engine.plan.artifact_store_tables import (
-    _bootstrap_pipeline_events_table,
-    _bootstrap_plan_artifacts_table,
-    _commit_metadata_for_pipeline_events,
-    _commit_metadata_for_rows,
-    _delta_schema_available,
-    _pipeline_events_location,
-    _pipeline_events_schema,
-    _plan_artifacts_location,
-    _plan_artifacts_schema,
-    _profile_name,
-    _record_pipeline_events_summary,
-    _record_plan_artifact_summary,
-    _refresh_pipeline_events_registration,
-    _refresh_plan_artifacts_registration,
-    _reset_artifacts_table_path,
+    bootstrap_pipeline_events_table,
+    bootstrap_plan_artifacts_table,
+    delta_schema_available,
+    pipeline_events_location,
+    pipeline_events_schema,
+    plan_artifacts_location,
+    plan_artifacts_schema,
+    profile_name,
+    record_pipeline_events_summary,
+    record_plan_artifact_summary,
+    refresh_pipeline_events_registration,
+    refresh_plan_artifacts_registration,
+    reset_artifacts_table_path,
 )
 
 __all__ = [
@@ -770,13 +796,10 @@ __all__ = [
     "PlanArtifactRow",
     "PlanArtifactsForViewsRequest",
     "WriteArtifactRow",
-    "_bootstrap_pipeline_events_table",
-    "_bootstrap_plan_artifacts_table",
-    "_delta_schema_available",
-    "_pipeline_events_location",
-    "_plan_artifacts_location",
-    "_reset_artifacts_table_path",
+    "bootstrap_pipeline_events_table",
+    "bootstrap_plan_artifacts_table",
     "build_plan_artifact_row",
+    "delta_schema_available",
     "ensure_pipeline_events_table",
     "ensure_plan_artifacts_table",
     "persist_execution_artifact",
@@ -785,5 +808,8 @@ __all__ = [
     "persist_plan_artifact_rows",
     "persist_plan_artifacts_for_views",
     "persist_write_artifact",
+    "pipeline_events_location",
+    "plan_artifacts_location",
+    "reset_artifacts_table_path",
     "validate_plan_determinism",
 ]

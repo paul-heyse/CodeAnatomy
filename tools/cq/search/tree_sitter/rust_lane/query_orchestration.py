@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from tools.cq.search.tree_sitter.rust_lane.query_pack_execution import (
+    collect_query_pack_captures,
+)
+
 if TYPE_CHECKING:
     from tree_sitter import Node
 
@@ -36,9 +40,6 @@ def orchestrate_query_packs(
     Returns:
         Raw query-pack captures, diagnostics, telemetry, and contract tuples.
     """
-    from tools.cq.search.tree_sitter.rust_lane import runtime_core as _runtime_core
-
-    collect_query_pack_captures = _runtime_core.__dict__["_collect_query_pack_captures"]
     return collect_query_pack_captures(
         root=root,
         source_bytes=source_bytes,

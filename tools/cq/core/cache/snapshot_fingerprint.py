@@ -30,6 +30,7 @@ from tools.cq.core.cache.telemetry import (
 )
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.contracts_constraints import NonNegativeInt
+from tools.cq.core.path_utils import safe_rel_path
 from tools.cq.core.structs import CqCacheStruct
 
 _INVENTORY_TOKEN_TUPLE_LENGTH = 2
@@ -81,15 +82,8 @@ class _ScopeSnapshotCacheContextV1(CqCacheStruct, frozen=True):
     cache_enabled: bool = False
 
 
-def _safe_rel_path(*, root: Path, file_path: Path) -> str:
-    try:
-        return file_path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return file_path.resolve().as_posix()
-
-
 def _file_stat(*, root: Path, file_path: Path) -> ScopeFileStatV1:
-    rel_path = _safe_rel_path(root=root, file_path=file_path)
+    rel_path = safe_rel_path(root=root, path=file_path)
     try:
         stat = file_path.stat()
         return ScopeFileStatV1(

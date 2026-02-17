@@ -7,8 +7,15 @@ and canonical semantic input names expected by the semantic compiler.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Protocol
 
 import msgspec
+
+from extraction.options import ExtractionRunOptions
+
+
+class ScipIndexConfig(Protocol):
+    """Structural contract for SCIP index configuration payloads."""
 
 
 class RunExtractionRequestV1(msgspec.Struct, frozen=True):
@@ -16,11 +23,11 @@ class RunExtractionRequestV1(msgspec.Struct, frozen=True):
 
     repo_root: str
     work_dir: str
-    scip_index_config: object | None = None
+    scip_index_config: ScipIndexConfig | Mapping[str, object] | None = None
     scip_identity_overrides: object | None = None
     tree_sitter_enabled: bool = True
     max_workers: int = 6
-    options: Mapping[str, object] | None = None
+    options: ExtractionRunOptions | Mapping[str, object] | None = None
 
 
 # Legacy compatibility aliases retained during migration.
@@ -92,6 +99,7 @@ def resolve_semantic_input_locations(delta_locations: Mapping[str, str]) -> dict
 
 __all__ = [
     "RunExtractionRequestV1",
+    "ScipIndexConfig",
     "resolve_semantic_input_locations",
     "with_compat_aliases",
 ]

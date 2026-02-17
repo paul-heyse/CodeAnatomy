@@ -454,7 +454,10 @@ def add_target_callees_section(
         )
         for name, count in target_callees.most_common(preview_limit)
     ]
-    return append_result_section(result, Section(title="Target Callees", findings=findings))
+    return append_result_section(
+        result,
+        Section(title="Target Callees", findings=tuple(findings)),
+    )
 
 
 class AttachTargetMetadataRequestV1(CqStruct, frozen=True):

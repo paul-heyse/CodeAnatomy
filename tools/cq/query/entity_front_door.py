@@ -8,11 +8,7 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.front_door_assembly import (
-    augment_insight_with_semantic,
-    build_entity_insight,
-    mark_partial_for_missing_languages,
-)
+from tools.cq.core.front_door_assembly import mark_partial_for_missing_languages
 from tools.cq.core.front_door_contracts import (
     EntityInsightBuildRequestV1,
     FrontDoorInsightV1,
@@ -22,6 +18,10 @@ from tools.cq.core.front_door_contracts import (
     InsightNeighborhoodV1,
     InsightRiskCountersV1,
     InsightSliceV1,
+)
+from tools.cq.core.front_door_entity import (
+    augment_insight_with_semantic,
+    build_entity_insight,
 )
 from tools.cq.core.front_door_render import to_public_front_door_insight_dict
 from tools.cq.core.front_door_risk import risk_from_counters

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import ast
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Protocol
 
 from tools.cq.core.scoring import (
     ConfidenceSignals,
@@ -17,6 +19,11 @@ from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import MacroScorePayloadV1, ScoringDetailsV1
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import find_symbol_definition_files
+
+
+class _AstVisitor(Protocol):
+    def visit(self, node: ast.AST) -> object: ...
+
 
 # ── Scope Filtering ──
 
@@ -86,6 +93,42 @@ def iter_files(
     if max_files is None:
         return rows
     return rows[: max(0, int(max_files))]
+
+
+def scan_python_files[VisitorT: _AstVisitor](
+    root: Path,
+    *,
+    include: list[str] | None,
+    exclude: list[str] | None,
+    visitor_factory: Callable[[str], VisitorT],
+    max_files: int | None = None,
+) -> tuple[list[VisitorT], int]:
+    """Parse Python files and run one visitor per file.
+
+    Returns:
+        tuple[list[VisitorT], int]: Visitor instances and files successfully scanned.
+    """
+    repo_root = resolve_repo_context(root).repo_root
+    visitors: list[VisitorT] = []
+    files_scanned = 0
+    for pyfile in iter_files(
+        root=repo_root,
+        include=include,
+        exclude=exclude,
+        extensions=(".py",),
+        max_files=max_files,
+    ):
+        rel = str(pyfile.relative_to(repo_root))
+        try:
+            source = pyfile.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=rel)
+        except (SyntaxError, OSError, UnicodeDecodeError):
+            continue
+        visitor = visitor_factory(rel)
+        visitor.visit(tree)
+        visitors.append(visitor)
+        files_scanned += 1
+    return visitors, files_scanned
 
 
 # ── Target Resolution ──
@@ -194,5 +237,6 @@ __all__ = [
     "macro_scoring_details",
     "resolve_macro_files",
     "resolve_target_files",
+    "scan_python_files",
     "scope_filter_applied",
 ]

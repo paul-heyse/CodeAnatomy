@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from pathlib import Path
-
-import msgspec
 
 from tools.cq.core.run_context import RunExecutionContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
-from tools.cq.core.schema import CqResult, Finding
+from tools.cq.core.schema import CqResult
+from tools.cq.core.scope_filter import filter_findings_by_scope
 from tools.cq.core.types import DEFAULT_QUERY_LANGUAGE_SCOPE
 from tools.cq.orchestration.request_factory import (
     RequestContextV1,
@@ -34,7 +32,7 @@ from tools.cq.run.spec import (
     SigImpactStep,
     step_type,
 )
-from tools.cq.search.pipeline.enrichment_contracts import parse_incremental_enrichment_mode
+from tools.cq.search._shared.enrichment_contracts import parse_incremental_enrichment_mode
 from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
 
 RUN_STEP_NON_FATAL_EXCEPTIONS = (
@@ -76,7 +74,12 @@ def execute_non_q_step(
         raise TypeError(msg)
 
     result = executor(step, ctx)
-    return _apply_run_scope_filter(result, ctx.root, plan.in_dir, plan.exclude)
+    return filter_findings_by_scope(
+        result,
+        root=ctx.root,
+        in_dir=plan.in_dir,
+        exclude=plan.exclude,
+    )
 
 
 def execute_non_q_step_safe(
@@ -360,10 +363,10 @@ def _execute_neighborhood_step(
     CqResult
         Neighborhood analysis result.
     """
-    from tools.cq.neighborhood.executor import NeighborhoodExecutionRequest, execute_neighborhood
+    from tools.cq.neighborhood.executor import NeighborhoodExecutionRequestV1, execute_neighborhood
 
     return execute_neighborhood(
-        NeighborhoodExecutionRequest(
+        NeighborhoodExecutionRequestV1(
             target=step.target,
             root=ctx.root,
             argv=ctx.argv,
@@ -377,50 +380,6 @@ def _execute_neighborhood_step(
             run_id=run_id,
             services=ctx.services,
         )
-    )
-
-
-def _apply_run_scope_filter(
-    result: CqResult,
-    root: Path,
-    in_dir: str | None,
-    exclude: tuple[str, ...],
-) -> CqResult:
-    if not in_dir and not exclude:
-        return result
-
-    base = (root / in_dir).resolve() if in_dir else None
-    exclude_patterns = [pattern.lstrip("!") for pattern in exclude]
-
-    def in_scope(finding: Finding) -> bool:
-        if finding.anchor is None:
-            return True
-        rel_path = Path(finding.anchor.file)
-        abs_path = (root / rel_path).resolve()
-        if base and not abs_path.is_relative_to(base):
-            return False
-        if not exclude_patterns:
-            return True
-        return all(not rel_path.match(pattern) for pattern in exclude_patterns)
-
-    key_findings = [f for f in result.key_findings if in_scope(f)]
-    evidence = [f for f in result.evidence if in_scope(f)]
-    sections = []
-    for section in result.sections:
-        section_findings = [f for f in section.findings if in_scope(f)]
-        if not section_findings:
-            continue
-        sections.append(
-            msgspec.structs.replace(section, findings=section_findings),
-        )
-
-    return CqResult(
-        run=result.run,
-        summary=result.summary,
-        key_findings=tuple(key_findings),
-        evidence=tuple(evidence),
-        sections=tuple(sections),
-        artifacts=result.artifacts,
     )
 
 

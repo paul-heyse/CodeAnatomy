@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated
 
 import msgspec
 
+from datafusion_engine.delta.shared_types import DeltaFeatureGate, DeltaProtocolSnapshot, NonNegInt
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.extensions.context_adaptation import resolve_extension_module
-from datafusion_engine.generated.delta_types import DeltaFeatureGate
 from serde_msgspec import StructBaseCompat, StructBaseStrict
 from utils.value_coercion import coerce_int
-
-NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 
 
 class DeltaProtocolSupport(StructBaseStrict, frozen=True):
@@ -35,15 +32,6 @@ class DeltaProtocolSupport(StructBaseStrict, frozen=True):
     max_writer_version: NonNegInt | None = None
     supported_reader_features: tuple[str, ...] = ()
     supported_writer_features: tuple[str, ...] = ()
-
-
-class DeltaProtocolSnapshot(StructBaseCompat, frozen=True):
-    """Snapshot of Delta protocol versions and feature flags."""
-
-    min_reader_version: NonNegInt | None = None
-    min_writer_version: NonNegInt | None = None
-    reader_features: tuple[str, ...] = ()
-    writer_features: tuple[str, ...] = ()
 
 
 class DeltaProtocolCompatibility(StructBaseCompat, frozen=True):

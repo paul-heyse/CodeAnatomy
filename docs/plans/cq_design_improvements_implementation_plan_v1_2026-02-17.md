@@ -2,7 +2,7 @@
 
 ## Scope Summary
 
-This plan synthesizes findings from 7 deep design reviews covering all ~82K LOC / 390 files in `tools/cq/`. It addresses 6 systemic themes confirmed across every review scope: (1) frozen struct integrity breaches, (2) dependency direction violations, (3) knowledge duplication, (4) God module concentration, (5) the `dict[str, object]` payload anti-pattern (913 occurrences across 140 files), and (6) module-level mutable singletons. The plan is organized as 12 scope items ordered by dependency and risk, progressing from safe structural fixes through module decomposition to the large-scale typed payload migration.
+This plan synthesizes findings from 7 deep design reviews covering all ~82K LOC / 390 files in `tools/cq/`. It addresses 9 systemic themes confirmed across the reviews: (1) frozen struct integrity breaches, (2) dependency direction violations, (3) knowledge duplication, (4) God module concentration, (5) the `dict[str, object]` payload anti-pattern (913 occurrences across 140 files), (6) module-level mutable singletons, (7) facade/alias proliferation, (8) summary payload typing gaps, and (9) testability gaps caused by hidden construction and global registries. The plan is organized as 25 scope items (S1–S25) and 10 cross-scope deletion batches (D1–D10), ordered by dependency and risk, progressing from contract integrity and boundary fixes through decomposition and typed payload migration to final observability hardening.
 
 **Design stance:** Incremental migration with no compatibility shims. Each scope item produces a working codebase. No `# deprecated` stubs or re-export facades for removed code.
 
@@ -14,6 +14,8 @@ This plan synthesizes findings from 7 deep design reviews covering all ~82K LOC 
 4. **Dependency direction**: Lower layers never import from higher layers. Shared contracts live in `_shared/` or `core/`.
 5. **No facade chains**: If a module only re-exports, eliminate it and update callers to import from the source.
 6. **Injectable context over module singletons**: Mutable runtime state lives in explicit context objects, not module-level globals.
+7. **No typed-regression scope items**: Once a boundary is typed, no new or replacement API may reintroduce `dict[str, object]` payload flow in that boundary.
+8. **Library-first implementation**: Prefer built-in library capabilities (`msgspec.convert`, `msgspec.to_builtins(order="deterministic")`, diskcache synchronization primitives, cyclopts result-action composition) before introducing custom glue layers.
 
 ## Current Baseline
 
@@ -25,8 +27,9 @@ This plan synthesizes findings from 7 deep design reviews covering all ~82K LOC 
 - `sgpy_scanner.py:452` imports from `query/executor_ast_grep.py` — astgrep depends on query layer.
 - `_extract_provenance` duplicated in 3 files, `_coerce_count` in 2 files, `_pack_source_rows` in 3 files, scope filter in 2 files, schema projection in 11 pairs, file-scan-visit in 6 macros, status derivation in 7 copies.
 - 913 `dict[str, object]` occurrences across 140 files. Typed fact structs (`PythonEnrichmentFacts`, `RustEnrichmentFacts`) exist in `enrichment/python_facts.py` and `enrichment/rust_facts.py` but are not threaded through the pipeline.
-- God modules: `runtime_core.py` (1,209 LOC), `extractors.py` (1,795 LOC), `executor_runtime_impl.py` (1,001 LOC), `calls/analysis.py` (771 LOC), `front_door_assembly.py` (769 LOC), `executor_definitions.py` (715 LOC), `tree_sitter_collector.py` (661 LOC), `summary_contract.py` (663 LOC), `report.py` (614 LOC).
+- God modules (>500 LOC, multiple change reasons): `extractors.py` (1,795 LOC), `runtime_core.py` (1,209 LOC), `executor_runtime_impl.py` (1,001 LOC), `calls/analysis.py` (771 LOC), `front_door_assembly.py` (769 LOC), `python_lane/facts.py` (738 LOC), `executor_definitions.py` (715 LOC), `diskcache_backend.py` (700 LOC), `python_lane/runtime.py` (685 LOC), `rust/enrichment.py` (667 LOC), `tree_sitter_collector.py` (661 LOC), `summary_contract.py` (663 LOC), `core/runtime.py` (644 LOC), `enrichment_facts.py` (642 LOC), `report.py` (614 LOC), `calls_target.py` (576 LOC), `calls/entry.py` (536 LOC), `multilang_orchestrator.py` (515 LOC).
 - Module-level mutable singletons: `_SESSIONS`, `_GLOBAL_STATE_HOLDER`, `_TREE_CACHE`, `_AST_CACHE` (2 copies), `console`, `error_console`, `app.config`, `_SEARCH_OBJECT_VIEW_REGISTRY`, `_LANGUAGE_ADAPTERS`, `_TELEMETRY`, `_SEEN_KEYS`, `_SCHEDULER_STATE`, `_BACKEND_STATE`.
+- Additional review-confirmed gaps now captured by expanded scopes S20–S25: `fragment_engine.py` + `fragment_orchestrator.py` layering complexity, mutable `DETAILS_KIND_REGISTRY`, query-side hidden constructor paths (`SymtableEnricher`, `load_default_rulepacks`), and CLI telemetry nesting complexity (`invoke_with_telemetry()`).
 
 ---
 
@@ -96,6 +99,8 @@ class BytecodeSurface(msgspec.Struct, frozen=True, kw_only=True):
 - `tools/cq/macros/imports.py` — Add `frozen=True` to `ImportInfo`; refactor `ModuleDeps` construction to pass `depends_on` as constructor arg
 - `tools/cq/macros/scopes.py` — Add `frozen=True` to `ScopeInfo`
 - `tools/cq/search/python/analysis_session.py` — Type `Any` fields on `PythonAnalysisSession` with proper types under `TYPE_CHECKING`
+- `tools/cq/core/run_context.py` — Change `RunContext.argv: list[str]` to `argv: tuple[str, ...]` for frozen integrity (Review 7, P10)
+- `tools/cq/neighborhood/snb_renderer.py` — Change `SemanticNeighborhoodBundleV1.node_index: dict[str, object]` to a frozen struct or `types.MappingProxyType` wrapper (Review 4, P10)
 
 ### New Files to Create
 
@@ -149,7 +154,6 @@ def extract_match_metavars(
 ### Files to Edit
 
 - `tools/cq/search/pipeline/enrichment_contracts.py` — Delete (relocated)
-- `tools/cq/search/_shared/enrichment_contracts.py` — New location for enrichment contracts
 - `tools/cq/search/enrichment/python_adapter.py` — Update imports to `_shared.enrichment_contracts`
 - `tools/cq/search/enrichment/rust_adapter.py` — Update imports to `_shared.enrichment_contracts`
 - `tools/cq/search/pipeline/classification.py` — Update imports to `_shared.enrichment_contracts`
@@ -248,11 +252,22 @@ def filter_findings_by_scope(
 - `tools/cq/core/render_summary.py` — Replace 7 `_derive_*_status()` functions with generic `_derive_status_from_summary()`
 - `tools/cq/query/symbol_resolver.py` — Replace hardcoded `_is_builtin` set with `name in dir(builtins)`
 - `tools/cq/cli_app/schema_projection.py` — Replace 11 function pairs with 2 generic functions
+- `tools/cq/search/pipeline/assembly.py` — Consolidate `_pack_source_rows` (duplicated in 3 pipeline files) into `_shared/helpers.py` (Review 2, P7)
+- `tools/cq/search/tree_sitter/core/adaptive_runtime.py` — Consolidate cache policy env-var resolution duplicated between `adaptive_runtime.py` and `partition_pipeline.py` into a single `_shared/cache_config.py` helper (Review 1, P7)
+- `tools/cq/query/executor_definitions.py` — Consolidate import parsing logic duplicated between `executor_definitions.py:342-380` and `symbol_resolver.py:118-156` into `query/import_utils.py` (Review 5, P7)
+- `tools/cq/macros/calls/entry.py` — Use `ScoringDetailsV1` struct in `build_detail_payload` to eliminate 6+ `asdict` scatter sites across macros (Review 6, P7)
+- `tools/cq/macros/_rust_fallback.py` — Standardize Rust fallback pattern: `_rust_fallback.py` uses `try/except ImportError`, `result_builder.py` uses `shutil.which()` — pick one convention (Review 6, P7)
+- `tools/cq/core/render_overview.py` — Consolidate `_safe_rel_path` (in `render_overview.py`) and `_to_rel_path` (in `render_summary.py`) into a single `core/path_utils.py` helper (Review 4, P7)
 
 ### New Files to Create
 
 - `tools/cq/core/scope_filter.py` — Consolidated scope filtering logic
 - `tests/unit/cq/core/test_scope_filter.py` — Tests for scope filter
+- `tools/cq/search/_shared/cache_config.py` — Shared cache policy env resolution helper
+- `tools/cq/query/import_utils.py` — Shared import parsing logic (from executor_definitions + symbol_resolver)
+- `tools/cq/core/path_utils.py` — Consolidated `safe_rel_path()` helper
+- `tests/unit/cq/query/test_import_utils.py` — Tests for shared import parsing
+- `tests/unit/cq/core/test_path_utils.py` — Tests for path utilities
 
 ### Legacy Decommission/Delete Scope
 
@@ -270,6 +285,10 @@ def filter_findings_by_scope(
 - Delete `_apply_run_scope_filter` from `tools/cq/run/step_executors.py:383-424` — use `core/scope_filter.py`
 - Delete `filter_result_by_scope` from `tools/cq/orchestration/bundles.py` — use `core/scope_filter.py`
 - Delete 7 `_derive_*_status()` functions from `tools/cq/core/render_summary.py` — replaced by generic
+- Delete `_pack_source_rows` from `tools/cq/search/pipeline/assembly.py` and 2 other pipeline files — consolidated into `_shared/helpers.py`
+- Delete cache policy env resolution from `tools/cq/search/tree_sitter/core/adaptive_runtime.py` and `partition_pipeline.py` — consolidated into `_shared/cache_config.py`
+- Delete import parsing logic from `tools/cq/query/executor_definitions.py:342-380` and `symbol_resolver.py:118-156` — consolidated into `query/import_utils.py`
+- Delete `_safe_rel_path` from `tools/cq/core/render_overview.py` and `_to_rel_path` from `render_summary.py` — consolidated into `core/path_utils.py`
 
 ---
 
@@ -383,6 +402,12 @@ class RunCommandSummaryV1(CqStruct, frozen=True, kw_only=True):
 - `tools/cq/core/serialization.py` — Replace bare `Any` with `object` at lines 47, 58, 80
 - `tools/cq/core/contract_codec.py` — Remove encoder/decoder singletons from `__all__`
 - `tools/cq/search/tree_sitter/query/registry.py` — Split `load_query_pack_sources()` into pure loader + separate drift state setter
+- `tools/cq/query/executor_runtime_impl.py` — Replace `assert isinstance(...)` guards with `ValueError` raises at 8 sites (Review 5, P8)
+- `tools/cq/query/symbol_resolver.py` — Split `SymbolTable.resolve()` CQS violation: currently appends to `self.unresolved` (command) and returns resolved symbol (query); split into `resolve()` (pure query) and `record_unresolved()` (command) (Review 5, P11)
+- `tools/cq/macros/calls/semantic.py` — Fix in-place mutation at lines 94-97: `populate_semantic_evidence()` mutates its `evidence` dict argument; return new dict instead (Review 6, P11)
+- `tools/cq/search/pipeline/__init__.py` — Rename `SearchContext` export alias (shadows stdlib `contextvars.Context` semantics) to `SearchPipelineContext`; keep `contracts.py` naming canonical (Review 2, P21)
+- `tools/cq/cli_app/result_action.py` — Split `handle_result()` CQS violation into `prepare_output()` (pure query → output payload) and `emit_prepared_output()` (command → write to console) (Review 7, P11)
+- `tools/cq/search/pipeline/assembly.py` — Fix `enforce_payload_budget()` CQS violation: currently mutates payload in-place and returns bool; split into `check_budget()` (query → bool) and `trim_to_budget()` (command → new payload) (Review 2, P11)
 
 ### New Files to Create
 
@@ -392,6 +417,8 @@ None.
 
 - Delete `apply_call_evidence` from `tools/cq/query/finding_builders.py:164-193` — replaced by `build_call_evidence`
 - Rename `RunSummaryV1` to `RunCommandSummaryV1` in `tools/cq/core/summary_contracts.py:49` — update all import sites
+- Delete `populate_semantic_evidence` from `tools/cq/macros/calls/semantic.py:94-97` — replaced by pure function returning new dict
+- Delete void `handle_result()` from `tools/cq/cli_app/result_action.py` — replaced by `prepare_output()` + `emit_prepared_output()`
 
 ---
 
@@ -430,7 +457,7 @@ def collect_query_pack_captures(...) -> ...:
 
 ### Files to Edit
 
-- `tools/cq/search/tree_sitter/rust_lane/runtime_core.py` — Decompose into sub-modules; keep as thin re-export facade
+- `tools/cq/search/tree_sitter/rust_lane/runtime_core.py` — Decompose into sub-modules; migrate all callsites to extracted modules; remove facade-style pass-through exports
 - `tools/cq/search/tree_sitter/rust_lane/query_orchestration.py` — Replace `__dict__` access with normal imports from new modules
 - `tools/cq/search/tree_sitter/rust_lane/payload_assembly.py` — Replace `__dict__` access with normal imports from new modules
 
@@ -449,7 +476,7 @@ def collect_query_pack_captures(...) -> ...:
 
 - Delete `__dict__["_collect_query_pack_captures"]` access from `tools/cq/search/tree_sitter/rust_lane/query_orchestration.py:41`
 - Delete `__dict__["_collect_query_pack_payload"]` access from `tools/cq/search/tree_sitter/rust_lane/payload_assembly.py:27`
-- Reduce `runtime_core.py` from 1,209 LOC to a ~100 LOC re-export facade
+- Delete `runtime_core.py` once all imports have been migrated to extracted modules
 
 ---
 
@@ -475,8 +502,8 @@ def execute_plan(ctx: QueryExecutionContext) -> CqResult:
 ### Files to Edit
 
 - `tools/cq/query/executor_runtime_impl.py` — Decompose into sub-modules
-- `tools/cq/query/executor_entity.py` — Replace with actual entity execution logic (or delete)
-- `tools/cq/query/executor_pattern.py` — Replace with actual pattern execution logic (or delete)
+- `tools/cq/query/executor_entity.py` — Migrate all callsites to `executor_entity_impl.py`, then delete module
+- `tools/cq/query/executor_pattern.py` — Migrate all callsites to `executor_pattern_impl.py`, then delete module
 - `tools/cq/query/executor_runtime.py` — Delete (facade eliminated)
 - `tools/cq/query/__init__.py` — Update exports
 - `tools/cq/query/planner.py` — Move entity-pattern maps to use `ENTITY_KINDS` registry
@@ -496,7 +523,7 @@ def execute_plan(ctx: QueryExecutionContext) -> CqResult:
 - Delete `tools/cq/query/executor_runtime.py` — facade eliminated; callers import directly from implementation modules
 - Delete `tools/cq/query/executor_entity.py` — replaced by `executor_entity_impl.py`
 - Delete `tools/cq/query/executor_pattern.py` — replaced by `executor_pattern_impl.py`
-- Reduce `executor_runtime_impl.py` from 1,001 LOC to ~100 LOC re-export facade (or delete entirely)
+- Delete `executor_runtime_impl.py` after extracting and migrating all execution paths to focused modules
 - Delete local `entity_patterns` and `entity_kinds` dicts from `tools/cq/query/planner.py:377-399` — use `ENTITY_KINDS`
 
 ---
@@ -515,7 +542,7 @@ from __future__ import annotations
 
 __all__ = ["enrich_python_context", "enrich_python_context_by_byte_range"]
 
-def enrich_python_context(...) -> dict[str, object] | None:
+def enrich_python_context(...) -> PythonEnrichmentFacts | None:
     """Orchestrate the 5-stage Python enrichment pipeline."""
     ...
 ```
@@ -612,7 +639,8 @@ class EnrichmentTelemetryV1(msgspec.Struct, frozen=True, kw_only=True):
 
 ### Files to Edit
 
-- `tools/cq/search/_shared/enrichment_contracts.py` — Replace `payload: dict[str, object]` with typed fact references
+Wrapper-contract field migration in `_shared/enrichment_contracts.py` is completed in S2; S9 edits all downstream typed-fact consumers.
+
 - `tools/cq/search/enrichment/contracts.py` — Update `LanguageEnrichmentPort` signatures to use typed facts
 - `tools/cq/search/enrichment/python_adapter.py` — Return `PythonEnrichmentFacts` from `payload_from_match`
 - `tools/cq/search/enrichment/rust_adapter.py` — Return `RustEnrichmentFacts` from `payload_from_match`
@@ -623,7 +651,7 @@ class EnrichmentTelemetryV1(msgspec.Struct, frozen=True, kw_only=True):
 - `tools/cq/search/objects/resolve.py` — Replace deep dict traversal with typed fact access
 - `tools/cq/search/semantic/models.py` — Replace `_string_list`, `_mapping_list` etc. with typed fact access
 - `tools/cq/search/python/extractors.py` (or `extractors_orchestrator.py` after S8) — Return typed `PythonEnrichmentFacts` instead of `dict[str, object]`
-- `tools/cq/search/tree_sitter/rust_lane/runtime_core.py` (or sub-modules after S6) — Return typed facts instead of `dict[str, object]`
+- `tools/cq/search/tree_sitter/rust_lane/runtime_core.py` — Pre-S6 integration point for typed Rust fact payload migration (migrated to extracted modules in S6)
 - `tools/cq/search/tree_sitter/contracts/lane_payloads.py` — Return typed payload structs instead of `dict[str, Any]`
 
 ### New Files to Create
@@ -708,7 +736,7 @@ class ConsolePort(Protocol):
 - `tools/cq/cli_app/result_render.py` — Accept `ConsolePort` from context instead of importing singleton
 - `tools/cq/cli_app/result_action.py` — Accept `ConsolePort` from context instead of importing singleton
 - `tools/cq/core/bootstrap.py` — Add `reset_runtime_services()` for test isolation
-- `tools/cq/core/worker_scheduler.py` — Add `reset_worker_scheduler()` for test isolation
+- `tools/cq/core/runtime/worker_scheduler.py` — Add `reset_worker_scheduler()` for test isolation
 
 ### New Files to Create
 
@@ -822,36 +850,902 @@ class LanguageEnrichmentProvider(Protocol):
         source_bytes: bytes,
         start_byte: int,
         end_byte: int,
-    ) -> dict[str, object] | None:
+    ) -> PythonEnrichmentFacts | RustEnrichmentFacts | None:
         """Enrich a byte range with language-specific analysis."""
         ...
 ```
 
 ```python
-# tools/cq/search/semantic/front_door.py — Use registry instead of hardcoded dispatch
-_PROVIDERS: dict[str, LanguageEnrichmentProvider] = {}
+# tools/cq/search/semantic/registry.py — Injectable provider registry (no module singleton)
+from __future__ import annotations
 
-def register_language_provider(language: str, provider: LanguageEnrichmentProvider) -> None:
-    _PROVIDERS[language] = provider
+from dataclasses import dataclass, field
 
-def _get_provider(language: str) -> LanguageEnrichmentProvider | None:
-    return _PROVIDERS.get(language)
+@dataclass
+class LanguageProviderRegistry:
+    providers: dict[str, LanguageEnrichmentProvider] = field(default_factory=dict)
+
+    def register(self, language: str, provider: LanguageEnrichmentProvider) -> None:
+        self.providers[language] = provider
+
+    def get(self, language: str) -> LanguageEnrichmentProvider | None:
+        return self.providers.get(language)
 ```
 
 ### Files to Edit
 
-- `tools/cq/search/semantic/front_door.py` — Replace hardcoded dispatch dict at line 215-218 with registry-based dispatch
+- `tools/cq/search/semantic/front_door.py` — Replace hardcoded dispatch dict with `LanguageProviderRegistry` passed from composition root/context
 - `tools/cq/search/semantic/models.py` — Split into `contracts.py` (structs) and `helpers.py` (adapters)
+- `tools/cq/search/tree_sitter/core/adaptive_runtime.py` — Introduce `CacheBackendProtocol` so adaptive runtime accepts any cache backend via DI, not just the concrete `diskcache` import (Review 1, P6)
+- `tools/cq/search/python/extractors.py` — Introduce `PythonNodeAccess` protocol for the 14 `node.xxx` attribute accesses that assume a concrete tree-sitter node type; enables testing with stubs (Review 3, P6)
+- `tools/cq/search/rg/adapter.py` — Extract `_run_and_collect()` helper from `RgAdapter.search()` (currently 4 inline subprocess invocations with identical error handling); single subprocess interaction seam (Review 3, P7)
+- `tools/cq/core/bootstrap.py` — Register language providers once and pass registry into semantic front-door composition
 
 ### New Files to Create
 
 - `tools/cq/search/semantic/contracts.py` — `LanguageEnrichmentProvider` protocol
+- `tools/cq/search/semantic/registry.py` — `LanguageProviderRegistry` value object
+- `tools/cq/search/tree_sitter/core/cache_protocol.py` — `CacheBackendProtocol` for injectable cache backends
+- `tools/cq/search/python/node_protocol.py` — `PythonNodeAccess` protocol for tree-sitter node abstraction
 - `tests/unit/cq/search/semantic/test_contracts.py` — Tests for provider protocol
+- `tests/unit/cq/search/semantic/test_registry.py` — Tests for provider registry behavior
+- `tests/unit/cq/search/tree_sitter/core/test_cache_protocol.py` — Tests for cache backend protocol
+- `tests/unit/cq/search/python/test_node_protocol.py` — Tests for node access protocol
 
 ### Legacy Decommission/Delete Scope
 
-- Delete hardcoded `{"python": ..., "rust": ...}` dispatch dict from `tools/cq/search/semantic/front_door.py:215-218`
+- Delete hardcoded `{"python": ..., "rust": ...}` dispatch dict from `tools/cq/search/semantic/front_door.py`
+- Delete module-level `_PROVIDERS` mutable singleton pattern from semantic front-door path
 - Delete direct imports of `enrich_python_context_by_byte_range` and `enrich_rust_context_by_byte_range` from `front_door.py:35-36`
+- Delete direct `diskcache` import from `tools/cq/search/tree_sitter/core/adaptive_runtime.py` — replaced by `CacheBackendProtocol`
+
+---
+
+## S13. God Module Decomposition — Tree-Sitter Lanes
+
+### Goal
+
+Decompose 3 God modules in the tree-sitter Python and Rust lane subsystems that were identified at deep review depth: `python_lane/facts.py` (738 LOC), `python_lane/runtime.py` (685 LOC), and `core/runtime.py` (644 LOC). These are distinct from the `rust_lane/runtime_core.py` (1,209 LOC) addressed in S6.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/tree_sitter/python_lane/fact_extraction.py — Extracted from facts.py
+from __future__ import annotations
+
+__all__ = ["extract_python_facts", "extract_scope_facts"]
+
+def extract_python_facts(node: object, *, source_bytes: bytes) -> PythonEnrichmentFacts:
+    """Extract structural facts from a Python tree-sitter node."""
+    ...
+
+def extract_scope_facts(node: object, *, source_bytes: bytes) -> PythonScopeFactsV1:
+    """Extract scope-related facts (closure, class, module level)."""
+    ...
+```
+
+```python
+# tools/cq/search/tree_sitter/python_lane/capture_processing.py — Extracted from runtime.py
+from __future__ import annotations
+
+__all__ = ["process_captures", "group_captures_by_scope"]
+
+def process_captures(
+    captures: list[object], *, source_bytes: bytes
+) -> tuple[PythonCaptureFactV1, ...]:
+    """Process raw tree-sitter captures into structured payloads."""
+    ...
+```
+
+### Files to Edit
+
+- `tools/cq/search/tree_sitter/python_lane/facts.py` — Decompose into `fact_extraction.py` (structural facts), `fact_formatting.py` (output formatting), `fact_contracts.py` (typed fact structs)
+- `tools/cq/search/tree_sitter/python_lane/runtime.py` — Decompose into `capture_processing.py` (capture grouping), `enrichment_dispatch.py` (stage orchestration), `query_pack_runner.py` (query pack execution)
+- `tools/cq/search/tree_sitter/core/runtime.py` — Decompose into `session_management.py` (parse session lifecycle), `language_dispatch.py` (lane routing), `scan_orchestration.py` (file scan coordination)
+
+### New Files to Create
+
+- `tools/cq/search/tree_sitter/python_lane/fact_extraction.py` — Structural fact extraction from nodes
+- `tools/cq/search/tree_sitter/python_lane/fact_formatting.py` — Fact output formatting
+- `tools/cq/search/tree_sitter/python_lane/fact_contracts.py` — Typed fact structs for Python lane
+- `tools/cq/search/tree_sitter/python_lane/capture_processing.py` — Capture grouping and processing
+- `tools/cq/search/tree_sitter/python_lane/enrichment_dispatch.py` — Stage orchestration
+- `tools/cq/search/tree_sitter/python_lane/query_pack_runner.py` — Query pack execution
+- `tools/cq/search/tree_sitter/core/session_management.py` — Parse session lifecycle
+- `tools/cq/search/tree_sitter/core/language_dispatch.py` — Lane routing
+- `tools/cq/search/tree_sitter/core/scan_orchestration.py` — File scan coordination
+- `tests/unit/cq/search/tree_sitter/python_lane/test_fact_extraction.py` — Tests for fact extraction
+- `tests/unit/cq/search/tree_sitter/python_lane/test_capture_processing.py` — Tests for capture processing
+- `tests/unit/cq/search/tree_sitter/core/test_session_management.py` — Tests for session management
+
+### Legacy Decommission/Delete Scope
+
+- Delete `python_lane/facts.py` once all callsites are migrated to extracted modules
+- Delete `python_lane/runtime.py` once all callsites are migrated to extracted modules
+- Delete `core/runtime.py` once all callsites are migrated to extracted modules
+
+---
+
+## S14. God Module Decomposition — CLI + Orchestration
+
+### Goal
+
+Decompose 2 God modules in the CLI and orchestration shell: `tree_sitter_collector.py` (661 LOC) and `multilang_orchestrator.py` (515 LOC).
+
+### Representative Code Snippets
+
+```python
+# tools/cq/neighborhood/collector_python.py — Extracted from tree_sitter_collector.py
+from __future__ import annotations
+
+__all__ = ["collect_python_neighborhood"]
+
+def collect_python_neighborhood(
+    file_path: str,
+    *,
+    source_bytes: bytes,
+    anchor_byte: int,
+    top_k: int = 10,
+) -> SemanticNeighborhoodBundleV1:
+    """Collect neighborhood context for a Python anchor point."""
+    ...
+```
+
+```python
+# tools/cq/orchestration/language_router.py — Extracted from multilang_orchestrator.py
+from __future__ import annotations
+
+__all__ = ["route_by_language", "detect_language"]
+
+def route_by_language(
+    request: object,
+    *,
+    lang: str = "auto",
+) -> QueryLanguage:
+    """Route an orchestration request to the appropriate language handler."""
+    ...
+```
+
+### Files to Edit
+
+- `tools/cq/neighborhood/tree_sitter_collector.py` — Decompose into `collector_python.py` (Python neighborhood), `collector_rust.py` (Rust neighborhood), `collector_shared.py` (shared anchor resolution)
+- `tools/cq/orchestration/multilang_orchestrator.py` — Decompose into `language_router.py` (language detection and routing), `result_assembly.py` (multi-language result merging)
+
+### New Files to Create
+
+- `tools/cq/neighborhood/collector_python.py` — Python neighborhood collection
+- `tools/cq/neighborhood/collector_rust.py` — Rust neighborhood collection
+- `tools/cq/neighborhood/collector_shared.py` — Shared anchor resolution logic
+- `tools/cq/orchestration/language_router.py` — Language detection and routing
+- `tools/cq/orchestration/result_assembly.py` — Multi-language result merging
+- `tests/unit/cq/neighborhood/test_collector_python.py` — Tests for Python collection
+- `tests/unit/cq/orchestration/test_language_router.py` — Tests for language routing
+
+### Legacy Decommission/Delete Scope
+
+- Delete `tree_sitter_collector.py` once all callsites are migrated to extracted modules
+- Delete `multilang_orchestrator.py` once all callsites are migrated to extracted modules
+
+---
+
+## S15. God Module Decomposition — Core Foundation
+
+### Goal
+
+Decompose 3 God modules in `core/`: `diskcache_backend.py` (700 LOC), `summary_contract.py` (663 LOC), and `enrichment_facts.py` (642 LOC).
+
+### Representative Code Snippets
+
+```python
+# tools/cq/core/cache/eviction_policy.py — Extracted from diskcache_backend.py
+from __future__ import annotations
+
+__all__ = ["EvictionPolicy", "apply_eviction"]
+
+class EvictionPolicy(msgspec.Struct, frozen=True, kw_only=True):
+    """Cache eviction configuration."""
+    max_size_bytes: int = 100 * 1024 * 1024
+    ttl_seconds: int = 3600
+    ...
+```
+
+```python
+# tools/cq/core/summary_validation.py — Extracted from summary_contract.py
+from __future__ import annotations
+
+__all__ = ["validate_summary_envelope", "validate_summary_sections"]
+
+def validate_summary_envelope(envelope: SummaryEnvelopeV1) -> list[str]:
+    """Validate a summary envelope for structural completeness. Returns error messages."""
+    ...
+```
+
+### Files to Edit
+
+- `tools/cq/core/cache/diskcache_backend.py` — Decompose into `eviction_policy.py` (eviction logic), `serialization.py` (encode/decode), `backend_core.py` (get/set/delete)
+- `tools/cq/core/summary_contract.py` — Decompose into `summary_validation.py` (validation logic), `summary_rendering.py` (render helpers), `summary_types.py` (struct definitions)
+- `tools/cq/core/enrichment_facts.py` — Decompose into `fact_types.py` (struct definitions), `fact_builders.py` (factory functions), `fact_accessors.py` (typed accessor helpers)
+
+### New Files to Create
+
+- `tools/cq/core/cache/eviction_policy.py` — Eviction logic
+- `tools/cq/core/cache/serialization.py` — Encode/decode helpers
+- `tools/cq/core/cache/backend_core.py` — Core get/set/delete operations
+- `tools/cq/core/summary_validation.py` — Summary validation logic
+- `tools/cq/core/summary_rendering.py` — Summary render helpers
+- `tools/cq/core/summary_types.py` — Summary struct definitions
+- `tools/cq/core/fact_types.py` — Enrichment fact struct definitions
+- `tools/cq/core/fact_builders.py` — Enrichment fact factory functions
+- `tools/cq/core/fact_accessors.py` — Typed fact accessor helpers
+- `tests/unit/cq/core/cache/test_eviction_policy.py` — Tests for eviction
+- `tests/unit/cq/core/test_summary_validation.py` — Tests for summary validation
+- `tests/unit/cq/core/test_fact_builders.py` — Tests for fact builders
+
+### Legacy Decommission/Delete Scope
+
+- Delete `diskcache_backend.py` once all callsites are migrated to extracted modules
+- Delete `summary_contract.py` once all callsites are migrated to extracted modules
+- Delete `enrichment_facts.py` once all callsites are migrated to extracted modules
+
+---
+
+## S16. God Module Decomposition — Macros + Query Periphery
+
+### Goal
+
+Decompose 3 God modules in the macros and query subsystems: `calls/entry.py` (536 LOC), `calls_target.py` (576 LOC), and `executor_definitions.py` (715 LOC, import extraction concern distinct from the main decomposition in S7).
+
+### Representative Code Snippets
+
+```python
+# tools/cq/macros/calls/entry_dispatch.py — Extracted from entry.py
+from __future__ import annotations
+
+__all__ = ["dispatch_call_analysis"]
+
+def dispatch_call_analysis(
+    request: CallsRequest,
+    *,
+    root: Path,
+) -> CallsResult:
+    """Dispatch a call analysis request to the appropriate handler."""
+    ...
+```
+
+```python
+# tools/cq/macros/calls/target_resolution.py — Extracted from calls_target.py
+from __future__ import annotations
+
+__all__ = ["resolve_call_target", "classify_call_target"]
+
+def resolve_call_target(
+    name: str,
+    *,
+    scope: object,
+    imports: dict[str, str],
+) -> str | None:
+    """Resolve a call target name to its fully qualified path."""
+    ...
+```
+
+### Files to Edit
+
+- `tools/cq/macros/calls/entry.py` — Decompose into `entry_dispatch.py` (request routing), `entry_output.py` (result formatting), keeping `entry.py` as the command boundary orchestrator only
+- `tools/cq/macros/calls_target.py` — Decompose into `target_resolution.py` (resolution logic), `target_classification.py` (call-site classification)
+- `tools/cq/query/executor_definitions.py` — Extract import handling logic into `query/import_utils.py` (partially covered by S3); extract entity kind registration into `core/entity_kinds.py` (partially covered by S7)
+- `tools/cq/macros/calls/entry.py` — Fix private symbol imports: replace `from tools.cq.core._internal import _foo` with public API imports (Review 6, P4/P22)
+
+### New Files to Create
+
+- `tools/cq/macros/calls/entry_dispatch.py` — Request routing logic
+- `tools/cq/macros/calls/entry_output.py` — Result formatting
+- `tools/cq/macros/calls/target_resolution.py` — Call target resolution
+- `tools/cq/macros/calls/target_classification.py` — Call-site classification
+- `tests/unit/cq/macros/calls/test_entry_dispatch.py` — Tests for dispatch
+- `tests/unit/cq/macros/calls/test_target_resolution.py` — Tests for resolution
+
+### Legacy Decommission/Delete Scope
+
+- Reduce `calls/entry.py` from 536 LOC to a focused command boundary module (<200 LOC)
+- Delete `calls_target.py` once all callsites are migrated to `target_resolution.py` and `target_classification.py`
+- Remove private symbol imports from `calls/entry.py` — replaced by public API imports
+
+---
+
+## S17. Domain Visitor Extraction to `analysis/`
+
+### Goal
+
+Move domain-specific AST visitor classes from `macros/` to `analysis/`, establishing `analysis/` as the home for reusable domain analysis logic. Currently, `ExceptionVisitor`, `SideEffectVisitor`, and `ImportVisitor` contain domain analysis logic that is only incidentally coupled to the macro execution shell.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/analysis/visitors/exception_visitor.py — Relocated from macros/exceptions.py
+from __future__ import annotations
+
+import ast
+
+__all__ = ["ExceptionVisitor"]
+
+
+class ExceptionVisitor(ast.NodeVisitor):
+    """Visit AST nodes to collect exception handling patterns.
+
+    Collects raise sites, catch sites, and bare except clauses.
+    """
+
+    def __init__(self) -> None:
+        self.raise_sites: list[RaiseSite] = []
+        self.catch_sites: list[CatchSite] = []
+        ...
+```
+
+### Files to Edit
+
+- `tools/cq/macros/exceptions.py` — Remove `ExceptionVisitor` class; import from `analysis/visitors/`
+- `tools/cq/macros/side_effects.py` — Remove `SideEffectVisitor` class; import from `analysis/visitors/`
+- `tools/cq/macros/imports.py` — Remove `ImportVisitor` class; import from `analysis/visitors/`
+
+### New Files to Create
+
+- `tools/cq/analysis/__init__.py` — Package init
+- `tools/cq/analysis/visitors/__init__.py` — Package init
+- `tools/cq/analysis/visitors/exception_visitor.py` — `ExceptionVisitor` (from macros/exceptions.py)
+- `tools/cq/analysis/visitors/side_effect_visitor.py` — `SideEffectVisitor` (from macros/side_effects.py)
+- `tools/cq/analysis/visitors/import_visitor.py` — `ImportVisitor` (from macros/imports.py)
+- `tests/unit/cq/analysis/visitors/test_exception_visitor.py` — Tests for exception visitor
+- `tests/unit/cq/analysis/visitors/test_side_effect_visitor.py` — Tests for side-effect visitor
+- `tests/unit/cq/analysis/visitors/test_import_visitor.py` — Tests for import visitor
+
+### Legacy Decommission/Delete Scope
+
+- Delete `ExceptionVisitor` class from `tools/cq/macros/exceptions.py` — relocated to `analysis/visitors/`
+- Delete `SideEffectVisitor` class from `tools/cq/macros/side_effects.py` — relocated to `analysis/visitors/`
+- Delete `ImportVisitor` class from `tools/cq/macros/imports.py` — relocated to `analysis/visitors/`
+
+---
+
+## S18. Quick Wins — Naming and Contract Fixes
+
+### Goal
+
+Collect small, independent naming and contract fixes identified across all 7 reviews that don't warrant their own scope item but should not be lost. Each is a 1-5 line change.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/tree_sitter/contracts/core_models.py — @dataclass → CqStruct
+# Before:
+@dataclass
+class TreeSitterInputEditV1:
+    start_byte: int
+    ...
+
+# After:
+class TreeSitterInputEditV1(CqStruct, frozen=True, kw_only=True):
+    start_byte: int
+    ...
+```
+
+### Files to Edit
+
+- `tools/cq/search/tree_sitter/contracts/core_models.py` — Convert `TreeSitterInputEditV1` from `@dataclass` to `CqStruct` (frozen=True) (Review 1, P22)
+- `tools/cq/search/python/resolution_support.py` — Remove leading underscore from `_AstAnchor` → `AstAnchor` (public-facing type) (Review 3, P21)
+- `tools/cq/search/python/resolution_support.py` — Remove leading underscore from `_DefinitionSite` → `DefinitionSite` (public-facing type) (Review 3, P21)
+- `tools/cq/search/rg/adapter.py` — Add V1 suffix to `RgProcessResult` → `RgProcessResultV1` for contract naming consistency (Review 3, P22)
+- `tools/cq/search/semantic/diagnostics.py` — Freeze `CAPABILITY_MATRIX` dict as `types.MappingProxyType` (Review 3, P20)
+- `tools/cq/neighborhood/snb_renderer.py` — Add V1 suffix to `NeighborhoodExecutionRequest` → `NeighborhoodExecutionRequestV1` (Review 7, P22)
+- `tools/cq/cli_app/params.py` — Align `NeighborhoodParams` with schema-driven pattern used by other param structs (Review 7, P21)
+- `tools/cq/query/planner.py` — Remove unused `python_path` parameter from `compile_query()` (Review 5, P20)
+- `tools/cq/query/planner.py` — Remove unused `rulepack_path` parameter from `compile_query()` (Review 5, P20)
+
+### New Files to Create
+
+None.
+
+### Legacy Decommission/Delete Scope
+
+- Delete `@dataclass` decorator from `TreeSitterInputEditV1` — replaced by `CqStruct` base
+- Rename `_AstAnchor` → `AstAnchor` in `resolution_support.py` — update all references and exports
+- Rename `_DefinitionSite` → `DefinitionSite` in `resolution_support.py` — update all references and exports
+- Delete unused `python_path` and `rulepack_path` parameters from `compile_query()` signature
+
+---
+
+## S19. Observability — Structured Logging
+
+### Goal
+
+Add structured logging to the ~55 pipeline files and 5 silent macros that currently have zero log statements. Without logging, failures in these modules produce no diagnostic output, forcing developers to add temporary print statements during debugging.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/pipeline/assembly.py — Add module logger
+from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def assemble_search_result(...) -> ...:
+    """Assemble search results from classified candidates."""
+    logger.debug("Assembling %d candidates for query=%r", len(candidates), query)
+    ...
+    if dropped:
+        logger.info("Dropped %d candidates by scope filter", len(dropped))
+    ...
+```
+
+```python
+# tools/cq/macros/exceptions.py — Add macro entry/exit logging
+from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def analyze_exceptions(root: Path, ...) -> list[RaiseSite]:
+    """Analyze exception patterns in Python files."""
+    logger.debug("Starting exception analysis in %s", root)
+    ...
+    logger.info("Exception analysis complete: %d raise sites, %d catch sites", len(raises), len(catches))
+    return raises
+```
+
+### Files to Edit
+
+- `tools/cq/search/pipeline/assembly.py` — Add `logging.getLogger(__name__)` and key entry/exit/error log points
+- `tools/cq/search/pipeline/classification.py` — Add structured logging
+- `tools/cq/search/pipeline/candidate_phase.py` — Add structured logging
+- `tools/cq/search/pipeline/classify_phase.py` — Add structured logging
+- `tools/cq/search/pipeline/partition_pipeline.py` — Add structured logging
+- `tools/cq/search/pipeline/smart_search.py` — Add structured logging at pipeline entry/exit
+- `tools/cq/search/pipeline/smart_search_sections.py` — Add structured logging
+- `tools/cq/search/pipeline/smart_search_summary.py` — Add structured logging
+- `tools/cq/search/pipeline/smart_search_followups.py` — Add structured logging
+- `tools/cq/search/pipeline/target_resolution.py` — Add structured logging
+- `tools/cq/search/pipeline/request_parsing.py` — Add structured logging
+- `tools/cq/search/pipeline/neighborhood_preview.py` — Add structured logging
+- `tools/cq/search/pipeline/search_runtime.py` — Add structured logging
+- `tools/cq/search/python/extractors.py` — Add structured logging for 5-stage enrichment
+- `tools/cq/search/rust/enrichment.py` — Add structured logging for Rust enrichment
+- `tools/cq/search/rg/adapter.py` — Add structured logging for subprocess invocations
+- `tools/cq/macros/exceptions.py` — Add entry/exit logging
+- `tools/cq/macros/side_effects.py` — Add entry/exit logging
+- `tools/cq/macros/imports.py` — Add entry/exit logging
+- `tools/cq/macros/scopes.py` — Add entry/exit logging
+- `tools/cq/macros/bytecode.py` — Add entry/exit logging
+- Additional ~35 pipeline files with zero logging (see Review 2, P24 and Review 6, P24 for full list)
+
+### New Files to Create
+
+None. This scope item adds `import logging` and `logger = logging.getLogger(__name__)` to existing files.
+
+### Legacy Decommission/Delete Scope
+
+None. This is additive only.
+
+---
+
+## S20. Facade and Alias Eradication
+
+### Goal
+
+Enforce hard-cutover public surfaces by deleting facade chains, lazy re-export modules, and compatibility aliases. Post-refactor modules must be owned by one responsibility and imported directly.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/pipeline/__init__.py — explicit exports, no Any=None sentinels
+from __future__ import annotations
+
+from tools.cq.search.pipeline.contracts import SearchConfig as SearchPipelineContext
+from tools.cq.search.pipeline.orchestration import SearchPipeline, assemble_result
+from tools.cq.search.pipeline.smart_search_types import SearchResultAssembly
+
+__all__ = [
+    "SearchPipeline",
+    "SearchPipelineContext",
+    "SearchResultAssembly",
+    "assemble_result",
+]
+```
+
+```python
+# tools/cq/query/__init__.py — direct exports from canonical modules
+from __future__ import annotations
+
+from tools.cq.query.executor_plan_dispatch import execute_plan
+
+__all__ = ["execute_plan"]
+```
+
+### Files to Edit
+
+- `tools/cq/query/__init__.py` — Remove facade-style chained exports; expose canonical modules only
+- `tools/cq/search/pipeline/__init__.py` — Remove lazy `Any = None` facade pattern and export canonical types directly
+- `tools/cq/search/tree_sitter/rust_lane/query_orchestration.py` — Remove private `__dict__`-based lookup calls
+- `tools/cq/search/tree_sitter/rust_lane/payload_assembly.py` — Remove private `__dict__`-based lookup calls
+- `tools/cq/core/report.py` — Remove `render_summary_compact` compatibility alias
+- `tools/cq/search/pipeline/smart_search_followups.py` — Remove compatibility alias and keep canonical function only
+
+### New Files to Create
+
+- `tests/unit/cq/query/test_public_import_surface.py` — Verify direct import surface and absence of facade chain exports
+- `tests/unit/cq/search/pipeline/test_public_import_surface.py` — Verify explicit pipeline exports and no lazy `Any=None` sentinels
+
+### Legacy Decommission/Delete Scope
+
+- Delete `tools/cq/query/executor_runtime.py`, `tools/cq/query/executor_entity.py`, and `tools/cq/query/executor_pattern.py` facade modules once S7 migration completes
+- Delete `render_summary_compact` alias from `tools/cq/core/report.py`
+- Delete compatibility alias in `tools/cq/search/pipeline/smart_search_followups.py`
+
+---
+
+## S21. Mutable Singleton Elimination Completion and Registry Hardening
+
+### Goal
+
+Complete singleton removal for all remaining mutable module-level registries and counters not fully covered by S10. Replace globals with explicit registry/context objects that can be injected and reset in tests.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/pipeline/object_view_registry.py
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field
+
+from tools.cq.search.objects.resolve import SearchObjectResolvedViewV1
+
+
+@dataclass
+class SearchObjectViewRegistry:
+    _rows: dict[str, SearchObjectResolvedViewV1] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def register(self, run_id: str, view: SearchObjectResolvedViewV1) -> None:
+        with self._lock:
+            self._rows[run_id] = view
+
+    def pop(self, run_id: str) -> SearchObjectResolvedViewV1 | None:
+        with self._lock:
+            return self._rows.pop(run_id, None)
+```
+
+```python
+# tools/cq/core/details_kinds.py — freeze read-only registry contract
+from __future__ import annotations
+
+from types import MappingProxyType
+
+_DETAILS_KIND_REGISTRY_MUTABLE: dict[str, KindSpec] = {
+    ...
+}
+DETAILS_KIND_REGISTRY = MappingProxyType(_DETAILS_KIND_REGISTRY_MUTABLE)
+```
+
+### Files to Edit
+
+- `tools/cq/search/pipeline/search_object_view_store.py` — Replace `_SEARCH_OBJECT_VIEW_REGISTRY` with injectable `SearchObjectViewRegistry`
+- `tools/cq/search/enrichment/language_registry.py` — Replace `_LANGUAGE_ADAPTERS` with explicit registry object
+- `tools/cq/core/cache/telemetry.py` — Replace `_TELEMETRY` / `_SEEN_KEYS` with injected telemetry store object
+- `tools/cq/core/cache/backend_lifecycle.py` — Replace `_BACKEND_STATE` with explicit backend registry object
+- `tools/cq/search/python/extractors.py` — Remove module-global `_AST_CACHE`; resolve from injected runtime/cache context
+- `tools/cq/search/rust/enrichment.py` — Remove module-global `_AST_CACHE`; resolve from injected runtime/cache context
+- `tools/cq/core/details_kinds.py` — Freeze registry and remove mutable global exposure
+- `tools/cq/core/bootstrap.py` — Compose registry/context instances and expose reset hooks for tests
+
+### New Files to Create
+
+- `tools/cq/search/pipeline/object_view_registry.py` — Thread-safe object-view registry
+- `tools/cq/search/enrichment/adapter_registry.py` — Language adapter registry object
+- `tools/cq/core/cache/backend_registry.py` — Backend lifecycle registry object
+- `tools/cq/core/cache/telemetry_store.py` — Telemetry counters store object replacing module globals
+- `tests/unit/cq/search/pipeline/test_object_view_registry.py` — Registry semantics tests
+- `tests/unit/cq/search/enrichment/test_adapter_registry.py` — Adapter registry tests
+- `tests/unit/cq/core/cache/test_backend_registry.py` — Backend registry lifecycle tests
+- `tests/unit/cq/core/cache/test_telemetry_store.py` — Telemetry store mutation/reset tests
+
+### Legacy Decommission/Delete Scope
+
+- Delete `_SEARCH_OBJECT_VIEW_REGISTRY` from `tools/cq/search/pipeline/search_object_view_store.py`
+- Delete `_LANGUAGE_ADAPTERS` from `tools/cq/search/enrichment/language_registry.py`
+- Delete `_TELEMETRY` and `_SEEN_KEYS` from `tools/cq/core/cache/telemetry.py`
+- Delete `_BACKEND_STATE` from `tools/cq/core/cache/backend_lifecycle.py`
+- Delete module-global `_AST_CACHE` instances from `tools/cq/search/python/extractors.py` and `tools/cq/search/rust/enrichment.py`
+- Delete mutable dict exposure of `DETAILS_KIND_REGISTRY` in `tools/cq/core/details_kinds.py`
+
+---
+
+## S22. Typed Summary and Macro Payload Contracts
+
+### Goal
+
+Replace high-traffic summary/update `dict[str, object]` payloads in query and macro paths with typed `msgspec.Struct` contracts to eliminate key-shape drift and reduce command/query mutation leakage.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/core/summary_update_contracts.py
+from __future__ import annotations
+
+from tools.cq.core.structs import CqStruct
+
+
+class EntitySummaryUpdateV1(CqStruct, frozen=True, kw_only=True):
+    matches: int
+    total_defs: int
+    total_calls: int
+    total_imports: int
+```
+
+```python
+# tools/cq/query/executor_runtime_impl.py — apply typed updates via deterministic builtins
+def _entity_summary_updates(result: CqResult) -> EntitySummaryUpdateV1:
+    summary = as_search_summary(result.summary)
+    return EntitySummaryUpdateV1(
+        matches=summary.matches,
+        total_defs=summary.total_defs,
+        total_calls=summary.total_calls,
+        total_imports=summary.total_imports,
+    )
+
+summary = apply_summary_mapping(
+    summary,
+    msgspec.to_builtins(_entity_summary_updates(result), order="deterministic"),
+)
+```
+
+### Files to Edit
+
+- `tools/cq/core/summary_contract.py` — Accept typed summary-update structs at boundary points
+- `tools/cq/core/scoring.py` — Accept `ScoringDetailsV1` directly in `build_detail_payload`
+- `tools/cq/macros/impact.py` — Replace dict summary builders with typed summary contracts
+- `tools/cq/macros/calls/entry.py` — Replace `_build_calls_summary()` dict return with typed contract
+- `tools/cq/macros/calls/semantic.py` — Replace mutable semantic payload dict merges with typed summary payload contract
+- `tools/cq/query/executor_runtime_impl.py` — Replace `dict[str, object]` summary update payloads with typed structs
+- `tools/cq/query/executor_definitions.py` — Replace summary update dicts with typed structs
+
+### New Files to Create
+
+- `tools/cq/core/summary_update_contracts.py` — Typed summary update contract structs for query and macro paths
+- `tests/unit/cq/core/test_summary_update_contracts.py` — Contract encode/decode and deterministic serialization tests
+- `tests/unit/cq/macros/test_typed_summary_payloads.py` — Macro summary payload typing tests
+- `tests/unit/cq/query/test_typed_summary_updates.py` — Query summary update typing tests
+
+### Legacy Decommission/Delete Scope
+
+- Delete dict-returning `_build_impact_summary()` from `tools/cq/macros/impact.py`
+- Delete dict-returning `_build_calls_summary()` from `tools/cq/macros/calls/entry.py`
+- Delete `msgspec.structs.asdict` scattering used only to feed summary dicts in macros where typed contracts supersede it
+- Delete dict-returning `_entity_summary_updates()` and related dict update helpers from `tools/cq/query/executor_runtime_impl.py`
+
+---
+
+## S23. Query Testability and Rulepack Registry Injection
+
+### Goal
+
+Eliminate hidden construction in query execution paths by injecting enrichers and rulepack providers through explicit context contracts.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/query/enrichment.py — injectable source reader for SymtableEnricher
+from collections.abc import Callable
+from pathlib import Path
+
+type SourceReader = Callable[[Path], str]
+
+
+class SymtableEnricher:
+    def __init__(self, root: Path, *, source_reader: SourceReader | None = None) -> None:
+        self._root = root
+        self._source_reader = source_reader or (lambda p: p.read_text(encoding="utf-8"))
+```
+
+```python
+# tools/cq/astgrep/rulepack_registry.py
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from tools.cq.astgrep.sgpy_scanner import RuleSpec
+
+
+@dataclass
+class RulePackRegistry:
+    _cache: dict[str, tuple[RuleSpec, ...]] = field(default_factory=dict)
+
+    def load_default(self, base: Path) -> dict[str, tuple[RuleSpec, ...]]:
+        if self._cache:
+            return dict(self._cache)
+        self._cache = _load_rulepacks_uncached(base)
+        return dict(self._cache)
+```
+
+### Files to Edit
+
+- `tools/cq/query/enrichment.py` — Add `source_reader` injection seam to `SymtableEnricher`
+- `tools/cq/query/execution_context.py` — Require injected `symtable_enricher` in execution context composition
+- `tools/cq/query/executor_runtime_impl.py` — Stop inline `SymtableEnricher(root)` construction; use injected dependency
+- `tools/cq/query/executor_definitions.py` — Stop inline `SymtableEnricher(root)` construction; use injected dependency
+- `tools/cq/query/section_builders.py` — Stop inline enricher construction; accept injected enricher/context
+- `tools/cq/query/batch.py` — Compose injected enricher at boundary
+- `tools/cq/astgrep/rulepack_loader.py` — Remove module-level `@lru_cache` singleton entrypoint
+- `tools/cq/astgrep/rules.py` — Resolve rulepacks via injected registry instance
+
+### New Files to Create
+
+- `tools/cq/astgrep/rulepack_registry.py` — Injectable rulepack registry object replacing singleton loader behavior
+- `tests/unit/cq/query/test_symtable_enricher_injection.py` — Query tests with fake source reader
+- `tests/unit/cq/astgrep/test_rulepack_registry.py` — Rulepack registry caching/reset tests
+
+### Legacy Decommission/Delete Scope
+
+- Delete `@lru_cache(maxsize=1)` `load_default_rulepacks()` singleton pattern from `tools/cq/astgrep/rulepack_loader.py`
+- Delete `clear_rulepack_cache()` test-only escape hatch from `tools/cq/astgrep/rulepack_loader.py`
+- Delete inline `SymtableEnricher(root)` construction sites in query executor modules
+
+---
+
+## S24. CLI Telemetry Decomposition and Schema Alignment
+
+### Goal
+
+Simplify CLI telemetry control flow by extracting event-builder helpers and align neighborhood command params with the schema-driven command pattern used elsewhere.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/cli_app/telemetry_events.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class CqInvokeEvent:
+    ok: bool
+    command: str | None
+    parse_ms: float
+    exec_ms: float
+    exit_code: int
+    error_class: str | None = None
+    error_stage: str | None = None
+    event_id: str | None = None
+    event_uuid_version: int | None = None
+    event_created_ms: int | None = None
+
+
+def build_invoke_event(
+    *,
+    ok: bool,
+    command: str | None,
+    parse_ms: float,
+    exec_ms: float,
+    exit_code: int,
+    error_class: str | None = None,
+    error_stage: str | None = None,
+    event_id: str | None = None,
+    event_uuid_version: int | None = None,
+    event_created_ms: int | None = None,
+) -> CqInvokeEvent:
+    return CqInvokeEvent(
+        ok=ok,
+        command=command,
+        parse_ms=parse_ms,
+        exec_ms=exec_ms,
+        exit_code=exit_code,
+        error_class=error_class,
+        error_stage=error_stage,
+        event_id=event_id,
+        event_uuid_version=event_uuid_version,
+        event_created_ms=event_created_ms,
+    )
+```
+
+```python
+# tools/cq/cli_app/command_schema.py — neighborhood command adopts schema-driven pattern
+class NeighborhoodCommandSchema(CqStruct, frozen=True, kw_only=True):
+    target: str
+    lang: str = "python"
+    top_k: int = 10
+    no_lsp: bool = False
+```
+
+### Files to Edit
+
+- `tools/cq/cli_app/telemetry.py` — Replace nested duplicated event construction with extracted event builder helper
+- `tools/cq/cli_app/command_schema.py` — Add `NeighborhoodCommandSchema`
+- `tools/cq/cli_app/params.py` — Align `NeighborhoodParams` generation with schema-driven pattern
+- `tools/cq/cli_app/schema_projection.py` — Project neighborhood params via generic projection helpers
+- `tools/cq/cli_app/context.py` — Thread any additional schema/config dependencies cleanly through context
+
+### New Files to Create
+
+- `tools/cq/cli_app/telemetry_events.py` — Shared telemetry event-builder helpers
+- `tests/unit/cq/cli_app/test_telemetry_event_builder.py` — Event-builder behavior tests
+- `tests/unit/cq/cli_app/test_neighborhood_schema_projection.py` — Neighborhood schema projection tests
+
+### Legacy Decommission/Delete Scope
+
+- Delete duplicated inline `CqInvokeEvent(...)` construction branches from `tools/cq/cli_app/telemetry.py`
+- Delete neighborhood-specific parameter divergence in `tools/cq/cli_app/params.py` once schema-driven generation is in place
+
+---
+
+## S25. Fragment Cache Simplification and Search Artifact Index Extraction
+
+### Goal
+
+Reduce cache-layer complexity by collapsing fragment orchestration layers and extracting search artifact index/deque coordination into a focused module.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/core/cache/fragment_runtime.py
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from tools.cq.core.cache.interface import CqCacheBackend
+
+
+def probe_or_persist_fragment(
+    *,
+    backend: CqCacheBackend,
+    cache_key: str,
+    compute: Callable[[], bytes],
+    ttl_seconds: int,
+) -> bytes:
+    payload = backend.get(cache_key)
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        return bytes(payload)
+    data = compute()
+    backend.set(cache_key, data, expire=ttl_seconds)
+    return data
+```
+
+```python
+# tools/cq/core/cache/search_artifact_index.py
+from __future__ import annotations
+
+from pathlib import Path
+
+from tools.cq.core.cache.policy import CqCachePolicyV1
+
+
+def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
+    return Path(policy.directory).expanduser() / "stores" / "search_artifacts" / "index" / f"run_{run_id}"
+```
+
+### Files to Edit
+
+- `tools/cq/core/cache/fragment_engine.py` — Move probe/persist runtime orchestration into `fragment_runtime.py`
+- `tools/cq/core/cache/fragment_orchestrator.py` — Remove duplicate orchestration layer and migrate callsites
+- `tools/cq/core/cache/search_artifact_store.py` — Delegate index/deque path and index iteration logic to `search_artifact_index.py`
+- `tools/cq/core/cache/__init__.py` — Export canonical cache runtime/index modules
+
+### New Files to Create
+
+- `tools/cq/core/cache/fragment_runtime.py` — Unified fragment probe/persist runtime helper
+- `tools/cq/core/cache/search_artifact_index.py` — Search artifact index/deque paths and iteration helpers
+- `tests/unit/cq/core/cache/test_fragment_runtime.py` — Fragment runtime behavior tests
+- `tests/unit/cq/core/cache/test_search_artifact_index.py` — Artifact index helper tests
+
+### Legacy Decommission/Delete Scope
+
+- Delete `tools/cq/core/cache/fragment_orchestrator.py` after migrating all callsites to `fragment_runtime.py`
+- Delete duplicated index/deque path helpers from `tools/cq/core/cache/search_artifact_store.py`
+- Delete duplicate fragment probe/persist wrappers superseded by `probe_or_persist_fragment`
 
 ---
 
@@ -872,14 +1766,14 @@ def _get_provider(language: str) -> LanguageEnrichmentProvider | None:
 - Delete `tools/cq/query/executor_runtime.py` facade — eliminated in S7
 - Delete `tools/cq/query/executor_entity.py` facade — eliminated in S7
 - Delete `tools/cq/query/executor_pattern.py` facade — eliminated in S7
-- Reduce `executor_runtime_impl.py` to thin re-export or delete entirely — decomposed in S7
-- Reduce `runtime_core.py` to thin re-export — decomposed in S6
-- Reduce `extractors.py` to thin orchestrator — decomposed in S8
+- Delete `tools/cq/query/executor_runtime_impl.py` after S7 callsite migration to focused execution modules
+- Delete `tools/cq/search/tree_sitter/rust_lane/runtime_core.py` after S6 callsite migration to extracted runtime modules
+- Delete `tools/cq/search/python/extractors.py` after S8 callsite migration to extracted orchestration modules
 
-### Batch D4 (after S3, S11)
+### Batch D4 (after S3, S11, S20)
 
 - Delete all trivial re-export modules in `_shared/`: `timeout.py`, `rg_request.py`, `encoding.py` — S3 consolidation
-- Delete `generate_followup_suggestions` compatibility alias from `smart_search_followups.py` — S3 cleanup
+- Delete `generate_followup_suggestions` compatibility alias from `smart_search_followups.py` — S20/S3 cleanup
 - Delete file-scan-visit boilerplate from 6 macros — replaced by `scan_python_files` in S11
 
 ### Batch D5 (after S9)
@@ -892,53 +1786,170 @@ def _get_provider(language: str) -> LanguageEnrichmentProvider | None:
 - Delete module-level `_SESSIONS`, `_GLOBAL_STATE_HOLDER`, `_TREE_CACHE_EVICTIONS` singletons — replaced by `TreeSitterRuntimeContext`
 - Remove import-time `CACHE_REGISTRY` registrations — moved to lazy initialization
 
+### Batch D7 (after S13, S14, S15, S16)
+
+- Delete `tools/cq/search/tree_sitter/python_lane/facts.py` after S13 callsite migration
+- Delete `tools/cq/search/tree_sitter/python_lane/runtime.py` after S13 callsite migration
+- Delete `tools/cq/search/tree_sitter/core/runtime.py` after S13 callsite migration
+- Delete `tools/cq/neighborhood/tree_sitter_collector.py` after S14 callsite migration
+- Delete `tools/cq/orchestration/multilang_orchestrator.py` after S14 callsite migration
+- Delete `tools/cq/core/cache/diskcache_backend.py` after S15 callsite migration
+- Delete `tools/cq/core/summary_contract.py` after S15 callsite migration
+- Delete `tools/cq/core/enrichment_facts.py` after S15 callsite migration
+- Delete `tools/cq/macros/calls_target.py` after S16 callsite migration
+
+### Batch D8 (after S17)
+
+- Delete `ExceptionVisitor` class from `tools/cq/macros/exceptions.py` — relocated to `analysis/visitors/`
+- Delete `SideEffectVisitor` class from `tools/cq/macros/side_effects.py` — relocated to `analysis/visitors/`
+- Delete `ImportVisitor` class from `tools/cq/macros/imports.py` — relocated to `analysis/visitors/`
+
+### Batch D9 (after S20, S22, S24)
+
+- Delete lazy export facade in `tools/cq/search/pipeline/__init__.py` (`Any=None` sentinels + `__getattr__` indirection)
+- Delete facade exports in `tools/cq/query/__init__.py` that no longer map to canonical modules
+- Delete dict-based summary update helper functions superseded by typed `summary_update_contracts` structs
+- Delete duplicated inline telemetry event construction branches in `tools/cq/cli_app/telemetry.py`
+
+### Batch D10 (after S21, S23, S25)
+
+- Delete mutable registry globals `_SEARCH_OBJECT_VIEW_REGISTRY`, `_LANGUAGE_ADAPTERS`, `_TELEMETRY`, `_SEEN_KEYS`, `_BACKEND_STATE`
+- Delete `@lru_cache(maxsize=1)` rulepack singleton + `clear_rulepack_cache()` helper from `tools/cq/astgrep/rulepack_loader.py`
+- Delete `tools/cq/core/cache/fragment_orchestrator.py` after callsite migration to `fragment_runtime.py`
+- Delete duplicate search artifact index/deque helper functions from `tools/cq/core/cache/search_artifact_store.py` after `search_artifact_index.py` migration
+
 ---
 
 ## Implementation Sequence
 
-1. **S1. Frozen Struct Integrity** — Zero external dependencies. Foundation for all subsequent work. Ensures the immutability invariant that copy-on-write patterns depend on.
+1. **S1. Frozen Struct Integrity** — Foundation for all contract/copy-on-write work.
+2. **S5. CQS Violations and Public Surface Cleanup** — Low-risk quality improvements that unblock later typing/decomposition.
+3. **S3. DRY Consolidation — Small Wins** — Reduce duplication before deep structural edits.
+4. **S2. Dependency Direction Corrections** — Unblocks clean layering for S4/S9/S12.
+5. **S4. Telemetry Accumulation Consolidation** — Depends on S2/S3 helper and boundary moves.
+6. **S20. Facade and Alias Eradication** — Enforce hard-cutover import surfaces before major module movement.
+7. **S11. Shell-Layer Domain Logic Extraction** — Move domain logic inward to stabilize shell boundaries.
+8. **S12. Missing Abstraction Introduction** — Introduce provider/cache protocols and registry seams needed by decomposition.
+9. **S6. God Module Decomposition — Tree-Sitter** — First major decomposition in tree-sitter lane.
+10. **S7. God Module Decomposition — Query Engine** — Parallel major decomposition in query lane.
+11. **S8. God Module Decomposition — Search Backends and Core** — Decompose remaining high-fan-in search/core modules.
+12. **S9. Typed Enrichment Payload Migration** — Highest-impact contract migration after decomposition boundaries are in place.
+13. **S22. Typed Summary and Macro Payload Contracts** — Extend typing discipline from enrichment payloads to summary/update payloads.
+14. **S23. Query Testability and Rulepack Registry Injection** — Remove hidden construction and singleton loaders in query/astgrep.
+15. **S10. Mutable Singleton Elimination** — Tree-sitter/CLI singleton migration using newly-extracted seams.
+16. **S21. Mutable Singleton Elimination Completion and Registry Hardening** — Finish singleton cleanup across remaining registries/caches.
+17. **S24. CLI Telemetry Decomposition and Schema Alignment** — Simplify telemetry complexity and normalize neighborhood schema flow.
+18. **S18. Quick Wins — Naming and Contract Fixes** — Safe consistency fixes after primary structural movement.
+19. **S13. God Module Decomposition — Tree-Sitter Lanes** — Follow-on lane decomposition after S6 pattern is established.
+20. **S14. God Module Decomposition — CLI + Orchestration** — Complete shell-layer decomposition after S11 extraction.
+21. **S15. God Module Decomposition — Core Foundation** — Decompose core cache/summary/fact modules after typed contracts settle.
+22. **S16. God Module Decomposition — Macros + Query Periphery** — Complete remaining macro/query decomposition.
+23. **S17. Domain Visitor Extraction** — Move visitors after macro decomposition reduces merge risk.
+24. **S25. Fragment Cache Simplification and Search Artifact Index Extraction** — Collapse residual cache-layer over-abstraction and split index concerns.
+25. **S19. Observability — Structured Logging** — Apply logging to final module topology last.
 
-2. **S5. CQS Violations and Public Surface Cleanup** — Independent quick wins. Improves code quality immediately with minimal risk. Pairs well with S1 as a single "contract integrity" PR.
+## Implementation Progress Audit (2026-02-17, refreshed)
 
-3. **S3. DRY Consolidation — Small Wins** — Independent of S1/S5. Many small, safe changes that reduce code surface area before larger refactors.
+### Status Legend
 
-4. **S2. Dependency Direction Corrections** — Depends on understanding the import graph. Relocating `enrichment_contracts.py` unblocks S4 and S9. Core DI fixes unblock S10.
+- `Complete` — scope is fully landed per this plan.
+- `Partial` — at least one material slice is landed, but scope is not yet complete.
+- `Not Started` — no material implementation landed yet.
 
-5. **S4. Telemetry Accumulation Consolidation** — Depends on S2 (enrichment contracts relocated) and S3 (`coerce_count` consolidated). Medium effort, high DRY impact.
+### Scope Status Snapshot
 
-6. **S11. Shell-Layer Domain Logic Extraction** — Independent of S2-S4. Can proceed in parallel. Extracts domain logic before God module decomposition reduces merge conflicts.
+| Scope | Status | Notes |
+|---|---|---|
+| S1 | Partial | Frozen `Section`, tuple findings, copy-on-write report enrichment, macro struct freezing, and `RunContext.argv` tuple landed; tuple/list compatibility regressions and SNB map hardening remain. |
+| S2 | Partial | `enrichment_contracts` relocation and astgrep metavar extraction landed; `core/services.py` still has deferred high-layer imports and layering cleanup is incomplete. |
+| S3 | Partial | Counter/provenance/AST-parent dedup slices landed; duplicate helpers still remain (`filter_result_by_scope`, `_pack_source_rows`, `_derive_*_status`, local builtin/scope helpers). |
+| S4 | Complete | Canonical enrichment telemetry accumulation module is live and duplicate adapter/pipeline accumulation functions are removed. |
+| S5 | Partial | `build_call_evidence`, result-action split, summary contract rename, and symbol-resolver command/query split landed; additional CQS cleanup remains (router semantics, payload-budget split, residual assert-style guards). |
+| S6 | Partial | Rust-lane decomposition modules exist and private `__dict__` lookups are removed; `runtime_core.py` remains the dominant implementation module and is not decommissioned. |
+| S7 | Partial | Query executor modules were extracted and facade modules deleted; `executor_runtime_impl.py` remains large and still owns substantial execution logic. |
+| S8 | Partial | `extractors_orchestrator.py` and front-door split modules exist; `extractors.py`, `front_door_assembly.py`, and `calls/analysis.py` remain large/primary. |
+| S9 | Partial | Typed telemetry schema and typed-flow tests landed; enrichment wrapper contracts and downstream flow still carry `dict[str, object]` payloads in primary paths. |
+| S10 | Partial | Runtime context and `ConsolePort` seams landed; module-level CLI console objects remain and singleton elimination is not complete. |
+| S11 | Partial | `apply_in_dir_scope()` and query router are wired; macro file-scan helper adoption is incomplete across planned macro modules. |
+| S12 | Partial | Semantic provider protocols/registry and cache/node abstraction files exist; semantic front door still directly imports concrete enrichers and keeps default registry state. |
+| S13 | Partial | Python-lane/core split modules exist; legacy god modules (`python_lane/facts.py`, `python_lane/runtime.py`, `core/runtime.py`) remain in place. |
+| S14 | Partial | Neighborhood collector and orchestration split modules exist; legacy `tree_sitter_collector.py` and `multilang_orchestrator.py` remain active. |
+| S15 | Partial | Core split modules (`backend_core`, `summary_*`, `fact_*`) are present; legacy `diskcache_backend.py`, `summary_contract.py`, and `enrichment_facts.py` are still present. |
+| S16 | Partial | Calls entry/target split modules exist; legacy `calls_target.py`, heavy `calls/entry.py`, and `executor_definitions.py` remain non-trivial. |
+| S17 | Complete | Domain visitors moved to `analysis/visitors/` and removed from macro modules. |
+| S18 | Partial | Quick-win contract/naming slices landed (`TreeSitterInputEditV1`, `RgProcessResultV1`, resolution type renames, frozen capability matrix); remaining param/schema alignment still open. |
+| S19 | Not Started | Structured logging rollout has not landed at planned breadth (no module logger adoption across search pipeline files). |
+| S20 | Complete | Pipeline lazy facade and compatibility aliases removed; query facade modules were deleted and rust-lane private indirection was removed. |
+| S21 | Partial | Registry objects are introduced, but mutable process-default registry holders remain and full registry hardening is incomplete. |
+| S22 | Partial | Typed summary update contracts are in place and used in key query/macro paths; full typed payload replacement for all summary/macro update paths remains. |
+| S23 | Partial | Rulepack registry injection work is present; hidden-constructor defaults and remaining query testability seams still need completion. |
+| S24 | Partial | CLI telemetry event decomposition landed (`telemetry_events.py`); remaining schema-alignment and command-path simplification remains. |
+| S25 | Partial | Fragment runtime/index extraction landed and `fragment_orchestrator.py` is removed; full search artifact store/index consolidation is incomplete. |
 
-7. **S12. Missing Abstraction Introduction** — Depends on S2 (clean dependency direction). Introduces protocols that S6 and S9 will use.
+### Decommission Batch Status Snapshot
 
-8. **S6. God Module Decomposition — Tree-Sitter** — Depends on S3 (duplications resolved) and S12 (protocols available). Largest single structural change in tree-sitter.
+| Batch | Status | Notes |
+|---|---|---|
+| D1 | Complete | `_apply_render_enrichment_in_place` removed; `render_summary_compact` alias removed. |
+| D2 | Complete | `pipeline/enrichment_contracts.py` deleted and telemetry accumulation duplicates consolidated under `search/enrichment/telemetry.py`. |
+| D3 | Partial | Query facade deletions are complete; `executor_runtime_impl.py`, `rust_lane/runtime_core.py`, and `search/python/extractors.py` are not yet decommissioned. |
+| D4 | Partial | Follow-up alias deletion is complete; trivial `_shared` re-export deletions and full macro scan-boilerplate removal are still pending. |
+| D5 | Not Started | Typed payload deletion batch not yet applied (`_partition_python_payload_fields`, semantic coercion helpers, and dict telemetry factory still present). |
+| D6 | Complete | `_SESSIONS`, `_GLOBAL_STATE_HOLDER`, and `_TREE_CACHE_EVICTIONS` globals are removed and runtime cache registration moved off import-time paths. |
+| D7 | Not Started | Legacy god modules from S13/S14/S15/S16 are still present and have not entered deletion batch. |
+| D8 | Complete | `ExceptionVisitor`, `SideEffectVisitor`, and `ImportVisitor` classes removed from macro modules after relocation to `analysis/visitors`. |
+| D9 | Partial | Pipeline facade and selected alias cleanups landed; typed-summary/helper and remaining facade-deletion slices are incomplete. |
+| D10 | Partial | `fragment_orchestrator.py` deletion is complete, but mutable registry globals and remaining cache/index cleanup slices are incomplete. |
 
-9. **S7. God Module Decomposition — Query Engine** — Depends on S3 (entity-pattern maps consolidated). Can proceed in parallel with S6.
+### Active CQ Failure Set (Audit: `pytest tests/unit/cq tests/e2e/cq --no-cov`)
 
-10. **S8. God Module Decomposition — Search Backends and Core** — Depends on S6 (shared query-pack pipeline extracted). Decomposes the remaining God modules.
-
-11. **S9. Typed Enrichment Payload Migration** — Depends on S2 (contracts relocated), S4 (telemetry consolidated), S6/S8 (modules decomposed for clean integration points). This is the highest-impact change but requires the most preparation.
-
-12. **S10. Mutable Singleton Elimination** — Depends on S6 (tree-sitter decomposition provides natural injection points) and S9 (typed payloads reduce the surface area of state that needs injection). Final structural improvement.
+- `tests/unit/cq/core/test_noqa_guard.py::test_tools_cq_runtime_has_no_noqa_suppressions`
+  - Runtime files currently containing `noqa`: `tools/cq/cli_app/telemetry_events.py`, `tools/cq/core/render_summary.py`, `tools/cq/neighborhood/collector_shared.py`, `tools/cq/query/router.py`
+- `tests/unit/cq/core/test_scope_filter.py::test_filter_findings_by_scope_applies_exclude_globs`
+  - Exclude-glob semantics in `tools/cq/core/scope_filter.py` do not currently match expected behavior.
+- `tests/unit/cq/query/test_router.py::test_route_query_or_search_returns_error_result_for_query_parse_failure`
+  - Query-router parse-failure behavior diverges from expected malformed-query handling.
+- `tests/unit/cq/search/test_smart_search.py::TestBuildSections::test_sections_include_strings_when_enabled`
+  - `Section.findings` tuple migration introduced test contract mismatch (`tuple` vs `list`) for empty occurrences section assertions.
+- `tests/unit/cq/test_report.py::test_render_enrichment_can_attach_payloads_via_precompute`
+  - Render enrichment precompute path no longer mutates result in-place; test still expects in-place mutation semantics.
 
 ---
 
 ## Implementation Checklist
 
-- [ ] S1. Frozen struct integrity (Section, report.py copy-on-write, 7 macro structs)
-- [ ] S5. CQS violations and public surface cleanup
-- [ ] S3. DRY consolidation — small wins (16 deduplication items)
-- [ ] S2. Dependency direction corrections (enrichment contracts, core DI, astgrep)
-- [ ] S4. Telemetry accumulation consolidation
-- [ ] S11. Shell-layer domain logic extraction
+- [ ] S1. Frozen struct integrity (partial: core + macro COW/frozen slices landed; SNB hardening + tuple/list parity cleanup pending)
+- [ ] S5. CQS violations and public surface cleanup (partial: call evidence + result_action + symbol resolver split landed; remaining CQS splits pending)
+- [ ] S3. DRY consolidation — small wins (partial: counter/builtin/AST-parent dedup landed; remaining dedup set pending)
+- [ ] S2. Dependency direction corrections (partial: enrichment-contract relocation + astgrep metavars extraction landed; core DI/layer cleanup pending)
+- [x] S4. Telemetry accumulation consolidation
+- [x] S20. Facade and alias eradication
+- [ ] S11. Shell-layer domain logic extraction (partial: `apply_in_dir_scope` + query router landed; macro scan-helper adoption incomplete)
 - [ ] S12. Missing abstraction introduction (LanguageEnrichmentProvider)
-- [ ] S6. God module decomposition — tree-sitter (runtime_core.py → 5 modules)
-- [ ] S7. God module decomposition — query engine (executor_runtime_impl.py → 4 modules)
-- [ ] S8. God module decomposition — search backends and core (extractors.py, front_door_assembly.py, calls/analysis.py)
+- [ ] S6. God module decomposition — tree-sitter (runtime_core.py → extracted modules, final runtime_core decommission pending)
+- [ ] S7. God module decomposition — query engine (facade deletion landed; runtime_impl decomposition completion pending)
+- [ ] S8. God module decomposition — search backends and core (extractors/front-door/calls analysis completion pending)
 - [ ] S9. Typed enrichment payload migration (dict[str, object] → typed facts)
+- [ ] S22. Typed summary and macro payload contracts
+- [ ] S23. Query testability and rulepack registry injection
 - [ ] S10. Mutable singleton elimination (TreeSitterRuntimeContext, ConsolePort)
-- [ ] D1. Cross-scope deletion batch (after S1, S5)
-- [ ] D2. Cross-scope deletion batch (after S2, S4)
-- [ ] D3. Cross-scope deletion batch (after S6, S7, S8)
-- [ ] D4. Cross-scope deletion batch (after S3, S11)
+- [ ] S21. Mutable singleton elimination completion and registry hardening
+- [ ] S24. CLI telemetry decomposition and schema alignment (partial: telemetry event builders extracted)
+- [ ] S18. Quick wins — naming and contract fixes (partial: major renames/contracts landed; remaining quick wins pending)
+- [ ] S13. God module decomposition — tree-sitter lanes (facts.py, runtime.py, core/runtime.py)
+- [ ] S14. God module decomposition — CLI + orchestration (tree_sitter_collector.py, multilang_orchestrator.py)
+- [ ] S15. God module decomposition — core foundation (diskcache_backend.py, summary_contract.py, enrichment_facts.py)
+- [ ] S16. God module decomposition — macros + query periphery (entry.py, calls_target.py, executor_definitions.py)
+- [x] S17. Domain visitor extraction to analysis/ (ExceptionVisitor, SideEffectVisitor, ImportVisitor)
+- [ ] S25. Fragment cache simplification and search artifact index extraction
+- [ ] S19. Observability — structured logging (~55 pipeline files + 5 macros)
+- [x] D1. Cross-scope deletion batch (after S1, S5)
+- [x] D2. Cross-scope deletion batch (after S2, S4)
+- [ ] D3. Cross-scope deletion batch (partial: query facade deletions done; runtime_core/extractors/runtime_impl deletions pending)
+- [ ] D4. Cross-scope deletion batch (partial: followups alias removed; remaining D4 deletions pending)
 - [ ] D5. Cross-scope deletion batch (after S9)
-- [ ] D6. Cross-scope deletion batch (after S10)
+- [x] D6. Cross-scope deletion batch (after S10 singleton removals in tree-sitter runtime)
+- [ ] D7. Cross-scope deletion batch (after S13, S14, S15, S16)
+- [x] D8. Cross-scope deletion batch (after S17)
+- [ ] D9. Cross-scope deletion batch (partial: pipeline/report/telemetry alias cleanup slices landed)
+- [ ] D10. Cross-scope deletion batch (partial: fragment orchestrator deletion landed; registry/index cleanup pending)

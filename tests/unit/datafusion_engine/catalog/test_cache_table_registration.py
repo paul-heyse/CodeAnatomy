@@ -22,17 +22,10 @@ def test_register_cache_tables_uses_direct_extension_path(
     """Test register cache tables uses direct extension path."""
     captured: dict[str, object] = {"ctx": None, "payload": None}
 
-    class _Module:
-        @staticmethod
-        def register_cache_tables(ctx: object, payload: dict[str, str]) -> None:
-            captured["ctx"] = ctx
-            captured["payload"] = payload
-
-    module = _Module()
     monkeypatch.setattr(
-        introspection,
-        "resolve_extension_module",
-        lambda *_args, **_kwargs: ("datafusion_ext", module),
+        introspection.datafusion_ext,
+        "register_cache_tables",
+        lambda ctx, payload: captured.update({"ctx": ctx, "payload": payload}),
     )
     monkeypatch.setattr(
         introspection,
@@ -58,16 +51,14 @@ def test_register_cache_tables_raises_abi_mismatch(
 ) -> None:
     """Raise an ABI mismatch when extension registers with incompatible SessionContext."""
 
-    class _Module:
-        @staticmethod
-        def register_cache_tables(_ctx: object, _payload: dict[str, str]) -> None:
-            msg = "argument 'ctx': cannot be converted"
-            raise RuntimeError(msg)
+    def _raise_abi_mismatch(_ctx: object, _payload: dict[str, str]) -> None:
+        msg = "argument 'ctx': cannot be converted"
+        raise RuntimeError(msg)
 
     monkeypatch.setattr(
-        introspection,
-        "resolve_extension_module",
-        lambda *_args, **_kwargs: ("datafusion_ext", _Module()),
+        introspection.datafusion_ext,
+        "register_cache_tables",
+        _raise_abi_mismatch,
     )
     monkeypatch.setattr(
         introspection,

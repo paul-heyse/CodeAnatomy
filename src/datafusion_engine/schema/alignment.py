@@ -54,7 +54,6 @@ def align_to_schema(
     if on_error == "keep":
         msg = "on_error='keep' is not supported by DataFusion alignment."
         raise ValueError(msg)
-    _ = safe_cast
     resolved_schema = pa.schema(schema)
     resolved_table = to_arrow_table(table)
     input_cols = list(resolved_table.column_names)
@@ -73,6 +72,7 @@ def align_to_schema(
         resolved_table,
         schema=resolved_schema,
         keep_extra_columns=keep_extra_columns,
+        safe_cast_mode=safe_cast,
     )
     info: AlignmentInfo = {
         "input_cols": input_cols,
@@ -291,4 +291,3 @@ __all__ = [
     "align_to_schema",
     "unify_schemas_core",
 ]
-from serde_msgspec import StructBaseStrict

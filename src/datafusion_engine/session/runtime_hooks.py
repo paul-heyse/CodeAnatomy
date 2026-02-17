@@ -30,15 +30,17 @@ from serde_artifact_specs import (
 )
 
 if TYPE_CHECKING:
-    from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.session.runtime_profile_config import (
         AdapterExecutionPolicy,
         ExecutionLabel,
+        ExplainRows,
     )
-
-    ExplainRows = TableLike | RecordBatchReaderLike
 else:
-    ExplainRows = object
+    from datafusion_engine.session.runtime_profile_config import (
+        AdapterExecutionPolicy,
+        ExecutionLabel,
+        ExplainRows,
+    )
 
 ExplainHook = Callable[[str, ExplainRows], None]
 PlanArtifactsHook = Callable[[Mapping[str, object]], None]

@@ -5,17 +5,21 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from tools.cq.core.types import QueryLanguage
+from tools.cq.search._shared.enrichment_contracts import (
+    IncrementalEnrichmentV1,
+    PythonEnrichmentV1,
+    incremental_enrichment_payload,
+    python_enrichment_payload,
+)
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
 from tools.cq.search.enrichment.core import (
     accumulate_runtime_flags,
     build_tree_sitter_diagnostic_rows,
     string_or_none,
 )
-from tools.cq.search.pipeline.enrichment_contracts import (
-    IncrementalEnrichmentV1,
-    PythonEnrichmentV1,
-    incremental_enrichment_payload,
-    python_enrichment_payload,
+from tools.cq.search.enrichment.telemetry import (
+    accumulate_stage_status,
+    accumulate_stage_timings,
 )
 
 
@@ -51,24 +55,32 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
         _ = self
         incremental = payload.get("incremental")
         if isinstance(incremental, dict):
-            _accumulate_stage_status(
-                lang_bucket=lang_bucket,
-                stage_status=incremental.get("stage_status"),
-            )
-            _accumulate_stage_timings(
-                lang_bucket=lang_bucket,
-                stage_timings=incremental.get("timings_ms"),
-            )
+            stages_bucket = lang_bucket.get("stages")
+            if isinstance(stages_bucket, dict):
+                accumulate_stage_status(
+                    stages_bucket=stages_bucket,
+                    stage_status=incremental.get("stage_status"),
+                )
+            timings_bucket = lang_bucket.get("timings_ms")
+            if isinstance(timings_bucket, dict):
+                accumulate_stage_timings(
+                    timings_bucket=timings_bucket,
+                    stage_timings_ms=incremental.get("timings_ms"),
+                )
         meta = payload.get("meta")
         if isinstance(meta, dict):
-            _accumulate_stage_status(
-                lang_bucket=lang_bucket,
-                stage_status=meta.get("stage_status"),
-            )
-            _accumulate_stage_timings(
-                lang_bucket=lang_bucket,
-                stage_timings=meta.get("stage_timings_ms"),
-            )
+            stages_bucket = lang_bucket.get("stages")
+            if isinstance(stages_bucket, dict):
+                accumulate_stage_status(
+                    stages_bucket=stages_bucket,
+                    stage_status=meta.get("stage_status"),
+                )
+            timings_bucket = lang_bucket.get("timings_ms")
+            if isinstance(timings_bucket, dict):
+                accumulate_stage_timings(
+                    timings_bucket=timings_bucket,
+                    stage_timings_ms=meta.get("stage_timings_ms"),
+                )
         accumulate_runtime_flags(
             lang_bucket=lang_bucket,
             runtime_payload=payload.get("query_runtime"),
@@ -88,33 +100,6 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
         rows.extend(_parse_quality_diagnostics(payload.get("parse_quality")))
         rows.extend(_degrade_reason_diagnostics(payload))
         return rows[:16]
-
-
-def _accumulate_stage_status(*, lang_bucket: dict[str, object], stage_status: object) -> None:
-    stages_bucket = lang_bucket.get("stages")
-    if not isinstance(stage_status, dict) or not isinstance(stages_bucket, dict):
-        return
-    for stage, stage_state in stage_status.items():
-        if not isinstance(stage, str) or not isinstance(stage_state, str):
-            continue
-        stage_bucket = stages_bucket.get(stage)
-        if not isinstance(stage_bucket, dict):
-            continue
-        if stage_state not in {"applied", "degraded", "skipped"}:
-            continue
-        stage_bucket[stage_state] = int(stage_bucket.get(stage_state, 0)) + 1
-
-
-def _accumulate_stage_timings(*, lang_bucket: dict[str, object], stage_timings: object) -> None:
-    timings_bucket = lang_bucket.get("timings_ms")
-    if not isinstance(stage_timings, dict) or not isinstance(timings_bucket, dict):
-        return
-    for stage, stage_ms in stage_timings.items():
-        if not isinstance(stage, str) or not isinstance(stage_ms, (int, float)):
-            continue
-        base = timings_bucket.get(stage)
-        base_ms = float(base) if isinstance(base, (int, float)) else 0.0
-        timings_bucket[stage] = base_ms + float(stage_ms)
 
 
 def _parse_quality_diagnostics(parse_quality: object) -> list[dict[str, object]]:

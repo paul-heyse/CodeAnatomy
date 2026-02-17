@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import msgspec
+
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.schema import (
     CqResult,
@@ -26,6 +28,7 @@ from tools.cq.core.schema import (
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.summary_contract import build_semantic_telemetry, summary_from_mapping
+from tools.cq.core.summary_update_contracts import CallsSummaryUpdateV1
 from tools.cq.macros.calls.analysis import (
     CallSite,
     _analyze_sites,
@@ -181,24 +184,33 @@ def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
     )
 
 
+def scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
+    """Public scan helper for call-site discovery.
+
+    Returns:
+        CallScanResult: Aggregated scan inputs and discovered call-site rows.
+    """
+    return _scan_call_sites(root_path, function_name)
+
+
 def _build_calls_summary(
     function_name: str,
     scan_result: CallScanResult,
-) -> dict[str, object]:
-    return {
-        "query": function_name,
-        "mode": "macro:calls",
-        "function": function_name,
-        "signature": scan_result.signature_info,
-        "total_sites": len(scan_result.all_sites),
-        "files_with_calls": scan_result.files_with_calls,
-        "total_py_files": scan_result.total_py_files,
-        "candidate_files": len(scan_result.candidate_files),
-        "scanned_files": len(scan_result.scan_files),
-        "call_records": len(scan_result.call_records),
-        "rg_candidates": scan_result.rg_candidates,
-        "scan_method": "ast-grep" if not scan_result.used_fallback else "rg",
-    }
+) -> CallsSummaryUpdateV1:
+    return CallsSummaryUpdateV1(
+        query=function_name,
+        mode="macro:calls",
+        function=function_name,
+        signature=scan_result.signature_info,
+        total_sites=len(scan_result.all_sites),
+        files_with_calls=scan_result.files_with_calls,
+        total_py_files=scan_result.total_py_files,
+        candidate_files=len(scan_result.candidate_files),
+        scanned_files=len(scan_result.scan_files),
+        call_records=len(scan_result.call_records),
+        rg_candidates=scan_result.rg_candidates,
+        scan_method="ast-grep" if not scan_result.used_fallback else "rg",
+    )
 
 
 def _summarize_sites(all_sites: list[CallSite]) -> CallAnalysisSummary:
@@ -266,7 +278,16 @@ def _init_calls_result(
         tc=ctx.tc,
         started_ms=started_ms,
     )
-    updated_summary = summary_from_mapping(_build_calls_summary(ctx.function_name, scan_result))
+    summary_mapping = msgspec.to_builtins(
+        _build_calls_summary(ctx.function_name, scan_result),
+        order="deterministic",
+    )
+    summary_mapping_dict: dict[str, object]
+    if not isinstance(summary_mapping, dict):
+        summary_mapping_dict = {}
+    else:
+        summary_mapping_dict = {str(key): value for key, value in summary_mapping.items()}
+    updated_summary = summary_from_mapping(summary_mapping_dict)
     return update_result_summary(builder.result, updated_summary.to_dict())
 
 
@@ -375,7 +396,7 @@ def _attach_calls_neighborhood_section(
         return insert_result_section(
             result,
             0,
-            Section(title="Neighborhood Preview", findings=neighborhood_findings),
+            Section(title="Neighborhood Preview", findings=tuple(neighborhood_findings)),
         )
     return result
 
@@ -484,6 +505,20 @@ def _build_calls_result(
     )
 
 
+def build_calls_result(
+    ctx: CallsContext,
+    scan_result: CallScanResult,
+    *,
+    started_ms: float,
+) -> CqResult:
+    """Public output builder for calls macro result assembly.
+
+    Returns:
+        CqResult: Fully assembled calls macro result payload.
+    """
+    return _build_calls_result(ctx, scan_result, started_ms=started_ms)
+
+
 def cmd_calls(request: CallsRequest) -> CqResult:
     """Census all call sites for a function.
 
@@ -532,5 +567,7 @@ def cmd_calls(request: CallsRequest) -> CqResult:
 
 
 __all__ = [
+    "build_calls_result",
     "cmd_calls",
+    "scan_call_sites",
 ]

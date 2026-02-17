@@ -130,7 +130,7 @@ def test_render_search_hides_summary_and_context_blocks() -> None:
         run=_run_meta(),
         summary=summary_from_mapping({"query": "build_graph", "mode": "identifier"}),
         key_findings=(finding,),
-        sections=(Section(title="Resolved Objects", findings=[finding]),),
+        sections=(Section(title="Resolved Objects", findings=(finding,)),),
     )
     output = render_markdown(result)
     assert "## Summary" not in output
@@ -161,7 +161,7 @@ def test_render_finding_includes_enrichment_tables() -> None:
     result = CqResult(
         run=_run_meta(),
         key_findings=(finding,),
-        sections=(Section(title="Top Contexts", findings=[finding]),),
+        sections=(Section(title="Top Contexts", findings=(finding,)),),
     )
 
     output = render_markdown(result)

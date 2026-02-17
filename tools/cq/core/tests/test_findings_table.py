@@ -172,7 +172,7 @@ class TestFlattenResult:
     def test_section_findings_flattened() -> None:
         """Flatten section findings into records."""
         finding = _make_finding(category="call", message="test call")
-        section = Section(title="Call Sites", findings=[finding])
+        section = Section(title="Call Sites", findings=(finding,))
         result = _make_result(sections=[section])
         records = flatten_result(result)
 
@@ -381,7 +381,7 @@ class TestRehydrateResult:
     def test_rehydrate_sections() -> None:
         """Rehydrate section findings from filtered data."""
         finding = _make_finding(category="call", message="call site")
-        section = Section(title="Call Sites", findings=[finding])
+        section = Section(title="Call Sites", findings=(finding,))
         original = _make_result(sections=[section])
         records = flatten_result(original)
         df = build_frame(records)
@@ -424,8 +424,8 @@ class TestRehydrateResult:
         """Preserve original section ordering when rehydrating."""
         finding1 = _make_finding(message="first")
         finding2 = _make_finding(message="second")
-        section1 = Section(title="First Section", findings=[finding1])
-        section2 = Section(title="Second Section", findings=[finding2])
+        section1 = Section(title="First Section", findings=(finding1,))
+        section2 = Section(title="Second Section", findings=(finding2,))
         original = _make_result(sections=[section1, section2])
 
         records = flatten_result(original)

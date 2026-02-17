@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any
 from tools.cq.search.python.resolution_support import (
     _MAX_BINDINGS,
     _NATIVE_RESOLUTION_ERRORS,
-    _AstAnchor,
+    AstAnchor,
+    DefinitionSite,
     _build_resolution_index,
-    _DefinitionSite,
     _descend_scope_table,
     _extract_binding_candidates,
     _extract_enclosing_context,
@@ -40,14 +40,14 @@ def _coerce_alias_map(value: object) -> dict[str, str]:
     }
 
 
-def _coerce_definition_index(value: object) -> dict[str, list[_DefinitionSite]]:
+def _coerce_definition_index(value: object) -> dict[str, list[DefinitionSite]]:
     if not isinstance(value, dict):
         return {}
-    out: dict[str, list[_DefinitionSite]] = {}
+    out: dict[str, list[DefinitionSite]] = {}
     for key, rows in value.items():
         if not isinstance(key, str) or not isinstance(rows, list):
             continue
-        typed_rows = [site for site in rows if isinstance(site, _DefinitionSite)]
+        typed_rows = [site for site in rows if isinstance(site, DefinitionSite)]
         if typed_rows:
             out[key] = typed_rows[:_MAX_BINDINGS]
     return out
@@ -102,8 +102,8 @@ def _resolve_ast_anchor(
     byte_start: int,
     byte_end: int,
     session: PythonAnalysisSession | None,
-) -> _AstAnchor | None:
-    anchor: _AstAnchor | None = None
+) -> AstAnchor | None:
+    anchor: AstAnchor | None = None
     if session is not None:
         span_index = session.ensure_ast_span_index()
         if span_index:
@@ -124,7 +124,7 @@ def _resolve_ast_anchor(
 
 def _build_resolution_payload(
     *,
-    anchor: _AstAnchor,
+    anchor: AstAnchor,
     inputs: _ResolutionPayloadInputs,
 ) -> dict[str, object]:
     index = _load_resolution_index(

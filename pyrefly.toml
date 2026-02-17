@@ -5,7 +5,12 @@ project-excludes = [
     "**/tests/fixtures/heuristics/**",
     "**/tests/e2e/cq/_golden_workspace/**",
 ]
-search-path = ["src", "."]
+search-path = [
+    "src",
+    ".",
+    "tests/e2e/cq/_golden_workspace/mixed_workspace/src",
+    "tests/e2e/cq/_golden_workspace/python_project",
+]
 python-version = "3.13.12"
 python-interpreter-path = ".venv/bin/python"
 

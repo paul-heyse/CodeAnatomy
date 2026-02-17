@@ -10,6 +10,7 @@ from tools.cq.cli_app.command_schema import (
     ExceptionsCommandSchema,
     ImpactCommandSchema,
     ImportsCommandSchema,
+    NeighborhoodCommandSchema,
     QueryCommandSchema,
     ReportCommandSchema,
     RunCommandSchema,
@@ -36,6 +37,7 @@ SigImpactOptions = SigImpactCommandSchema
 SideEffectsOptions = SideEffectsCommandSchema
 BytecodeSurfaceOptions = BytecodeSurfaceCommandSchema
 RunOptions = RunCommandSchema
+NeighborhoodOptions = NeighborhoodCommandSchema
 
 
 def options_from_params[T](params: Any, *, type_: type[T]) -> T:
@@ -55,6 +57,7 @@ __all__ = [
     "ExceptionsOptions",
     "ImpactOptions",
     "ImportsOptions",
+    "NeighborhoodOptions",
     "QueryOptions",
     "ReportOptions",
     "RunOptions",

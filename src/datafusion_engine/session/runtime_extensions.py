@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -61,212 +62,13 @@ logger = logging.getLogger(__name__)
 _DDL_CATALOG_WARNING_STATE: dict[str, bool] = {"emitted": False}
 
 
-def _defer_import_datafusion_udf_validation_spec() -> ArtifactSpec:
-    """Return DATAFUSION_UDF_VALIDATION_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_UDF_VALIDATION_SPEC
-
-    return DATAFUSION_UDF_VALIDATION_SPEC
+def _deferred_import(module_path: str, attr_name: str) -> object:
+    module = importlib.import_module(module_path)
+    return getattr(module, attr_name)
 
 
-def _defer_import_datafusion_extension_parity_spec() -> ArtifactSpec:
-    """Return DATAFUSION_EXTENSION_PARITY_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_EXTENSION_PARITY_SPEC
-
-    return DATAFUSION_EXTENSION_PARITY_SPEC
-
-
-def _defer_import_datafusion_runtime_capabilities_spec() -> ArtifactSpec:
-    """Return DATAFUSION_RUNTIME_CAPABILITIES_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_RUNTIME_CAPABILITIES_SPEC
-
-    return DATAFUSION_RUNTIME_CAPABILITIES_SPEC
-
-
-def _defer_import_performance_policy_spec() -> ArtifactSpec:
-    """Return PERFORMANCE_POLICY_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import PERFORMANCE_POLICY_SPEC
-
-    return PERFORMANCE_POLICY_SPEC
-
-
-def _defer_import_datafusion_cache_config_spec() -> ArtifactSpec:
-    """Return DATAFUSION_CACHE_CONFIG_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_CACHE_CONFIG_SPEC
-
-    return DATAFUSION_CACHE_CONFIG_SPEC
-
-
-def _defer_import_cache_policy_spec() -> ArtifactSpec:
-    """Return CACHE_POLICY_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import CACHE_POLICY_SPEC
-
-    return CACHE_POLICY_SPEC
-
-
-def _defer_import_datafusion_cache_root_spec() -> ArtifactSpec:
-    """Return DATAFUSION_CACHE_ROOT_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_CACHE_ROOT_SPEC
-
-    return DATAFUSION_CACHE_ROOT_SPEC
-
-
-def _defer_import_datafusion_cache_snapshot_error_spec() -> ArtifactSpec:
-    """Return DATAFUSION_CACHE_SNAPSHOT_ERROR_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_CACHE_SNAPSHOT_ERROR_SPEC
-
-    return DATAFUSION_CACHE_SNAPSHOT_ERROR_SPEC
-
-
-def _defer_import_datafusion_function_factory_spec() -> ArtifactSpec:
-    """Return DATAFUSION_FUNCTION_FACTORY_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_FUNCTION_FACTORY_SPEC
-
-    return DATAFUSION_FUNCTION_FACTORY_SPEC
-
-
-def _defer_import_datafusion_expr_planners_spec() -> ArtifactSpec:
-    """Return DATAFUSION_EXPR_PLANNERS_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_EXPR_PLANNERS_SPEC
-
-    return DATAFUSION_EXPR_PLANNERS_SPEC
-
-
-def _defer_import_datafusion_tracing_install_spec() -> ArtifactSpec:
-    """Return DATAFUSION_TRACING_INSTALL_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_TRACING_INSTALL_SPEC
-
-    return DATAFUSION_TRACING_INSTALL_SPEC
-
-
-def _defer_import_datafusion_delta_tracing_spec() -> ArtifactSpec:
-    """Return DATAFUSION_DELTA_TRACING_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_DELTA_TRACING_SPEC
-
-    return DATAFUSION_DELTA_TRACING_SPEC
-
-
-def _defer_import_datafusion_udf_registry_spec() -> ArtifactSpec:
-    """Return DATAFUSION_UDF_REGISTRY_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_UDF_REGISTRY_SPEC
-
-    return DATAFUSION_UDF_REGISTRY_SPEC
-
-
-def _defer_import_datafusion_udf_docs_spec() -> ArtifactSpec:
-    """Return DATAFUSION_UDF_DOCS_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_UDF_DOCS_SPEC
-
-    return DATAFUSION_UDF_DOCS_SPEC
-
-
-def _defer_import_datafusion_delta_plan_codecs_spec() -> ArtifactSpec:
-    """Return DATAFUSION_DELTA_PLAN_CODECS_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_DELTA_PLAN_CODECS_SPEC
-
-    return DATAFUSION_DELTA_PLAN_CODECS_SPEC
-
-
-def _defer_import_datafusion_delta_session_defaults_spec() -> ArtifactSpec:
-    """Return DATAFUSION_DELTA_SESSION_DEFAULTS_SPEC (deferred import).
-
-    Returns:
-    -------
-    object
-        The artifact spec constant.
-    """
-    from serde_artifact_specs import DATAFUSION_DELTA_SESSION_DEFAULTS_SPEC
-
-    return DATAFUSION_DELTA_SESSION_DEFAULTS_SPEC
+def _artifact_spec(name: str) -> ArtifactSpec:
+    return cast("ArtifactSpec", _deferred_import("serde_artifact_specs", name))
 
 
 def _resolve_tracing_context(
@@ -495,7 +297,7 @@ def _validate_udf_specs(
         introspector: Schema introspector.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If the tracing hook is unavailable.
     """
     from datafusion_engine.udf.extension_core import (
         rust_udf_snapshot,
@@ -520,7 +322,7 @@ def _validate_udf_specs(
 
             record_artifact(
                 profile,
-                _defer_import_datafusion_udf_validation_spec(),
+                _artifact_spec("DATAFUSION_UDF_VALIDATION_SPEC"),
                 {
                     "event_time_unix_ms": int(time.time() * 1000),
                     "udf_catalog_policy": profile.policies.udf_catalog_policy,
@@ -820,12 +622,12 @@ def _record_extension_parity_validation(
     payload["settings_hash"] = profile.settings_hash()
     record_artifact(
         profile,
-        _defer_import_datafusion_extension_parity_spec(),
+        _artifact_spec("DATAFUSION_EXTENSION_PARITY_SPEC"),
         payload,
     )
     record_artifact(
         profile,
-        _defer_import_datafusion_runtime_capabilities_spec(),
+        _artifact_spec("DATAFUSION_RUNTIME_CAPABILITIES_SPEC"),
         runtime_capabilities,
     )
     _record_performance_policy(profile, runtime_capabilities=runtime_capabilities)
@@ -883,7 +685,7 @@ def _record_performance_policy(
     )
     record_artifact(
         profile,
-        _defer_import_performance_policy_spec(),
+        _artifact_spec("PERFORMANCE_POLICY_SPEC"),
         policy_payload,
     )
 
@@ -903,16 +705,16 @@ def _record_cache_diagnostics(profile: DataFusionRuntimeProfile, ctx: SessionCon
         return
     cache_diag = _capture_cache_diagnostics(ctx)
     config_payload = _cache_config_payload(cache_diag)
-    record_artifact(profile, _defer_import_datafusion_cache_config_spec(), config_payload)
+    record_artifact(profile, _artifact_spec("DATAFUSION_CACHE_CONFIG_SPEC"), config_payload)
     record_artifact(
         profile,
-        _defer_import_datafusion_cache_root_spec(),
+        _artifact_spec("DATAFUSION_CACHE_ROOT_SPEC"),
         {"cache_root": profile.io_ops.cache_root()},
     )
     if profile.policies.cache_policy is not None:
         record_artifact(
             profile,
-            _defer_import_cache_policy_spec(),
+            _artifact_spec("CACHE_POLICY_SPEC"),
             cache_policy_settings(profile.policies.cache_policy),
         )
     cache_snapshots = _cache_snapshot_rows(cache_diag)
@@ -952,7 +754,7 @@ def _snapshot_metadata_caches(profile: DataFusionRuntimeProfile, ctx: SessionCon
             return
         record_artifact(
             profile,
-            _defer_import_datafusion_cache_snapshot_error_spec(),
+            _artifact_spec("DATAFUSION_CACHE_SNAPSHOT_ERROR_SPEC"),
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "error": str(exc),
@@ -1042,7 +844,8 @@ def _install_tracing(profile: DataFusionRuntimeProfile, ctx: SessionContext) -> 
         ctx: DataFusion session context.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        RuntimeError: If tracing installation fails.
+        ValueError: If tracing is enabled but extension entrypoints are unavailable.
     """
     from datafusion_engine.session.runtime_compile import record_artifact
 
@@ -1054,7 +857,7 @@ def _install_tracing(profile: DataFusionRuntimeProfile, ctx: SessionContext) -> 
     if profile.diagnostics.diagnostics_sink is not None:
         record_artifact(
             profile,
-            _defer_import_datafusion_delta_tracing_spec(),
+            _artifact_spec("DATAFUSION_DELTA_TRACING_SPEC"),
             {
                 "enabled": profile.features.enable_tracing,
                 "installed": delta_installed,
@@ -1072,21 +875,19 @@ def _install_tracing(profile: DataFusionRuntimeProfile, ctx: SessionContext) -> 
             raise ValueError(msg)
         ctx_arg, details = _resolve_tracing_context(ctx, module)
         if ctx_arg is None:
-            logger.info(
-                "Tracing install skipped: no compatible SessionContext for %s",
-                details.get("module") or "unknown",
+            msg = (
+                "Tracing install failed: no compatible SessionContext was resolved for "
+                f"{details.get('module') or 'unknown'}."
             )
-            _record_tracing_install(profile, "no_compatible_session_context", details)
-            return
+            raise RuntimeError(msg)
         try:
             install(ctx_arg)
         except TypeError as exc:
-            logger.info("Tracing install failed: %s", exc)
-            error_details = {
-                "module": details.get("module"),
-                "context_type": type(ctx_arg).__name__,
-            }
-            _record_tracing_install(profile, str(exc), error_details)
+            msg = (
+                "Tracing install failed due to SessionContext ABI mismatch. "
+                f"module={details.get('module')}, context_type={type(ctx_arg).__name__}"
+            )
+            raise RuntimeError(msg) from exc
         return
     profile.diagnostics.tracing_hook(ctx)
 
@@ -1240,7 +1041,7 @@ def _record_udf_snapshot(profile: DataFusionRuntimeProfile, snapshot: Mapping[st
         return
     record_artifact(
         profile,
-        _defer_import_datafusion_udf_registry_spec(),
+        _artifact_spec("DATAFUSION_UDF_REGISTRY_SPEC"),
         dict(snapshot),
     )
 
@@ -1258,7 +1059,7 @@ def _record_udf_docs(profile: DataFusionRuntimeProfile, docs: Mapping[str, objec
         return
     record_artifact(
         profile,
-        _defer_import_datafusion_udf_docs_spec(),
+        _artifact_spec("DATAFUSION_UDF_DOCS_SPEC"),
         dict(docs),
     )
 
@@ -1279,7 +1080,7 @@ def _record_delta_plan_codecs(
         return
     record_artifact(
         profile,
-        _defer_import_datafusion_delta_plan_codecs_spec(),
+        _artifact_spec("DATAFUSION_DELTA_PLAN_CODECS_SPEC"),
         {
             "enabled": profile.features.enable_delta_plan_codecs,
             "available": available,
@@ -1313,7 +1114,7 @@ def record_delta_session_defaults(
         return
     record_artifact(
         profile,
-        _defer_import_datafusion_delta_session_defaults_spec(),
+        _artifact_spec("DATAFUSION_DELTA_SESSION_DEFAULTS_SPEC"),
         {
             "enabled": profile.features.enable_delta_session_defaults,
             "available": available,
@@ -1339,7 +1140,7 @@ def _record_tracing_install(
     if profile.diagnostics.diagnostics_sink is None:
         return
     payload = {"error": error, **details}
-    record_artifact(profile, _defer_import_datafusion_tracing_install_spec(), payload)
+    record_artifact(profile, _artifact_spec("DATAFUSION_TRACING_INSTALL_SPEC"), payload)
 
 
 def _record_function_factory(
@@ -1365,7 +1166,7 @@ def _record_function_factory(
         return
     record_artifact(
         profile,
-        _defer_import_datafusion_function_factory_spec(),
+        _artifact_spec("DATAFUSION_FUNCTION_FACTORY_SPEC"),
         {
             "enabled": profile.features.enable_function_factory,
             "available": available,
@@ -1400,7 +1201,7 @@ def _record_expr_planners(
         return
     record_artifact(
         profile,
-        _defer_import_datafusion_expr_planners_spec(),
+        _artifact_spec("DATAFUSION_EXPR_PLANNERS_SPEC"),
         {
             "enabled": profile.features.enable_expr_planners,
             "available": available,

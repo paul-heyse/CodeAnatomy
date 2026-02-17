@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from tools.cq.search._shared.enrichment_contracts import IncrementalEnrichmentModeV1
 from tools.cq.search._shared.types import QueryMode, SearchLimits
 from tools.cq.search.pipeline import smart_search as classification_module
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.contracts import SearchConfig
-from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
 from tools.cq.search.pipeline.smart_search import RawMatch
 
 

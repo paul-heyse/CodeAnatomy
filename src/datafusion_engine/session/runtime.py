@@ -17,10 +17,6 @@ from datafusion import (
     SessionContext,
 )
 
-from datafusion_engine.arrow.interop import (
-    RecordBatchReaderLike,
-    TableLike,
-)
 from datafusion_engine.lineage.diagnostics import (
     DiagnosticsSink,
     ensure_recorder_sink,
@@ -110,9 +106,11 @@ if TYPE_CHECKING:
     from typing import Protocol
 
     from datafusion_engine.bootstrap.zero_row import ZeroRowBootstrapReport, ZeroRowBootstrapRequest
+    from datafusion_engine.obs.datafusion_runs import DataFusionRun
     from datafusion_engine.session.context_pool import DataFusionContextPool
     from datafusion_engine.udf.metadata import UdfCatalog
-    from obs.datafusion_runs import DataFusionRun
+    from datafusion_engine.views.artifacts import CachePolicy
+    from storage.cdf_cursor_protocol import CdfCursorStoreLike
 
     class _DeltaRuntimeEnvOptions(Protocol):
         max_spill_size: int | None
@@ -122,11 +120,6 @@ if TYPE_CHECKING:
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
 )
-
-if TYPE_CHECKING:
-    ExplainRows = TableLike | RecordBatchReaderLike
-else:
-    ExplainRows = object
 
 _TELEMETRY_MSGPACK_ENCODER = MSGPACK_ENCODER
 
@@ -248,6 +241,22 @@ class DataFusionRuntimeProfile(
             Catalog operations helper.
         """
         return RuntimeProfileCatalog(self)
+
+    def delta_runtime_ctx(self) -> SessionContext:
+        """Return canonical SessionContext used for Delta runtime operations."""
+        return self.session_context()
+
+    def semantic_cache_overrides(self) -> Mapping[str, CachePolicy]:
+        """Return explicit semantic view cache policy overrides."""
+        return dict(self.data_sources.semantic_output.cache_overrides)
+
+    def cdf_cursor_store(self) -> CdfCursorStoreLike | None:
+        """Return configured CDF cursor store."""
+        return self.data_sources.cdf_cursor_store
+
+    def diagnostics_sink(self) -> DiagnosticsSink | None:
+        """Return configured diagnostics sink when available."""
+        return self.diagnostics.diagnostics_sink
 
     def _validate_information_schema(self) -> None:
         if not self.catalog.enable_information_schema:
@@ -545,7 +554,7 @@ class DataFusionRuntimeProfile(
         SessionRuntime
             Planning-ready session runtime.
         """
-        return build_session_runtime(self, use_cache=True)
+        return build_session_runtime(self)
 
     def run_zero_row_bootstrap_validation(
         self,

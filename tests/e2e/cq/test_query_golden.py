@@ -11,7 +11,8 @@ import pytest
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.enrichment import SymtableEnricher
+from tools.cq.query.executor_plan_dispatch import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 
@@ -32,6 +33,7 @@ def _execute_query(
             query=query,
             root=str(root),
             services=resolve_runtime_services(root),
+            symtable_enricher=SymtableEnricher(root),
             argv=(),
             query_text=query_text,
         ),
@@ -130,7 +132,7 @@ def test_execute_plan_function_golden(
     update_golden : bool
         Whether to update golden files.
     """
-    query_text = "entity=function name=execute_plan in=tools/cq/query/executor_runtime.py"
+    query_text = "entity=function name=execute_plan in=tools/cq/query/executor_plan_dispatch.py"
     query = parse_query(query_text)
     plan = compile_query(query)
     result = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)

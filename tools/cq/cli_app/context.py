@@ -14,6 +14,7 @@ from tools.cq.index.repo import resolve_repo_context
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from tools.cq.cli_app.protocols import ConsolePort
     from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.schema import CqResult
     from tools.cq.core.toolchain import Toolchain
@@ -28,6 +29,8 @@ class CliContextOptions:
     output_format: OutputFormat = OutputFormat.md
     artifact_dir: Path | None = None
     save_artifact: bool = True
+    console: ConsolePort | None = None
+    error_console: ConsolePort | None = None
 
     @classmethod
     def from_kwargs(cls, kwargs: Mapping[str, object]) -> CliContextOptions:
@@ -53,6 +56,8 @@ class CliContextOptions:
                 artifact_raw if isinstance(artifact_raw, Path) or artifact_raw is None else None
             ),
             save_artifact=bool(kwargs.get("save_artifact", True)),
+            console=None,
+            error_console=None,
         )
 
 
@@ -75,6 +80,10 @@ class CliContext(CqStruct, frozen=True):
         Directory for saving artifacts, or None for default.
     save_artifact
         Whether to save artifacts (can be disabled via --no-save-artifact).
+    console
+        Optional console output dependency injected by launcher.
+    error_console
+        Optional error console dependency injected by launcher.
     """
 
     argv: list[str]
@@ -85,6 +94,8 @@ class CliContext(CqStruct, frozen=True):
     output_format: OutputFormat = OutputFormat.md
     artifact_dir: Path | None = None
     save_artifact: bool = True
+    console: ConsolePort | None = None
+    error_console: ConsolePort | None = None
 
     @classmethod
     def from_parts(
@@ -111,6 +122,8 @@ class CliContext(CqStruct, frozen=True):
             output_format=resolved_options.output_format,
             artifact_dir=resolved_options.artifact_dir,
             save_artifact=resolved_options.save_artifact,
+            console=resolved_options.console,
+            error_console=resolved_options.error_console,
         )
 
     @classmethod

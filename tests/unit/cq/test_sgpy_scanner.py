@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.astgrep.rulepack_loader import clear_rulepack_cache, load_default_rulepacks
+from tools.cq.astgrep.rulepack_loader import load_default_rulepacks
 from tools.cq.astgrep.sgpy_scanner import (
     RecordType,
     RuleSpec,
@@ -15,7 +15,6 @@ from tools.cq.astgrep.sgpy_scanner import (
     scan_with_pattern,
 )
 
-clear_rulepack_cache()
 _PY_RULES = {rule.rule_id: rule for rule in load_default_rulepacks().get("python", ())}
 PY_CALL_NAME = _PY_RULES["py_call_name"]
 PY_DEF_CLASS = _PY_RULES["py_def_class"]

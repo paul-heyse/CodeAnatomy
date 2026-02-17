@@ -17,7 +17,7 @@ import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 
@@ -737,6 +737,35 @@ def _collect_query_pack_captures(
     return accumulator.finalize()
 
 
+def collect_query_pack_captures(
+    *,
+    root: Node,
+    source_bytes: bytes,
+    windows: tuple[QueryWindowV1, ...],
+    settings: QueryExecutionSettingsV1,
+) -> tuple[
+    dict[str, list[Node]],
+    tuple[ObjectEvidenceRowV1, ...],
+    tuple[TreeSitterQueryHitV1, ...],
+    dict[str, object],
+    tuple[InjectionPlanV1, ...],
+    tuple[RustTagEventV1, ...],
+]:
+    """Collect captures, telemetry, and lane artifacts for Rust query packs.
+
+    Returns:
+    -------
+    tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], tuple[TreeSitterQueryHitV1, ...], dict[str, object], tuple[InjectionPlanV1, ...], tuple[RustTagEventV1, ...]]
+        Aggregated captures, rows, telemetry, and lane artifacts.
+    """
+    return _collect_query_pack_captures(
+        root=root,
+        source_bytes=source_bytes,
+        windows=windows,
+        settings=settings,
+    )
+
+
 def _query_windows_for_span(
     *,
     byte_start: int,
@@ -902,6 +931,32 @@ def _collect_query_pack_payload(
     return payload
 
 
+def collect_query_pack_payload(
+    *,
+    root: Node,
+    source_bytes: bytes,
+    byte_span: tuple[int, int],
+    changed_ranges: tuple[object, ...] = (),
+    query_budget_ms: int | None = None,
+    file_key: str | None = None,
+) -> dict[str, object]:
+    """Collect query-pack payload for the provided byte span.
+
+    Returns:
+    -------
+    dict[str, object]
+        Query-pack payload for the selected source range.
+    """
+    return _collect_query_pack_payload(
+        root=root,
+        source_bytes=source_bytes,
+        byte_span=byte_span,
+        changed_ranges=changed_ranges,
+        query_budget_ms=query_budget_ms,
+        file_key=file_key,
+    )
+
+
 def _aggregate_query_runtime(query_telemetry: dict[str, object]) -> dict[str, object]:
     did_exceed_match_limit = False
     cancelled = False
@@ -1009,6 +1064,17 @@ def _collect_payload_with_timings(request: _RustPayloadBuildRequestV1) -> dict[s
     return payload
 
 
+def collect_payload_with_timings(request: object) -> dict[str, object]:
+    """Collect enrichment payload with stage timing metadata.
+
+    Returns:
+    -------
+    dict[str, object]
+        Enrichment payload annotated with stage timings and status.
+    """
+    return _collect_payload_with_timings(cast("_RustPayloadBuildRequestV1", request))
+
+
 def _finalize_enrichment_payload(
     *,
     payload: dict[str, object],
@@ -1069,6 +1135,17 @@ def _run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, 
     status["tree_sitter"] = "applied"
     payload["stage_status"] = status
     return _finalize_enrichment_payload(payload=payload, total_started=total_started)
+
+
+def run_rust_enrichment_pipeline(request: object) -> dict[str, object] | None:
+    """Run full Rust enrichment pipeline for a source request.
+
+    Returns:
+    -------
+    dict[str, object] | None
+        Canonical payload on success, or ``None`` when enrichment is unavailable.
+    """
+    return _run_rust_enrichment_pipeline(cast("_RustPipelineRequestV1", request))
 
 
 # ---------------------------------------------------------------------------
@@ -1202,8 +1279,12 @@ __all__ = [
     "RustLaneEnrichmentSettingsV1",
     "RustLaneRuntimeDepsV1",
     "clear_tree_sitter_rust_cache",
+    "collect_payload_with_timings",
+    "collect_query_pack_captures",
+    "collect_query_pack_payload",
     "enrich_rust_context",
     "enrich_rust_context_by_byte_range",
     "get_tree_sitter_rust_cache_stats",
     "is_tree_sitter_rust_available",
+    "run_rust_enrichment_pipeline",
 ]

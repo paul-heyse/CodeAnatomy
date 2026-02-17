@@ -19,7 +19,7 @@ from tools.cq.search._shared.timeouts import search_sync_with_timeout
 from tools.cq.search._shared.types import QueryMode, SearchLimits
 from tools.cq.search.rg.codec import as_match_data, match_line_number, match_line_text, match_path
 from tools.cq.search.rg.contracts import RgRunSettingsV1
-from tools.cq.search.rg.runner import RgProcessResult, run_rg_json, run_with_settings
+from tools.cq.search.rg.runner import RgProcessResultV1, run_rg_json, run_with_settings
 
 _DEF_LINE_PATTERN = r"^\s*(def |async def |class |fn |pub fn |struct |enum |trait |impl )"
 
@@ -236,7 +236,7 @@ def _run_call_candidate_search(
     mode: QueryMode,
     limits: SearchLimits,
     lang_scope: QueryLanguageScope,
-) -> RgProcessResult:
+) -> RgProcessResultV1:
     return search_sync_with_timeout(
         run_rg_json,
         limits.timeout_seconds,
@@ -255,7 +255,7 @@ def _run_call_candidate_search(
 
 
 def _collect_call_candidate_rows(
-    proc: RgProcessResult,
+    proc: RgProcessResultV1,
     *,
     root: Path,
     call_pattern: re.Pattern[str],

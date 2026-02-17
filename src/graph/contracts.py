@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import msgspec
 
+from planning_engine.spec_contracts import RuntimeConfig
+
 
 class OrchestrateBuildRequestV1(msgspec.Struct, frozen=True):
     """Request envelope for top-level build orchestration."""
@@ -13,7 +15,7 @@ class OrchestrateBuildRequestV1(msgspec.Struct, frozen=True):
     output_dir: str
     engine_profile: str = "medium"
     rulepack_profile: str = "default"
-    runtime_config: object | None = None
+    runtime_config: RuntimeConfig | None = None
     extraction_config: dict[str, object] | None = None
     include_errors: bool = True
     include_manifest: bool = True

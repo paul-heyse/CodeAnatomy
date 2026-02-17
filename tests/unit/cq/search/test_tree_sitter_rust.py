@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Sized
+
 import pytest
 from tools.cq.search.cache.registry import CACHE_REGISTRY
+from tools.cq.search.tree_sitter.core.runtime_context import get_default_context
 from tools.cq.search.tree_sitter.rust_lane import runtime as tree_sitter_rust
 from tools.cq.search.tree_sitter.rust_lane import runtime_core as tree_sitter_rust_core
 from tools.cq.search.tree_sitter.rust_lane.enrichment_extractors import _MAX_FIELDS_SHOWN
 from tools.cq.search.tree_sitter.rust_lane.runtime import MAX_SOURCE_BYTES
-from tools.cq.search.tree_sitter.rust_lane.runtime_cache import (
-    _MAX_TREE_CACHE_ENTRIES,
-    _TREE_CACHE,
-)
 
 _RUST_SAMPLE = 'mod outer {\n    fn build_graph() {\n        println!("hello");\n    }\n}\n'
 
@@ -480,17 +479,22 @@ def test_cache_staleness() -> None:
 
 @_ts_available
 def test_cache_bounded() -> None:
-    """Cache should not grow beyond _MAX_TREE_CACHE_ENTRIES."""
+    """Cache should evict entries once it exceeds internal capacity."""
     CACHE_REGISTRY.clear_all("rust")
-    limit = _MAX_TREE_CACHE_ENTRIES
 
-    for i in range(limit + 20):
+    inserted = 260
+    for i in range(inserted):
         source = f"fn func_{i}() {{}}\n"
         tree_sitter_rust.enrich_rust_context(source, line=1, col=3, cache_key=f"bounded-{i}")
 
-    cache_size = len(_TREE_CACHE)
-    assert cache_size <= limit
-    assert tree_sitter_rust.get_tree_sitter_rust_cache_stats()["cache_evictions"] > 0
+    runtime_context = get_default_context()
+    cache = runtime_context.rust_tree_cache
+    assert cache is not None
+    assert isinstance(cache, Sized)
+    assert len(cache) < inserted
+
+    stats = tree_sitter_rust.get_tree_sitter_rust_cache_stats()
+    assert stats["cache_evictions"] > 0
 
 
 @_ts_available

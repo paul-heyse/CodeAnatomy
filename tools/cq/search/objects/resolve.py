@@ -10,6 +10,11 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from tools.cq.core.id import stable_digest24
+from tools.cq.search._shared.enrichment_contracts import (
+    incremental_enrichment_payload,
+    python_enrichment_payload,
+    rust_enrichment_payload,
+)
 from tools.cq.search.enrichment.core import parse_python_enrichment
 from tools.cq.search.objects.payload_views import (
     EnrichmentPayloadView,
@@ -24,11 +29,6 @@ from tools.cq.search.objects.render import (
     SearchOccurrenceV1,
 )
 from tools.cq.search.pipeline.context_window import ContextWindow
-from tools.cq.search.pipeline.enrichment_contracts import (
-    incremental_enrichment_payload,
-    python_enrichment_payload,
-    rust_enrichment_payload,
-)
 
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.smart_search_types import EnrichedMatch

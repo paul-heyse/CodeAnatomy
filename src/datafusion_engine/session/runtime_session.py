@@ -11,18 +11,19 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 from datafusion import DataFrame, SessionContext, SQLOptions
 
+from datafusion_engine.schema.introspection_common import read_only_sql_options
 from datafusion_engine.schema.introspection_core import SchemaIntrospector
+from datafusion_engine.schema.introspection_routines import _introspection_cache_for_ctx
 from datafusion_engine.session._session_caches import (
     RUNTIME_SETTINGS_OVERLAY,
     SESSION_RUNTIME_CACHE,
 )
-from datafusion_engine.sql.options import planning_sql_options, sql_options_for_profile
+from datafusion_engine.sql.options import sql_options_for_profile
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from storage.ipc_utils import payload_hash
 from utils.registry_protocol import Registry
 
 if TYPE_CHECKING:
-    from datafusion_engine.catalog.introspection import IntrospectionCache
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
@@ -219,17 +220,13 @@ def _merge_runtime_settings_rows(
     return rows
 
 
-def build_session_runtime(
-    profile: DataFusionRuntimeProfile, *, use_cache: bool = True
-) -> SessionRuntime:
+def build_session_runtime(profile: DataFusionRuntimeProfile) -> SessionRuntime:
     """Build and cache a planning-ready SessionRuntime for a profile.
 
     Parameters
     ----------
     profile
         DataFusion runtime profile to materialize.
-    use_cache
-        When ``True``, cache the runtime by the profile cache key.
 
     Returns:
     -------
@@ -241,7 +238,7 @@ def build_session_runtime(
     cached = cached_obj if isinstance(cached_obj, SessionRuntime) else None
     ctx = profile.session_context()
     # Guard against cache-key collisions across profile variants.
-    if cached is not None and use_cache and cached.profile == profile and cached.ctx is ctx:
+    if cached is not None and cached.profile == profile and cached.ctx is ctx:
         return cached
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
     from datafusion_engine.udf.extension_core import rust_udf_snapshot, rust_udf_snapshot_hash
@@ -267,8 +264,7 @@ def build_session_runtime(
         udf_snapshot=snapshot,
         df_settings=df_settings,
     )
-    if use_cache:
-        SESSION_RUNTIME_CACHE[cache_key] = runtime
+    SESSION_RUNTIME_CACHE[cache_key] = runtime
     return runtime
 
 
@@ -370,10 +366,6 @@ def session_runtime_for_context(
 # ---------------------------------------------------------------------------
 
 
-def _read_only_sql_options() -> SQLOptions:
-    return planning_sql_options(None)
-
-
 def _is_sql_options_type_mismatch(exc: TypeError) -> bool:
     message = str(exc)
     return "cannot be converted to 'SQLOptions'" in message
@@ -387,7 +379,7 @@ def _sql_with_options(
     allow_statements: bool | None = None,
 ) -> DataFrame:
 
-    resolved_sql_options = sql_options or _read_only_sql_options()
+    resolved_sql_options = sql_options or read_only_sql_options()
     if allow_statements:
         allow_statements_flag = True
         resolved_sql_options = resolved_sql_options.with_allow_statements(allow_statements_flag)
@@ -414,16 +406,6 @@ def _sql_with_options(
 # ---------------------------------------------------------------------------
 # Snapshot functions
 # ---------------------------------------------------------------------------
-
-
-def _introspection_cache_for_ctx(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None,
-) -> IntrospectionCache:
-    from datafusion_engine.catalog.introspection import introspection_cache_for_ctx
-
-    return introspection_cache_for_ctx(ctx, sql_options=sql_options)
 
 
 def settings_snapshot_for_profile(

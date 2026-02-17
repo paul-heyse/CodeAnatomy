@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from tools.cq.search.objects.render import SearchObjectResolvedViewV1
-
-# Module-level registry for storing object views by run_id
-_SEARCH_OBJECT_VIEW_REGISTRY: dict[str, SearchObjectResolvedViewV1] = {}
+from tools.cq.search.pipeline.object_view_registry import (
+    get_default_search_object_view_registry,
+)
 
 
 def register_search_object_view(
@@ -24,7 +24,7 @@ def register_search_object_view(
     """
     if not isinstance(run_id, str) or not run_id:
         return
-    _SEARCH_OBJECT_VIEW_REGISTRY[run_id] = view
+    get_default_search_object_view_registry().register(run_id, view)
 
 
 def pop_search_object_view_for_run(run_id: str | None) -> SearchObjectResolvedViewV1 | None:
@@ -42,10 +42,16 @@ def pop_search_object_view_for_run(run_id: str | None) -> SearchObjectResolvedVi
     """
     if not isinstance(run_id, str) or not run_id:
         return None
-    return _SEARCH_OBJECT_VIEW_REGISTRY.pop(run_id, None)
+    return get_default_search_object_view_registry().pop(run_id)
+
+
+def clear_search_object_views() -> None:
+    """Clear all run-scoped object views from default registry."""
+    get_default_search_object_view_registry().clear()
 
 
 __all__ = [
+    "clear_search_object_views",
     "pop_search_object_view_for_run",
     "register_search_object_view",
 ]

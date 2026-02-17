@@ -102,9 +102,6 @@ def resolve_cache_policy_hierarchy(
 
 
 __all__ = [
-    "_cache_policy_for",
-    "_normalize_cache_policy",
-    "_resolve_cache_policy_hierarchy",
     "cache_policy_for",
     "normalize_cache_policy",
     "resolve_cache_policy_hierarchy",

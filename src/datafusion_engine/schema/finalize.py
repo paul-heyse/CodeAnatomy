@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -47,6 +48,9 @@ from schema_spec.specs import TableSchemaSpec
 if TYPE_CHECKING:
     from datafusion_engine.schema.policy import SchemaPolicy
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 type InvariantFn = Callable[[TableLike], tuple[ArrayLike, str]]
@@ -756,6 +760,16 @@ def finalize(
         Finalized table bundle.
     """
     options = options or FinalizeOptions()
+    input_rows = int(getattr(table, "num_rows", 0))
+    _LOGGER.debug(
+        "schema.finalize.start",
+        extra={
+            "contract": contract.name,
+            "input_rows": input_rows,
+            "mode": options.mode,
+            "determinism_tier": str(options.determinism_tier),
+        },
+    )
     schema_policy = _resolve_schema_policy(contract, schema_policy=options.schema_policy)
     schema = schema_policy.resolved_schema()
     aligned, align_info = schema_policy.apply_with_info(table)
@@ -814,7 +828,7 @@ def finalize(
         good = good.select(keep)
     elif good.column_names != schema.names:
         good = good.select(schema.names)
-    return FinalizeResult(
+    result = FinalizeResult(
         good=good,
         errors=errors,
         stats=_build_stats_table(raw_errors, error_spec=options.error_spec),
@@ -822,6 +836,16 @@ def finalize(
             contract, align_info, good_rows=good.num_rows, error_rows=errors.num_rows
         ),
     )
+    _LOGGER.debug(
+        "schema.finalize.complete",
+        extra={
+            "contract": contract.name,
+            "input_rows": input_rows,
+            "good_rows": result.good.num_rows,
+            "error_rows": result.errors.num_rows,
+        },
+    )
+    return result
 
 
 def normalize_only(

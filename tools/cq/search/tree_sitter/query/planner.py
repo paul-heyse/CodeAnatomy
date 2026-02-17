@@ -10,34 +10,12 @@ from tools.cq.search.tree_sitter.contracts.query_models import (
     QueryPackPlanV1,
     QueryPatternPlanV1,
 )
+from tools.cq.search.tree_sitter.core.language_registry import extract_provenance
 
 if TYPE_CHECKING:
     from tree_sitter import Query
 
-from tools.cq.search.tree_sitter.core.language_registry import normalize_semantic_version
-
 _MIN_ASSERTION_TUPLE_SIZE = 2
-
-
-def _extract_provenance(
-    *,
-    language_obj: object | None,
-) -> tuple[str | None, tuple[int, int, int] | None, int | None]:
-    if language_obj is None:
-        return None, None, None
-    grammar_name = getattr(language_obj, "name", None)
-    semantic_version = normalize_semantic_version(getattr(language_obj, "semantic_version", None))
-    abi_version_raw = getattr(language_obj, "abi_version", None)
-    abi_version = (
-        int(abi_version_raw)
-        if isinstance(abi_version_raw, int) and not isinstance(abi_version_raw, bool)
-        else None
-    )
-    return (
-        grammar_name if isinstance(grammar_name, str) and grammar_name else None,
-        semantic_version,
-        abi_version,
-    )
 
 
 def _capture_quantifier_name(query: Query, pattern_idx: int, capture_idx: int) -> str:
@@ -144,7 +122,7 @@ def build_pack_plan(
         from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
 
         language_obj = load_tree_sitter_language(language)
-    grammar_name, semantic_version, abi_version = _extract_provenance(language_obj=language_obj)
+    grammar_name, semantic_version, abi_version = extract_provenance(language_obj)
     return QueryPackPlanV1(
         pack_name=pack_name,
         query_hash=digest,

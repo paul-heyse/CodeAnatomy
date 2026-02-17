@@ -32,6 +32,7 @@ from tools.cq.core.summary_contract import (
     apply_summary_mapping,
     as_search_summary,
 )
+from tools.cq.core.summary_update_contracts import EntitySummaryUpdateV1
 from tools.cq.core.types import (
     QueryLanguage,
     QueryLanguageScope,
@@ -73,7 +74,7 @@ from tools.cq.query.executor_definitions import (
     process_import_query as _process_import_query,
 )
 from tools.cq.query.finding_builders import (
-    apply_call_evidence as _apply_call_evidence,
+    build_call_evidence as _build_call_evidence,
 )
 from tools.cq.query.finding_builders import (
     build_def_evidence_map as _build_def_evidence_map,
@@ -167,6 +168,7 @@ class ExecutePlanRequestV1(CqStruct, frozen=True):
     query: Query
     root: str
     services: CqRuntimeServices
+    symtable_enricher: SymtableEnricher
     argv: tuple[str, ...] = ()
     query_text: str | None = None
     run_id: str | None = None
@@ -181,6 +183,7 @@ class _AutoScopePlanRequest:
     query_text: str | None
     run_id: str
     services: CqRuntimeServices
+    symtable_enricher: SymtableEnricher
 
 
 def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
@@ -197,6 +200,10 @@ def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
         summary=apply_summary_mapping(result.summary, _summary_common_for_context(ctx)),
     )
     return assign_result_finding_ids(_finalize_single_scope_summary(ctx, result))
+
+
+def _resolve_symtable_enricher(ctx: QueryExecutionContext) -> SymtableEnricher:
+    return ctx.symtable_enricher
 
 
 def _resolve_entity_paths(
@@ -339,8 +346,8 @@ def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState 
 def _apply_entity_handlers(
     state: EntityExecutionState,
     *,
-    symtable: SymtableEnricher | None = None,
-) -> tuple[list[Finding], list[Section], dict[str, object]]:
+    symtable: SymtableEnricher,
+) -> tuple[list[Finding], list[Section], EntitySummaryUpdateV1]:
     query = state.ctx.query
     root = state.ctx.root
     candidates = state.candidates
@@ -351,7 +358,6 @@ def _apply_entity_handlers(
             list(candidates.import_records),
             query,
             temp_result,
-            root,
             symtable=symtable,
         )
         return (
@@ -360,7 +366,7 @@ def _apply_entity_handlers(
             _entity_summary_updates(temp_result),
         )
     if query.entity == "decorator":
-        findings, summary_updates = _process_decorator_query(
+        findings, summary_updates = process_decorator_query(
             state.scan,
             query,
             root,
@@ -368,7 +374,7 @@ def _apply_entity_handlers(
         )
         return findings, [], summary_updates
     if query.entity == "callsite":
-        findings, summary_updates = _process_call_query(state.scan, query, root)
+        findings, summary_updates = process_call_query(state.scan, query, root)
         return findings, [], summary_updates
 
     temp_result = mk_result(_build_runmeta(state.ctx))
@@ -381,14 +387,14 @@ def _apply_entity_handlers(
     )
 
 
-def _entity_summary_updates(result: CqResult) -> dict[str, object]:
+def _entity_summary_updates(result: CqResult) -> EntitySummaryUpdateV1:
     summary = as_search_summary(result.summary)
-    return {
-        "matches": summary.matches,
-        "total_defs": summary.total_defs,
-        "total_calls": summary.total_calls,
-        "total_imports": summary.total_imports,
-    }
+    return EntitySummaryUpdateV1(
+        matches=summary.matches,
+        total_defs=summary.total_defs,
+        total_calls=summary.total_calls,
+        total_imports=summary.total_imports,
+    )
 
 
 def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> CqResult:
@@ -485,6 +491,7 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
                 query_text=request.query_text,
                 run_id=active_run_id,
                 services=services,
+                symtable_enricher=request.symtable_enricher,
             )
         )
 
@@ -497,6 +504,7 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
         started_ms=ms(),
         run_id=active_run_id,
         services=services,
+        symtable_enricher=request.symtable_enricher,
         query_text=request.query_text,
     )
     result = _execute_single_context(ctx)
@@ -505,8 +513,8 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
 
 
 def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
-    from tools.cq.query.executor_entity import execute_entity_query
-    from tools.cq.query.executor_pattern import execute_pattern_query
+    from tools.cq.query.executor_entity_impl import execute_entity_query
+    from tools.cq.query.executor_pattern_impl import execute_pattern_query
 
     if ctx.plan.is_pattern_query:
         logger.debug("Dispatching pattern query execution for lang=%s", ctx.plan.lang)
@@ -564,6 +572,7 @@ def _run_scoped_auto_query(*, request: _AutoScopePlanRequest, lang: QueryLanguag
         started_ms=ms(),
         run_id=request.run_id,
         services=request.services,
+        symtable_enricher=request.symtable_enricher,
     )
     return _execute_single_context(scoped_ctx)
 
@@ -591,21 +600,33 @@ def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     -------
     CqResult
         Query result with findings and summary metadata.
+
+    Raises:
+        ValueError: If called with a pattern-query execution plan.
     """
-    assert not ctx.plan.is_pattern_query, (
-        "execute_entity_query called with a pattern query plan; use execute_pattern_query instead"
-    )
+    if ctx.plan.is_pattern_query:
+        msg = "execute_entity_query called with a pattern query plan; use execute_pattern_query instead"
+        raise ValueError(msg)
     state = _prepare_entity_state(ctx)
     if isinstance(state, CqResult):
         return state
 
     result = mk_result(_build_runmeta(ctx))
     summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    findings, sections, summary_updates = _apply_entity_handlers(state)
+    findings, sections, summary_updates = _apply_entity_handlers(
+        state,
+        symtable=ctx.symtable_enricher,
+    )
+    summary_mapping_raw = msgspec.to_builtins(summary_updates, order="deterministic")
+    summary_mapping: dict[str, object]
+    if not isinstance(summary_mapping_raw, dict):
+        summary_mapping = {}
+    else:
+        summary_mapping = {str(key): value for key, value in summary_mapping_raw.items()}
     summary = apply_summary_mapping(
         summary,
         {
-            **summary_updates,
+            **summary_mapping,
             "files_scanned": len({r.file for r in state.records}),
         },
     )
@@ -643,6 +664,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         run_id=request.run_id or uuid7_str(),
         services=request.services,
         query_text=request.query_text,
+        symtable_enricher=request.symtable,
     )
     scan_ctx = _build_scan_context(request.records)
     candidates = _build_entity_candidates(scan_ctx, request.records)
@@ -664,10 +686,16 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     result = mk_result(_build_runmeta(ctx))
     summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
     findings, sections, summary_updates = _apply_entity_handlers(state, symtable=request.symtable)
+    summary_mapping_raw = msgspec.to_builtins(summary_updates, order="deterministic")
+    summary_mapping: dict[str, object]
+    if not isinstance(summary_mapping_raw, dict):
+        summary_mapping = {}
+    else:
+        summary_mapping = {str(key): value for key, value in summary_mapping_raw.items()}
     summary = apply_summary_mapping(
         summary,
         {
-            **summary_updates,
+            **summary_mapping,
             "files_scanned": len({r.file for r in state.records}),
         },
     )
@@ -694,10 +722,13 @@ def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     -------
     CqResult
         Query result with findings and summary metadata.
+
+    Raises:
+        ValueError: If called with an entity-query execution plan.
     """
-    assert ctx.plan.is_pattern_query, (
-        "execute_pattern_query called with an entity query plan; use execute_entity_query instead"
-    )
+    if not ctx.plan.is_pattern_query:
+        msg = "execute_pattern_query called with an entity query plan; use execute_entity_query instead"
+        raise ValueError(msg)
     state = _prepare_pattern_state(ctx)
     if isinstance(state, CqResult):
         return state
@@ -716,7 +747,7 @@ def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     key_findings = list(findings)
 
     if state.ctx.query.scope_filter and findings:
-        enricher = SymtableEnricher(state.ctx.root)
+        enricher = _resolve_symtable_enricher(state.ctx)
         key_findings = filter_by_scope(
             key_findings,
             state.ctx.query.scope_filter,
@@ -765,6 +796,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
         started_ms=ms(),
         run_id=request.run_id or uuid7_str(),
         services=request.services,
+        symtable_enricher=request.symtable,
         query_text=request.query_text,
     )
     if not request.files:
@@ -796,7 +828,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     key_findings = list(findings)
 
     if state.ctx.query.scope_filter and findings:
-        enricher = SymtableEnricher(state.ctx.root)
+        enricher = _resolve_symtable_enricher(state.ctx)
         key_findings = filter_by_scope(
             key_findings,
             state.ctx.query.scope_filter,
@@ -828,12 +860,12 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     return assign_result_finding_ids(result)
 
 
-def _process_decorator_query(
+def process_decorator_query(
     ctx: ScanContext,
     query: Query,
     root: Path,
     def_candidates: list[SgRecord] | tuple[SgRecord, ...] | None = None,
-) -> tuple[list[Finding], dict[str, object]]:
+) -> tuple[list[Finding], EntitySummaryUpdateV1]:
     """Process a decorator entity query.
 
     Returns:
@@ -906,17 +938,19 @@ def _process_decorator_query(
             finding = msgspec.structs.replace(finding, details=details)
             findings.append(finding)
 
-    return findings, {
-        "total_defs": len(ctx.def_records),
-        "matches": len(findings),
-    }
+    return findings, EntitySummaryUpdateV1(
+        matches=len(findings),
+        total_defs=len(ctx.def_records),
+        total_calls=0,
+        total_imports=0,
+    )
 
 
-def _process_call_query(
+def process_call_query(
     ctx: ScanContext,
     query: Query,
     root: Path,
-) -> tuple[list[Finding], dict[str, object]]:
+) -> tuple[list[Finding], EntitySummaryUpdateV1]:
     """Process a callsite entity query.
 
     Returns:
@@ -939,14 +973,16 @@ def _process_call_query(
             caller_name = extract_def_name(containing) or "<module>"
             details["caller"] = caller_name
             evidence = evidence_map.get(_record_key(containing))
-            _apply_call_evidence(details, evidence, call_target)
+            details.update(_build_call_evidence(evidence, call_target))
         finding = _call_to_finding(call_record, extra_details=details)
         findings.append(finding)
 
-    return findings, {
-        "total_calls": len(ctx.call_records),
-        "matches": len(findings),
-    }
+    return findings, EntitySummaryUpdateV1(
+        matches=len(findings),
+        total_defs=0,
+        total_calls=len(ctx.call_records),
+        total_imports=0,
+    )
 
 
 def rg_files_with_matches(
@@ -996,5 +1032,7 @@ __all__ = [
     "execute_entity_query_from_records",
     "execute_pattern_query_with_files",
     "execute_plan",
+    "process_call_query",
+    "process_decorator_query",
     "rg_files_with_matches",
 ]

@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tools.cq.search._shared.enrichment_contracts import IncrementalEnrichmentModeV1
 from tools.cq.search.enrichment.incremental_provider import (
     IncrementalAnchorRequestV1,
     enrich_incremental_anchor,
 )
-from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
 
 
 @pytest.mark.parametrize(

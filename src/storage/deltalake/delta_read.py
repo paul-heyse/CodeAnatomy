@@ -1,7 +1,4 @@
 """Delta Lake read/write helpers for Arrow tables."""
-# NOTE(size-exception): This module is temporarily >800 LOC during hard-cutover
-# decomposition. Remaining extraction and contraction work is tracked in
-# docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
 
 from __future__ import annotations
 
@@ -35,7 +32,7 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.control_plane_core import (
         DeltaMergeRequest,
     )
-    from datafusion_engine.delta.protocol import DeltaFeatureGate
+    from datafusion_engine.delta.shared_types import DeltaFeatureGate
     from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
@@ -315,17 +312,6 @@ class DeltaMergeArrowRequest:
 
 
 @dataclass(frozen=True)
-class _DeltaMergeFallbackInput:
-    source: TableLike | RecordBatchReaderLike
-    request: DeltaMergeArrowRequest
-    storage_options: StorageOptions | None
-    source_alias: str
-    target_alias: str
-    matched_updates: Mapping[str, str]
-    not_matched_inserts: Mapping[str, str]
-
-
-@dataclass(frozen=True)
 class _DeltaMergeExecutionState:
     ctx: SessionContext
     request: DeltaMergeArrowRequest
@@ -400,7 +386,7 @@ def delta_table_version(
     Raises:
         DataFusionEngineError: If the operation cannot be completed.
     """
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="metadata",
         table_path=path,
         extra={"codeanatomy.metadata_kind": "version"},
@@ -461,7 +447,7 @@ def read_delta_table(request: DeltaReadRequest) -> RecordBatchReaderLike:
     if request.version is not None and request.timestamp is not None:
         msg = "Delta read request must set either version or timestamp, not both."
         raise ValueError(msg)
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="read",
         table_path=request.path,
         extra={
@@ -503,7 +489,7 @@ def read_delta_table(request: DeltaReadRequest) -> RecordBatchReaderLike:
             )
             return cast("RecordBatchReaderLike", to_reader(table_data))
 
-        profile = _runtime_profile_for_delta(request.runtime_profile)
+        profile = runtime_profile_for_delta(request.runtime_profile)
         ctx = profile.session_context()
         from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
         from datafusion_engine.dataset.resolution import (
@@ -675,14 +661,14 @@ def read_delta_cdf_eager(
 
 
 from storage.deltalake.delta_runtime_ops import (
-    _runtime_profile_for_delta,
-    _storage_span_attributes,
     delta_cdf_enabled,
     delta_commit_metadata,
     delta_history_snapshot,
     delta_protocol_snapshot,
     delta_table_features,
     read_delta_cdf,
+    runtime_profile_for_delta,
+    storage_span_attributes,
 )
 
 __all__ = [

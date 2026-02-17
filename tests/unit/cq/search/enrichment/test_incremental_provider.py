@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tools.cq.search._shared.enrichment_contracts import (
+    incremental_enrichment_payload,
+    parse_incremental_enrichment_mode,
+)
 from tools.cq.search.enrichment.incremental_provider import (
     IncrementalAnchorRequestV1,
     enrich_incremental_anchor,
-)
-from tools.cq.search.pipeline.enrichment_contracts import (
-    incremental_enrichment_payload,
-    parse_incremental_enrichment_mode,
 )
 
 

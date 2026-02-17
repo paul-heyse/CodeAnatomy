@@ -56,7 +56,7 @@ def _result_with_diagnostics() -> CqResult:
         sections=(
             Section(
                 title="Definitions",
-                findings=[Finding(category="definition", message="function: target")],
+                findings=(Finding(category="definition", message="function: target"),),
             ),
         ),
     )

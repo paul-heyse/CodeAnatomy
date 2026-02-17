@@ -10,6 +10,6 @@ def test_runtime_for_profile_returns_session_runtime() -> None:
     """runtime_for_profile returns runtime bound to the input profile."""
     profile = DataFusionRuntimeProfile()
 
-    runtime = runtime_for_profile(profile, use_cache=False)
+    runtime = runtime_for_profile(profile)
 
     assert runtime.profile is profile

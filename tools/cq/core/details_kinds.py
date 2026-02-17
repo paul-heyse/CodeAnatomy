@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import msgspec
 
 from tools.cq.core.structs import CqStruct
@@ -16,7 +18,7 @@ class KindSpec(CqStruct, frozen=True):
     preview_keys: tuple[str, ...] = msgspec.field(default_factory=tuple)
 
 
-DETAILS_KIND_REGISTRY: dict[str, KindSpec] = {
+_DETAILS_KIND_REGISTRY_MUTABLE: dict[str, KindSpec] = {
     "sym.scope_graph": KindSpec(kind="sym.scope_graph", rank=100, preview_keys=("tables_count",)),
     "sym.partitions": KindSpec(kind="sym.partitions", rank=110, preview_keys=("partition_keys",)),
     "sym.binding_resolve": KindSpec(
@@ -41,6 +43,7 @@ DETAILS_KIND_REGISTRY: dict[str, KindSpec] = {
         preview_keys=("bind_ok",),
     ),
 }
+DETAILS_KIND_REGISTRY = MappingProxyType(_DETAILS_KIND_REGISTRY_MUTABLE)
 
 
 def resolve_kind(kind: str) -> KindSpec | None:

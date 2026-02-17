@@ -1,147 +1,237 @@
-"""PyArrow type coercion utilities."""
+"""Arrow coercion helpers for tables, schemas, and record-batch readers."""
 
 from __future__ import annotations
 
-import pyarrow as pa
+from collections.abc import Sequence
+from typing import cast
 
-from datafusion_engine.arrow.interop import RecordBatchReaderLike, coerce_table_like
+import pyarrow as pa
+import pyarrow.types as patypes
+
+from datafusion_engine.arrow.interop import RecordBatchReader, RecordBatchReaderLike
 
 
 def storage_type(data_type: pa.DataType) -> pa.DataType:
-    """Recursively unwrap ExtensionType to storage type.
-
-    Parameters
-    ----------
-    data_type
-        PyArrow data type, possibly containing ExtensionTypes.
+    """Normalize an Arrow type to its storage-safe equivalent.
 
     Returns:
     -------
-    pa.DataType
-        The underlying storage type with ExtensionTypes unwrapped.
+    pyarrow.DataType
+        Storage-compatible Arrow type.
     """
-    resolved = data_type
     if isinstance(data_type, pa.ExtensionType):
-        resolved = storage_type(data_type.storage_type)
-    elif pa.types.is_string_view(data_type):
-        resolved = pa.string()
-    elif pa.types.is_binary_view(data_type):
-        resolved = pa.binary()
-    elif pa.types.is_struct(data_type):
-        fields = [
-            pa.field(field.name, storage_type(field.type), field.nullable, field.metadata)
-            for field in data_type
-        ]
-        resolved = pa.struct(fields)
-    elif pa.types.is_list(data_type) or pa.types.is_list_view(data_type):
-        value_field = data_type.value_field
-        value_type = storage_type(value_field.type)
-        resolved = pa.list_(
-            pa.field(
-                value_field.name,
-                value_type,
-                value_field.nullable,
-                value_field.metadata,
-            )
+        return storage_type(data_type.storage_type)
+    result: pa.DataType = data_type
+    if patypes.is_string_view(data_type):
+        result = pa.string()
+    elif patypes.is_binary_view(data_type):
+        result = pa.binary()
+    elif patypes.is_list_view(data_type):
+        value_field = pa.field(
+            data_type.value_field.name,
+            storage_type(data_type.value_field.type),
+            nullable=data_type.value_field.nullable,
+            metadata=data_type.value_field.metadata,
         )
-    elif pa.types.is_large_list(data_type) or pa.types.is_large_list_view(data_type):
-        value_field = data_type.value_field
-        value_type = storage_type(value_field.type)
-        resolved = pa.large_list(
-            pa.field(
-                value_field.name,
-                value_type,
-                value_field.nullable,
-                value_field.metadata,
-            )
+        result = pa.list_(value_field)
+    elif patypes.is_large_list_view(data_type):
+        value_field = pa.field(
+            data_type.value_field.name,
+            storage_type(data_type.value_field.type),
+            nullable=data_type.value_field.nullable,
+            metadata=data_type.value_field.metadata,
         )
-    elif pa.types.is_map(data_type):
-        resolved = pa.map_(
-            storage_type(data_type.key_type),
-            storage_type(data_type.item_type),
-            keys_sorted=data_type.keys_sorted,
+        result = pa.large_list(value_field)
+    elif patypes.is_struct(data_type):
+        result = pa.struct(
+            [
+                pa.field(
+                    field.name,
+                    storage_type(field.type),
+                    nullable=field.nullable,
+                    metadata=field.metadata,
+                )
+                for field in data_type
+            ]
         )
-    return resolved
+    elif patypes.is_list(data_type):
+        value_field = pa.field(
+            data_type.value_field.name,
+            storage_type(data_type.value_field.type),
+            nullable=data_type.value_field.nullable,
+            metadata=data_type.value_field.metadata,
+        )
+        result = pa.list_(value_field)
+    elif patypes.is_large_list(data_type):
+        value_field = pa.field(
+            data_type.value_field.name,
+            storage_type(data_type.value_field.type),
+            nullable=data_type.value_field.nullable,
+            metadata=data_type.value_field.metadata,
+        )
+        result = pa.large_list(value_field)
+    elif patypes.is_map(data_type):
+        key_field = pa.field(
+            data_type.key_field.name,
+            storage_type(data_type.key_field.type),
+            nullable=data_type.key_field.nullable,
+            metadata=data_type.key_field.metadata,
+        )
+        item_field = pa.field(
+            data_type.item_field.name,
+            storage_type(data_type.item_field.type),
+            nullable=data_type.item_field.nullable,
+            metadata=data_type.item_field.metadata,
+        )
+        result = pa.map_(key_field, item_field, keys_sorted=data_type.keys_sorted)
+    return result
 
 
 def storage_schema(schema: pa.Schema) -> pa.Schema:
-    """Convert schema to storage representation.
-
-    Parameters
-    ----------
-    schema
-        PyArrow schema, possibly containing ExtensionTypes.
-
-    Returns:
-    -------
-    pa.Schema
-        Schema with all ExtensionTypes unwrapped to storage types.
-    """
+    """Return schema with all fields normalized to storage-safe Arrow types."""
     fields = [
-        pa.field(field.name, storage_type(field.type), field.nullable, field.metadata)
+        pa.field(
+            field.name,
+            storage_type(field.type),
+            nullable=field.nullable,
+            metadata=field.metadata,
+        )
         for field in schema
     ]
     return pa.schema(fields, metadata=schema.metadata)
 
 
 def coerce_table_to_storage(table: pa.Table) -> pa.Table:
-    """Coerce table to use storage types only.
-
-    Parameters
-    ----------
-    table
-        PyArrow table, possibly containing ExtensionTypes.
+    """Cast a table to its storage-safe schema when needed.
 
     Returns:
     -------
-    pa.Table
-        Table with all columns cast to storage types.
+    pyarrow.Table
+        Table using storage-compatible schema types.
     """
-    target_schema = storage_schema(table.schema)
-    if table.schema.equals(target_schema):
+    target = storage_schema(table.schema)
+    if table.schema == target:
         return table
-    return table.cast(target_schema)
+    return table.cast(target)
+
+
+def coerce_to_recordbatch_reader(value: object) -> RecordBatchReaderLike | None:
+    """Coerce value to a ``RecordBatchReaderLike`` when possible.
+
+    Returns:
+    -------
+    RecordBatchReaderLike | None
+        Reader-like value when coercion succeeds, otherwise ``None``.
+    """
+    if value is None:
+        return None
+    resolved: RecordBatchReaderLike | None = None
+    if isinstance(value, RecordBatchReader):
+        resolved = value
+    elif isinstance(value, pa.RecordBatch):
+        record_batch = cast("pa.RecordBatch", value)
+        resolved = cast(
+            "RecordBatchReaderLike",
+            pa.RecordBatchReader.from_batches(record_batch.schema, [record_batch]),
+        )
+    else:
+        schema = getattr(value, "schema", None)
+        to_batches = getattr(value, "to_batches", None)
+        if schema is not None and callable(to_batches):
+            resolved = cast(
+                "RecordBatchReaderLike",
+                pa.RecordBatchReader.from_batches(schema, to_batches()),
+            )
+        elif isinstance(value, Sequence):
+            batches = [batch for batch in value if isinstance(batch, pa.RecordBatch)]
+            if batches:
+                resolved = cast(
+                    "RecordBatchReaderLike",
+                    pa.RecordBatchReader.from_batches(batches[0].schema, batches),
+                )
+    return resolved
+
+
+def _table_from_record_batch_sequence(value: object) -> pa.Table | None:
+    if not isinstance(value, Sequence):
+        return None
+    batches = [batch for batch in value if isinstance(batch, pa.RecordBatch)]
+    if not batches:
+        return None
+    return pa.Table.from_batches(batches, schema=batches[0].schema)
+
+
+def _table_from_to_arrow_table(value: object) -> pa.Table | None:
+    to_arrow_table_fn = getattr(value, "to_arrow_table", None)
+    if not callable(to_arrow_table_fn):
+        return None
+    resolved = to_arrow_table_fn()
+    if isinstance(resolved, pa.Table):
+        return resolved
+    return None
+
+
+def _table_from_batches(value: object) -> pa.Table | None:
+    to_batches = getattr(value, "to_batches", None)
+    schema = getattr(value, "schema", None)
+    if not callable(to_batches) or not isinstance(schema, pa.Schema):
+        return None
+    batches = to_batches()
+    if not isinstance(batches, Sequence):
+        return None
+    resolved_batches = [batch for batch in batches if isinstance(batch, pa.RecordBatch)]
+    if resolved_batches:
+        return pa.Table.from_batches(resolved_batches, schema=schema)
+    return pa.Table.from_pylist([], schema=schema)
 
 
 def to_arrow_table(value: object) -> pa.Table:
-    """Convert various Arrow-like inputs to a Table.
-
-    Parameters
-    ----------
-    value
-        Table-like input or RecordBatchReader-like input.
+    """Coerce supported DataFusion/Arrow values to ``pyarrow.Table``.
 
     Returns:
     -------
-    pa.Table
-        Converted table.
-    """
-    resolved = coerce_table_like(value, requested_schema=None)
-    if isinstance(resolved, RecordBatchReaderLike):
-        return resolved.read_all()
-    if isinstance(resolved, pa.Table):
-        return resolved
-    return pa.Table.from_pydict(resolved.to_pydict())
-
-
-def ensure_arrow_table(value: object, *, label: str = "input") -> pa.Table:
-    """Convert table-like input into a PyArrow table.
-
-    Returns:
-        pa.Table: Converted PyArrow table.
+    pyarrow.Table
+        Coerced Arrow table.
 
     Raises:
-        TypeError: If *value* cannot be converted into a table.
+        TypeError: If the input cannot be converted to an Arrow table.
+    """
+    resolved: pa.Table | None = None
+    if isinstance(value, pa.Table):
+        resolved = value
+    elif isinstance(value, pa.RecordBatch):
+        record_batch = cast("pa.RecordBatch", value)
+        resolved = pa.Table.from_batches([record_batch], schema=record_batch.schema)
+    elif isinstance(value, RecordBatchReader):
+        resolved = cast("pa.RecordBatchReader", value).read_all()
+    if resolved is None:
+        resolved = _table_from_record_batch_sequence(value)
+    if resolved is None:
+        resolved = _table_from_to_arrow_table(value)
+    if resolved is None:
+        resolved = _table_from_batches(value)
+    if resolved is not None:
+        return resolved
+    msg = f"value must be Table/RecordBatch/RecordBatchReader; got {type(value).__name__}"
+    raise TypeError(msg)
+
+
+def ensure_arrow_table(value: object, *, label: str = "value") -> pa.Table:
+    """Return value as ``pyarrow.Table`` or raise with contextual label.
+
+    Raises:
+        TypeError: If the input cannot be converted to an Arrow table.
     """
     try:
         return to_arrow_table(value)
     except TypeError as exc:
-        msg = f"{label} must be Table/RecordBatch/RecordBatchReader, got {type(value).__name__}"
+        msg = f"{label} must be Table/RecordBatch/RecordBatchReader; got {type(value).__name__}"
         raise TypeError(msg) from exc
 
 
 __all__ = [
     "coerce_table_to_storage",
+    "coerce_to_recordbatch_reader",
     "ensure_arrow_table",
     "storage_schema",
     "storage_type",

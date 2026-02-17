@@ -43,7 +43,6 @@ from datafusion_engine.io.write_delta import (
     _apply_delta_check_constraints,
     _apply_explicit_delta_features,
     _apply_policy_commit_metadata,
-    _commit_metadata_from_properties,
     _delta_commit_metadata,
     _delta_feature_gate_override,
     _delta_idempotent_options,
@@ -55,6 +54,7 @@ from datafusion_engine.io.write_delta import (
     _resolve_delta_schema_policy,
     _schema_columns,
     _validate_delta_protocol_support,
+    commit_metadata_from_properties,
 )
 from datafusion_engine.schema.contracts import delta_constraints_for_location
 from datafusion_engine.sql.helpers import sql_identifier as _sql_identifier
@@ -79,9 +79,9 @@ from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.diagnostics import DiagnosticsRecorder
+    from datafusion_engine.obs.datafusion_runs import DataFusionRun
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.streaming import StreamingExecutionResult
-    from obs.datafusion_runs import DataFusionRun
     from semantics.program_manifest import ManifestDatasetResolver
 
 _RETRYABLE_DELTA_STREAM_ERROR_MARKERS: tuple[str, ...] = (
@@ -840,7 +840,7 @@ class WritePipeline:
             idempotent=idempotent,
             extra_metadata=commit_metadata,
         )
-        commit_metadata = _commit_metadata_from_properties(commit_properties)
+        commit_metadata = commit_metadata_from_properties(commit_properties)
         commit_app_id = idempotent.app_id if idempotent is not None else None
         commit_version = idempotent.version if idempotent is not None else None
         return DeltaWriteSpec(
@@ -1005,10 +1005,16 @@ class WritePipeline:
         operation_name = spec.commit_metadata.get("operation")
         if _is_delta_observability_operation(operation_name):
             return
-        report = delta_result.report or {}
         from datafusion_engine.delta.observability import (
             DeltaMutationArtifact,
+            DeltaOperationReport,
             record_delta_mutation,
+        )
+
+        operation_report = DeltaOperationReport.from_payload(
+            delta_result.report,
+            operation=operation,
+            commit_metadata=spec.commit_metadata,
         )
 
         commit_run_id = spec.commit_run.run_id if spec.commit_run is not None else None
@@ -1017,7 +1023,7 @@ class WritePipeline:
             artifact=DeltaMutationArtifact(
                 table_uri=spec.table_uri,
                 operation=operation,
-                report=report,
+                report=operation_report.to_payload(),
                 dataset_name=spec.commit_key,
                 mode=spec.mode,
                 commit_metadata=spec.commit_metadata,
@@ -1246,85 +1252,41 @@ class WritePipeline:
         *,
         spec: DeltaWriteSpec,
     ) -> DeltaWriteResult:
-        from deltalake.writer import write_deltalake
-
+        from datafusion_engine.delta.control_plane_core import DeltaCommitOptions
+        from datafusion_engine.delta.transactions import write_transaction
+        from datafusion_engine.delta.write_ipc_payload import (
+            DeltaWriteRequestOptions,
+            build_delta_write_request,
+        )
         from datafusion_engine.lineage.diagnostics import record_artifact
         from serde_artifact_specs import DELTA_WRITE_BOOTSTRAP_SPEC
+        from storage.deltalake.delta_runtime_ops import commit_metadata_from_properties
         from utils.storage_options import merged_storage_options
 
-        stream = result.to_arrow_stream()
+        table = result.df.to_arrow_table()
         storage = merged_storage_options(spec.storage_options, spec.log_storage_options)
         partition_by = list(spec.partition_by) if spec.partition_by else None
         storage_options = dict(storage) if storage else None
-
-        def _write_with_source(source: pa.RecordBatchReader) -> None:
-            predicate = spec.replace_predicate if spec.mode == "overwrite" else None
-            if spec.mode == "overwrite":
-                if spec.writer_properties is None:
-                    write_deltalake(
-                        spec.table_uri,
-                        source,
-                        partition_by=partition_by,
-                        mode=spec.mode,
-                        schema_mode=spec.schema_mode,
-                        storage_options=storage_options,
-                        predicate=predicate,
-                        target_file_size=spec.target_file_size,
-                        commit_properties=spec.commit_properties,
-                    )
-                    return
-                write_deltalake(
-                    spec.table_uri,
-                    source,
-                    partition_by=partition_by,
-                    mode=spec.mode,
-                    schema_mode=spec.schema_mode,
-                    storage_options=storage_options,
-                    predicate=predicate,
-                    target_file_size=spec.target_file_size,
-                    commit_properties=spec.commit_properties,
-                    writer_properties=spec.writer_properties,
-                )
-                return
-            if spec.writer_properties is None:
-                write_deltalake(
-                    spec.table_uri,
-                    source,
-                    partition_by=partition_by,
-                    mode=spec.mode,
-                    schema_mode=spec.schema_mode,
-                    storage_options=storage_options,
-                    target_file_size=spec.target_file_size,
-                    commit_properties=spec.commit_properties,
-                )
-                return
-            write_deltalake(
-                spec.table_uri,
-                source,
-                partition_by=partition_by,
+        commit_options = DeltaCommitOptions(
+            metadata=commit_metadata_from_properties(spec.commit_properties),
+            app_transaction=None,
+        )
+        request = build_delta_write_request(
+            table_uri=spec.table_uri,
+            table=table,
+            options=DeltaWriteRequestOptions(
                 mode=spec.mode,
                 schema_mode=spec.schema_mode,
                 storage_options=storage_options,
+                partition_columns=partition_by,
                 target_file_size=spec.target_file_size,
-                commit_properties=spec.commit_properties,
-                writer_properties=spec.writer_properties,
-            )
-
-        try:
-            _write_with_source(stream)
-        except (
-            Exception
-        ) as exc:  # intentionally broad: deltalake write surfaces backend-specific exceptions
-            if not _is_retryable_delta_stream_error(exc):
-                raise
-            fallback_table = result.df.to_arrow_table()
-            fallback_reader = pa.RecordBatchReader.from_batches(
-                fallback_table.schema,
-                fallback_table.to_batches(),
-            )
-            _write_with_source(fallback_reader)
+                extra_constraints=spec.extra_constraints,
+                commit_options=commit_options,
+            ),
+        )
+        report = write_transaction(self.ctx, request=request)
         if self.runtime_profile is not None:
-            row_count = None
+            row_count = int(table.num_rows)
             record_artifact(
                 self.runtime_profile,
                 DELTA_WRITE_BOOTSTRAP_SPEC,
@@ -1338,7 +1300,7 @@ class WritePipeline:
         return DeltaWriteResult(
             path=canonical_table_uri(spec.table_uri),
             version=None,
-            report=None,
+            report=report,
         )
 
     @staticmethod

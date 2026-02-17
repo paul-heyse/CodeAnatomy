@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
+from tools.cq.cli_app.protocols import ConsolePort
 from tools.cq.cli_app.result_render import emit_output, render_result
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.schema import CqResult, RunMeta
@@ -16,8 +18,9 @@ class _Console:
     file: io.StringIO
     printed: list[str]
 
-    def print(self, text: str) -> None:
-        self.printed.append(text)
+    def print(self, *args: object, **kwargs: object) -> None:
+        _ = kwargs
+        self.printed.append(" ".join(str(arg) for arg in args))
 
 
 def _result() -> CqResult:
@@ -49,26 +52,26 @@ def test_render_result_both_combines_markdown_and_json(
     assert rendered == "MD\n\n---\n\nJSON"
 
 
-def test_emit_output_writes_json_like_directly(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_emit_output_writes_json_like_directly() -> None:
     """Write JSON-like output directly to the sink file stream."""
     sink = io.StringIO()
     console = _Console(file=sink, printed=[])
-    monkeypatch.setattr("tools.cq.cli_app.app.console", console)
 
-    emit_output('{"ok":true}', output_format=OutputFormat.json)
+    emit_output(
+        '{"ok":true}',
+        output_format=OutputFormat.json,
+        console=cast("ConsolePort", console),
+    )
 
     assert sink.getvalue() == '{"ok":true}\n'
     assert console.printed == []
 
 
-def test_emit_output_uses_console_print_for_markdown(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_emit_output_uses_console_print_for_markdown() -> None:
     """Use console printing path for markdown output."""
     sink = io.StringIO()
     console = _Console(file=sink, printed=[])
-    monkeypatch.setattr("tools.cq.cli_app.app.console", console)
 
-    emit_output("hello", output_format=OutputFormat.md)
+    emit_output("hello", output_format=OutputFormat.md, console=cast("ConsolePort", console))
 
     assert console.printed == ["hello"]

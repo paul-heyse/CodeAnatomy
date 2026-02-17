@@ -6,7 +6,7 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.cli_app.types import QueryLanguageToken
+from tools.cq.cli_app.types import NeighborhoodLanguageToken, QueryLanguageToken
 from tools.cq.core.structs import CqStruct
 from tools.cq.run.spec import RunStep
 
@@ -45,6 +45,16 @@ class SearchCommandSchema(CommonFilterCommandSchema, frozen=True, kw_only=True):
     enrich_mode: str = "ts_sym"
     in_dir: str | None = None
     lang: QueryLanguageToken = QueryLanguageToken.auto
+
+
+class NeighborhoodCommandSchema(CqStruct, frozen=True, kw_only=True):
+    """Canonical neighborhood command schema."""
+
+    lang: NeighborhoodLanguageToken = NeighborhoodLanguageToken.python
+    top_k: int = 10
+    semantic_enrichment: bool = True
+    enrich: bool = True
+    enrich_mode: str = "ts_sym"
 
 
 class QueryCommandSchema(CommonFilterCommandSchema, frozen=True, kw_only=True):
@@ -116,6 +126,7 @@ __all__ = [
     "ExceptionsCommandSchema",
     "ImpactCommandSchema",
     "ImportsCommandSchema",
+    "NeighborhoodCommandSchema",
     "QueryCommandSchema",
     "ReportCommandSchema",
     "RunCommandSchema",

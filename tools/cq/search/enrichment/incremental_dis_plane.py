@@ -11,6 +11,7 @@ from tools.cq.introspection.bytecode_index import (
     parse_exception_table,
 )
 from tools.cq.introspection.cfg_builder import build_cfg
+from tools.cq.search._shared.helpers import coerce_count
 
 _DEF_OP_PREFIXES: tuple[str, ...] = (
     "STORE_",
@@ -18,17 +19,6 @@ _DEF_OP_PREFIXES: tuple[str, ...] = (
 )
 _USE_OP_PREFIXES: tuple[str, ...] = ("LOAD_",)
 _MAX_ARGVAL_DEPTH: Final[int] = 3
-
-
-def _coerce_count(value: object) -> int:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            return 0
-    return 0
 
 
 def _iter_code_objects(root: CodeType) -> list[CodeType]:
@@ -244,9 +234,9 @@ def build_dis_bundle(code: CodeType, *, anchor_name: str | None = None) -> dict[
         "cfg": {
             "functions": cfg_rows,
             "functions_count": len(cfg_rows),
-            "blocks_n": sum(_coerce_count(row.get("blocks_n")) for row in cfg_rows),
-            "edges_n": sum(_coerce_count(row.get("edges_n")) for row in cfg_rows),
-            "exc_edges_n": sum(_coerce_count(row.get("exception_edges_n")) for row in cfg_rows),
+            "blocks_n": sum(coerce_count(row.get("blocks_n")) for row in cfg_rows),
+            "edges_n": sum(coerce_count(row.get("edges_n")) for row in cfg_rows),
+            "exc_edges_n": sum(coerce_count(row.get("exception_edges_n")) for row in cfg_rows),
         },
         "exception_regions": exception_rows,
         "defuse_events": defuse_rows,

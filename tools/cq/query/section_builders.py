@@ -21,7 +21,7 @@ from tools.cq.core.schema import (
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.query.finding_builders import (
-    apply_call_evidence,
+    build_call_evidence,
     build_def_evidence_map,
     extract_call_target,
     find_enclosing_class,
@@ -31,6 +31,7 @@ from tools.cq.query.scan import ScanContext
 from tools.cq.query.shared_utils import extract_def_name
 
 if TYPE_CHECKING:
+    from tools.cq.query.enrichment import SymtableEnricher
     from tools.cq.query.ir import Query
     from tools.cq.utils.interval_index import FileIntervalIndex
 
@@ -52,6 +53,7 @@ def append_def_query_sections(
     matching_defs: list[SgRecord],
     scan_ctx: ScanContext,
     root: Path,
+    symtable: SymtableEnricher,
 ) -> CqResult:
     """Append sections to definition query result.
 
@@ -67,12 +69,15 @@ def append_def_query_sections(
         Scan context
     root
         Repository root
+    symtable
+        Injected symtable enricher.
 
     Returns:
     -------
     CqResult
         Updated result with requested definition sections.
     """
+    _ = symtable
     if "callers" in query.fields:
         callers_section = build_callers_section(
             matching_defs,
@@ -102,6 +107,8 @@ def append_expander_sections(
     ctx: ScanContext,
     root: Path,
     query: Query,
+    *,
+    symtable: SymtableEnricher,
 ) -> CqResult:
     """Append sections for requested expanders.
 
@@ -150,7 +157,11 @@ def append_expander_sections(
                 ctx.file_index,
             ),
         ),
-        ("scope", False, lambda: build_scope_section(target_defs, root, ctx.calls_by_def)),
+        (
+            "scope",
+            False,
+            lambda: build_scope_section(target_defs, ctx.calls_by_def, symtable=symtable),
+        ),
         ("bytecode_surface", False, lambda: build_bytecode_surface_section(target_defs, root)),
     ]
 
@@ -213,7 +224,7 @@ def build_entity_neighborhood_preview_section(
                 ),
             )
         )
-    return Section(title="Neighborhood Preview", findings=preview_findings)
+    return Section(title="Neighborhood Preview", findings=tuple(preview_findings))
 
 
 def build_callers_section(
@@ -247,7 +258,7 @@ def build_callers_section(
         root,
     )
     findings = build_caller_findings(call_contexts, evidence_map)
-    return Section(title="Callers", findings=findings)
+    return Section(title="Callers", findings=tuple(findings))
 
 
 def build_call_target_context(
@@ -398,7 +409,7 @@ def build_caller_findings(
         details: dict[str, object] = {"caller": caller_name, "callee": call_target}
         if containing is not None:
             evidence = evidence_map.get(record_key(containing))
-            apply_call_evidence(details, evidence, call_target)
+            details.update(build_call_evidence(evidence, call_target))
         findings.append(
             Finding(
                 category="caller",
@@ -451,7 +462,7 @@ def build_callees_section(
                 "caller": def_name,
                 "callee": call_target,
             }
-            apply_call_evidence(details, evidence, call_target)
+            details.update(build_call_evidence(evidence, call_target))
             findings.append(
                 Finding(
                     category="callee",
@@ -464,7 +475,7 @@ def build_callees_section(
 
     return Section(
         title="Callees",
-        findings=findings,
+        findings=tuple(findings),
     )
 
 
@@ -500,7 +511,7 @@ def build_imports_section(
 
     return Section(
         title="Imports",
-        findings=findings,
+        findings=tuple(findings),
     )
 
 
@@ -556,14 +567,15 @@ def build_raises_section(
 
     return Section(
         title="Raises",
-        findings=findings,
+        findings=tuple(findings),
     )
 
 
 def build_scope_section(
     target_defs: Sequence[SgRecord],
-    root: Path,
     calls_by_def: Mapping[SgRecord, Sequence[SgRecord]],
+    *,
+    symtable: SymtableEnricher,
 ) -> Section:
     """Build section showing scope details for target definitions.
 
@@ -571,8 +583,6 @@ def build_scope_section(
     ----------
     target_defs
         Target definitions
-    root
-        Repository root
     calls_by_def
         Calls by definition
 
@@ -581,15 +591,13 @@ def build_scope_section(
     Section
         Scope section for the report
     """
-    from tools.cq.query.enrichment import SymtableEnricher
     from tools.cq.query.executor_definitions import def_to_finding
 
     findings: list[Finding] = []
-    enricher = SymtableEnricher(root)
 
     for def_record in target_defs:
         base_finding = def_to_finding(def_record, calls_by_def.get(def_record, []))
-        scope_info = enricher.enrich_function_finding(base_finding, def_record)
+        scope_info = symtable.enrich_function_finding(base_finding, def_record)
         if not scope_info:
             continue
         def_name = extract_def_name(def_record) or "<unknown>"
@@ -613,7 +621,7 @@ def build_scope_section(
 
     return Section(
         title="Scope",
-        findings=findings,
+        findings=tuple(findings),
     )
 
 
@@ -676,7 +684,7 @@ def build_bytecode_surface_section(
 
     return Section(
         title="Bytecode Surface",
-        findings=findings,
+        findings=tuple(findings),
     )
 
 

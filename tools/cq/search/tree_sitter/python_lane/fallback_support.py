@@ -19,11 +19,16 @@ if TYPE_CHECKING:
 _MAX_CAPTURE_TEXT_LEN = 120
 
 
-def _capture_named_definition(
+def capture_named_definition(
     name_nodes: list[Node],
     fallback_nodes: list[Node],
     source_bytes: bytes,
 ) -> str | None:
+    """Capture a definition name from direct captures or fallback nodes.
+
+    Returns:
+        str | None: Captured definition name when available.
+    """
     if name_nodes:
         name = node_text(name_nodes[0], source_bytes)
         if name:
@@ -134,10 +139,15 @@ def _append_alias_only_rows(
             return
 
 
-def _capture_import_alias_chain(
+def capture_import_alias_chain(
     captures: dict[str, list[Node]],
     source_bytes: bytes,
 ) -> list[dict[str, object]]:
+    """Capture import alias chain rows from parse captures.
+
+    Returns:
+        list[dict[str, object]]: Ordered import-alias chain rows.
+    """
     chain: list[dict[str, object]] = []
     _append_import_statement_chain(chain, captures, source_bytes)
     _append_import_from_statement_chain(chain, captures, source_bytes)
@@ -163,10 +173,15 @@ def _capture_import_alias_chain(
     return chain[:_MAX_CAPTURE_ITEMS]
 
 
-def _capture_binding_candidates(
+def capture_binding_candidates(
     captures: dict[str, list[Node]],
     source_bytes: bytes,
 ) -> list[dict[str, object]]:
+    """Capture binding candidates from assignment/identifier captures.
+
+    Returns:
+        list[dict[str, object]]: Binding candidate rows.
+    """
     candidates: list[dict[str, object]] = []
     for capture_name, kind in (
         ("assignment.target", "assignment"),
@@ -188,10 +203,15 @@ def _capture_binding_candidates(
     return candidates
 
 
-def _capture_qualified_name_candidates(
+def capture_qualified_name_candidates(
     captures: dict[str, list[Node]],
     source_bytes: bytes,
 ) -> list[dict[str, object]]:
+    """Capture qualified-name candidates from parse captures.
+
+    Returns:
+        list[dict[str, object]]: Qualified-name candidate rows.
+    """
     rows = _capture_text_rows(
         captures,
         (
@@ -221,7 +241,8 @@ def _capture_qualified_name_candidates(
     return out
 
 
-def _default_parse_quality() -> dict[str, object]:
+def default_parse_quality() -> dict[str, object]:
+    """Return a default parse-quality payload for non-error states."""
     return {
         "has_error": False,
         "error_nodes": list[str](),
@@ -305,13 +326,18 @@ def _fallback_binding_candidates(
     return []
 
 
-def _fallback_resolution_fields(
+def fallback_resolution_fields(
     *,
     source: str,
     source_bytes: bytes,
     byte_start: int,
     byte_end: int,
 ) -> dict[str, object]:
+    """Build fallback resolution payload when query captures are insufficient.
+
+    Returns:
+        dict[str, object]: Best-effort fallback semantic payload.
+    """
     token = source_bytes[byte_start:byte_end].decode("utf-8", errors="replace").strip()
     if not token:
         return {}
@@ -343,10 +369,10 @@ def _fallback_resolution_fields(
 
 
 __all__ = [
-    "_capture_binding_candidates",
-    "_capture_import_alias_chain",
-    "_capture_named_definition",
-    "_capture_qualified_name_candidates",
-    "_default_parse_quality",
-    "_fallback_resolution_fields",
+    "capture_binding_candidates",
+    "capture_import_alias_chain",
+    "capture_named_definition",
+    "capture_qualified_name_candidates",
+    "default_parse_quality",
+    "fallback_resolution_fields",
 ]

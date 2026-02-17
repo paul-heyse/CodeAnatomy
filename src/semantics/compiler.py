@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from datafusion.expr import Expr
 
     from semantics.ir import SemanticIRJoinGroup
+    from semantics.ports import SessionPort
     from semantics.quality import QualityRelationshipSpec
     from semantics.quality_compiler import TableInfoLike
     from semantics.specs import SemanticTableSpec
@@ -164,6 +165,11 @@ class RelationOptions:
     use_cdf: bool = False
     output_name: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.join_type is not None and self.strategy_hint is not None:
+            msg = "RelationOptions cannot set both join_type and strategy_hint."
+            raise ValueError(msg)
+
 
 @dataclass(frozen=True)
 class JoinInputs:
@@ -182,7 +188,9 @@ class SemanticCompiler:
     high-level operations that apply semantic rules.
     """
 
-    def __init__(self, ctx: SessionContext, *, config: SemanticConfig | None = None) -> None:
+    def __init__(
+        self, ctx: SessionContext | SessionPort, *, config: SemanticConfig | None = None
+    ) -> None:
         """Initialize the compiler.
 
         Parameters
@@ -192,7 +200,8 @@ class SemanticCompiler:
         config
             Optional semantic configuration overrides.
         """
-        self.ctx = ctx
+        self._ctx = ctx
+        self.ctx = cast("SessionContext", ctx)
         self._tables: dict[str, TableInfo] = {}
         self._udf_snapshot: dict[str, object] | None = None
         self._config = config or SemanticConfig()

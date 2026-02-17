@@ -74,7 +74,7 @@ class TestMermaidFlowchart:
         result = CqResult(
             run=_make_run_meta(),
             key_findings=(),
-            sections=(Section(title="Callers", findings=callers),),
+            sections=(Section(title="Callers", findings=tuple(callers)),),
         )
         output = render_mermaid_flowchart(result)
         assert "-->" in output
@@ -191,7 +191,7 @@ class TestDotRenderer:
         result = CqResult(
             run=_make_run_meta(),
             key_findings=(),
-            sections=(Section(title="Callers", findings=callers),),
+            sections=(Section(title="Callers", findings=tuple(callers)),),
         )
         output = render_dot(result)
         assert "->" in output

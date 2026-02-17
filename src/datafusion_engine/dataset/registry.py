@@ -91,13 +91,20 @@ class DatasetLocation(StructBaseStrict, frozen=True):
     overrides: DatasetLocationOverrides | None = None
 
     def __post_init__(self) -> None:
-        """Normalize path-like inputs into a string."""
+        """Normalize path-like inputs into a string.
+
+        Raises:
+            ValueError: If both ``delta_version`` and ``delta_timestamp`` are set.
+        """
         object.__setattr__(self, "path", str(self.path))
+        if self.delta_version is not None and self.delta_timestamp is not None:
+            msg = "DatasetLocation cannot set both delta_version and delta_timestamp."
+            raise ValueError(msg)
 
     @property
     def resolved(self) -> ResolvedDatasetLocation:
         """Return a cached resolved view of this dataset location."""
-        return _resolve_cached_location(self)
+        return _resolve_location(self)
 
     @property
     def delta_scan(self) -> DeltaScanOptions | None:
@@ -106,49 +113,49 @@ class DatasetLocation(StructBaseStrict, frozen=True):
             delta_overrides = self.overrides.delta if self.overrides is not None else None
             if delta_overrides is None or delta_overrides.scan is None:
                 return None
-        resolved = _resolve_cached_location(self)
+        resolved = _resolve_location(self)
         return resolved.delta_scan
 
     @property
     def delta_cdf_policy(self) -> DeltaCdfPolicy | None:
         """Return effective Delta CDF policy."""
-        resolved = _resolve_cached_location(self)
+        resolved = _resolve_location(self)
         return resolved.delta_cdf_policy
 
     @property
     def resolved_delta_log_storage_options(self) -> Mapping[str, str] | None:
         """Return effective Delta log storage options."""
-        resolved = _resolve_cached_location(self)
+        resolved = _resolve_location(self)
         return resolved.delta_log_storage_options
 
     @property
     def delta_write_policy(self) -> DeltaWritePolicy | None:
         """Return effective Delta write policy."""
-        resolved = _resolve_cached_location(self)
+        resolved = _resolve_location(self)
         return resolved.delta_write_policy
 
     @property
     def delta_schema_policy(self) -> DeltaSchemaPolicy | None:
         """Return effective Delta schema policy."""
-        resolved = _resolve_cached_location(self)
+        resolved = _resolve_location(self)
         return resolved.delta_schema_policy
 
     @property
     def delta_maintenance_policy(self) -> DeltaMaintenancePolicy | None:
         """Return effective Delta maintenance policy."""
-        resolved = _resolve_cached_location(self)
+        resolved = _resolve_location(self)
         return resolved.delta_maintenance_policy
 
     @property
     def delta_feature_gate(self) -> DeltaFeatureGate | None:
         """Return effective Delta feature gate."""
-        resolved = _resolve_cached_location(self)
+        resolved = _resolve_location(self)
         return resolved.delta_feature_gate
 
     @property
     def delta_constraints(self) -> tuple[str, ...]:
         """Return effective Delta CHECK constraints."""
-        resolved = _resolve_cached_location(self)
+        resolved = _resolve_location(self)
         return resolved.delta_constraints
 
 
@@ -377,8 +384,8 @@ def dataset_catalog_from_profile(
     profile_ref = profile
 
     # Deferred import to avoid circular import with session.runtime
-    from datafusion_engine.dataset.semantic_catalog import build_semantic_dataset_catalog
     from datafusion_engine.session.runtime_dataset_io import normalize_dataset_locations_for_profile
+    from semantics.semantic_catalog import build_semantic_dataset_catalog
 
     _register_locations(
         catalog,
@@ -717,7 +724,7 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
     )
 
 
-def _resolve_cached_location(location: DatasetLocation) -> ResolvedDatasetLocation:
+def _resolve_location(location: DatasetLocation) -> ResolvedDatasetLocation:
     return resolve_dataset_location(location)
 
 

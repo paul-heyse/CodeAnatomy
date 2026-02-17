@@ -12,7 +12,8 @@ import msgspec
 
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.run_context import RunContext
-from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms, update_result_summary
+from tools.cq.core.schema import CqResult, mk_result, ms, update_result_summary
+from tools.cq.core.scope_filter import filter_findings_by_scope
 from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.core.target_specs import BundleTargetKind, TargetSpecV1
 from tools.cq.macros.bytecode import cmd_bytecode_surface
@@ -23,7 +24,8 @@ from tools.cq.macros.scopes import cmd_scopes
 from tools.cq.macros.side_effects import cmd_side_effects
 from tools.cq.macros.sig_impact import cmd_sig_impact
 from tools.cq.orchestration.request_factory import RequestContextV1, RequestFactory
-from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.enrichment import SymtableEnricher
+from tools.cq.query.executor_plan_dispatch import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.ir import Scope
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -151,6 +153,7 @@ def resolve_target_scope(ctx: BundleContext) -> TargetScope:
             query=query,
             root=str(root),
             services=ctx.services,
+            symtable_enricher=SymtableEnricher(root),
             argv=tuple(ctx.argv),
         ),
         tc=ctx.tc,
@@ -175,34 +178,10 @@ def filter_result_by_scope(
     CqResult
         Result containing findings within the target scope.
     """
-
-    def _in_scope(finding: Finding) -> bool:
-        if finding.anchor is None:
-            return True
-        file_path = (root / finding.anchor.file).resolve()
-        return scope.matches(file_path)
-
-    key_findings = [f for f in result.key_findings if _in_scope(f)]
-    evidence = [f for f in result.evidence if _in_scope(f)]
-    sections: list[Section] = []
-    for section in result.sections:
-        section_findings = [f for f in section.findings if _in_scope(f)]
-        if not section_findings:
-            continue
-        sections.append(
-            Section(
-                title=section.title,
-                findings=section_findings,
-                collapsed=section.collapsed,
-            )
-        )
-    return CqResult(
-        run=result.run,
-        summary=result.summary,
-        key_findings=tuple(key_findings),
-        evidence=tuple(evidence),
-        sections=tuple(sections),
-        artifacts=result.artifacts,
+    return filter_findings_by_scope(
+        result,
+        root=root,
+        path_filter=scope.matches,
     )
 
 

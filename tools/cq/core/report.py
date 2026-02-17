@@ -20,19 +20,17 @@ from tools.cq.core.render_enrichment import (
 from tools.cq.core.render_enrichment import (
     format_enrichment_facts as _format_enrichment_facts,
 )
-from tools.cq.core.render_enrichment_orchestrator import (
-    RenderEnrichmentSessionV1,
-)
-from tools.cq.core.render_enrichment_orchestrator import (
+from tools.cq.core.render_enrichment_apply import RenderEnrichmentSessionV1
+from tools.cq.core.render_enrichment_apply import (
     count_render_enrichment_tasks as _count_render_enrichment_tasks_orchestrator,
 )
-from tools.cq.core.render_enrichment_orchestrator import (
+from tools.cq.core.render_enrichment_apply import (
     maybe_attach_render_enrichment as _maybe_attach_render_enrichment_orchestrator,
 )
-from tools.cq.core.render_enrichment_orchestrator import (
+from tools.cq.core.render_enrichment_apply import (
     precompute_render_enrichment_cache as _precompute_render_enrichment_cache_orchestrator,
 )
-from tools.cq.core.render_enrichment_orchestrator import (
+from tools.cq.core.render_enrichment_apply import (
     select_enrichment_target_files as _select_enrichment_target_files_orchestrator,
 )
 from tools.cq.core.render_overview import render_code_overview as _render_code_overview
@@ -364,7 +362,11 @@ def _render_sections(
             continue
         lines.append(
             _format_section(
-                Section(title=section.title, findings=findings, collapsed=section.collapsed),
+                Section(
+                    title=section.title,
+                    findings=tuple(findings),
+                    collapsed=section.collapsed,
+                ),
                 context=context,
             )
         )
@@ -522,7 +524,7 @@ def _prepare_render_enrichment_session(
     )
 
 
-def _apply_render_enrichment_in_place(
+def _apply_render_enrichment(
     result: CqResult,
     *,
     root: Path,
@@ -542,7 +544,7 @@ def _apply_render_enrichment_in_place(
     enriched_sections = tuple(
         msgspec.structs.replace(
             section,
-            findings=[_apply(finding) for finding in section.findings],
+            findings=tuple(_apply(finding) for finding in section.findings),
         )
         for section in result.sections
     )
@@ -578,7 +580,7 @@ def render_markdown(
         root=root,
         port=resolved_context.enrichment_port,
     )
-    result = _apply_render_enrichment_in_place(
+    result = _apply_render_enrichment(
         result,
         root=root,
         cache=session.cache,
@@ -613,14 +615,11 @@ def render_markdown(
     return "\n".join(lines)
 
 
-# Public API re-exports
-render_summary_compact = render_summary_condensed
-
 from tools.cq.core.render_summary import ARTIFACT_ONLY_KEYS
 
 __all__ = [
     "ARTIFACT_ONLY_KEYS",
     "compact_summary_for_rendering",
     "render_markdown",
-    "render_summary_compact",
+    "render_summary_condensed",
 ]

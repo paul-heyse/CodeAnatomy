@@ -123,7 +123,11 @@ class GraphProductBuildRequest:
     otel_options: OtelBootstrapOptions | None = None
 
 
-def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildResult:
+def build_graph_product(
+    request: GraphProductBuildRequest,
+    *,
+    install_signal_handlers: bool = True,
+) -> GraphProductBuildResult:
     """Build the requested graph product and return typed outputs.
 
     Routes through engine-native orchestration with profiles and runtime config.
@@ -156,8 +160,11 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
     result: GraphProductBuildResult | None = None
     fallback_bundle_dir = resolved_output_dir / "run_bundle" / run_id
     signal_triggered = {"value": False}
-    handler = _signal_handler_for_build(run_id, fallback_bundle_dir, signal_triggered)
-    previous_sigterm, previous_sigint = _install_signal_handlers(handler)
+    previous_sigterm: signal.Handlers | None = None
+    previous_sigint: signal.Handlers | None = None
+    if install_signal_handlers:
+        handler = _signal_handler_for_build(run_id, fallback_bundle_dir, signal_triggered)
+        previous_sigterm, previous_sigint = _install_signal_handlers(handler)
     try:
         result = _execute_build(
             request=request,
@@ -190,7 +197,8 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         )
         return result
     finally:
-        _restore_signal_handlers(previous_sigterm, previous_sigint)
+        if previous_sigterm is not None and previous_sigint is not None:
+            _restore_signal_handlers(previous_sigterm, previous_sigint)
         _finalize_build_bundle(result, request, fallback_bundle_dir, run_id)
         heartbeat.stop(timeout_s=2.0)
         reset_run_id(run_token)

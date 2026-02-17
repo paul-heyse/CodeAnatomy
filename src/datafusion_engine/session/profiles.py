@@ -14,11 +14,8 @@ from datafusion_engine.session.runtime_session import (
 
 def runtime_for_profile(
     profile: DataFusionRuntimeProfile,
-    *,
-    use_cache: bool = True,
 ) -> SessionRuntime:
     """Return session runtime for a profile."""
-    _ = use_cache
     return profile.session_runtime()
 
 

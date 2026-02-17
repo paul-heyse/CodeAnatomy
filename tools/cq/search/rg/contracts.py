@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import msgspec
 
 from tools.cq.core.contract_codec import to_contract_builtins
 from tools.cq.core.structs import CqOutputStruct, CqSettingsStruct
 from tools.cq.search._shared.requests import RgRunRequest
-from tools.cq.search.rg.runner import RgProcessResult
+
+if TYPE_CHECKING:
+    from tools.cq.search.rg.runner import RgProcessRuntimeResultV1
 
 
 class RgRunSettingsV1(CqSettingsStruct, frozen=True):
@@ -52,7 +56,9 @@ def settings_from_request(request: RgRunRequest) -> RgRunSettingsV1:
     )
 
 
-def result_from_process(result: RgProcessResult) -> RgProcessResultV1:
+def result_from_process(
+    result: RgProcessResultV1 | RgProcessRuntimeResultV1,
+) -> RgProcessResultV1:
     """Convert native process result into a transport-safe output contract.
 
     Returns:

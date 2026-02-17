@@ -26,6 +26,12 @@ from datafusion_engine.plan.perf_policy import (
 )
 from datafusion_engine.session.cache_policy import CachePolicyConfig
 from datafusion_engine.session.contracts import IdentifierNormalizationMode
+from datafusion_engine.session.policy_groups import (
+    CachePolicyGroup,
+    DeltaPolicyGroup,
+    RuntimeArtifactPolicyGroup,
+    SqlPolicyGroup,
+)
 from datafusion_engine.session.runtime_config_policies import (
     DataFusionConfigPolicy,
     DataFusionFeatureGates,
@@ -496,6 +502,38 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
     input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
     prepared_statements: tuple[PreparedStatementSpec, ...] = INFO_SCHEMA_STATEMENTS
     runtime_env_hook: Callable[[RuntimeEnvBuilder], RuntimeEnvBuilder] | None = None
+
+    def cache_policy_group(self) -> CachePolicyGroup:
+        """Return cache-focused policy settings."""
+        return CachePolicyGroup(
+            cache_profile_name=self.cache_profile_name,
+            cache_max_columns=self.cache_max_columns,
+            snapshot_pinned_mode=self.snapshot_pinned_mode,
+        )
+
+    def sql_policy_group(self) -> SqlPolicyGroup:
+        """Return SQL-focused policy settings."""
+        return SqlPolicyGroup(
+            sql_policy_name=self.sql_policy_name,
+            param_identifier_allowlist=self.param_identifier_allowlist,
+        )
+
+    def delta_policy_group(self) -> DeltaPolicyGroup:
+        """Return Delta-focused policy settings."""
+        return DeltaPolicyGroup(
+            delta_plan_codec_physical=self.delta_plan_codec_physical,
+            delta_plan_codec_logical=self.delta_plan_codec_logical,
+            delta_protocol_mode=self.delta_protocol_mode,
+        )
+
+    def runtime_artifact_policy_group(self) -> RuntimeArtifactPolicyGroup:
+        """Return runtime artifact/cache policy settings."""
+        return RuntimeArtifactPolicyGroup(
+            runtime_artifact_cache_enabled=self.runtime_artifact_cache_enabled,
+            runtime_artifact_cache_root=self.runtime_artifact_cache_root,
+            metadata_cache_snapshot_enabled=self.metadata_cache_snapshot_enabled,
+            plan_artifacts_root=self.plan_artifacts_root,
+        )
 
     @staticmethod
     def _callable_identity(value: object | None) -> str | None:

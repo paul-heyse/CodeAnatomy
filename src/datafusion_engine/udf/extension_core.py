@@ -24,6 +24,7 @@ from datafusion_engine.udf.constants import (
     EXTENSION_MODULE_PATH,
     REBUILD_WHEELS_HINT,
 )
+from datafusion_engine.udf.runtime_snapshot_types import normalize_runtime_install_snapshot
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -48,7 +49,7 @@ class ExtensionRegistries:
     runtime_payloads: WeakKeyDictionary[SessionContext, Mapping[str, object]] = field(
         default_factory=WeakKeyDictionary
     )
-    udf_policies: WeakKeyDictionary[SessionContext, tuple[bool, int | None, int | None]] = field(
+    udf_policies: WeakKeyDictionary[SessionContext, AsyncUdfPolicy] = field(
         default_factory=WeakKeyDictionary
     )
     udf_validated: WeakSet[SessionContext] = field(default_factory=WeakSet)
@@ -61,97 +62,24 @@ def _resolve_registries(registries: ExtensionRegistries | None) -> ExtensionRegi
 
 RustUdfSnapshot = Mapping[str, object]
 
-_DDL_TYPE_ALIASES: dict[str, str] = {
-    "int8": "TINYINT",
-    "int16": "SMALLINT",
-    "int32": "INT",
-    "int64": "BIGINT",
-    "uint8": "TINYINT",
-    "uint16": "SMALLINT",
-    "uint32": "INT",
-    "uint64": "BIGINT",
-    "float32": "FLOAT",
-    "float64": "DOUBLE",
-    "utf8": "VARCHAR",
-    "large_utf8": "VARCHAR",
-    "large_string": "VARCHAR",
-    "string": "VARCHAR",
-    "null": "VARCHAR",
-    "bool": "BOOLEAN",
-    "boolean": "BOOLEAN",
-}
 
-_DDL_COMPLEX_TYPE_TOKENS: tuple[str, ...] = (
-    "struct<",
-    "list<",
-    "large_list<",
-    "fixed_size_list<",
-    "map<",
-    "dictionary<",
-    "binary",
-    "large_binary",
-    "fixed_size_binary",
-    "union<",
-)
+@dataclass(frozen=True)
+class AsyncUdfPolicy:
+    """Policy for async UDF execution."""
+
+    enabled: bool
+    timeout_ms: int | None = None
+    batch_size: int | None = None
+
 
 _EXPECTED_PLUGIN_ABI_MAJOR = 1
 _EXPECTED_PLUGIN_ABI_MINOR = 1
 _REGISTRY_SNAPSHOT_VERSION = 1
 _RUNTIME_INSTALL_ENTRYPOINT = "install_codeanatomy_runtime"
-_RUNTIME_MODULAR_ENTRYPOINTS: tuple[str, ...] = (
-    "register_codeanatomy_udfs",
-    "install_function_factory",
-    "install_expr_planners",
-    "registry_snapshot",
-)
-
-_EXPR_SURFACE_SNAPSHOT_ENTRIES: Mapping[str, Mapping[str, object]] = {
-    "stable_id": {
-        "probe_args": ("prefix", "part1"),
-        "parameter_names": ("prefix", "part1"),
-        "signature_inputs": (("string", "string"),),
-        "return_types": ("string",),
-        "volatility": "stable",
-    },
-    "stable_id_parts": {
-        "probe_args": ("prefix", "part1"),
-        "parameter_names": ("prefix", "part1"),
-        "signature_inputs": (("string", "string"),),
-        "return_types": ("string",),
-        "volatility": "stable",
-    },
-    "col_to_byte": {
-        "probe_args": ("abcdef", 3, "BYTE"),
-        "parameter_names": ("line_text", "col", "col_unit"),
-        "signature_inputs": (("string", "int64", "string"),),
-        "return_types": ("int64",),
-        "volatility": "stable",
-    },
-    "span_make": {
-        "probe_args": (0, 0),
-        "parameter_names": ("bstart", "bend"),
-        "signature_inputs": (("int64", "int64"),),
-        "return_types": (
-            "struct<bstart: int64, bend: int64, line_base: int64, col_unit: string, end_exclusive: bool>",
-        ),
-        "volatility": "stable",
-    },
-}
 
 
 def _module_supports_runtime_install(module: ModuleType) -> bool:
-    if callable(getattr(module, _RUNTIME_INSTALL_ENTRYPOINT, None)):
-        return True
-    if all(callable(getattr(module, name, None)) for name in _RUNTIME_MODULAR_ENTRYPOINTS):
-        return True
-    return all(
-        callable(getattr(module, name, None))
-        for name in (
-            "install_codeanatomy_udf_config",
-            "install_function_factory",
-            "install_expr_planners",
-        )
-    )
+    return callable(getattr(module, _RUNTIME_INSTALL_ENTRYPOINT, None))
 
 
 def _invoke_runtime_entrypoint(
@@ -175,106 +103,6 @@ def _invoke_runtime_entrypoint(
     return payload
 
 
-def _build_runtime_install_payload(
-    *,
-    install_mode: str,
-    snapshot: Mapping[str, object],
-    internal: ModuleType,
-    udf_installed: bool,
-    planner_names: Sequence[str],
-    async_config: Mapping[str, object],
-) -> dict[str, object]:
-    return {
-        "contract_version": 3,
-        "runtime_install_mode": install_mode,
-        "snapshot": snapshot,
-        "udf_installed": udf_installed,
-        "function_factory_installed": True,
-        "expr_planners_installed": True,
-        "expr_planner_names": tuple(planner_names),
-        "cache_registrar_available": callable(getattr(internal, "register_cache_tables", None)),
-        "async": dict(async_config),
-    }
-
-
-def _missing_runtime_modular_entrypoints(internal: ModuleType) -> list[str]:
-    return [
-        name for name in _RUNTIME_MODULAR_ENTRYPOINTS if not callable(getattr(internal, name, None))
-    ]
-
-
-def _install_runtime_via_modular_entrypoints(
-    internal: ModuleType,
-    *,
-    ctx: SessionContext,
-    enable_async: bool,
-    async_udf_timeout_ms: int | None,
-    async_udf_batch_size: int | None,
-    registries: ExtensionRegistries,
-) -> Mapping[str, object]:
-    register_udfs = getattr(internal, "register_codeanatomy_udfs", None)
-    snapshot_fn = getattr(internal, "registry_snapshot", None)
-    if not callable(register_udfs) or not callable(snapshot_fn):
-        missing = _missing_runtime_modular_entrypoints(internal)
-        missing_csv = ", ".join(missing)
-        msg = (
-            f"{internal.__name__} is missing modular runtime entrypoints: {missing_csv}. "
-            f"{REBUILD_WHEELS_HINT}"
-        )
-        raise TypeError(msg)
-
-    from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.expr.planner import install_expr_planners
-    from datafusion_engine.udf.factory import (
-        function_factory_policy_from_snapshot,
-        install_function_factory,
-    )
-
-    install_udf_config = getattr(internal, "install_codeanatomy_udf_config", None)
-    if callable(install_udf_config):
-        _invoke_runtime_entrypoint(internal, "install_codeanatomy_udf_config", ctx=ctx)
-
-    _invoke_runtime_entrypoint(
-        internal,
-        "register_codeanatomy_udfs",
-        ctx=ctx,
-        args=(enable_async, async_udf_timeout_ms, async_udf_batch_size),
-    )
-    raw_snapshot = _invoke_runtime_entrypoint(internal, "registry_snapshot", ctx=ctx)
-    if not isinstance(raw_snapshot, Mapping):
-        msg = f"{internal.__name__}.registry_snapshot returned a non-mapping payload."
-        raise TypeError(msg)
-
-    normalized_snapshot = _normalize_registry_snapshot(
-        raw_snapshot,
-        ctx=ctx,
-        registries=registries,
-    )
-
-    policy = function_factory_policy_from_snapshot(
-        normalized_snapshot,
-        allow_async=enable_async,
-    )
-    install_function_factory(ctx, policy=policy)
-
-    planner_names = domain_planner_names_from_snapshot(normalized_snapshot) or (
-        "codeanatomy_domain",
-    )
-    install_expr_planners(ctx, planner_names=planner_names)
-    return _build_runtime_install_payload(
-        install_mode="modular",
-        snapshot=normalized_snapshot,
-        internal=internal,
-        udf_installed=True,
-        planner_names=planner_names,
-        async_config={
-            "enabled": enable_async,
-            "timeout_ms": async_udf_timeout_ms,
-            "batch_size": async_udf_batch_size,
-        },
-    )
-
-
 def _install_codeanatomy_runtime_snapshot(
     ctx: SessionContext,
     *,
@@ -285,46 +113,31 @@ def _install_codeanatomy_runtime_snapshot(
 ) -> Mapping[str, object]:
     internal = _datafusion_internal()
     installer = getattr(internal, _RUNTIME_INSTALL_ENTRYPOINT, None)
+    if not callable(installer):
+        msg = (
+            f"{EXTENSION_MODULE_LABEL} is missing required runtime entrypoint "
+            f"{_RUNTIME_INSTALL_ENTRYPOINT!r}. {REBUILD_WHEELS_HINT}"
+        )
+        raise TypeError(msg)
     expected = {"major": _EXPECTED_PLUGIN_ABI_MAJOR, "minor": _EXPECTED_PLUGIN_ABI_MINOR}
-    install_mode = "unified"
-    if callable(installer):
-        try:
-            payload = _invoke_runtime_entrypoint(
-                internal,
-                _RUNTIME_INSTALL_ENTRYPOINT,
-                ctx=ctx,
-                args=(
-                    enable_async,
-                    async_udf_timeout_ms,
-                    async_udf_batch_size,
-                ),
-            )
-        except (RuntimeError, TypeError, ValueError) as exc:
-            msg = (
-                "Rust runtime install failed due to SessionContext ABI mismatch. "
-                f"expected_plugin_abi={expected}. "
-                f"{REBUILD_WHEELS_HINT}"
-            )
-            raise RuntimeError(msg) from exc
-    else:
-        install_mode = "modular"
-        try:
-            payload = _install_runtime_via_modular_entrypoints(
-                internal,
-                ctx=ctx,
-                enable_async=enable_async,
-                async_udf_timeout_ms=async_udf_timeout_ms,
-                async_udf_batch_size=async_udf_batch_size,
-                registries=registries,
-            )
-        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-            msg = (
-                "Rust runtime modular install failed due to SessionContext ABI mismatch "
-                "or missing runtime entrypoints. "
-                f"expected_plugin_abi={expected}. "
-                f"{REBUILD_WHEELS_HINT}"
-            )
-            raise RuntimeError(msg) from exc
+    try:
+        payload = _invoke_runtime_entrypoint(
+            internal,
+            _RUNTIME_INSTALL_ENTRYPOINT,
+            ctx=ctx,
+            args=(
+                enable_async,
+                async_udf_timeout_ms,
+                async_udf_batch_size,
+            ),
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = (
+            "Rust runtime install failed due to SessionContext ABI mismatch. "
+            f"expected_plugin_abi={expected}. "
+            f"{REBUILD_WHEELS_HINT}"
+        )
+        raise RuntimeError(msg) from exc
     if not isinstance(payload, Mapping):
         msg = "Rust runtime installer returned a non-mapping payload."
         raise TypeError(msg)
@@ -339,7 +152,7 @@ def _install_codeanatomy_runtime_snapshot(
         registries=registries,
     )
     payload_mapping.setdefault("contract_version", 3)
-    payload_mapping.setdefault("runtime_install_mode", install_mode)
+    payload_mapping.setdefault("runtime_install_mode", "unified")
     payload_mapping.setdefault("udf_installed", True)
     payload_mapping.setdefault("function_factory_installed", True)
     payload_mapping.setdefault("expr_planners_installed", True)
@@ -348,7 +161,16 @@ def _install_codeanatomy_runtime_snapshot(
         callable(getattr(internal, "register_cache_tables", None)),
     )
     payload_mapping["snapshot"] = normalized_snapshot
-    registries.runtime_payloads[ctx] = payload_mapping
+    normalized_payload = normalize_runtime_install_snapshot(payload_mapping)
+    registries.runtime_payloads[ctx] = {
+        "contract_version": normalized_payload.contract_version,
+        "runtime_install_mode": normalized_payload.runtime_install_mode,
+        "udf_installed": normalized_payload.udf_installed,
+        "function_factory_installed": normalized_payload.function_factory_installed,
+        "expr_planners_installed": normalized_payload.expr_planners_installed,
+        "cache_registrar_available": normalized_payload.cache_registrar_available,
+        "snapshot": dict(normalized_payload.snapshot),
+    }
     return normalized_snapshot
 
 
@@ -357,12 +179,12 @@ def _build_registry_snapshot(
     *,
     registries: ExtensionRegistries,
 ) -> Mapping[str, object]:
-    policy = registries.udf_policies.get(ctx, (False, None, None))
+    policy = registries.udf_policies.get(ctx, AsyncUdfPolicy(enabled=False))
     return _install_codeanatomy_runtime_snapshot(
         ctx,
-        enable_async=policy[0],
-        async_udf_timeout_ms=policy[1],
-        async_udf_batch_size=policy[2],
+        enable_async=policy.enabled,
+        async_udf_timeout_ms=policy.timeout_ms,
+        async_udf_batch_size=policy.batch_size,
         registries=registries,
     )
 
@@ -420,13 +242,12 @@ def _normalize_registry_snapshot(
     payload["volatility"] = volatility
     payload["signature_inputs"] = signature_inputs
     payload["return_types"] = return_types
-    payload = _supplement_expr_surface_snapshot(payload, ctx=ctx)
     if ctx in registries.udf_policies:
-        enable_async, timeout_ms, batch_size = registries.udf_policies[ctx]
+        policy = registries.udf_policies[ctx]
         payload["async_udf_policy"] = {
-            "enabled": enable_async,
-            "timeout_ms": timeout_ms,
-            "batch_size": batch_size,
+            "enabled": policy.enabled,
+            "timeout_ms": policy.timeout_ms,
+            "batch_size": policy.batch_size,
         }
     return payload
 
@@ -457,8 +278,8 @@ def _datafusion_internal() -> ModuleType:
     except ImportError as exc:
         msg = ABI_LOAD_FAILURE_MSG.format(module=EXTENSION_MODULE_LABEL, error=exc)
         details = (
-            f"The {EXTENSION_MODULE_LABEL} extension module exposing install_codeanatomy_runtime or "
-            "the modular runtime entrypoint contract is required. "
+            f"The {EXTENSION_MODULE_LABEL} extension module exposing "
+            "install_codeanatomy_runtime is required. "
             f"{REBUILD_WHEELS_HINT}"
         )
         error_message = f"{msg} {details}"
@@ -545,7 +366,6 @@ from datafusion_engine.udf.extension_snapshot_runtime import (
     _require_bool_mapping,
     _require_mapping,
     _snapshot_names,
-    _supplement_expr_surface_snapshot,
     _validated_snapshot,
     rust_runtime_install_payload,
     rust_udf_docs,
@@ -667,6 +487,7 @@ def udf_audit_payload(snapshot: Mapping[str, object]) -> dict[str, object]:
 
 
 __all__ = [
+    "AsyncUdfPolicy",
     "ExtensionRegistries",
     "RustUdfSnapshot",
     "_async_udf_policy",

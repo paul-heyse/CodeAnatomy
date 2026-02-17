@@ -14,9 +14,6 @@ Key introspection surfaces:
 - information_schema.parameters: Function parameter metadata
 - information_schema.df_settings: Session configuration
 """
-# NOTE(size-exception): This module is temporarily >800 LOC during hard-cutover
-# decomposition. Remaining extraction and contraction work is tracked in
-# docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
 
 from __future__ import annotations
 
@@ -30,14 +27,12 @@ import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
 from datafusion_engine.arrow.interop import coerce_arrow_schema
-from datafusion_engine.sql.options import (
-    sql_options_for_profile,
-)
+from datafusion_engine.schema.introspection_cache import SchemaMapping
+from datafusion_engine.schema.introspection_common import read_only_sql_options
+from datafusion_engine.schema.introspection_routines import _introspection_cache_for_ctx
 from datafusion_engine.tables.metadata import table_provider_metadata
 from serde_msgspec import to_builtins
 from utils.hashing import CacheKeyBuilder
-
-SchemaMapping = dict[str, dict[str, dict[str, dict[str, str]]]]
 
 if TYPE_CHECKING:
     from datafusion_engine.catalog.introspection import IntrospectionCache, IntrospectionSnapshot
@@ -104,23 +99,6 @@ def schema_contract_from_table(
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
-
-
-def _read_only_sql_options() -> SQLOptions:
-    return sql_options_for_profile(None)
-
-
-def _introspection_cache_for_ctx(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None,
-) -> IntrospectionCache:
-    try:
-        from datafusion_engine.catalog.introspection import introspection_cache_for_ctx
-    except ImportError as exc:  # pragma: no cover - defensive fallback
-        msg = "DataFusion introspection helpers are unavailable."
-        raise ValueError(msg) from exc
-    return introspection_cache_for_ctx(ctx, sql_options=sql_options)
 
 
 def _stable_cache_key(prefix: str, payload: Mapping[str, object]) -> str:
@@ -303,7 +281,7 @@ class SchemaIntrospector:
             if isinstance(cached, list):
                 return cached
         try:
-            df = self.ctx.sql_with_options(sql, self.sql_options or _read_only_sql_options())
+            df = self.ctx.sql_with_options(sql, self.sql_options or read_only_sql_options())
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = "Schema introspection SQL parse failed."
             raise ValueError(msg) from exc

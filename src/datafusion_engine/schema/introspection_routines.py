@@ -10,14 +10,10 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
-from datafusion_engine.sql.options import sql_options_for_profile
+from datafusion_engine.schema.introspection_common import read_only_sql_options
 
 if TYPE_CHECKING:
     from datafusion_engine.catalog.introspection import IntrospectionCache
-
-
-def _read_only_sql_options() -> SQLOptions:
-    return sql_options_for_profile(None)
 
 
 def _introspection_cache_for_ctx(
@@ -224,7 +220,7 @@ def _information_schema_table(
         if isinstance(candidate, type) and issubclass(candidate, Exception):
             panic_exception_type = candidate
     query = f"select * from information_schema.{name}"
-    resolved_options = sql_options or _read_only_sql_options()
+    resolved_options = sql_options or read_only_sql_options()
     try:
         df = ctx.sql_with_options(query, resolved_options)
         return df.to_arrow_table()

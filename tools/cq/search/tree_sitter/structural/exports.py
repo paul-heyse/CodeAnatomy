@@ -12,27 +12,10 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterDiagnosticV1,
     TreeSitterQueryHitV1,
 )
+from tools.cq.search.tree_sitter.structural.node_id import build_node_id
 
 if TYPE_CHECKING:
     from tree_sitter import Node
-
-
-# -- Shared Utilities ---------------------------------------------------------
-
-
-def _build_node_id(*, file_path: str, node: object | None) -> str:
-    """Build a stable structural node identifier from file and byte span.
-
-    Returns:
-        str: Function return value.
-    """
-    if node is None:
-        return f"{file_path}:::null"
-    node_type = str(getattr(node, "type", "unknown"))
-    return (
-        f"{file_path}:{int(getattr(node, 'start_byte', 0))}:"
-        f"{int(getattr(node, 'end_byte', 0))}:{node_type}"
-    )
 
 
 # -- Diagnostic Export --------------------------------------------------------
@@ -154,7 +137,7 @@ def export_query_hits(
                         query_name=file_path,
                         pattern_index=pattern_index,
                         capture_name=capture_name,
-                        node_id=_build_node_id(file_path=file_path, node=node),
+                        node_id=build_node_id(file_path=file_path, node=node),
                         start_byte=int(getattr(node, "start_byte", 0)),
                         end_byte=int(getattr(node, "end_byte", 0)),
                     )

@@ -110,10 +110,10 @@ def _compute_context_window(
 def _build_calls_neighborhood(
     request: CallsNeighborhoodRequest,
 ) -> tuple[InsightNeighborhoodV1, list[Finding], list[str]]:
-    from tools.cq.core.front_door_assembly import (
+    from tools.cq.core.front_door_contracts import InsightNeighborhoodV1, InsightSliceV1
+    from tools.cq.core.front_door_search import (
         build_neighborhood_from_slices,
     )
-    from tools.cq.core.front_door_contracts import InsightNeighborhoodV1, InsightSliceV1
     from tools.cq.core.snb_schema import SemanticNodeRefV1
     from tools.cq.neighborhood.contracts import (
         TreeSitterNeighborhoodCollectRequest,

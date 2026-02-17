@@ -166,6 +166,9 @@ SEMANTIC_TYPE_COMPATIBILITY_GROUPS: Final[dict[SemanticType, tuple[Compatibility
     SemanticType.QNAME: (CompatibilityGroup.SYMBOL_IDENTITY,),
 }
 
+# Canonical exact-name FILE_IDENTITY join key set used across compiler/IR pipeline.
+FILE_IDENTITY_COLUMN_NAMES: Final[frozenset[str]] = frozenset({"file_id", "path"})
+
 
 def _matches_pattern(lower_name: str, column_name: str, pattern: tuple[str, ...]) -> bool:
     """Check if column name matches a pattern specification.
@@ -316,6 +319,7 @@ def columns_are_joinable(left_col: str, right_col: str) -> bool:
 
 
 __all__ = [
+    "FILE_IDENTITY_COLUMN_NAMES",
     "STANDARD_COLUMNS",
     "CompatibilityGroup",
     "SemanticColumnSpec",

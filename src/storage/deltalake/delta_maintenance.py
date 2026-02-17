@@ -11,8 +11,8 @@ from obs.otel import SCOPE_STORAGE, stage_span
 from storage.deltalake.delta_read import DeltaVacuumOptions, StorageOptions
 from storage.deltalake.delta_runtime_ops import (
     _DeltaMaintenanceRecord,
-    _record_delta_maintenance,
-    _storage_span_attributes,
+    record_delta_maintenance,
+    storage_span_attributes,
 )
 from storage.deltalake.delta_write import build_commit_properties
 
@@ -38,7 +38,7 @@ def vacuum_delta(
     from utils.storage_options import merged_storage_options
 
     options = options or DeltaVacuumOptions()
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="vacuum",
         table_path=path,
         extra={
@@ -133,7 +133,7 @@ def create_delta_checkpoint(
     """
     from utils.storage_options import merged_storage_options
 
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="checkpoint",
         table_path=path,
         dataset_name=dataset_name,
@@ -177,7 +177,7 @@ def create_delta_checkpoint(
                 "version": table.version(),
                 "fallback_error": str(fallback_error) if fallback_error is not None else None,
             }
-            _record_delta_maintenance(
+            record_delta_maintenance(
                 _DeltaMaintenanceRecord(
                     runtime_profile=runtime_profile,
                     report=report,
@@ -192,7 +192,7 @@ def create_delta_checkpoint(
                 )
             )
             return report
-        _record_delta_maintenance(
+        record_delta_maintenance(
             _DeltaMaintenanceRecord(
                 runtime_profile=runtime_profile,
                 report=report,
@@ -230,7 +230,7 @@ def cleanup_delta_log(
     """
     from utils.storage_options import merged_storage_options
 
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="cleanup_metadata",
         table_path=path,
         dataset_name=dataset_name,
@@ -264,7 +264,7 @@ def cleanup_delta_log(
         except (ImportError, RuntimeError, TypeError, ValueError) as exc:
             msg = f"Delta metadata cleanup failed via Rust control plane: {exc}"
             raise RuntimeError(msg) from exc
-        _record_delta_maintenance(
+        record_delta_maintenance(
             _DeltaMaintenanceRecord(
                 runtime_profile=runtime_profile,
                 report=report,

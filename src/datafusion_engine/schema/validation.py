@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
@@ -36,6 +37,9 @@ if TYPE_CHECKING:
 
     from datafusion_engine.schema.contracts import SchemaContract, TableConstraints
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -106,10 +110,9 @@ class _ValidationContext:
 
 
 def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> SessionContext:
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-    profile = runtime_profile or DataFusionRuntimeProfile()
-    return profile.session_runtime().ctx
+    if runtime_profile is not None:
+        return runtime_profile.session_runtime().ctx
+    return SessionContext()
 
 
 def _expr_table(df: DataFrame) -> ArrowTable:
@@ -641,6 +644,15 @@ def validate_table(
         spec=spec,
         options=options,
     )
+    _LOGGER.debug(
+        "schema.validate_table.start",
+        extra={
+            "table_name": spec.name,
+            "row_count": context.row_count,
+            "strict_mode": options.strict,
+            "coerce": options.coerce,
+        },
+    )
     sql_options = sql_options_for_profile(runtime_profile)
     key_fields = _resolve_key_fields(
         runtime_profile,
@@ -663,6 +675,15 @@ def validate_table(
     if options.max_errors is not None:
         error_entries = error_entries[: options.max_errors]
 
+    _LOGGER.debug(
+        "schema.validate_table.complete",
+        extra={
+            "table_name": spec.name,
+            "row_count": context.row_count,
+            "invalid_row_count": invalid_row_count,
+            "error_count": len(error_entries),
+        },
+    )
     return _build_validation_report(
         validated=validated,
         invalid_rows=invalid_rows,

@@ -203,19 +203,28 @@ def load_query_pack_sources(
             language=normalized,
             include_distribution=include_distribution,
         )
+    report = build_grammar_drift_report(language=normalized, query_sources=loaded_rows)
+    if not report.compatible and include_distribution:
+        return _load_sources_uncached(language=normalized, include_distribution=False)
+    return loaded_rows
+
+
+def set_last_grammar_drift_report(
+    *,
+    language: str,
+    query_sources: tuple[QueryPackSourceV1, ...],
+) -> GrammarDriftReportV1:
+    """Compute and persist latest grammar-drift report for one language.
+
+    Returns:
+        GrammarDriftReportV1: Computed grammar drift report for `language`.
+    """
     from tools.cq.search.tree_sitter.query.runtime_state import get_query_runtime_state
 
-    runtime_state = get_query_runtime_state()
-    report = build_grammar_drift_report(language=normalized, query_sources=loaded_rows)
-    runtime_state.last_drift_reports[normalized] = report
-    if not report.compatible and include_distribution:
-        fallback_rows = _load_sources_uncached(language=normalized, include_distribution=False)
-        runtime_state.last_drift_reports[normalized] = build_grammar_drift_report(
-            language=normalized,
-            query_sources=fallback_rows,
-        )
-        return fallback_rows
-    return loaded_rows
+    normalized = language.strip().lower()
+    report = build_grammar_drift_report(language=normalized, query_sources=query_sources)
+    get_query_runtime_state().last_drift_reports[normalized] = report
+    return report
 
 
 def load_query_pack_sources_for_profile(
@@ -255,4 +264,5 @@ __all__ = [
     "load_distribution_query_source",
     "load_query_pack_sources",
     "load_query_pack_sources_for_profile",
+    "set_last_grammar_drift_report",
 ]

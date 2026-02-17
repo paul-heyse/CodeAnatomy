@@ -5,12 +5,15 @@ Builds symbol keys and resolves references across files.
 
 from __future__ import annotations
 
-import re
+import builtins as python_builtins
 from dataclasses import dataclass, field
 
 from tools.cq.query.finding_builders import extract_call_target as _extract_call_target
+from tools.cq.query.import_utils import parse_import_bindings
 from tools.cq.query.sg_parser import SgRecord, filter_records_by_kind
 from tools.cq.query.shared_utils import extract_def_name
+
+_BUILTIN_NAMES = frozenset(dir(python_builtins))
 
 
 @dataclass
@@ -155,9 +158,11 @@ class SymbolTable:
         if key in self.definitions:
             return self.definitions[key]
 
-        # Track as unresolved
-        self.unresolved.append((file, name))
         return None
+
+    def record_unresolved(self, file: str, name: str) -> None:
+        """Record one unresolved symbol lookup."""
+        self.unresolved.append((file, name))
 
     def _resolve_import(self, binding: ImportBinding) -> SgRecord | None:
         """Resolve an imported name to its definition.
@@ -241,83 +246,15 @@ def _parse_import(record: SgRecord) -> list[ImportBinding]:
     list[ImportBinding]
         Import bindings extracted from the record.
     """
-    text = record.text
-    handlers = {
-        "import ": _parse_import_stmt,
-        "from ": _parse_from_import_stmt,
-    }
-    for prefix, handler in handlers.items():
-        if text.startswith(prefix):
-            return handler(text)
-    return []
-
-
-def _parse_import_stmt(text: str) -> list[ImportBinding]:
-    bindings: list[ImportBinding] = []
-    remainder = text[7:].strip()
-    if " as " in remainder:
-        parts = remainder.split(" as ", 1)
-        source = parts[0].strip()
-        alias = parts[1].strip()
-        bindings.append(
-            ImportBinding(
-                local_name=alias,
-                source_module=source,
-                source_name=source.split(".")[-1],
-                is_from_import=False,
-            )
+    return [
+        ImportBinding(
+            local_name=parsed.local_name,
+            source_module=parsed.source_module,
+            source_name=parsed.source_name,
+            is_from_import=parsed.is_from_import,
         )
-        return bindings
-
-    for module_name in remainder.split(","):
-        cleaned_module = module_name.strip()
-        if cleaned_module:
-            bindings.append(
-                ImportBinding(
-                    local_name=cleaned_module.split(".")[-1],
-                    source_module=cleaned_module,
-                    source_name=None,
-                    is_from_import=False,
-                )
-            )
-    return bindings
-
-
-def _parse_from_import_stmt(text: str) -> list[ImportBinding]:
-    bindings: list[ImportBinding] = []
-    match = re.match(r"from\s+([\w.]+)\s+import\s+(.+)", text)
-    if not match:
-        return bindings
-    source_module = match.group(1)
-    names_part = match.group(2).strip()
-
-    if names_part.startswith("("):
-        names_part = names_part[1:]
-    if names_part.endswith(")"):
-        names_part = names_part[:-1]
-
-    for name_spec in names_part.split(","):
-        cleaned_spec = name_spec.strip()
-        if not cleaned_spec:
-            continue
-
-        if " as " in cleaned_spec:
-            parts = cleaned_spec.split(" as ", 1)
-            source_name = parts[0].strip()
-            local_name = parts[1].strip()
-        else:
-            source_name = cleaned_spec
-            local_name = cleaned_spec
-
-        bindings.append(
-            ImportBinding(
-                local_name=local_name,
-                source_module=source_module,
-                source_name=source_name if source_name != local_name else None,
-                is_from_import=True,
-            )
-        )
-    return bindings
+        for parsed in parse_import_bindings(record.text)
+    ]
 
 
 def resolve_call_target(
@@ -352,6 +289,7 @@ def resolve_call_target(
     if resolved:
         return resolved, "resolved"
 
+    symbol_table.record_unresolved(call.file, target_name)
     return None, "unresolved"
 
 
@@ -365,74 +303,4 @@ def _is_builtin(name: str) -> bool:
     bool
         True if the name is a builtin.
     """
-    builtins = {
-        "abs",
-        "all",
-        "any",
-        "ascii",
-        "bin",
-        "bool",
-        "breakpoint",
-        "bytearray",
-        "bytes",
-        "callable",
-        "chr",
-        "classmethod",
-        "compile",
-        "complex",
-        "delattr",
-        "dict",
-        "dir",
-        "divmod",
-        "enumerate",
-        "eval",
-        "exec",
-        "filter",
-        "float",
-        "format",
-        "frozenset",
-        "getattr",
-        "globals",
-        "hasattr",
-        "hash",
-        "help",
-        "hex",
-        "id",
-        "input",
-        "int",
-        "isinstance",
-        "issubclass",
-        "iter",
-        "len",
-        "list",
-        "locals",
-        "map",
-        "max",
-        "memoryview",
-        "min",
-        "next",
-        "object",
-        "oct",
-        "open",
-        "ord",
-        "pow",
-        "print",
-        "property",
-        "range",
-        "repr",
-        "reversed",
-        "round",
-        "set",
-        "setattr",
-        "slice",
-        "sorted",
-        "staticmethod",
-        "str",
-        "sum",
-        "super",
-        "tuple",
-        "type",
-        "vars",
-        "zip",
-    }
-    return name in builtins
+    return name in _BUILTIN_NAMES

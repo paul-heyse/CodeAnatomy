@@ -78,7 +78,7 @@ def test_iter_result_findings_preserves_section_order() -> None:
     result = CqResult(
         run=_run_meta(),
         key_findings=(key,),
-        sections=(Section(title="Section", findings=[section_finding]),),
+        sections=(Section(title="Section", findings=(section_finding,)),),
         evidence=(evidence,),
     )
     assert iter_result_findings(result) == [key, section_finding, evidence]

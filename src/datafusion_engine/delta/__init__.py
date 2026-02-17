@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING
+
+from utils.lazy_module import make_lazy_loader
 
 __all__ = [
     "DeltaMutationRequest",
@@ -22,13 +23,4 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.service import DeltaMutationRequest, DeltaService
 
 
-def __getattr__(name: str) -> object:
-    export = _EXPORT_MAP.get(name)
-    if export is None:
-        msg = f"module {__name__!r} has no attribute {name!r}"
-        raise AttributeError(msg)
-    module_name, attr = export
-    module = importlib.import_module(module_name)
-    value = getattr(module, attr)
-    globals()[name] = value
-    return value
+__getattr__, __dir__ = make_lazy_loader(_EXPORT_MAP, __name__, globals())

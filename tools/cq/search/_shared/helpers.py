@@ -99,6 +99,31 @@ def truncate(text: str, max_len: int) -> str:
     return text[: max(1, max_len - 3)] + "..."
 
 
+def coerce_count(value: object) -> int:
+    """Coerce one value to integer count with safe defaults.
+
+    Returns:
+    -------
+    int
+        Integer count value or zero when coercion fails.
+    """
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
+def safe_int_counter(value: object) -> int:
+    """Return one non-bool integer counter value, else zero."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
 def sg_node_text(node: SgNode | None) -> str | None:
     """Extract normalized text from an ast-grep node.
 
@@ -178,12 +203,14 @@ def assert_no_runtime_only_keys(payload: Mapping[str, object]) -> None:
 __all__ = [
     "RuntimeBoundarySummary",
     "assert_no_runtime_only_keys",
+    "coerce_count",
     "convert_from_attributes",
     "decode_mapping",
     "encode_mapping",
     "has_runtime_only_keys",
     "line_col_to_byte_offset",
     "node_text",
+    "safe_int_counter",
     "sg_node_text",
     "source_hash",
     "to_mapping_payload",

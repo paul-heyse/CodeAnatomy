@@ -77,14 +77,14 @@ def merge_step_results(merged: CqResult, step_id: str, step_result: CqResult) ->
             *tuple(
                 Section(
                     title=f"{step_id}: {section.title}",
-                    findings=[
+                    findings=tuple(
                         _clone_with_provenance(
                             finding,
                             step_id=step_id,
                             source_macro=source_macro,
                         )
                         for finding in section.findings
-                    ],
+                    ),
                     collapsed=section.collapsed,
                 )
                 for section in step_result.sections

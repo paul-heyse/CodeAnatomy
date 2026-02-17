@@ -10,10 +10,11 @@ from tools.cq.core.renderers import (
     render_mermaid_class_diagram,
     render_mermaid_flowchart,
 )
-from tools.cq.core.report import render_markdown, render_summary_compact
+from tools.cq.core.report import render_markdown, render_summary_condensed
 from tools.cq.core.serialization import dumps_json
 
 if TYPE_CHECKING:
+    from tools.cq.cli_app.protocols import ConsolePort
     from tools.cq.cli_app.types import OutputFormat
     from tools.cq.core.schema import CqResult
 
@@ -40,7 +41,7 @@ def render_result(
     renderers: dict[str, Callable[[CqResult], str]] = {
         "json": lambda payload: dumps_json(payload, indent=2),
         "md": render_markdown,
-        "summary": render_summary_compact,
+        "summary": render_summary_condensed,
         "mermaid": render_mermaid_flowchart,
         "mermaid-class": render_mermaid_class_diagram,
         "dot": render_dot,
@@ -55,10 +56,13 @@ def render_result(
     return renderer(result)
 
 
-def emit_output(output: str, *, output_format: OutputFormat) -> None:
+def emit_output(
+    output: str,
+    *,
+    output_format: OutputFormat,
+    console: ConsolePort,
+) -> None:
     """Emit rendered output without introducing wrapping artifacts."""
-    from tools.cq.cli_app.app import console
-
     format_value = str(output_format)
     if format_value in _JSON_LIKE_FORMATS:
         stream = console.file

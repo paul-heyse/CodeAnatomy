@@ -7,9 +7,10 @@ from pathlib import Path
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor_runtime import (
+from tools.cq.query.enrichment import SymtableEnricher
+from tools.cq.query.executor_ast_grep import collect_match_spans as _collect_match_spans
+from tools.cq.query.executor_plan_dispatch import (
     ExecutePlanRequestV1,
-    _collect_match_spans,
     execute_plan,
 )
 from tools.cq.query.ir import Query
@@ -29,6 +30,7 @@ def _execute_query(tmp_path: Path, query_text: str) -> tuple[Query, ToolPlan, Cq
             query=query,
             root=str(tmp_path),
             services=resolve_runtime_services(tmp_path),
+            symtable_enricher=SymtableEnricher(tmp_path),
             argv=("cq", "q", query_text),
             query_text=query_text,
         ),

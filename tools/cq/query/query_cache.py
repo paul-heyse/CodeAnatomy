@@ -18,7 +18,7 @@ from tools.cq.core.cache.fragment_contracts import (
     FragmentWriteV1,
 )
 from tools.cq.core.cache.fragment_engine import FragmentPersistRuntimeV1, FragmentProbeRuntimeV1
-from tools.cq.core.cache.fragment_orchestrator import FragmentScanResult, run_fragment_scan
+from tools.cq.core.cache.fragment_runtime import FragmentScanResult, run_fragment_scan
 from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import build_cache_key, build_scope_hash
 from tools.cq.core.cache.namespaces import (

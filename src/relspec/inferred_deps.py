@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import importlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -277,22 +276,11 @@ def _required_types_from_registry(
     return required
 
 
-def _optional_module_attr(module: str, attr: str) -> object | None:
+def _extract_dataset_spec(name: str) -> DatasetSpec | None:
     try:
-        loaded = importlib.import_module(module)
+        from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
-    return getattr(loaded, attr, None)
-
-
-def _extract_dataset_spec(name: str) -> DatasetSpec | None:
-    extract_dataset_spec = _optional_module_attr(
-        "datafusion_engine.extract_registry",
-        "dataset_spec",
-    )
-    if not callable(extract_dataset_spec):
-        return None
-    extract_dataset_spec = cast("Callable[[str], DatasetSpec]", extract_dataset_spec)
     try:
         return extract_dataset_spec(name)
     except KeyError:
@@ -300,14 +288,11 @@ def _extract_dataset_spec(name: str) -> DatasetSpec | None:
 
 
 def _normalize_dataset_spec(name: str, *, ctx: SessionContext | None = None) -> DatasetSpec | None:
-    normalize_dataset_spec = _optional_module_attr(
-        "semantics.catalog.dataset_specs",
-        "dataset_spec",
-    )
-    if not callable(normalize_dataset_spec):
+    try:
+        from semantics.catalog.dataset_specs import dataset_spec as normalize_dataset_spec
+    except (ImportError, RuntimeError, TypeError, ValueError):
         return None
     _ = ctx
-    normalize_dataset_spec = cast("Callable[[str], DatasetSpec]", normalize_dataset_spec)
     try:
         return normalize_dataset_spec(name)
     except KeyError:
@@ -315,7 +300,7 @@ def _normalize_dataset_spec(name: str, *, ctx: SessionContext | None = None) -> 
 
 
 def _dataset_spec_for_table(name: str, *, ctx: SessionContext | None = None) -> DatasetSpec | None:
-    resolvers = (
+    resolvers: tuple[Callable[[str], DatasetSpec | None], ...] = (
         _extract_dataset_spec,
         lambda table_name: _normalize_dataset_spec(table_name, ctx=ctx),
     )

@@ -14,7 +14,7 @@ from storage.deltalake.delta_read import (
     SnapshotKey,
     _open_delta_table,
 )
-from storage.deltalake.delta_runtime_ops import _storage_span_attributes
+from storage.deltalake.delta_runtime_ops import storage_span_attributes
 
 
 def canonical_table_uri(table_uri: str) -> str:
@@ -49,7 +49,7 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
     pa.Schema | None
         Resolved table schema when available.
     """
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="metadata",
         table_path=request.path,
         extra={"codeanatomy.metadata_kind": "schema"},

@@ -9,7 +9,7 @@ import ast
 import dis
 import logging
 import symtable
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from tools.cq.query.sg_parser import SgRecord
 
 logger = logging.getLogger(__name__)
+SourceReader = Callable[[Path], str]
 
 __all__ = [
     "BytecodeInfo",
@@ -363,15 +364,18 @@ def enrich_records(
 class SymtableEnricher:
     """Enricher that adds symtable-based scope information."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, source_reader: SourceReader | None = None) -> None:
         """Initialize enricher.
 
         Parameters
         ----------
         root
             Repository root for resolving file paths.
+        source_reader
+            Optional source-reader injection seam for tests.
         """
         self._root = root
+        self._source_reader = source_reader or (lambda path: path.read_text(encoding="utf-8"))
         self._cache: dict[Path, ScopeGraph] = {}
 
     def _get_scope_graph(self, file_path: Path) -> ScopeGraph | None:
@@ -386,8 +390,11 @@ class SymtableEnricher:
             return self._cache[file_path]
 
         try:
-            source = file_path.read_text(encoding="utf-8")
+            source = self._source_reader(file_path)
         except OSError as exc:
+            logger.debug("Failed to read %s: %s", file_path, exc)
+            return None
+        except (RuntimeError, TypeError, ValueError) as exc:
             logger.debug("Failed to read %s: %s", file_path, exc)
             return None
 

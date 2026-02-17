@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 
 from cyclopts import App
 from cyclopts.bind import normalize_tokens
@@ -15,25 +14,10 @@ from tools.cq.cli_app.result_action import (
     CQ_DEFAULT_RESULT_ACTION,
     apply_result_action,
 )
+from tools.cq.cli_app.telemetry_events import CqInvokeEvent, build_invoke_event
 from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
 
 _INVOCATION_RUNTIME_ERRORS = (OSError, RuntimeError, TypeError, ValueError)
-
-
-@dataclass(frozen=True, slots=True)
-class CqInvokeEvent:
-    """Structured CQ invocation telemetry payload."""
-
-    ok: bool
-    command: str | None
-    parse_ms: float
-    exec_ms: float
-    exit_code: int
-    error_class: str | None = None
-    error_stage: str | None = None
-    event_id: str | None = None
-    event_uuid_version: int | None = None
-    event_created_ms: int | None = None
 
 
 def _apply_result_action(app: App, result: object) -> int:
@@ -96,7 +80,7 @@ def invoke_with_telemetry(
                 result = dispatch_bound_command(command, bound)
             except CycloptsError as exc:
                 exec_ms = (time.perf_counter() - t1) * 1000.0
-                event = CqInvokeEvent(
+                event = build_invoke_event(
                     ok=False,
                     command=command_name,
                     parse_ms=parse_ms,
@@ -112,7 +96,7 @@ def invoke_with_telemetry(
             else:
                 exit_code = _apply_result_action(app, result)
                 exec_ms = (time.perf_counter() - t1) * 1000.0
-                event = CqInvokeEvent(
+                event = build_invoke_event(
                     ok=True,
                     command=command_name,
                     parse_ms=parse_ms,
@@ -125,7 +109,7 @@ def invoke_with_telemetry(
                 return exit_code, event
         except CycloptsError as exc:
             parse_ms = (time.perf_counter() - t0) * 1000.0
-            event = CqInvokeEvent(
+            event = build_invoke_event(
                 ok=False,
                 command=command_name,
                 parse_ms=parse_ms,
@@ -140,7 +124,7 @@ def invoke_with_telemetry(
             return 2, event
         except _INVOCATION_RUNTIME_ERRORS as exc:
             exec_ms = (time.perf_counter() - t0) * 1000.0
-            event = CqInvokeEvent(
+            event = build_invoke_event(
                 ok=False,
                 command=command_name,
                 parse_ms=(time.perf_counter() - t0) * 1000.0,

@@ -20,6 +20,7 @@ from datafusion import SessionContext
 from core.config_base import config_fingerprint
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema.introspection_core import schema_from_table
+from datafusion_engine.schema.type_resolution import arrow_type_to_sql as _arrow_type_to_sql
 from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.dataset_spec import ContractSpec, DatasetSpec, TableSchemaContract
 from schema_spec.field_spec import FieldSpec
@@ -867,31 +868,7 @@ class SchemaContract:
         str
             SQL type string
         """
-        from schema_spec.arrow_types import ArrowTypeBase, arrow_type_to_pyarrow
-
-        if isinstance(arrow_type, ArrowTypeBase):
-            arrow_type = arrow_type_to_pyarrow(arrow_type)
-        # Simplified mapping - extend as needed
-        type_map = {
-            pa.int64(): "Int64",
-            pa.int32(): "Int32",
-            pa.string(): "Utf8",
-            pa.float64(): "Float64",
-            pa.bool_(): "Boolean",
-        }
-        try:
-            mapped = type_map.get(arrow_type)
-        except TypeError:
-            mapped = None
-        if mapped is not None:
-            return mapped
-        for candidate, sql_type in type_map.items():
-            if arrow_type == candidate:
-                return sql_type
-        storage_type = getattr(arrow_type, "storage_type", None)
-        if isinstance(storage_type, pa.DataType) and storage_type is not arrow_type:
-            return SchemaContract._arrow_type_to_sql(storage_type)
-        return str(arrow_type)
+        return _arrow_type_to_sql(arrow_type)
 
     @staticmethod
     def _normalize_type_string(value: str) -> str:

@@ -287,21 +287,21 @@ class Finding(msgspec.Struct, frozen=True):
     id_taxonomy: str | None = None
 
 
-class Section(msgspec.Struct):
+class Section(msgspec.Struct, frozen=True):
     """A logical grouping of findings with a heading.
 
     Parameters
     ----------
     title : str
         Section heading.
-    findings : list[Finding]
+    findings : tuple[Finding, ...]
         Findings in this section.
     collapsed : bool
         Whether to render collapsed by default.
     """
 
     title: str
-    findings: list[Finding] = msgspec.field(default_factory=list)
+    findings: tuple[Finding, ...] = ()
     collapsed: bool = False
 
 
@@ -498,6 +498,14 @@ def append_result_section(result: CqResult, section: Section) -> CqResult:
     )
 
 
+def append_section_finding(section: Section, finding: Finding) -> Section:
+    """Return a section with one finding appended."""
+    return msgspec.structs.replace(
+        section,
+        findings=(*section.findings, finding),
+    )
+
+
 def insert_result_section(result: CqResult, index: int, section: Section) -> CqResult:
     """Return a result with one section inserted at index."""
     sections = list(result.sections)
@@ -546,7 +554,7 @@ def assign_result_finding_ids(result: CqResult) -> CqResult:
     sections = tuple(
         msgspec.structs.replace(
             section,
-            findings=[_assign(finding) for finding in section.findings],
+            findings=tuple(_assign(finding) for finding in section.findings),
         )
         for section in result.sections
     )
@@ -583,6 +591,7 @@ __all__ = [
     "append_result_evidence",
     "append_result_key_finding",
     "append_result_section",
+    "append_section_finding",
     "assign_result_finding_ids",
     "coerce_str",
     "extend_result_evidence",

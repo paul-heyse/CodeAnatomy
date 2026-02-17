@@ -358,7 +358,7 @@ def _derive_policy_payload_from_snapshot(
     derive = getattr(module, "derive_function_factory_policy", None)
     if not callable(derive):
         return None
-    payload = derive(snapshot, allow_async)
+    payload = derive(snapshot, allow_async=allow_async)
     if isinstance(payload, Mapping):
         return dict(payload)
     return None

@@ -227,6 +227,20 @@ def _derive_cache_policies(
                 policy_value = override
         policies[task_name] = policy_value
 
+    _LOGGER.debug(
+        "Derived cache policies for compiled execution policy.",
+        extra={
+            "codeanatomy.task_count": len(task_graph.task_idx),
+            "codeanatomy.output_count": len(output_locations),
+            "codeanatomy.override_count": len(cache_overrides or ()),
+            "codeanatomy.workload_class": normalized_workload,
+            "codeanatomy.cache_policy_counts": {
+                "none": sum(1 for value in policies.values() if value == "none"),
+                "delta_staging": sum(1 for value in policies.values() if value == "delta_staging"),
+                "delta_output": sum(1 for value in policies.values() if value == "delta_output"),
+            },
+        },
+    )
     return policies
 
 

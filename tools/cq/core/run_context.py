@@ -18,7 +18,7 @@ class RunContext(CqStruct, frozen=True):
     """Shared run metadata context for CQ commands."""
 
     root: Path
-    argv: list[str]
+    argv: tuple[str, ...]
     tc: Toolchain | None = None
     started_ms: float = 0.0
     run_id: str | None = None
@@ -30,7 +30,7 @@ class RunContext(CqStruct, frozen=True):
         cls,
         *,
         root: Path,
-        argv: list[str] | None,
+        argv: list[str] | tuple[str, ...] | None,
         tc: Toolchain | None,
         started_ms: float,
         run_id: str | None = None,
@@ -45,7 +45,7 @@ class RunContext(CqStruct, frozen=True):
         identity = resolve_run_identity_contract(run_id)
         return cls(
             root=root,
-            argv=list(argv) if argv else [],
+            argv=tuple(argv) if argv else (),
             tc=tc,
             started_ms=started_ms,
             run_id=identity.run_id,
@@ -64,7 +64,7 @@ class RunContext(CqStruct, frozen=True):
         toolchain = self.tc.to_dict() if self.tc else {}
         return mk_runmeta(
             macro=macro,
-            argv=self.argv,
+            argv=list(self.argv),
             root=str(self.root),
             started_ms=self.started_ms,
             toolchain=toolchain,

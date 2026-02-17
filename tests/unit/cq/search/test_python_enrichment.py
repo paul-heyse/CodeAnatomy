@@ -12,7 +12,6 @@ from tools.cq.search._shared.requests import (
 )
 from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.python.extractors import (
-    _AST_CACHE,
     _classify_item_role,
     _extract_behavior_summary,
     _extract_call_target,
@@ -31,6 +30,7 @@ from tools.cq.search.python.extractors import (
     enrich_python_context,
     enrich_python_context_by_byte_range,
 )
+from tools.cq.search.python.runtime_context import get_default_python_runtime_context
 
 TRUNCATION_MAX_CHARS = 20
 MIN_SCOPE_CHAIN_LENGTH = 2
@@ -947,10 +947,11 @@ class TestCaching:
     @staticmethod
     def test_cache_clear() -> None:
         """Test cache clear."""
+        ast_cache = get_default_python_runtime_context().ast_cache
         _get_ast(b"x = 1\n", cache_key="clear_test")
-        assert "clear_test" in _AST_CACHE
+        assert "clear_test" in ast_cache
         CACHE_REGISTRY.clear_all("python")
-        assert "clear_test" not in _AST_CACHE
+        assert "clear_test" not in ast_cache
 
 
 class TestPayloadTruncation:

@@ -1,9 +1,14 @@
-"""Schema specification models and adapters."""
+"""Schema specification models and adapters.
+
+This module intentionally re-exports a large schema surface for stable
+imports across the codebase while lazily loading implementations.
+"""
 
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING
+
+from utils.lazy_module import make_lazy_loader
 
 if TYPE_CHECKING:
     from schema_spec.dataset_spec import (
@@ -209,18 +214,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    target = _EXPORT_MAP.get(name)
-    if target is None:
-        msg = f"module {__name__!r} has no attribute {name!r}"
-        raise AttributeError(msg)
-    module_path, attr_name = target
-    module = importlib.import_module(module_path)
-    return getattr(module, attr_name)
-
-
-def __dir__() -> list[str]:
-    return sorted(list(globals()) + list(_EXPORT_MAP))
+__getattr__, __dir__ = make_lazy_loader(_EXPORT_MAP, __name__, globals())
 
 
 __all__ = [

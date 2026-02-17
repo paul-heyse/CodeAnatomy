@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import msgspec
 import pyarrow as pa
-from datafusion import DataFrame, SessionContext, SQLOptions, col, lit
+from datafusion import DataFrame, SessionContext, col, lit
 from datafusion.expr import Expr
 
 from datafusion_engine.arrow.coercion import to_arrow_table
@@ -21,6 +21,7 @@ from datafusion_engine.arrow.interop import (
 )
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.expr.cast import safe_cast
+from datafusion_engine.schema.introspection_routines import _introspection_cache_for_ctx
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import planning_sql_options
 from datafusion_engine.tables.metadata import table_provider_metadata
@@ -33,7 +34,6 @@ from storage.cdf_cursor_protocol import CdfCursorStoreLike
 from utils.value_coercion import coerce_int
 
 if TYPE_CHECKING:
-    from datafusion_engine.catalog.introspection import IntrospectionCache
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.program_manifest import ManifestDatasetResolver, SemanticProgramManifest
 
@@ -127,14 +127,16 @@ def _align_projection_exprs(
     schema: pa.Schema,
     input_columns: Sequence[str],
     keep_extra_columns: bool,
+    safe_cast_mode: bool = True,
 ) -> list[Expr]:
+    caster = safe_cast if safe_cast_mode else lambda expr, dtype: expr.cast(dtype)
     selections: list[Expr] = []
     for schema_field in schema:
         col_name = schema_field.name
         if schema_field.name in input_columns:
-            selections.append(safe_cast(col(col_name), schema_field.type).alias(col_name))
+            selections.append(caster(col(col_name), schema_field.type).alias(col_name))
         else:
-            selections.append(safe_cast(lit(None), schema_field.type).alias(col_name))
+            selections.append(caster(lit(None), schema_field.type).alias(col_name))
     if keep_extra_columns:
         for name in input_columns:
             if name in schema.names:
@@ -148,6 +150,7 @@ def align_table_to_schema(
     *,
     schema: SchemaLike,
     keep_extra_columns: bool = False,
+    safe_cast_mode: bool = True,
     ctx: SessionContext | None = None,
 ) -> pa.Table:
     """Align a table to a target schema using DataFusion casts.
@@ -157,8 +160,6 @@ def align_table_to_schema(
     pyarrow.Table
         Table aligned to the provided schema.
     """
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
     resolved_schema = pa.schema(schema)
     resolved_table = to_arrow_table(table)
     if _schema_has_extension(resolved_schema):
@@ -167,13 +168,14 @@ def align_table_to_schema(
             schema=resolved_schema,
             keep_extra_columns=keep_extra_columns,
         )
-    session = ctx or DataFusionRuntimeProfile().session_context()
+    session = ctx or SessionContext()
     temp_name = register_temp_table(session, resolved_table, prefix="__schema_align_")
     try:
         selections = _align_projection_exprs(
             schema=resolved_schema,
             input_columns=resolved_table.column_names,
             keep_extra_columns=keep_extra_columns,
+            safe_cast_mode=safe_cast_mode,
         )
         aligned = session.table(temp_name).select(*selections).to_arrow_table()
     finally:
@@ -274,9 +276,7 @@ def dataset_schema_from_context(
     Raises:
         KeyError: If the operation cannot be completed.
     """
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-    session_ctx = ctx or DataFusionRuntimeProfile().session_context()
+    session_ctx = ctx or SessionContext()
     try:
         schema = session_ctx.table(name).schema()
     except (KeyError, RuntimeError, TypeError, ValueError) as exc:
@@ -326,14 +326,11 @@ def read_delta_as_reader(
     pyarrow.RecordBatchReader
         Streaming reader for the Delta table via DataFusion's Delta table provider.
     """
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
     if delta_scan is None:
         delta_scan = DeltaScanOptions(schema_force_view_types=False)
     elif delta_scan.schema_force_view_types is None:
         delta_scan = msgspec.structs.replace(delta_scan, schema_force_view_types=False)
-    profile = DataFusionRuntimeProfile()
-    ctx = profile.session_context()
+    ctx = SessionContext()
     from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
     from datafusion_engine.dataset.resolution import (
         DatasetResolutionRequest,
@@ -356,7 +353,7 @@ def read_delta_as_reader(
         DatasetResolutionRequest(
             ctx=ctx,
             location=location,
-            runtime_profile=profile,
+            runtime_profile=None,
         )
     )
     from datafusion_engine.tables.metadata import TableProviderCapsule
@@ -402,9 +399,7 @@ def dataset_spec_from_context(
 
 
 def _datafusion_type_name(dtype: pa.DataType) -> str:
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-    ctx = DataFusionRuntimeProfile().io_ops.ephemeral_context()
+    ctx = SessionContext()
     table = pa.Table.from_arrays([pa.array([None], type=dtype)], names=["value"])
     from datafusion_engine.io.adapter import DataFusionIOAdapter
 
@@ -600,9 +595,7 @@ def datasource_config_from_manifest(
         else _semantic_output_config_for_profile(runtime_profile)
     )
     resolved_cdf_cursor_store = (
-        cdf_cursor_store
-        if cdf_cursor_store is not None
-        else runtime_profile.data_sources.cdf_cursor_store
+        cdf_cursor_store if cdf_cursor_store is not None else runtime_profile.cdf_cursor_store()
     )
     return DataSourceConfig(
         dataset_templates=locations,
@@ -647,9 +640,7 @@ def datasource_config_from_profile(
     else:
         merged_templates = dict(dataset_templates)
     resolved_cdf_cursor_store = (
-        cdf_cursor_store
-        if cdf_cursor_store is not None
-        else runtime_profile.data_sources.cdf_cursor_store
+        cdf_cursor_store if cdf_cursor_store is not None else runtime_profile.cdf_cursor_store()
     )
     return DataSourceConfig(
         dataset_templates=merged_templates,
@@ -674,7 +665,7 @@ def record_dataset_readiness(
     from semantics.resolver_identity import record_resolver_if_tracking
 
     record_resolver_if_tracking(dataset_resolver, label="dataset_readiness")
-    if profile.diagnostics.diagnostics_sink is None:
+    if profile.diagnostics_sink() is None:
         return
     from datafusion_engine.lineage.diagnostics import record_artifact
     from obs.otel import set_heartbeat_blockers
@@ -814,16 +805,6 @@ def _apply_readiness_status(
 # ---------------------------------------------------------------------------
 # Cache diagnostics helpers
 # ---------------------------------------------------------------------------
-
-
-def _introspection_cache_for_ctx(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None,
-) -> IntrospectionCache:
-    from datafusion_engine.catalog.introspection import introspection_cache_for_ctx
-
-    return introspection_cache_for_ctx(ctx, sql_options=sql_options)
 
 
 def _capture_cache_diagnostics(ctx: SessionContext) -> Mapping[str, object]:

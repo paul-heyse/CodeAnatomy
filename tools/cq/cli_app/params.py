@@ -18,6 +18,7 @@ from tools.cq.cli_app.command_schema import (
     ExceptionsCommandSchema,
     ImpactCommandSchema,
     ImportsCommandSchema,
+    NeighborhoodCommandSchema,
     QueryCommandSchema,
     ReportCommandSchema,
     RunCommandSchema,
@@ -304,6 +305,31 @@ _RUN_PARAM_FIELDS: dict[str, Parameter] = {
     ),
 }
 
+_NEIGHBORHOOD_PARAM_FIELDS: dict[str, Parameter] = {
+    "lang": Parameter(name="--lang", help="Query language (python, rust)"),
+    "top_k": Parameter(
+        name="--top-k",
+        help="Max items per slice",
+        validator=validators.Number(gte=1, lte=10_000),
+    ),
+    "semantic_enrichment": Parameter(
+        name="--semantic-enrichment",
+        negative="--no-semantic-enrichment",
+        negative_bool=(),
+        help="Enable semantic enrichment",
+    ),
+    "enrich": Parameter(
+        name="--enrich",
+        negative="--no-enrich",
+        negative_bool=(),
+        help="Enable incremental enrichment for neighborhood target analysis",
+    ),
+    "enrich_mode": Parameter(
+        name="--enrich-mode",
+        help="Incremental enrichment mode (ts_only, ts_sym, ts_sym_dis, full)",
+    ),
+}
+
 if TYPE_CHECKING:
     FilterParams = CommonFilterCommandSchema
     QueryParams = QueryCommandSchema
@@ -316,6 +342,7 @@ if TYPE_CHECKING:
     SideEffectsParams = SideEffectsCommandSchema
     BytecodeSurfaceParams = BytecodeSurfaceCommandSchema
     RunParams = RunCommandSchema
+    NeighborhoodParams = NeighborhoodCommandSchema
 else:
     FilterParams = _build_params_class(
         name="FilterParams",
@@ -394,6 +421,13 @@ else:
         base=FilterParams,
         doc="Options for the run command.",
     )
+    NeighborhoodParams = _build_params_class(
+        name="NeighborhoodParams",
+        schema_type=NeighborhoodCommandSchema,
+        field_parameters=_NEIGHBORHOOD_PARAM_FIELDS,
+        base=None,
+        doc="Options for the neighborhood command.",
+    )
 
 __all__ = [
     "BytecodeSurfaceParams",
@@ -401,6 +435,7 @@ __all__ = [
     "FilterParams",
     "ImpactParams",
     "ImportsParams",
+    "NeighborhoodParams",
     "QueryParams",
     "ReportParams",
     "RunParams",

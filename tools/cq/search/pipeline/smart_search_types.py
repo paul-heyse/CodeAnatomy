@@ -12,14 +12,14 @@ from typing import TYPE_CHECKING
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.types import QueryLanguage
-from tools.cq.search.pipeline.classifier import MatchCategory
-from tools.cq.search.pipeline.context_window import ContextWindow
-from tools.cq.search.pipeline.enrichment_contracts import (
+from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentModeV1,
     IncrementalEnrichmentV1,
     PythonEnrichmentV1,
     RustTreeSitterEnrichmentV1,
 )
+from tools.cq.search.pipeline.classifier import MatchCategory
+from tools.cq.search.pipeline.context_window import ContextWindow
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot

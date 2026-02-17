@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import ast
 import symtable
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from tools.cq.search.python.ast_utils import ast_node_priority, node_byte_span
+from tools.cq.search.python.ast_utils import (
+    ast_node_priority,
+    iter_nodes_with_parents,
+    node_byte_span,
+)
 
 if TYPE_CHECKING:
     from tools.cq.search.python.analysis_session import AstSpanEntry, PythonAnalysisSession
@@ -35,7 +38,9 @@ _NATIVE_RESOLUTION_ERRORS = (
 
 
 @dataclass(frozen=True, slots=True)
-class _AstAnchor:
+class AstAnchor:
+    """Resolved AST anchor and ancestry for one byte-range span."""
+
     node: ast.AST
     parents: tuple[ast.AST, ...]
     byte_start: int
@@ -43,7 +48,9 @@ class _AstAnchor:
 
 
 @dataclass(frozen=True, slots=True)
-class _DefinitionSite:
+class DefinitionSite:
+    """Definition site metadata for one resolved symbol."""
+
     kind: str
     byte_start: int | None
 
@@ -59,25 +66,16 @@ class _ResolutionPayloadInputs:
     byte_end: int
 
 
-def _iter_nodes_with_parents(tree: ast.AST) -> Iterator[tuple[ast.AST, tuple[ast.AST, ...]]]:
-    stack: list[tuple[ast.AST, tuple[ast.AST, ...]]] = [(tree, ())]
-    while stack:
-        node, parents = stack.pop()
-        yield node, parents
-        children = tuple(ast.iter_child_nodes(node))
-        stack.extend((child, (*parents, node)) for child in reversed(children))
-
-
 def _find_ast_anchor(
     tree: ast.AST,
     source_bytes: bytes,
     *,
     byte_start: int,
     byte_end: int,
-) -> _AstAnchor | None:
-    best: _AstAnchor | None = None
+) -> AstAnchor | None:
+    best: AstAnchor | None = None
     best_key: tuple[int, int, int] | None = None
-    for node, parents in _iter_nodes_with_parents(tree):
+    for node, parents in iter_nodes_with_parents(tree):
         span = node_byte_span(node, source_bytes)
         if span is None:
             continue
@@ -91,7 +89,7 @@ def _find_ast_anchor(
         priority = ast_node_priority(node)
         candidate_key = (size, priority, -depth)
         if best_key is None or candidate_key < best_key:
-            best = _AstAnchor(
+            best = AstAnchor(
                 node=node,
                 parents=parents,
                 byte_start=span_start,
@@ -106,8 +104,8 @@ def _find_ast_anchor_from_index(
     *,
     byte_start: int,
     byte_end: int,
-) -> _AstAnchor | None:
-    best: _AstAnchor | None = None
+) -> AstAnchor | None:
+    best: AstAnchor | None = None
     best_key: tuple[int, int, int] | None = None
     for entry in span_entries:
         contains_anchor = entry.byte_start <= byte_start and byte_end <= entry.byte_end
@@ -118,7 +116,7 @@ def _find_ast_anchor_from_index(
         depth = len(entry.parents)
         candidate_key = (size, entry.priority, -depth)
         if best_key is None or candidate_key < best_key:
-            best = _AstAnchor(
+            best = AstAnchor(
                 node=entry.node,
                 parents=entry.parents,
                 byte_start=entry.byte_start,
@@ -150,7 +148,7 @@ def _extract_symbol_role(node: ast.AST) -> dict[str, object]:
     return {}
 
 
-def _extract_enclosing_context(anchor: _AstAnchor) -> dict[str, object]:
+def _extract_enclosing_context(anchor: AstAnchor) -> dict[str, object]:
     payload: dict[str, object] = {}
     enclosing_callable: str | None = None
     enclosing_class: str | None = None
@@ -226,14 +224,14 @@ def _build_import_alias_map(tree: ast.AST) -> dict[str, str]:
     return alias_map
 
 
-def _site_with_kind(kind: str, node: ast.AST, source_bytes: bytes) -> _DefinitionSite:
+def _site_with_kind(kind: str, node: ast.AST, source_bytes: bytes) -> DefinitionSite:
     span = node_byte_span(node, source_bytes)
-    return _DefinitionSite(kind=kind, byte_start=(span[0] if span else None))
+    return DefinitionSite(kind=kind, byte_start=(span[0] if span else None))
 
 
 def _callable_or_class_definition_site(
     name: str, node: ast.AST, source_bytes: bytes
-) -> _DefinitionSite | None:
+) -> DefinitionSite | None:
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
         return _site_with_kind("function_def", node, source_bytes)
     if isinstance(node, ast.ClassDef) and node.name == name:
@@ -266,7 +264,7 @@ def _is_assignment_name(node: ast.AST, name: str) -> bool:
     return isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Store)
 
 
-def _definition_site(name: str, node: ast.AST, source_bytes: bytes) -> _DefinitionSite | None:
+def _definition_site(name: str, node: ast.AST, source_bytes: bytes) -> DefinitionSite | None:
     direct_site = _callable_or_class_definition_site(name, node, source_bytes)
     if direct_site is not None:
         return direct_site
@@ -284,8 +282,8 @@ def _definition_site(name: str, node: ast.AST, source_bytes: bytes) -> _Definiti
     return None
 
 
-def _build_definition_index(tree: ast.AST, source_bytes: bytes) -> dict[str, list[_DefinitionSite]]:
-    index: dict[str, list[_DefinitionSite]] = {}
+def _build_definition_index(tree: ast.AST, source_bytes: bytes) -> dict[str, list[DefinitionSite]]:
+    index: dict[str, list[DefinitionSite]] = {}
     for node in ast.walk(tree):
         # A placeholder name filters in _definition_site.
         for candidate_name in _candidate_definition_names(node):
@@ -407,9 +405,9 @@ def _resolve_symbol_table_and_flags(
 
 def _extract_binding_candidates(
     *,
-    anchor: _AstAnchor,
+    anchor: AstAnchor,
     scope_tables: list[symtable.SymbolTable],
-    definition_index: dict[str, list[_DefinitionSite]],
+    definition_index: dict[str, list[DefinitionSite]],
 ) -> dict[str, object]:
     name = _symbol_name_from_node(anchor.node)
     if name is None:
@@ -460,7 +458,7 @@ def _append_from_chain_entry(chain: list[dict[str, object]], from_node: ast.Impo
     chain.append({"from": value})
 
 
-def _extract_import_alias_chain(anchor: _AstAnchor) -> dict[str, object]:
+def _extract_import_alias_chain(anchor: AstAnchor) -> dict[str, object]:
     chain: list[dict[str, object]] = []
 
     if isinstance(anchor.node, ast.alias):
@@ -509,7 +507,7 @@ def _tree_sitter_anchor_text(
 
 def _extract_qualified_name_candidates(
     *,
-    anchor: _AstAnchor,
+    anchor: AstAnchor,
     alias_map: dict[str, str],
     enclosing_callable: str | None,
     enclosing_class: str | None,
@@ -565,8 +563,8 @@ def _build_resolution_index(
 __all__ = [
     "_MAX_BINDINGS",
     "_NATIVE_RESOLUTION_ERRORS",
-    "_AstAnchor",
-    "_DefinitionSite",
+    "AstAnchor",
+    "DefinitionSite",
     "_ResolutionPayloadInputs",
     "_build_resolution_index",
     "_descend_scope_table",

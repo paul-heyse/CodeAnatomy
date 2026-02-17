@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.pipeline.enrichment_contracts import (
+from tools.cq.search._shared.enrichment_contracts import (
     PythonEnrichmentV1,
     RustTreeSitterEnrichmentV1,
     python_enrichment_payload,

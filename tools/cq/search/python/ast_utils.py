@@ -69,7 +69,20 @@ def ast_node_priority(node: ast.AST) -> int:
     return 10
 
 
+def iter_nodes_with_parents(tree: ast.AST) -> list[tuple[ast.AST, tuple[ast.AST, ...]]]:
+    """Return depth-first node/parent tuples for an AST tree."""
+    nodes: list[tuple[ast.AST, tuple[ast.AST, ...]]] = []
+    stack: list[tuple[ast.AST, tuple[ast.AST, ...]]] = [(tree, ())]
+    while stack:
+        node, parents = stack.pop()
+        nodes.append((node, parents))
+        children = tuple(ast.iter_child_nodes(node))
+        stack.extend((child, (*parents, node)) for child in reversed(children))
+    return nodes
+
+
 __all__ = [
     "ast_node_priority",
+    "iter_nodes_with_parents",
     "node_byte_span",
 ]

@@ -20,6 +20,37 @@ _ENTITY_EXTRA_RECORD_TYPES: dict[str, frozenset[str]] = {
     "method": frozenset({"call"}),
 }
 
+_ENTITY_PATTERN_MAP_PYTHON: dict[str, str] = {
+    "function": "$FUNC",
+    "class": "$CLASS",
+    "method": "$METHOD",
+    "decorator": "@$DECORATOR($$$)",
+    "import": "import $MODULE",
+    "callsite": "$FUNC($$$)",
+}
+
+_ENTITY_KIND_MAP_PYTHON: dict[str, str] = {
+    "function": "function_definition",
+    "class": "class_definition",
+    "method": "function_definition",
+}
+
+_ENTITY_PATTERN_MAP_RUST: dict[str, str] = {
+    "function": "$FUNC",
+    "method": "$METHOD",
+    "module": "$MOD",
+    "import": "$USE",
+    "callsite": "$CALL",
+}
+
+_ENTITY_KIND_MAP_RUST: dict[str, str] = {
+    "function": "function_item",
+    "method": "function_item",
+    "module": "mod_item",
+    "import": "use_declaration",
+    "callsite": "call_expression",
+}
+
 
 class EntityKindRegistry(msgspec.Struct, frozen=True):
     """Immutable registry of normalized entity kind sets."""
@@ -65,6 +96,24 @@ class EntityKindRegistry(msgspec.Struct, frozen=True):
         if entity_type is None:
             return frozenset()
         return self.entity_record_types.get(entity_type, frozenset())
+
+    @staticmethod
+    def pattern_for_entity(entity_type: str | None, *, language: str) -> str | None:
+        """Return canonical ast-grep pattern token for an entity selector."""
+        if entity_type is None:
+            return None
+        if language == "rust":
+            return _ENTITY_PATTERN_MAP_RUST.get(entity_type)
+        return _ENTITY_PATTERN_MAP_PYTHON.get(entity_type)
+
+    @staticmethod
+    def kind_for_entity(entity_type: str | None, *, language: str) -> str | None:
+        """Return canonical ast-grep node kind for an entity selector when singular."""
+        if entity_type is None:
+            return None
+        if language == "rust":
+            return _ENTITY_KIND_MAP_RUST.get(entity_type)
+        return _ENTITY_KIND_MAP_PYTHON.get(entity_type)
 
     def extra_record_types_for_entity(self, entity_type: str | None) -> frozenset[str]:
         """Return extra record types needed for one entity type."""

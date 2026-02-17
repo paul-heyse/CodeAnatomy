@@ -46,7 +46,7 @@ def summary_envelope_to_mapping(envelope: SummaryOutputEnvelopeV1) -> dict[str, 
     return require_mapping(envelope)
 
 
-class RunSummaryV1(CqStrictOutputStruct, frozen=True):
+class RunCommandSummaryV1(CqStrictOutputStruct, frozen=True):
     """Typed run summary for structured summary access.
 
     Provides typed access to common summary fields while remaining
@@ -62,14 +62,14 @@ class RunSummaryV1(CqStrictOutputStruct, frozen=True):
     step_summaries: dict[str, dict[str, Any]] = msgspec.field(default_factory=dict)
 
 
-def run_summary_from_dict(raw: Mapping[str, Any] | None) -> RunSummaryV1:
-    """Parse a raw summary dict into a typed RunSummaryV1.
+def run_summary_from_dict(raw: Mapping[str, Any] | None) -> RunCommandSummaryV1:
+    """Parse a raw summary dict into a typed RunCommandSummaryV1.
 
     Returns:
-        RunSummaryV1: Typed summary with defaults for missing keys.
+        RunCommandSummaryV1: Typed summary with defaults for missing keys.
     """
     if not raw:
-        return RunSummaryV1()
+        return RunCommandSummaryV1()
     query = raw.get("query")
     mode = raw.get("mode")
     lang_scope = raw.get("lang_scope")
@@ -77,7 +77,7 @@ def run_summary_from_dict(raw: Mapping[str, Any] | None) -> RunSummaryV1:
     matched_files = raw.get("matched_files", 0)
     scanned_files = raw.get("scanned_files", 0)
     step_summaries = raw.get("step_summaries")
-    return RunSummaryV1(
+    return RunCommandSummaryV1(
         query=query if isinstance(query, str) else None,
         mode=mode if isinstance(mode, str) else None,
         lang_scope=lang_scope if isinstance(lang_scope, str) else None,
@@ -88,8 +88,8 @@ def run_summary_from_dict(raw: Mapping[str, Any] | None) -> RunSummaryV1:
     )
 
 
-def run_summary_to_dict(summary: RunSummaryV1) -> dict[str, Any]:
-    """Convert a typed RunSummaryV1 to a plain dict.
+def run_summary_to_dict(summary: RunCommandSummaryV1) -> dict[str, Any]:
+    """Convert a typed RunCommandSummaryV1 to a plain dict.
 
     Returns:
         dict[str, Any]: Summary as mapping payload.
@@ -98,7 +98,7 @@ def run_summary_to_dict(summary: RunSummaryV1) -> dict[str, Any]:
 
 
 __all__ = [
-    "RunSummaryV1",
+    "RunCommandSummaryV1",
     "SummaryOutputEnvelopeV1",
     "build_summary_envelope",
     "run_summary_from_dict",

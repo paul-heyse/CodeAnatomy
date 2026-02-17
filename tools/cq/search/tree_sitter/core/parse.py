@@ -6,7 +6,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from tools.cq.search.tree_sitter.contracts.core_models import (
     ParseSessionStatsV1,
@@ -18,6 +18,7 @@ from tools.cq.search.tree_sitter.core.infrastructure import (
     apply_parser_controls,
     parse_streaming_source,
 )
+from tools.cq.search.tree_sitter.core.runtime_context import get_default_context
 
 if TYPE_CHECKING:
     from tree_sitter import Parser, Tree
@@ -267,9 +268,6 @@ class ParseSession:
         return True
 
 
-_SESSIONS: dict[str, ParseSession] = {}
-
-
 def get_parse_session(*, language: str, parser_factory: Callable[[], Parser]) -> ParseSession:
     """Return process-local parse session for one language lane.
 
@@ -277,11 +275,12 @@ def get_parse_session(*, language: str, parser_factory: Callable[[], Parser]) ->
         ParseSession: Session instance for the requested language.
     """
     with _LANGUAGE_SESSION_LOCK:
-        existing = _SESSIONS.get(language)
+        runtime_context = get_default_context()
+        existing = runtime_context.parse_sessions.get(language)
         if existing is not None:
-            return existing
+            return cast("ParseSession", existing)
         session = ParseSession(parser_factory)
-        _SESSIONS[language] = session
+        runtime_context.parse_sessions[language] = session
         return session
 
 
@@ -289,12 +288,16 @@ def clear_parse_session(*, language: str | None = None) -> None:
     """Clear one language parse session or all sessions."""
     session_rows: list[tuple[str | None, ParseSession]]
     with _LANGUAGE_SESSION_LOCK:
+        runtime_context = get_default_context()
         if language is None:
-            session_rows = list(_SESSIONS.items())
-            _SESSIONS.clear()
+            session_rows = [
+                (lang, cast("ParseSession", session))
+                for lang, session in runtime_context.parse_sessions.items()
+            ]
+            runtime_context.parse_sessions.clear()
         else:
-            one = _SESSIONS.pop(language, None)
-            session_rows = [(language, one)] if one is not None else []
+            one = runtime_context.parse_sessions.pop(language, None)
+            session_rows = [(language, cast("ParseSession", one))] if one is not None else []
     for lang_name, session in session_rows:
         stats = session.stats()
         logger.debug(

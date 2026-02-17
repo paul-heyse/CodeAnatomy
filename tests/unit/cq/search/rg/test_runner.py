@@ -13,7 +13,7 @@ from tools.cq.search.rg.contracts import RgRunSettingsV1
 from tools.cq.search.rg.runner import (
     RgCountRequest,
     RgFilesWithMatchesRequest,
-    RgProcessResult,
+    RgProcessResultV1,
     build_command_from_settings,
     run_rg_count,
     run_rg_files_with_matches,
@@ -88,9 +88,9 @@ def test_run_with_request_normalizes_result(monkeypatch: pytest.MonkeyPatch) -> 
     """Test run with request normalizes result."""
     from tools.cq.search.rg import runner as runner_module
 
-    def _fake_run(_request: RgRunRequest, *, pcre2_available: bool = False) -> RgProcessResult:
+    def _fake_run(_request: RgRunRequest, *, pcre2_available: bool = False) -> RgProcessResultV1:
         _ = pcre2_available
-        return RgProcessResult(
+        return RgProcessResultV1(
             command=["rg", "--json"],
             events=[RgEvent(type="summary", data={"stats": {"matches": 1}})],
             timed_out=False,

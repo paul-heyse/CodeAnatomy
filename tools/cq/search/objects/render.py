@@ -206,7 +206,7 @@ def build_resolved_objects_section(
                 details=DetailPayload(kind=kind, data_items=tuple(sorted(details_data.items()))),
             )
         )
-    return Section(title="Resolved Objects", findings=findings)
+    return Section(title="Resolved Objects", findings=tuple(findings))
 
 
 def build_occurrences_section(
@@ -268,7 +268,7 @@ def build_occurrences_section(
                 ),
             )
         )
-    return Section(title="Occurrences", findings=findings)
+    return Section(title="Occurrences", findings=tuple(findings))
 
 
 def build_occurrence_kind_counts_section(occurrences: list[SearchOccurrenceV1]) -> Section:
@@ -290,7 +290,7 @@ def build_occurrence_kind_counts_section(occurrences: list[SearchOccurrenceV1]) 
         )
         for category, count in counts.most_common()
     ]
-    return Section(title="Uses by Kind", findings=findings, collapsed=True)
+    return Section(title="Uses by Kind", findings=tuple(findings), collapsed=True)
 
 
 def build_occurrence_hot_files_section(occurrences: list[SearchOccurrenceV1]) -> Section:
@@ -310,7 +310,7 @@ def build_occurrence_hot_files_section(occurrences: list[SearchOccurrenceV1]) ->
         )
         for file, count in counts.most_common(10)
     ]
-    return Section(title="Hot Files", findings=findings, collapsed=True)
+    return Section(title="Hot Files", findings=tuple(findings), collapsed=True)
 
 
 def build_non_code_occurrence_section(occurrences: list[SearchOccurrenceV1]) -> Section | None:
@@ -341,7 +341,7 @@ def build_non_code_occurrence_section(occurrences: list[SearchOccurrenceV1]) -> 
     ]
     return Section(
         title="Non-Code Matches (Strings / Comments / Docstrings)",
-        findings=findings,
+        findings=tuple(findings),
         collapsed=True,
     )
 

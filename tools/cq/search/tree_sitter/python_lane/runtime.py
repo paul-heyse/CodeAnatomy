@@ -73,12 +73,12 @@ logger = logging.getLogger(__name__)
 
 
 from tools.cq.search.tree_sitter.python_lane.fallback_support import (
-    _capture_binding_candidates,
-    _capture_import_alias_chain,
-    _capture_named_definition,
-    _capture_qualified_name_candidates,
-    _default_parse_quality,
-    _fallback_resolution_fields,
+    capture_binding_candidates,
+    capture_import_alias_chain,
+    capture_named_definition,
+    capture_qualified_name_candidates,
+    default_parse_quality,
+    fallback_resolution_fields,
 )
 
 
@@ -398,7 +398,7 @@ def _apply_gap_fill_from_captures(
     _set_payload_field(
         payload,
         key="enclosing_callable",
-        value=_capture_named_definition(
+        value=capture_named_definition(
             captures.get("def.function.name", []),
             captures.get("def.function", []),
             source_bytes,
@@ -407,7 +407,7 @@ def _apply_gap_fill_from_captures(
     _set_payload_field(
         payload,
         key="enclosing_class",
-        value=_capture_named_definition(
+        value=capture_named_definition(
             captures.get("class.definition.name", []),
             captures.get("class.definition", []),
             source_bytes,
@@ -416,17 +416,17 @@ def _apply_gap_fill_from_captures(
     _set_payload_field(
         payload,
         key="import_alias_chain",
-        value=_capture_import_alias_chain(captures, source_bytes),
+        value=capture_import_alias_chain(captures, source_bytes),
     )
     _set_payload_field(
         payload,
         key="binding_candidates",
-        value=_capture_binding_candidates(captures, source_bytes),
+        value=capture_binding_candidates(captures, source_bytes),
     )
     _set_payload_field(
         payload,
         key="qualified_name_candidates",
-        value=_capture_qualified_name_candidates(captures, source_bytes),
+        value=capture_qualified_name_candidates(captures, source_bytes),
     )
 
 
@@ -504,7 +504,7 @@ def _mark_degraded(payload: dict[str, object], *, reason: str) -> dict[str, obje
     logger.warning("Python tree-sitter enrichment degraded: %s", reason)
     payload["enrichment_status"] = "degraded"
     payload["degrade_reason"] = reason
-    payload["parse_quality"] = _default_parse_quality()
+    payload["parse_quality"] = default_parse_quality()
     return payload
 
 
@@ -605,7 +605,7 @@ def enrich_python_context_by_byte_range(
         )
         payload["enrichment_status"] = "skipped"
         payload["degrade_reason"] = "source_too_large"
-        payload["parse_quality"] = _default_parse_quality()
+        payload["parse_quality"] = default_parse_quality()
         return canonicalize_python_lane_payload(payload)
 
     parsed = _parse_tree_for_enrichment(
@@ -662,7 +662,7 @@ def enrich_python_context_by_byte_range(
     )
     _merge_fallback_resolution(
         payload,
-        _fallback_resolution_fields(
+        fallback_resolution_fields(
             source=source,
             source_bytes=source_bytes,
             byte_start=byte_start,

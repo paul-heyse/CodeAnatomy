@@ -247,7 +247,7 @@ class DeltaServicePort(Protocol):
         """Cleanup log metadata for the table and return report payload."""
         ...
 
-    def _provider_artifact_payload(
+    def provider_artifact_payload(
         self,
         *,
         request: _ProviderArtifactRecordRequest,

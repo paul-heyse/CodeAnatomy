@@ -23,10 +23,12 @@ from tools.cq.core.schema import (
     CqResult,
     Finding,
     Section,
+    append_section_finding,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_update_contracts import ImpactSummaryUpdateV1
 from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_bound_call
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
 from tools.cq.index.def_index import DefIndex, FnDecl
@@ -284,14 +286,15 @@ def _append_kind_sections(
         section = Section(title=f"Taint {kind.title()} Sites")
         for site in sites[:_SECTION_SITE_LIMIT]:
             details = {"depth": site.depth, "param": site.param}
-            section.findings.append(
+            section = append_section_finding(
+                section,
                 Finding(
                     category=kind,
                     message=site.description,
                     anchor=Anchor(file=site.file, line=site.line),
                     severity="info",
                     details=build_detail_payload(scoring=scoring_dict, data=details),
-                )
+                ),
             )
         builder.add_section(section)
 
@@ -306,14 +309,15 @@ def _append_callers_section(
     scoring_dict = msgspec.structs.asdict(scoring_details)
     caller_section = Section(title="Callers (via rg)")
     for file, line in caller_sites[:_CALLER_LIMIT]:
-        caller_section.findings.append(
+        caller_section = append_section_finding(
+            caller_section,
             Finding(
                 category="caller",
                 message="Potential call site",
                 anchor=Anchor(file=file, line=line),
                 severity="info",
                 details=build_detail_payload(scoring=scoring_dict),
-            )
+            ),
         )
     builder.add_section(caller_section)
 
@@ -436,17 +440,17 @@ def _build_impact_summary(
     functions: list[FnDecl],
     all_sites: list[TaintedSite],
     caller_sites: list[tuple[str, int]],
-) -> dict[str, object]:
-    return {
-        "query": f"{request.function_name} --param {request.param_name}",
-        "mode": "impact",
-        "function": request.function_name,
-        "parameter": request.param_name,
-        "taint_sites": len(all_sites),
-        "max_depth": request.max_depth,
-        "functions_analyzed": len(functions),
-        "callers_found": len(caller_sites),
-    }
+) -> ImpactSummaryUpdateV1:
+    return ImpactSummaryUpdateV1(
+        query=f"{request.function_name} --param {request.param_name}",
+        mode="impact",
+        function=request.function_name,
+        parameter=request.param_name,
+        taint_sites=len(all_sites),
+        max_depth=request.max_depth,
+        functions_analyzed=len(functions),
+        callers_found=len(caller_sites),
+    )
 
 
 def _build_impact_result(
@@ -469,16 +473,21 @@ def _build_impact_result(
     all_sites = _analyze_functions(ctx)
     caller_sites = _find_callers_via_search(request.function_name, request.root)
 
-    builder.with_summary(
-        summary_from_mapping(
-            _build_impact_summary(
-                request,
-                functions=ctx.functions,
-                all_sites=all_sites,
-                caller_sites=caller_sites,
-            )
-        )
+    summary_mapping = msgspec.to_builtins(
+        _build_impact_summary(
+            request,
+            functions=ctx.functions,
+            all_sites=all_sites,
+            caller_sites=caller_sites,
+        ),
+        order="deterministic",
     )
+    summary_mapping_dict: dict[str, object]
+    if not isinstance(summary_mapping, dict):
+        summary_mapping_dict = {}
+    else:
+        summary_mapping_dict = {str(key): value for key, value in summary_mapping.items()}
+    builder.with_summary(summary_from_mapping(summary_mapping_dict))
 
     scoring_details, depth_counts, files_affected = _build_impact_scoring(all_sites)
     _append_depth_findings(

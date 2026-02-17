@@ -17,6 +17,7 @@ from tools.cq.core.schema import (
     CqResult,
     Finding,
     Section,
+    append_section_finding,
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
@@ -41,7 +42,7 @@ _ATTR_OPS: set[str] = {"LOAD_ATTR", "STORE_ATTR", "DELETE_ATTR"}
 _IGNORED_NUMERIC_CONSTS: set[object] = {0, 1, -1, None}
 
 
-class BytecodeSurface(msgspec.Struct):
+class BytecodeSurface(msgspec.Struct, frozen=True):
     """Bytecode analysis for a code object.
 
     Parameters
@@ -211,24 +212,26 @@ def _append_surface_section(
         parts = _build_surface_parts(surface, show_set)
         if not parts:
             continue
-        section.findings.append(
+        section = append_section_finding(
+            section,
             Finding(
                 category="bytecode",
                 message=f"{surface.qualname}: {'; '.join(parts)}",
                 anchor=Anchor(file=surface.file, line=surface.line),
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
 
     if len(all_surfaces) > _MAX_SURFACES_DISPLAY:
-        section.findings.append(
+        section = append_section_finding(
+            section,
             Finding(
                 category="truncated",
                 message=f"... and {len(all_surfaces) - _MAX_SURFACES_DISPLAY} more",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
     return section
 
@@ -265,22 +268,24 @@ def _append_global_summary(
     glob_section = Section(title="Global References")
     for name in sorted(all_globals)[:_MAX_GLOBAL_SUMMARY]:
         count = sum(1 for surface in all_surfaces if name in surface.globals)
-        glob_section.findings.append(
+        glob_section = append_section_finding(
+            glob_section,
             Finding(
                 category="global",
                 message=f"{name}: {count} code objects",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
     if len(all_globals) > _MAX_GLOBAL_SUMMARY:
-        glob_section.findings.append(
+        glob_section = append_section_finding(
+            glob_section,
             Finding(
                 category="truncated",
                 message=f"... and {len(all_globals) - _MAX_GLOBAL_SUMMARY} more",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
     return glob_section
 
@@ -294,13 +299,14 @@ def _append_opcode_summary(
         return None
     op_section = Section(title="Opcode Summary")
     for op, count in sorted(total_opcodes.items(), key=lambda item: -item[1])[:_MAX_OPCODE_SUMMARY]:
-        op_section.findings.append(
+        op_section = append_section_finding(
+            op_section,
             Finding(
                 category="opcode",
                 message=f"{op}: {count}",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
     return op_section
 

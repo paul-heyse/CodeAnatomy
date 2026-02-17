@@ -34,7 +34,7 @@ def test_merge_step_results_adds_provenance() -> None:
     step_result = CqResult(
         run=run,
         key_findings=(finding,),
-        sections=(Section(title="Section", findings=[finding]),),
+        sections=(Section(title="Section", findings=(finding,)),),
     )
 
     merged = CqResult(run=run)

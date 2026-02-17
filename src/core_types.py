@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NewType
 
 from msgspec import Meta
-from pydantic import Field
+from pydantic import StringConstraints
 
 type PathLike = str | Path
 type StrictnessMode = Literal["strict", "tolerant"]
@@ -44,7 +44,7 @@ IdentifierStr = Annotated[
         title="Identifier",
         description="Normalized identifier string.",
     ),
-    Field(pattern=IDENTIFIER_PATTERN),
+    StringConstraints(pattern=IDENTIFIER_PATTERN),
 ]
 RunIdStr = Annotated[
     str,
@@ -53,7 +53,7 @@ RunIdStr = Annotated[
         title="Run ID",
         description="Stable run identifier.",
     ),
-    Field(pattern=RUN_ID_PATTERN),
+    StringConstraints(pattern=RUN_ID_PATTERN),
 ]
 HashStr = Annotated[
     str,
@@ -63,7 +63,7 @@ HashStr = Annotated[
         description="Deterministic hash value.",
         examples=["sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"],
     ),
-    Field(pattern=HASH_PATTERN),
+    StringConstraints(pattern=HASH_PATTERN),
 ]
 EventKindStr = Annotated[
     str,
@@ -72,7 +72,7 @@ EventKindStr = Annotated[
         title="Event Kind",
         description="Normalized event kind identifier.",
     ),
-    Field(pattern=EVENT_KIND_PATTERN),
+    StringConstraints(pattern=EVENT_KIND_PATTERN),
 ]
 StatusStr = Annotated[
     str,
@@ -81,7 +81,7 @@ StatusStr = Annotated[
         title="Status",
         description="Normalized status identifier.",
     ),
-    Field(pattern=STATUS_PATTERN),
+    StringConstraints(pattern=STATUS_PATTERN),
 ]
 
 

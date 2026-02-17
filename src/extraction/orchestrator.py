@@ -7,11 +7,14 @@ which are written to Delta storage.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,6 +30,7 @@ from obs.otel import SCOPE_EXTRACT, record_error, record_stage_duration, stage_s
 
 if TYPE_CHECKING:
     import pyarrow as pa
+    from datafusion import SessionContext
 
     from extract.session import ExtractSession
     from extraction.runtime_profile import RuntimeProfileSpec
@@ -56,10 +60,25 @@ class _Stage1ExecutionRequest:
     repo_root: Path
     repo_files: pa.Table
     extract_dir: Path
+    execution_bundle: _ExtractExecutionBundle
     scip_index_config: object | None
     scip_identity_overrides: object | None
     tree_sitter_enabled: bool
     max_workers: int
+
+
+@dataclass(frozen=True)
+class _ExtractExecutionBundle:
+    runtime_spec: RuntimeProfileSpec
+    extract_session: ExtractSession
+
+
+@dataclass(frozen=True)
+class _RepoFilesExtractorSpec:
+    module_path: str
+    function_name: str
+    output_key: str | None
+    error_label: str
 
 
 def run_extraction(request: RunExtractionRequestV1) -> ExtractionResult:
@@ -106,10 +125,12 @@ def run_extraction(request: RunExtractionRequestV1) -> ExtractionResult:
         default_tree_sitter_enabled=request.tree_sitter_enabled,
         default_max_workers=request.max_workers,
     )
+    execution_bundle = _build_extract_execution_bundle()
     extraction_start = time.monotonic()
     repo_files = _run_repo_scan_with_fallback(
         repo_root=repo_root,
         extract_dir=extract_dir,
+        execution_bundle=execution_bundle,
         options=resolved_options,
         state=state,
     )
@@ -120,6 +141,7 @@ def run_extraction(request: RunExtractionRequestV1) -> ExtractionResult:
             repo_root=repo_root,
             repo_files=repo_files,
             extract_dir=extract_dir,
+            execution_bundle=execution_bundle,
             scip_index_config=request.scip_index_config,
             scip_identity_overrides=request.scip_identity_overrides,
             tree_sitter_enabled=resolved_options.tree_sitter_enabled,
@@ -127,8 +149,17 @@ def run_extraction(request: RunExtractionRequestV1) -> ExtractionResult:
         ),
         state=state,
     )
-    _run_python_imports_stage(extract_dir=extract_dir, state=state)
-    _run_python_external_stage(repo_root=repo_root, extract_dir=extract_dir, state=state)
+    _run_python_imports_stage(
+        extract_dir=extract_dir,
+        execution_bundle=execution_bundle,
+        state=state,
+    )
+    _run_python_external_stage(
+        repo_root=repo_root,
+        extract_dir=extract_dir,
+        execution_bundle=execution_bundle,
+        state=state,
+    )
     _finalize_extraction_state(state=state, extraction_start=extraction_start)
     return _materialize_extraction_result(state)
 
@@ -140,6 +171,32 @@ def _materialize_extraction_result(state: _ExtractionRunState) -> ExtractionResu
         errors=state.errors,
         timing=state.timing,
     )
+
+
+def _build_extract_execution_bundle(*, profile: str = "default") -> _ExtractExecutionBundle:
+    """Build shared extraction session/runtime surfaces for a run.
+
+    Returns:
+        _ExtractExecutionBundle: Runtime profile and extract session bundle.
+    """
+    from extract.session import ExtractSession
+    from extraction.engine_session_factory import build_engine_session
+    from extraction.runtime_profile import resolve_runtime_profile
+
+    runtime_spec = resolve_runtime_profile(profile)
+    engine_session = build_engine_session(runtime_spec=runtime_spec)
+    return _ExtractExecutionBundle(
+        runtime_spec=runtime_spec,
+        extract_session=ExtractSession(engine_session=engine_session),
+    )
+
+
+@cache
+def _delta_write_ctx() -> SessionContext:
+    """Return a cached native extraction session context for Delta writes."""
+    from extraction.rust_session_bridge import build_extraction_session
+
+    return build_extraction_session({})
 
 
 def _record_repo_scan_outputs(
@@ -158,6 +215,7 @@ def _run_repo_scan_with_fallback(
     *,
     repo_root: Path,
     extract_dir: Path,
+    execution_bundle: _ExtractExecutionBundle,
     options: ExtractionRunOptions,
     state: _ExtractionRunState,
 ) -> pa.Table | None:
@@ -169,7 +227,18 @@ def _run_repo_scan_with_fallback(
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "repo_scan"},
         ):
-            outputs = _run_repo_scan(repo_root, options=options)
+            scan_fn = _run_repo_scan
+            if "execution_bundle" in inspect.signature(scan_fn).parameters:
+                outputs = scan_fn(
+                    repo_root,
+                    options=options,
+                    execution_bundle=execution_bundle,
+                )
+            else:
+                outputs = scan_fn(
+                    repo_root,
+                    options=options,
+                )
         state.timing["repo_scan"] = time.monotonic() - t0
         return _record_repo_scan_outputs(outputs=outputs, extract_dir=extract_dir, state=state)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -227,6 +296,7 @@ def _run_parallel_stage1_extractors(
     extractors = _build_stage1_extractors(
         repo_root=request.repo_root,
         repo_files=request.repo_files,
+        execution_bundle=request.execution_bundle,
         scip_index_config=request.scip_index_config,
         tree_sitter_enabled=request.tree_sitter_enabled,
     )
@@ -255,7 +325,12 @@ def _run_parallel_stage1_extractors(
                 logger.warning("Extractor %s failed: %s", name, exc)
 
 
-def _run_python_imports_stage(*, extract_dir: Path, state: _ExtractionRunState) -> None:
+def _run_python_imports_stage(
+    *,
+    extract_dir: Path,
+    execution_bundle: _ExtractExecutionBundle,
+    state: _ExtractionRunState,
+) -> None:
     t0 = time.monotonic()
     try:
         with stage_span(
@@ -264,7 +339,14 @@ def _run_python_imports_stage(*, extract_dir: Path, state: _ExtractionRunState) 
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "python_imports"},
         ):
-            python_imports = _run_python_imports(state.delta_locations)
+            imports_fn = _run_python_imports
+            if "execution_bundle" in inspect.signature(imports_fn).parameters:
+                python_imports = imports_fn(
+                    state.delta_locations,
+                    execution_bundle=execution_bundle,
+                )
+            else:
+                python_imports = imports_fn(state.delta_locations)
         state.timing["python_imports"] = time.monotonic() - t0
         state.delta_locations["python_imports"] = _write_delta(
             python_imports,
@@ -282,6 +364,7 @@ def _run_python_external_stage(
     *,
     repo_root: Path,
     extract_dir: Path,
+    execution_bundle: _ExtractExecutionBundle,
     state: _ExtractionRunState,
 ) -> None:
     t0 = time.monotonic()
@@ -292,7 +375,15 @@ def _run_python_external_stage(
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "python_external"},
         ):
-            python_external = _run_python_external(state.delta_locations, repo_root)
+            external_fn = _run_python_external
+            if "execution_bundle" in inspect.signature(external_fn).parameters:
+                python_external = external_fn(
+                    state.delta_locations,
+                    repo_root,
+                    execution_bundle=execution_bundle,
+                )
+            else:
+                python_external = external_fn(state.delta_locations, repo_root)
         state.timing["python_external"] = time.monotonic() - t0
         state.delta_locations["python_external_interfaces"] = _write_delta(
             python_external,
@@ -332,11 +423,24 @@ def _write_delta(table: pa.Table, location: Path, name: str) -> str:
     str
         Location path as a string.
     """
-    import deltalake
+    from datafusion_engine.delta.transactions import write_transaction
+    from datafusion_engine.delta.write_ipc_payload import (
+        DeltaWriteRequestOptions,
+        build_delta_write_request,
+    )
 
     location.mkdir(parents=True, exist_ok=True)
     loc_str = str(location)
-    deltalake.write_deltalake(loc_str, table, mode="overwrite")
+    request = build_delta_write_request(
+        table_uri=loc_str,
+        table=table,
+        options=DeltaWriteRequestOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            storage_options=None,
+        ),
+    )
+    write_transaction(_delta_write_ctx(), request=request)
     logger.info("Wrote %d rows to %s at %s", table.num_rows, name, loc_str)
     return loc_str
 
@@ -355,6 +459,7 @@ def _require_repo_scan_table(
 def _run_repo_scan(
     repo_root: Path,
     *,
+    execution_bundle: _ExtractExecutionBundle | None = None,
     options: ExtractionRunOptions,
 ) -> dict[str, pa.Table]:
     """Run repo scan extraction.
@@ -373,14 +478,10 @@ def _run_repo_scan(
     from extract.python.scope import PythonScopePolicy
     from extract.scanning.repo_scan import RepoScanOptions, scan_repo_tables
     from extract.scanning.repo_scope import RepoScopeOptions
-    from extract.session import ExtractSession
-    from extraction.engine_session_factory import build_engine_session
-    from extraction.runtime_profile import resolve_runtime_profile
 
-    # Build runtime profile and session
-    runtime_spec = resolve_runtime_profile("default")
-    engine_session = build_engine_session(runtime_spec=runtime_spec)
-    extract_session = ExtractSession(engine_session=engine_session)
+    resolved_bundle = execution_bundle or _build_extract_execution_bundle()
+    runtime_spec = resolved_bundle.runtime_spec
+    extract_session = resolved_bundle.extract_session
 
     scope_policy = RepoScopeOptions(
         python_scope=PythonScopePolicy(),
@@ -506,6 +607,7 @@ def _build_stage1_extractors(
     *,
     repo_root: Path,
     repo_files: pa.Table,
+    execution_bundle: _ExtractExecutionBundle,
     scip_index_config: object | None,
     tree_sitter_enabled: bool,
 ) -> dict[str, Callable[[], pa.Table]]:
@@ -527,25 +629,67 @@ def _build_stage1_extractors(
     dict[str, Callable[[], pa.Table]]
         Mapping of extractor name to callable.
     """
-    from extract.session import ExtractSession
-    from extraction.engine_session_factory import build_engine_session
-    from extraction.runtime_profile import resolve_runtime_profile
-
-    # Build session properly
-    runtime_spec = resolve_runtime_profile("default")
-    engine_session = build_engine_session(runtime_spec=runtime_spec)
-    extract_session = ExtractSession(engine_session=engine_session)
+    runtime_spec = execution_bundle.runtime_spec
+    extract_session = execution_bundle.extract_session
 
     extractors: dict[str, Callable[[], pa.Table]] = {
-        "ast_files": lambda: _extract_ast(repo_files, extract_session, runtime_spec),
-        "libcst_files": lambda: _extract_cst(repo_files, extract_session, runtime_spec),
-        "bytecode_files_v1": lambda: _extract_bytecode(repo_files, extract_session, runtime_spec),
-        "symtable_files_v1": lambda: _extract_symtable(repo_files, extract_session, runtime_spec),
+        "ast_files": lambda: _run_repo_files_output_extractor(
+            repo_files=repo_files,
+            extract_session=extract_session,
+            runtime_spec=runtime_spec,
+            spec=_RepoFilesExtractorSpec(
+                module_path="extract.extractors.ast",
+                function_name="extract_ast_tables",
+                output_key="ast_files",
+                error_label="ast",
+            ),
+        ),
+        "libcst_files": lambda: _run_repo_files_output_extractor(
+            repo_files=repo_files,
+            extract_session=extract_session,
+            runtime_spec=runtime_spec,
+            spec=_RepoFilesExtractorSpec(
+                module_path="extract.extractors.cst",
+                function_name="extract_cst_tables",
+                output_key="libcst_files",
+                error_label="cst",
+            ),
+        ),
+        "bytecode_files_v1": lambda: _run_repo_files_output_extractor(
+            repo_files=repo_files,
+            extract_session=extract_session,
+            runtime_spec=runtime_spec,
+            spec=_RepoFilesExtractorSpec(
+                module_path="extract.extractors.bytecode",
+                function_name="extract_bytecode_table",
+                output_key=None,
+                error_label="bytecode",
+            ),
+        ),
+        "symtable_files_v1": lambda: _run_repo_files_output_extractor(
+            repo_files=repo_files,
+            extract_session=extract_session,
+            runtime_spec=runtime_spec,
+            spec=_RepoFilesExtractorSpec(
+                module_path="extract.extractors.symtable_extract",
+                function_name="extract_symtables_table",
+                output_key=None,
+                error_label="symtable",
+            ),
+        ),
     }
 
     if tree_sitter_enabled:
-        extractors["tree_sitter_files"] = lambda: _extract_tree_sitter(
-            repo_files, extract_session, runtime_spec
+        extractors["tree_sitter_files"] = lambda: _run_repo_files_output_extractor(
+            repo_files=repo_files,
+            extract_session=extract_session,
+            runtime_spec=runtime_spec,
+            spec=_RepoFilesExtractorSpec(
+                module_path="extract.extractors.tree_sitter",
+                function_name="extract_ts_tables",
+                output_key="tree_sitter_files",
+                error_label="tree-sitter",
+            ),
         )
 
     if scip_index_config is not None:
@@ -559,12 +703,14 @@ def _build_stage1_extractors(
     return extractors
 
 
-def _extract_ast(
+def _run_repo_files_output_extractor(
     repo_files: pa.Table,
     extract_session: ExtractSession,
     runtime_spec: RuntimeProfileSpec,
+    *,
+    spec: _RepoFilesExtractorSpec,
 ) -> pa.Table:
-    """Extract AST tables.
+    """Run a repo-files extractor and normalize its table output.
 
     Parameters
     ----------
@@ -575,176 +721,38 @@ def _extract_ast(
     runtime_spec
         Runtime profile specification.
 
+    spec
+        Import/function metadata for the extractor and optional output key.
+
     Returns:
     -------
     pa.Table
-        AST files table.
+        Extractor output table.
 
     Raises:
-        ValueError: If extraction produces no outputs.
+        TypeError: If the extractor function is missing or output type is invalid.
+        ValueError: If extractor output is missing or malformed.
     """
-    from extract.extractors.ast import extract_ast_tables
-
-    outputs = extract_ast_tables(
+    module = importlib.import_module(spec.module_path)
+    extractor = getattr(module, spec.function_name, None)
+    if not callable(extractor):
+        msg = f"{spec.module_path}.{spec.function_name} is not callable."
+        raise TypeError(msg)
+    result = extractor(
         repo_files=repo_files,
         session=extract_session,
         profile=runtime_spec.name,
         prefer_reader=False,
     )
-
-    ast_files = outputs.get("ast_files")
-    if ast_files is not None:
-        return _coerce_to_table(ast_files)
-
-    msg = "ast extraction produced no outputs"
-    raise ValueError(msg)
-
-
-def _extract_cst(
-    repo_files: pa.Table,
-    extract_session: ExtractSession,
-    runtime_spec: RuntimeProfileSpec,
-) -> pa.Table:
-    """Extract CST tables.
-
-    Parameters
-    ----------
-    repo_files
-        Repo files table.
-    extract_session
-        Extract session.
-    runtime_spec
-        Runtime profile specification.
-
-    Returns:
-    -------
-    pa.Table
-        LibCST files table.
-
-    Raises:
-        ValueError: If extraction produces no outputs.
-    """
-    from extract.extractors.cst import extract_cst_tables
-
-    outputs = extract_cst_tables(
-        repo_files=repo_files,
-        session=extract_session,
-        profile=runtime_spec.name,
-        prefer_reader=False,
-    )
-
-    cst_files = outputs.get("libcst_files")
-    if cst_files is not None:
-        return _coerce_to_table(cst_files)
-
-    msg = "cst extraction produced no outputs"
-    raise ValueError(msg)
-
-
-def _extract_tree_sitter(
-    repo_files: pa.Table,
-    extract_session: ExtractSession,
-    runtime_spec: RuntimeProfileSpec,
-) -> pa.Table:
-    """Extract tree-sitter tables.
-
-    Parameters
-    ----------
-    repo_files
-        Repo files table.
-    extract_session
-        Extract session.
-    runtime_spec
-        Runtime profile specification.
-
-    Returns:
-    -------
-    pa.Table
-        Tree-sitter files table.
-
-    Raises:
-        ValueError: If extraction produces no outputs.
-    """
-    from extract.extractors.tree_sitter import extract_ts_tables
-
-    outputs = extract_ts_tables(
-        repo_files=repo_files,
-        session=extract_session,
-        profile=runtime_spec.name,
-        prefer_reader=False,
-    )
-
-    ts_files = outputs.get("tree_sitter_files")
-    if ts_files is not None:
-        return _coerce_to_table(ts_files)
-
-    msg = "tree-sitter extraction produced no outputs"
-    raise ValueError(msg)
-
-
-def _extract_bytecode(
-    repo_files: pa.Table,
-    extract_session: ExtractSession,
-    runtime_spec: RuntimeProfileSpec,
-) -> pa.Table:
-    """Extract bytecode table.
-
-    Parameters
-    ----------
-    repo_files
-        Repo files table.
-    extract_session
-        Extract session.
-    runtime_spec
-        Runtime profile specification.
-
-    Returns:
-    -------
-    pa.Table
-        Bytecode files table.
-    """
-    from extract.extractors.bytecode import extract_bytecode_table
-
-    table = extract_bytecode_table(
-        repo_files=repo_files,
-        session=extract_session,
-        profile=runtime_spec.name,
-        prefer_reader=False,
-    )
-
-    return _coerce_to_table(table)
-
-
-def _extract_symtable(
-    repo_files: pa.Table,
-    extract_session: ExtractSession,
-    runtime_spec: RuntimeProfileSpec,
-) -> pa.Table:
-    """Extract symtable table.
-
-    Parameters
-    ----------
-    repo_files
-        Repo files table.
-    extract_session
-        Extract session.
-    runtime_spec
-        Runtime profile specification.
-
-    Returns:
-    -------
-    pa.Table
-        Symtable files table.
-    """
-    from extract.extractors.symtable_extract import extract_symtables_table
-
-    table = extract_symtables_table(
-        repo_files=repo_files,
-        session=extract_session,
-        profile=runtime_spec.name,
-        prefer_reader=False,
-    )
-
+    if spec.output_key is None:
+        return _coerce_to_table(result)
+    if not isinstance(result, Mapping):
+        msg = f"{spec.error_label} extraction produced a non-mapping output payload."
+        raise TypeError(msg)
+    table = result.get(spec.output_key)
+    if table is None:
+        msg = f"{spec.error_label} extraction produced no {spec.output_key} output."
+        raise ValueError(msg)
     return _coerce_to_table(table)
 
 
@@ -810,7 +818,11 @@ def _extract_scip(
     return _coerce_to_table(scip_index)
 
 
-def _run_python_imports(delta_locations: dict[str, str]) -> pa.Table:
+def _run_python_imports(
+    delta_locations: dict[str, str],
+    *,
+    execution_bundle: _ExtractExecutionBundle | None = None,
+) -> pa.Table:
     """Run python_imports extraction.
 
     Parameters
@@ -827,19 +839,15 @@ def _run_python_imports(delta_locations: dict[str, str]) -> pa.Table:
         ValueError: If extraction produces no output.
     """
     from extract.extractors.imports_extract import extract_python_imports_tables
-    from extract.session import ExtractSession
-    from extraction.engine_session_factory import build_engine_session
-    from extraction.runtime_profile import resolve_runtime_profile
 
     # Load inputs from Delta locations (adapter-normalized dataset keys)
     ast_imports = _load_delta_table(delta_locations.get("ast_files"))
     cst_imports = _load_delta_table(delta_locations.get("libcst_files"))
     ts_imports = _load_delta_table(delta_locations.get("tree_sitter_files"))
 
-    # Create extract session
-    runtime_spec = resolve_runtime_profile("default")
-    engine_session = build_engine_session(runtime_spec=runtime_spec)
-    extract_session = ExtractSession(engine_session=engine_session)
+    resolved_bundle = execution_bundle or _build_extract_execution_bundle()
+    runtime_spec = resolved_bundle.runtime_spec
+    extract_session = resolved_bundle.extract_session
 
     outputs = extract_python_imports_tables(
         ast_imports=ast_imports,
@@ -858,7 +866,12 @@ def _run_python_imports(delta_locations: dict[str, str]) -> pa.Table:
     return _coerce_to_table(python_imports)
 
 
-def _run_python_external(delta_locations: dict[str, str], repo_root: Path) -> pa.Table:
+def _run_python_external(
+    delta_locations: dict[str, str],
+    repo_root: Path,
+    *,
+    execution_bundle: _ExtractExecutionBundle | None = None,
+) -> pa.Table:
     """Run python_external extraction.
 
     Parameters
@@ -877,9 +890,6 @@ def _run_python_external(delta_locations: dict[str, str], repo_root: Path) -> pa
         ValueError: If python_imports table is missing or extraction produces no output.
     """
     from extract.extractors.external_scope import extract_python_external_tables
-    from extract.session import ExtractSession
-    from extraction.engine_session_factory import build_engine_session
-    from extraction.runtime_profile import resolve_runtime_profile
 
     # Load python_imports from Delta location
     python_imports_table = _load_delta_table(delta_locations.get("python_imports"))
@@ -887,10 +897,9 @@ def _run_python_external(delta_locations: dict[str, str], repo_root: Path) -> pa
         msg = "python_imports table is required for python_external extraction"
         raise ValueError(msg)
 
-    # Create extract session
-    runtime_spec = resolve_runtime_profile("default")
-    engine_session = build_engine_session(runtime_spec=runtime_spec)
-    extract_session = ExtractSession(engine_session=engine_session)
+    resolved_bundle = execution_bundle or _build_extract_execution_bundle()
+    runtime_spec = resolved_bundle.runtime_spec
+    extract_session = resolved_bundle.extract_session
 
     outputs = extract_python_external_tables(
         python_imports=python_imports_table,

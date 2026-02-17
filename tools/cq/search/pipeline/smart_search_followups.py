@@ -78,19 +78,4 @@ def build_followups(
     return findings
 
 
-def generate_followup_suggestions(
-    matches: list[EnrichedMatch],
-    query: str,
-    mode: QueryMode,
-) -> list[Finding]:
-    """Compatibility alias for follow-up generation.
-
-    Returns:
-    -------
-    list[Finding]
-        Follow-up suggestions derived from the match set.
-    """
-    return build_followups(matches, query, mode)
-
-
-__all__ = ["build_followups", "generate_followup_suggestions"]
+__all__ = ["build_followups"]

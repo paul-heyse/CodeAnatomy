@@ -5,11 +5,11 @@ Analyzes module import structure, identifies cycles, and maps dependencies.
 
 from __future__ import annotations
 
-import ast
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -20,6 +20,7 @@ from tools.cq.core.schema import (
     Section,
     append_result_key_finding,
     append_result_section,
+    append_section_finding,
     extend_result_evidence,
     ms,
     update_result_summary,
@@ -27,11 +28,13 @@ from tools.cq.core.schema import (
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.index.graph_utils import find_sccs
-from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
-from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
+from tools.cq.macros.shared import macro_scoring_details, scan_python_files, scope_filter_applied
+
+if TYPE_CHECKING:
+    from tools.cq.analysis.visitors.import_visitor import ImportVisitor
 
 _STDLIB_MODULE_NAMES: frozenset[str] = frozenset(sys.stdlib_module_names)
 _CYCLE_LIMIT = 10
@@ -39,7 +42,7 @@ _EXTERNAL_LIMIT = 30
 _REL_IMPORT_LIMIT = 20
 
 
-class ImportInfo(msgspec.Struct):
+class ImportInfo(msgspec.Struct, frozen=True):
     """Information about an import statement.
 
     Parameters
@@ -50,7 +53,7 @@ class ImportInfo(msgspec.Struct):
         Line number.
     module : str
         Imported module name.
-    names : list[str]
+    names : tuple[str, ...]
         Imported names (for from imports).
     is_from : bool
         Whether this is a from import.
@@ -65,29 +68,29 @@ class ImportInfo(msgspec.Struct):
     file: str
     line: int
     module: str
-    names: list[str] = msgspec.field(default_factory=list)
+    names: tuple[str, ...] = ()
     is_from: bool = False
     is_relative: bool = False
     level: int = 0
     alias: str | None = None
 
 
-class ModuleDeps(msgspec.Struct):
+class ModuleDeps(msgspec.Struct, frozen=True):
     """Dependencies for a single module.
 
     Parameters
     ----------
     file : str
         Module file path.
-    imports : list[ImportInfo]
+    imports : tuple[ImportInfo, ...]
         All imports in the module.
-    depends_on : set[str]
+    depends_on : frozenset[str]
         Direct dependencies (module names).
     """
 
     file: str
-    imports: list[ImportInfo] = msgspec.field(default_factory=list)
-    depends_on: set[str] = msgspec.field(default_factory=set)
+    imports: tuple[ImportInfo, ...] = ()
+    depends_on: frozenset[str] = frozenset()
 
 
 class ImportRequest(ScopedMacroRequestBase, frozen=True):
@@ -149,51 +152,14 @@ def _resolve_relative_import(
     return ".".join(base_parts) if base_parts else None
 
 
-class ImportVisitor(ast.NodeVisitor):
-    """Extract imports from a module."""
+def _import_visitor_factory(file: str) -> ImportVisitor[ImportInfo]:
+    from tools.cq.analysis.visitors.import_visitor import ImportVisitor
 
-    def __init__(self, file: str) -> None:
-        """__init__."""
-        self.file = file
-        self.imports: list[ImportInfo] = []
-
-    def visit_Import(self, node: ast.Import) -> None:
-        """Record direct import statements."""
-        for alias in node.names:
-            self.imports.append(
-                ImportInfo(
-                    file=self.file,
-                    line=node.lineno,
-                    module=alias.name,
-                    is_from=False,
-                    alias=alias.asname,
-                )
-            )
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        """Record from-import statements."""
-        module = node.module or ""
-        is_relative = node.level > 0
-
-        # Resolve relative import
-        if is_relative:
-            resolved = _resolve_relative_import(self.file, node.level, node.module)
-            if resolved:
-                module = resolved
-
-        names = [alias.name for alias in node.names if alias.name != "*"]
-
-        self.imports.append(
-            ImportInfo(
-                file=self.file,
-                line=node.lineno,
-                module=module,
-                names=names,
-                is_from=True,
-                is_relative=is_relative,
-                level=node.level,
-            )
-        )
+    return ImportVisitor(
+        file,
+        make_import_info=ImportInfo,
+        resolve_relative_import=_resolve_relative_import,
+    )
 
 
 # Import cycle detection moved to graph_utils using rustworkx
@@ -237,30 +203,28 @@ def _collect_imports(
     include: list[str] | None = None,
     exclude: list[str] | None = None,
 ) -> tuple[dict[str, ModuleDeps], list[ImportInfo]]:
-    repo_root = resolve_repo_context(root).repo_root
     deps: dict[str, ModuleDeps] = {}
     all_imports: list[ImportInfo] = []
-    for pyfile in iter_files(
-        root=repo_root,
+    visitors, _files_scanned = scan_python_files(
+        root,
         include=include,
         exclude=exclude,
-        extensions=(".py",),
-    ):
-        rel_str = str(pyfile.relative_to(repo_root))
-        try:
-            source = pyfile.read_text(encoding="utf-8")
-            tree = ast.parse(source, filename=rel_str)
-        except (SyntaxError, OSError, UnicodeDecodeError):
-            continue
-        visitor = ImportVisitor(rel_str)
-        visitor.visit(tree)
-        mod_deps = ModuleDeps(file=rel_str, imports=visitor.imports)
+        visitor_factory=_import_visitor_factory,
+    )
+    for visitor in visitors:
+        rel_str = visitor.file
+        depends_on: set[str] = set()
         for imp in visitor.imports:
             if not imp.module:
                 continue
-            mod_deps.depends_on.add(imp.module.split(".")[0])
+            depends_on.add(imp.module.split(".")[0])
             if "." in imp.module:
-                mod_deps.depends_on.add(imp.module)
+                depends_on.add(imp.module)
+        mod_deps = ModuleDeps(
+            file=rel_str,
+            imports=tuple(visitor.imports),
+            depends_on=frozenset(depends_on),
+        )
         deps[rel_str] = mod_deps
         all_imports.extend(visitor.imports)
     return deps, all_imports
@@ -323,13 +287,14 @@ def _append_cycle_section(
     for index, cycle in enumerate(cycles[:_CYCLE_LIMIT], 1):
         cycle_str = " -> ".join(cycle) + f" -> {cycle[0]}"
         details = {"modules": cycle}
-        cycle_section.findings.append(
+        cycle_section = append_section_finding(
+            cycle_section,
             Finding(
                 category="cycle",
                 message=f"Cycle {index}: {cycle_str}",
                 severity="warning",
                 details=build_detail_payload(scoring=scoring_details, data=details),
-            )
+            ),
         )
     return append_result_section(result, cycle_section)
 
@@ -345,13 +310,14 @@ def _append_external_section(
     ext_section = Section(title="External Dependencies")
     for dep in sorted(external_deps)[:_EXTERNAL_LIMIT]:
         count = sum(1 for imp_info in all_imports if imp_info.module.split(".")[0] == dep)
-        ext_section.findings.append(
+        ext_section = append_section_finding(
+            ext_section,
             Finding(
                 category="external",
                 message=f"{dep}: {count} imports",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
     return append_result_section(result, ext_section)
 
@@ -366,14 +332,15 @@ def _append_relative_section(
     rel_section = Section(title="Relative Imports")
     for imp_info in relative_imports[:_REL_IMPORT_LIMIT]:
         dots = "." * imp_info.level
-        rel_section.findings.append(
+        rel_section = append_section_finding(
+            rel_section,
             Finding(
                 category="relative",
                 message=f"from {dots}{imp_info.module or ''} import {', '.join(imp_info.names) or '*'}",
                 anchor=Anchor(file=imp_info.file, line=imp_info.line),
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
     return append_result_section(result, rel_section)
 
@@ -388,14 +355,15 @@ def _append_module_focus(
     for file, mod_deps in deps.items():
         if module in file or _file_to_module(file).startswith(module):
             for imp_info in mod_deps.imports:
-                focus_section.findings.append(
+                focus_section = append_section_finding(
+                    focus_section,
                     Finding(
                         category="import",
                         message=f"{'from ' if imp_info.is_from else 'import '}{imp_info.module}",
                         anchor=Anchor(file=imp_info.file, line=imp_info.line),
                         severity="info",
                         details=build_detail_payload(scoring=scoring_details),
-                    )
+                    ),
                 )
     return append_result_section(result, focus_section)
 

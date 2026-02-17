@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Literal, cast
 
 import msgspec
 import pyarrow as pa
-from deltalake.writer import write_deltalake
 
 from datafusion_engine.arrow.semantic import apply_semantic_types
 from datafusion_engine.cache.inventory import (
@@ -433,6 +432,7 @@ def _seed_and_register_dataset(
     path = Path(str(location.path))
     try:
         _materialize_delta_table(
+            ctx=ctx,
             path=path,
             schema=item.schema,
             seed_row=_seed_row_for_schema(item.schema) if should_seed else None,
@@ -526,6 +526,7 @@ def _bootstrap_safe_location(location: DatasetLocation) -> DatasetLocation:
 
 def _materialize_delta_table(
     *,
+    ctx: SessionContext,
     path: Path,
     schema: pa.Schema,
     seed_row: Mapping[str, object] | None = None,
@@ -534,12 +535,22 @@ def _materialize_delta_table(
     compatible = _delta_compatible_schema(schema)
     rows: list[dict[str, object]] = [] if seed_row is None else [dict(seed_row)]
     table = pa.Table.from_pylist(rows, schema=compatible)
-    write_deltalake(
-        str(path),
-        table,
-        mode="overwrite",
-        schema_mode="overwrite",
+    from datafusion_engine.delta.transactions import write_transaction
+    from datafusion_engine.delta.write_ipc_payload import (
+        DeltaWriteRequestOptions,
+        build_delta_write_request,
     )
+
+    request = build_delta_write_request(
+        table_uri=str(path),
+        table=table,
+        options=DeltaWriteRequestOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            storage_options=None,
+        ),
+    )
+    write_transaction(ctx, request=request)
 
 
 def _seed_row_for_schema(schema: pa.Schema) -> dict[str, object]:

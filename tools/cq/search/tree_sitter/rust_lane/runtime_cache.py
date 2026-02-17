@@ -15,6 +15,7 @@ from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids
 from tools.cq.search.tree_sitter.core.lane_support import make_parser_from_language
 from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
+from tools.cq.search.tree_sitter.core.runtime_context import get_default_context
 from tools.cq.search.tree_sitter.query.compiler import compile_query
 
 if TYPE_CHECKING:
@@ -29,9 +30,31 @@ except ImportError:  # pragma: no cover - exercised via availability checks
 
 
 _MAX_TREE_CACHE_ENTRIES = 128
-_TREE_CACHE: BoundedCache[str, None] = BoundedCache(max_size=_MAX_TREE_CACHE_ENTRIES, policy="lru")
-_TREE_CACHE_EVICTIONS = {"value": 0}
-CACHE_REGISTRY.register_cache("rust", "rust_lane:tree_cache", _TREE_CACHE)
+_CACHE_REGISTRATION_STATE: dict[str, bool] = {"registered": False}
+
+
+def _tree_cache() -> BoundedCache[str, None]:
+    runtime_context = get_default_context()
+    cache = runtime_context.rust_tree_cache
+    if isinstance(cache, BoundedCache):
+        return cache
+    created: BoundedCache[str, None] = BoundedCache(
+        max_size=_MAX_TREE_CACHE_ENTRIES,
+        policy="lru",
+    )
+    runtime_context.rust_tree_cache = created
+    if not _CACHE_REGISTRATION_STATE["registered"]:
+        CACHE_REGISTRY.register_cache("rust", "rust_lane:tree_cache", created)
+        _CACHE_REGISTRATION_STATE["registered"] = True
+    return created
+
+
+def _tree_cache_evictions() -> int:
+    return int(get_default_context().rust_tree_cache_evictions)
+
+
+def _set_tree_cache_evictions(value: int) -> None:
+    get_default_context().rust_tree_cache_evictions = max(0, int(value))
 
 
 @lru_cache(maxsize=1)
@@ -65,6 +88,17 @@ def _rust_field_ids() -> dict[str, int]:
     return cached_field_ids("rust")
 
 
+def rust_field_ids() -> dict[str, int]:
+    """Return cached Rust grammar field IDs.
+
+    Returns:
+    -------
+    dict[str, int]
+        Field name to field ID mapping.
+    """
+    return _rust_field_ids()
+
+
 def _touch_tree_cache(_session: object, cache_key: str | None) -> None:
     """Touch cache entry to update LRU ordering.
 
@@ -77,13 +111,14 @@ def _touch_tree_cache(_session: object, cache_key: str | None) -> None:
     """
     if not cache_key:
         return
-    if cache_key in _TREE_CACHE:
-        _TREE_CACHE.put(cache_key, None)
+    cache = _tree_cache()
+    if cache_key in cache:
+        cache.put(cache_key, None)
         return
-    at_capacity = len(_TREE_CACHE) >= _MAX_TREE_CACHE_ENTRIES
-    _TREE_CACHE.put(cache_key, None)
+    at_capacity = len(cache) >= _MAX_TREE_CACHE_ENTRIES
+    cache.put(cache_key, None)
     if at_capacity:
-        _TREE_CACHE_EVICTIONS["value"] += 1
+        _set_tree_cache_evictions(_tree_cache_evictions() + 1)
 
 
 def _parse_with_session(
@@ -122,8 +157,8 @@ def clear_tree_sitter_rust_cache() -> None:
     from tools.cq.search.tree_sitter.rust_lane.query_cache import clear_query_cache
 
     clear_parse_session(language="rust")
-    _TREE_CACHE.clear()
-    _TREE_CACHE_EVICTIONS["value"] = 0
+    _tree_cache().clear()
+    _set_tree_cache_evictions(0)
     _rust_language.cache_clear()
     compile_query.cache_clear()
     clear_query_cache()
@@ -148,7 +183,7 @@ def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
         "entries": stats.entries,
         "cache_hits": stats.cache_hits,
         "cache_misses": stats.cache_misses,
-        "cache_evictions": _TREE_CACHE_EVICTIONS["value"],
+        "cache_evictions": _tree_cache_evictions(),
         "parse_count": stats.parse_count,
         "reparse_count": stats.reparse_count,
         "edit_failures": stats.edit_failures,
@@ -158,4 +193,5 @@ def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
 __all__ = [
     "clear_tree_sitter_rust_cache",
     "get_tree_sitter_rust_cache_stats",
+    "rust_field_ids",
 ]

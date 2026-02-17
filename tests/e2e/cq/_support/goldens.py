@@ -188,10 +188,17 @@ def _result_to_dict(result: CqResult) -> dict[str, Any]:
     -------
     dict[str, Any]
         Result as dictionary.
+
+    Raises:
+        TypeError: If serialization does not produce a dictionary payload.
     """
     from tools.cq.core.serialization import to_builtins
 
-    return to_builtins(result)
+    builtins_result = to_builtins(result)
+    if isinstance(builtins_result, dict):
+        return cast("dict[str, Any]", builtins_result)
+    msg = "expected dictionary payload from to_builtins(CqResult)"
+    raise TypeError(msg)
 
 
 def assert_json_snapshot(

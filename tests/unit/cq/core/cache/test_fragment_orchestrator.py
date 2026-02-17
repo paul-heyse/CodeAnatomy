@@ -15,7 +15,7 @@ from tools.cq.core.cache.fragment_contracts import (
     FragmentWriteV1,
 )
 from tools.cq.core.cache.fragment_engine import FragmentPersistRuntimeV1, FragmentProbeRuntimeV1
-from tools.cq.core.cache.fragment_orchestrator import run_fragment_scan
+from tools.cq.core.cache.fragment_runtime import run_fragment_scan
 
 
 def test_run_fragment_scan_scans_misses_and_persists(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -47,11 +47,11 @@ def test_run_fragment_scan_scans_misses_and_persists(monkeypatch: pytest.MonkeyP
         persisted.extend(writes)
 
     monkeypatch.setattr(
-        "tools.cq.core.cache.fragment_orchestrator.partition_fragment_entries",
+        "tools.cq.core.cache.fragment_runtime.partition_fragment_entries",
         fake_partition,
     )
     monkeypatch.setattr(
-        "tools.cq.core.cache.fragment_orchestrator.persist_fragment_writes",
+        "tools.cq.core.cache.fragment_runtime.persist_fragment_writes",
         fake_persist,
     )
 

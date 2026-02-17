@@ -111,16 +111,43 @@ class TableProviderMetadata:
     delta_scan_effective: dict[str, object] | None = None
 
 
-_TABLE_PROVIDER_METADATA_BY_CONTEXT: WeakKeyDictionary[
-    SessionContext,
-    dict[str, TableProviderMetadata],
-] = WeakKeyDictionary()
+@dataclass
+class TableProviderMetadataRegistry:
+    """Context-scoped registry for table-provider metadata."""
+
+    _by_context: WeakKeyDictionary[SessionContext, dict[str, TableProviderMetadata]] = field(
+        default_factory=WeakKeyDictionary
+    )
+
+    def record(self, ctx: SessionContext, *, metadata: TableProviderMetadata) -> None:
+        """Record metadata for a table in the provided session context."""
+        context_metadata = self._by_context.get(ctx)
+        if context_metadata is None:
+            context_metadata = {}
+            self._by_context[ctx] = context_metadata
+        context_metadata[metadata.table_name] = metadata
+
+    def get(self, ctx: SessionContext, *, table_name: str) -> TableProviderMetadata | None:
+        """Return metadata for a single table in a context."""
+        return self._by_context.get(ctx, {}).get(table_name)
+
+    def all(self, ctx: SessionContext) -> dict[str, TableProviderMetadata]:
+        """Return all metadata entries for a context."""
+        return dict(self._by_context.get(ctx, {}))
+
+    def clear(self, ctx: SessionContext) -> None:
+        """Clear all metadata for a context."""
+        self._by_context.pop(ctx, None)
+
+
+_TABLE_PROVIDER_METADATA_REGISTRY = TableProviderMetadataRegistry()
 
 
 def record_table_provider_metadata(
     ctx: SessionContext,
     *,
     metadata: TableProviderMetadata,
+    registry: TableProviderMetadataRegistry | None = None,
 ) -> None:
     """Record TableProvider metadata for a session context.
 
@@ -131,17 +158,14 @@ def record_table_provider_metadata(
     metadata : TableProviderMetadata
         Metadata to record for the table.
     """
-    context_metadata = _TABLE_PROVIDER_METADATA_BY_CONTEXT.get(ctx)
-    if context_metadata is None:
-        context_metadata = {}
-        _TABLE_PROVIDER_METADATA_BY_CONTEXT[ctx] = context_metadata
-    context_metadata[metadata.table_name] = metadata
+    (registry or _TABLE_PROVIDER_METADATA_REGISTRY).record(ctx, metadata=metadata)
 
 
 def table_provider_metadata(
     ctx: SessionContext,
     *,
     table_name: str,
+    registry: TableProviderMetadataRegistry | None = None,
 ) -> TableProviderMetadata | None:
     """Return TableProvider metadata for a table when available.
 
@@ -157,10 +181,14 @@ def table_provider_metadata(
     TableProviderMetadata | None
         Metadata instance when available.
     """
-    return _TABLE_PROVIDER_METADATA_BY_CONTEXT.get(ctx, {}).get(table_name)
+    return (registry or _TABLE_PROVIDER_METADATA_REGISTRY).get(ctx, table_name=table_name)
 
 
-def all_table_provider_metadata(ctx: SessionContext) -> dict[str, TableProviderMetadata]:
+def all_table_provider_metadata(
+    ctx: SessionContext,
+    *,
+    registry: TableProviderMetadataRegistry | None = None,
+) -> dict[str, TableProviderMetadata]:
     """Return all TableProvider metadata for a session context.
 
     Parameters
@@ -173,10 +201,14 @@ def all_table_provider_metadata(ctx: SessionContext) -> dict[str, TableProviderM
     dict[str, TableProviderMetadata]
         Mapping of table names to metadata.
     """
-    return dict(_TABLE_PROVIDER_METADATA_BY_CONTEXT.get(ctx, {}))
+    return (registry or _TABLE_PROVIDER_METADATA_REGISTRY).all(ctx)
 
 
-def clear_table_provider_metadata(ctx: SessionContext) -> None:
+def clear_table_provider_metadata(
+    ctx: SessionContext,
+    *,
+    registry: TableProviderMetadataRegistry | None = None,
+) -> None:
     """Clear all TableProvider metadata for a session context.
 
     Parameters
@@ -184,12 +216,13 @@ def clear_table_provider_metadata(ctx: SessionContext) -> None:
     ctx : SessionContext
         Session context instance.
     """
-    _TABLE_PROVIDER_METADATA_BY_CONTEXT.pop(ctx, None)
+    (registry or _TABLE_PROVIDER_METADATA_REGISTRY).clear(ctx)
 
 
 __all__ = [
     "TableProviderCapsule",
     "TableProviderMetadata",
+    "TableProviderMetadataRegistry",
     "all_table_provider_metadata",
     "clear_table_provider_metadata",
     "record_table_provider_metadata",

@@ -3,14 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import cast
-
-import pyarrow as pa
-
-from datafusion_engine.arrow.interop import (
-    RecordBatchReader,
-    RecordBatchReaderLike,
-)
 
 
 class CoercionError(ValueError):
@@ -149,50 +141,6 @@ def coerce_mapping_list(value: object) -> Sequence[Mapping[str, object]] | None:
     return None
 
 
-def coerce_to_recordbatch_reader(value: object) -> RecordBatchReaderLike | None:
-    """Coerce value to a RecordBatchReader.
-
-    Parameters
-    ----------
-    value
-        Value to coerce. Accepts:
-        - RecordBatchReader (returned as-is)
-        - Table (converted to reader)
-        - RecordBatch (wrapped in reader)
-        - Sequence[RecordBatch] (wrapped in reader)
-
-    Returns:
-    -------
-    RecordBatchReaderLike | None
-        RecordBatchReader or None if coercion fails.
-    """
-    if value is None:
-        return None
-    if isinstance(value, RecordBatchReader):
-        return value
-    if isinstance(value, pa.RecordBatch):
-        record_batch = cast("pa.RecordBatch", value)
-        return cast(
-            "RecordBatchReaderLike",
-            pa.RecordBatchReader.from_batches(record_batch.schema, [record_batch]),
-        )
-    schema = getattr(value, "schema", None)
-    to_batches = getattr(value, "to_batches", None)
-    if schema is not None and callable(to_batches):
-        return cast(
-            "RecordBatchReaderLike",
-            pa.RecordBatchReader.from_batches(schema, to_batches()),
-        )
-    if isinstance(value, Sequence):
-        batches = [batch for batch in value if isinstance(batch, pa.RecordBatch)]
-        if batches:
-            return cast(
-                "RecordBatchReaderLike",
-                pa.RecordBatchReader.from_batches(batches[0].schema, batches),
-            )
-    return None
-
-
 def raise_for_int(value: object, *, context: str = "") -> int:
     """Coerce value to int, raising CoercionError on failure.
 
@@ -277,7 +225,6 @@ __all__ = [
     "coerce_str",
     "coerce_str_list",
     "coerce_str_tuple",
-    "coerce_to_recordbatch_reader",
     "raise_for_bool",
     "raise_for_float",
     "raise_for_int",

@@ -10,6 +10,7 @@ from tools.cq.cli_app.command_schema import (
     ExceptionsCommandSchema,
     ImpactCommandSchema,
     ImportsCommandSchema,
+    NeighborhoodCommandSchema,
     QueryCommandSchema,
     ReportCommandSchema,
     RunCommandSchema,
@@ -23,6 +24,7 @@ from tools.cq.cli_app.options import (
     ExceptionsOptions,
     ImpactOptions,
     ImportsOptions,
+    NeighborhoodOptions,
     QueryOptions,
     ReportOptions,
     RunOptions,
@@ -36,6 +38,7 @@ from tools.cq.cli_app.params import (
     FilterParams,
     ImpactParams,
     ImportsParams,
+    NeighborhoodParams,
     QueryParams,
     ReportParams,
     RunParams,
@@ -237,12 +240,32 @@ def run_options_from_projected_params(params: RunParams | None) -> RunOptions:
     return _options(params or RunParams(), schema_type=RunCommandSchema, options_type=RunOptions)
 
 
+def project_neighborhood_params(params: NeighborhoodParams | None) -> NeighborhoodCommandSchema:
+    return _project(params or NeighborhoodParams(), schema_type=NeighborhoodCommandSchema)
+
+
+def neighborhood_options_from_projected_params(
+    params: NeighborhoodParams | None,
+) -> NeighborhoodOptions:
+    """Project neighborhood params into typed neighborhood options.
+
+    Returns:
+        NeighborhoodOptions: Typed neighborhood options payload.
+    """
+    return _options(
+        params or NeighborhoodParams(),
+        schema_type=NeighborhoodCommandSchema,
+        options_type=NeighborhoodOptions,
+    )
+
+
 __all__ = [
     "bytecode_surface_options_from_projected_params",
     "exceptions_options_from_projected_params",
     "filter_options_from_projected_params",
     "impact_options_from_projected_params",
     "imports_options_from_projected_params",
+    "neighborhood_options_from_projected_params",
     "query_options_from_projected_params",
     "report_options_from_projected_params",
     "run_options_from_projected_params",

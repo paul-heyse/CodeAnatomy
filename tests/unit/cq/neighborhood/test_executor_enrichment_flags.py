@@ -10,8 +10,8 @@ from tools.cq.core.schema import CqResult, RunMeta
 from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.neighborhood.bundle_builder import BundleBuildRequest
-from tools.cq.neighborhood.executor import NeighborhoodExecutionRequest, execute_neighborhood
-from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
+from tools.cq.neighborhood.executor import NeighborhoodExecutionRequestV1, execute_neighborhood
+from tools.cq.search._shared.enrichment_contracts import IncrementalEnrichmentModeV1
 
 
 def _toolchain() -> Toolchain:
@@ -69,7 +69,7 @@ def test_neighborhood_executor_propagates_incremental_flags(
     )
 
     result = execute_neighborhood(
-        NeighborhoodExecutionRequest(
+        NeighborhoodExecutionRequestV1(
             target="build_graph",
             root=tmp_path,
             argv=["cq", "neighborhood", "build_graph"],

@@ -5,7 +5,6 @@ This module contains the 'search' command for smart code search.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated
 
 from cyclopts import Parameter
@@ -19,6 +18,7 @@ from tools.cq.orchestration.request_factory import (
     RequestFactory,
     SearchRequestOptionsV1,
 )
+from tools.cq.run.scope import apply_in_dir_scope
 
 
 def search(
@@ -38,8 +38,8 @@ def search(
         CliResult: Renderable command result payload.
     """
     from tools.cq.core.types import parse_query_language_scope
+    from tools.cq.search._shared.enrichment_contracts import parse_incremental_enrichment_mode
     from tools.cq.search._shared.types import QueryMode
-    from tools.cq.search.pipeline.enrichment_contracts import parse_incremental_enrichment_mode
     from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
 
     ctx = require_context(ctx)
@@ -57,11 +57,7 @@ def search(
     # Treat --in as scan scope, not a root override
     include_globs: list[str] = list(options.include) if options.include else []
     if options.in_dir:
-        in_value = options.in_dir.rstrip("/")
-        requested = Path(in_value)
-        candidate = requested if requested.is_absolute() else (ctx.root / requested)
-        looks_like_file = candidate.is_file() or (requested.suffix and not in_value.endswith("/"))
-        include_globs.append(in_value if looks_like_file else f"{in_value}/**")
+        include_globs.extend(apply_in_dir_scope(options.in_dir, ctx.root, lang=str(options.lang)))
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.search(

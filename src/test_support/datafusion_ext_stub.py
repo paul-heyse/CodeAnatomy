@@ -140,6 +140,22 @@ def install_function_factory(ctx: SessionContext, payload: bytes) -> None:
     _ = (ctx, payload)
 
 
+def derive_function_factory_policy(
+    snapshot: object,
+    *,
+    allow_async: bool = False,
+) -> dict[str, object]:
+    """Return a minimal policy payload for FunctionFactory derivation."""
+    _ = snapshot
+    return {
+        "version": 1,
+        "primitives": [],
+        "prefer_named_arguments": True,
+        "allow_async": bool(allow_async),
+        "domain_operator_hooks": [],
+    }
+
+
 def udf_expr(name: str, *args: object, ctx: SessionContext | None = None) -> Expr:
     """Return a stub expression for udf_expr.
 
@@ -226,6 +242,27 @@ def session_context_contract_probe(ctx: SessionContext) -> dict[str, object]:
     }
 
 
+def install_codeanatomy_runtime(
+    ctx: SessionContext,
+    *,
+    enable_async_udfs: bool = False,
+    async_udf_timeout_ms: int | None = None,
+    async_udf_batch_size: int | None = None,
+) -> dict[str, object]:
+    """Return a stub runtime-install payload with registry snapshot."""
+    _ = (enable_async_udfs, async_udf_timeout_ms, async_udf_batch_size)
+    snapshot = registry_snapshot(ctx)
+    return {
+        "contract_version": 3,
+        "runtime_install_mode": "unified",
+        "snapshot": snapshot,
+        "udf_installed": True,
+        "function_factory_installed": True,
+        "expr_planners_installed": True,
+        "cache_registrar_available": True,
+    }
+
+
 def replay_substrait_plan(ctx: SessionContext, payload_bytes: bytes) -> object:
     """Replay Substrait bytes through public DataFusion Python APIs in stub mode.
 
@@ -256,7 +293,6 @@ def lineage_from_substrait(payload_bytes: bytes) -> dict[str, object]:
         "referenced_tables": [],
         "required_udfs": [],
         "required_rewrite_tags": [],
-        "referenced_udfs": [],
     }
 
 
@@ -278,6 +314,68 @@ def register_dataset_provider(ctx: SessionContext, request_payload: object) -> d
         "snapshot": {},
         "scan_config": delta_scan_config_from_session(ctx),
     }
+
+
+def capture_plan_bundle_runtime(
+    ctx: SessionContext,
+    payload: object,
+    df: object,
+) -> dict[str, object]:
+    """Return a minimal runtime capture payload for plan bundle bridge tests."""
+    _ = (ctx, payload, df)
+    return {"captured": True, "logical_plan": "", "optimized_plan": "", "physical_plan": ""}
+
+
+def build_plan_bundle_artifact_with_warnings(
+    ctx: SessionContext,
+    payload: object,
+    df: object,
+) -> dict[str, object]:
+    """Return a minimal plan-bundle artifact payload for bridge tests."""
+    _ = (ctx, payload, df)
+    return {"artifact": {}, "warnings": []}
+
+
+def delta_write_ipc_request(ctx: SessionContext, request_msgpack: bytes) -> dict[str, object]:
+    """Return a stub Delta write result payload."""
+    _ = (ctx, request_msgpack)
+    return {
+        "version": 0,
+        "num_added_files": 0,
+        "num_removed_files": 0,
+        "num_copied_rows": 0,
+        "num_deleted_rows": 0,
+        "num_inserted_rows": 0,
+        "num_updated_rows": 0,
+    }
+
+
+def delta_merge_request_payload(ctx: SessionContext, request_msgpack: bytes) -> dict[str, object]:
+    """Return a stub Delta merge result payload."""
+    _ = (ctx, request_msgpack)
+    return {
+        "version": 0,
+        "num_target_rows_inserted": 0,
+        "num_target_rows_updated": 0,
+        "num_target_rows_deleted": 0,
+        "num_target_rows_copied": 0,
+    }
+
+
+def delta_cdf_table_provider(ctx: SessionContext, *args: object) -> dict[str, object]:
+    """Return a stub CDF provider payload."""
+    _ = (ctx, args)
+    return {"provider": None, "table_name": None}
+
+
+def register_cache_tables(ctx: SessionContext, payload: object) -> None:
+    """Register cache tables in stub mode."""
+    _ = (ctx, payload)
+
+
+def install_tracing(ctx: SessionContext) -> None:
+    """Install tracing hooks in stub mode."""
+    _ = ctx
 
 
 def arrow_stream_to_batches(obj: object) -> object:
@@ -1146,7 +1244,9 @@ def col_to_byte(line_text: Expr, col_index: Expr, col_unit: Expr) -> Expr:
 __all__ = [
     "arrow_metadata",
     "arrow_stream_to_batches",
+    "build_plan_bundle_artifact_with_warnings",
     "capabilities_snapshot",
+    "capture_plan_bundle_runtime",
     "cdf_change_rank",
     "cdf_is_delete",
     "cdf_is_upsert",
@@ -1154,6 +1254,7 @@ __all__ = [
     "count_distinct_agg",
     "create_df_plugin_table_provider",
     "delta_scan_config_from_session",
+    "derive_function_factory_policy",
     "first_value_agg",
     "install_delta_table_factory",
     "install_expr_planners",

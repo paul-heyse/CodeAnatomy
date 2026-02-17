@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.types as patypes
 from datafusion import SessionContext
 
-from datafusion_engine.udf.extension_core import _DDL_COMPLEX_TYPE_TOKENS, _DDL_TYPE_ALIASES
+from datafusion_engine.dataset.ddl_types import DDL_COMPLEX_TYPE_TOKENS, ddl_type_alias
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -107,13 +107,13 @@ def _ddl_type_name_from_string(dtype_name: str) -> str:
         return "DATE"
     if dtype_name.startswith("time"):
         return "TIME"
-    if any(token in dtype_name for token in _DDL_COMPLEX_TYPE_TOKENS) or dtype_name in {
+    if any(token in dtype_name for token in DDL_COMPLEX_TYPE_TOKENS) or dtype_name in {
         "any",
         "variant",
         "json",
     }:
         return "VARCHAR"
-    alias = _DDL_TYPE_ALIASES.get(dtype_name)
+    alias = ddl_type_alias(dtype_name)
     return alias or dtype_name.upper()
 
 

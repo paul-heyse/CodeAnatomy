@@ -10,6 +10,8 @@ from typing import Literal
 
 import msgspec
 
+from planning_engine.spec_contracts import RuntimeConfig
+
 type EngineProfile = Literal["small", "medium", "large"]
 type RulepackProfile = Literal["Default", "LowLatency", "Replay", "Strict"]
 type TracingPreset = Literal["Maximal", "MaximalNoData", "ProductionLean"]
@@ -40,7 +42,7 @@ class EngineExecutionOptions(msgspec.Struct, frozen=True):
 
     engine_profile: EngineProfile = "medium"
     rulepack_profile: RulepackProfile = "Default"
-    runtime_config: object | None = None
+    runtime_config: RuntimeConfig | None = None
     extraction_config: object | None = None
     incremental_config: object | None = None
 

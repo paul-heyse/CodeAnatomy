@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib
 import logging
 import os
@@ -742,33 +741,6 @@ def reset_providers_for_tests() -> None:
     if providers is not None:
         providers.shutdown()
     _STATE["providers"] = None
-    from opentelemetry._logs import _internal as logs_internal
-    from opentelemetry.metrics import _internal as metrics_internal
-
-    def _set_private_attr(target: object | None, attr: str, value: object) -> None:
-        if target is None:
-            return
-        with contextlib.suppress(AttributeError):
-            setattr(target, attr, value)
-
-    def _reset_once(holder: object | None) -> None:
-        _set_private_attr(holder, "_done", value=False)
-
-    def _reset_proxy_meter(proxy: object | None) -> None:
-        if proxy is None:
-            return
-        _set_private_attr(proxy, "_real_meter_provider", None)
-        meters = getattr(proxy, "_meters", None)
-        if meters is not None and hasattr(meters, "clear"):
-            meters.clear()
-
-    _reset_once(getattr(trace, "_TRACER_PROVIDER_SET_ONCE", None))
-    _reset_once(getattr(metrics_internal, "_METER_PROVIDER_SET_ONCE", None))
-    _reset_proxy_meter(getattr(metrics_internal, "_PROXY_METER_PROVIDER", None))
-    _reset_once(getattr(logs_internal, "_LOGGER_PROVIDER_SET_ONCE", None))
-    _set_private_attr(trace, "_TRACER_PROVIDER", None)
-    _set_private_attr(metrics_internal, "_METER_PROVIDER", None)
-    _set_private_attr(logs_internal, "_LOGGER_PROVIDER", None)
     reset_metrics_registry()
 
 

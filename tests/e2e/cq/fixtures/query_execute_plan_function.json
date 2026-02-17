@@ -5,10 +5,10 @@
     {
       "anchor": {
         "col": 0,
-        "end_col": 61,
-        "end_line": 74,
-        "file": "tools/cq/query/executor_runtime.py",
-        "line": 68
+        "end_col": 44,
+        "end_line": 28,
+        "file": "tools/cq/query/executor_plan_dispatch.py",
+        "line": 22
       },
       "category": "definition",
       "details": {
@@ -19,7 +19,7 @@
           ],
           [
             "caller_count",
-            1
+            0
           ],
           [
             "calls_within",
@@ -76,10 +76,10 @@
         {
           "anchor": {
             "col": 0,
-            "end_col": 61,
-            "end_line": 74,
-            "file": "tools/cq/query/executor_runtime.py",
-            "line": 68
+            "end_col": 44,
+            "end_line": 28,
+            "file": "tools/cq/query/executor_plan_dispatch.py",
+            "line": 22
           },
           "category": "entity_neighborhood",
           "details": {
@@ -90,7 +90,7 @@
               ],
               [
                 "caller_count",
-                1
+                0
               ],
               [
                 "enclosing_scope",
@@ -114,7 +114,7 @@
               "impact_score": 0.032
             }
           },
-          "message": "execute_plan: callers=1, callees=1, scope=<module>",
+          "message": "execute_plan: callers=0, callees=1, scope=<module>",
           "severity": "info"
         }
       ],
@@ -175,10 +175,10 @@
             {
               "byte_span": null,
               "display_label": "execute_plan",
-              "file_path": "tools/cq/query/executor_runtime.py",
+              "file_path": "tools/cq/query/executor_plan_dispatch.py",
               "kind": "definition",
               "name": "execute_plan",
-              "node_id": "entity:callee:tools/cq/query/executor_runtime.py:68:execute_plan",
+              "node_id": "entity:callee:tools/cq/query/executor_plan_dispatch.py:22:execute_plan",
               "qualname": null,
               "signature": null
             }
@@ -189,20 +189,9 @@
         "callers": {
           "availability": "partial",
           "overflow_artifact_ref": null,
-          "preview": [
-            {
-              "byte_span": null,
-              "display_label": "execute_plan",
-              "file_path": "tools/cq/query/executor_runtime.py",
-              "kind": "definition",
-              "name": "execute_plan",
-              "node_id": "entity:caller:tools/cq/query/executor_runtime.py:68:execute_plan",
-              "qualname": null,
-              "signature": null
-            }
-          ],
+          "preview": [],
           "source": "heuristic",
-          "total": 1
+          "total": 0
         },
         "hierarchy_or_scope": {
           "availability": "partial",
@@ -223,7 +212,7 @@
         "counters": {
           "arg_shape_count": 0,
           "callees": 1,
-          "callers": 1,
+          "callers": 0,
           "closure_capture_count": 0,
           "files_with_calls": 0,
           "forwarding_count": 0,
@@ -238,8 +227,8 @@
         "kind": "definition",
         "location": {
           "col": 0,
-          "file": "tools/cq/query/executor_runtime.py",
-          "line": 68
+          "file": "tools/cq/query/executor_plan_dispatch.py",
+          "line": 22
         },
         "qualname": null,
         "selection_reason": "top_entity_result",

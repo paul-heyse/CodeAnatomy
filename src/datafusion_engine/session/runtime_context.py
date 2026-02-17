@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
@@ -42,13 +42,27 @@ from datafusion_engine.sql.options import sql_options_for_profile, statement_sql
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
 
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.udf.metadata import UdfCatalog
     from datafusion_engine.views.artifacts import DataFusionViewArtifact
 
 
+def _as_runtime_profile(profile: _RuntimeContextMixin) -> DataFusionRuntimeProfile:
+    """Narrow runtime mixin receiver to canonical runtime profile type.
+
+    Returns:
+        DataFusionRuntimeProfile: Runtime profile view of the mixin receiver.
+    """
+    return cast("DataFusionRuntimeProfile", profile)
+
+
 class _RuntimeContextMixin:
+    def __getattr__(self, name: str) -> Any:
+        msg = f"{type(self).__name__!s} has no attribute {name!r}"
+        raise AttributeError(msg)
+
     def _ephemeral_context_phases(
-        self: Any,
+        self,
         ctx: SessionContext,
     ) -> tuple[RegistrationPhase, ...]:
         return (
@@ -90,38 +104,46 @@ class _RuntimeContextMixin:
             ),
         )
 
-    def _install_catalogs_for_context(self: Any, ctx: SessionContext) -> None:
+    def _install_catalogs_for_context(self, ctx: SessionContext) -> None:
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
         self._install_view_schema(ctx)
 
-    def _install_udf_stack_for_context(self: Any, ctx: SessionContext) -> None:
-        _install_udf_platform(self, ctx)
-        _install_planner_rules(self, ctx)
+    def _install_udf_stack_for_context(self, ctx: SessionContext) -> None:
+        _install_udf_platform(_as_runtime_profile(self), ctx)
+        _install_planner_rules(_as_runtime_profile(self), ctx)
 
-    def _install_schema_guards_for_context(self: Any, ctx: SessionContext) -> None:
-        _install_schema_registry(self, ctx)
-        _validate_rule_function_allowlist(self, ctx)
+    def _install_schema_guards_for_context(
+        self, ctx: SessionContext
+    ) -> None:
+        _install_schema_registry(_as_runtime_profile(self), ctx)
+        _validate_rule_function_allowlist(_as_runtime_profile(self), ctx)
 
-    def _install_planning_extensions_for_context(self: Any, ctx: SessionContext) -> None:
-        _prepare_statements(self, ctx)
+    def _install_planning_extensions_for_context(
+        self, ctx: SessionContext
+    ) -> None:
+        _prepare_statements(_as_runtime_profile(self), ctx)
         self.delta_ops.ensure_delta_plan_codecs(ctx)
 
-    def _install_extension_hooks_for_context(self: Any, ctx: SessionContext) -> None:
-        _record_extension_parity_validation(self, ctx)
-        _install_physical_expr_adapter_factory(self, ctx)
+    def _install_extension_hooks_for_context(
+        self, ctx: SessionContext
+    ) -> None:
+        _record_extension_parity_validation(_as_runtime_profile(self), ctx)
+        _install_physical_expr_adapter_factory(_as_runtime_profile(self), ctx)
 
-    def _install_observability_for_context(self: Any, ctx: SessionContext) -> None:
-        _install_tracing(self, ctx)
-        _install_cache_tables(self, ctx)
-        _record_cache_diagnostics(self, ctx)
+    def _install_observability_for_context(
+        self, ctx: SessionContext
+    ) -> None:
+        _install_tracing(_as_runtime_profile(self), ctx)
+        _install_cache_tables(_as_runtime_profile(self), ctx)
+        _record_cache_diagnostics(_as_runtime_profile(self), ctx)
 
-    def _install_input_plugins(self: Any, ctx: SessionContext) -> None:
+    def _install_input_plugins(self, ctx: SessionContext) -> None:
         """Install input plugins on the session context."""
         for plugin in self.policies.input_plugins:
             plugin(ctx)
 
-    def _install_registry_catalogs(self: Any, ctx: SessionContext) -> None:
+    def _install_registry_catalogs(self, ctx: SessionContext) -> None:
         """Install registry-backed catalog providers on the session context."""
         if not self.catalog.registry_catalogs:
             return
@@ -133,10 +155,10 @@ class _RuntimeContextMixin:
             catalogs=self.catalog.registry_catalogs,
             catalog_name=catalog_name,
             default_schema=self.catalog.default_schema,
-            runtime_profile=self,
+            runtime_profile=_as_runtime_profile(self),
         )
 
-    def _install_view_schema(self: Any, ctx: SessionContext) -> None:
+    def _install_view_schema(self, ctx: SessionContext) -> None:
         """Install the view schema namespace when configured."""
         if self.catalog.view_schema_name is None:
             return
@@ -155,7 +177,7 @@ class _RuntimeContextMixin:
 
         catalog.register_schema(self.catalog.view_schema_name, Schema.memory_schema())
 
-    def udf_catalog(self: Any, ctx: SessionContext) -> UdfCatalog:
+    def udf_catalog(self, ctx: SessionContext) -> UdfCatalog:
         """Return the cached UDF catalog for a session context.
 
         Args:
@@ -170,14 +192,16 @@ class _RuntimeContextMixin:
         cache_key = ctx
         catalog = self.udf_catalog_cache.get(cache_key)
         if catalog is None:
-            _refresh_udf_catalog(self, ctx)
+            _refresh_udf_catalog(_as_runtime_profile(self), ctx)
             catalog = self.udf_catalog_cache.get(cache_key)
         if catalog is None:
             msg = "UDF catalog is unavailable for the current DataFusion session context."
             raise RuntimeError(msg)
         return catalog
 
-    def function_factory_policy_hash(self: Any, ctx: SessionContext) -> str | None:
+    def function_factory_policy_hash(
+        self, ctx: SessionContext
+    ) -> str | None:
         """Return the FunctionFactory policy hash for a session context.
 
         Returns:
@@ -196,7 +220,7 @@ class _RuntimeContextMixin:
             allow_async=self.features.enable_async_udfs,
         )
 
-    def _resolved_sql_policy(self: Any) -> DataFusionSqlPolicy:
+    def _resolved_sql_policy(self) -> DataFusionSqlPolicy:
         """Return the resolved SQL policy for this runtime profile.
 
         Returns:
@@ -210,7 +234,7 @@ class _RuntimeContextMixin:
             return DataFusionSqlPolicy()
         return resolve_sql_policy(self.policies.sql_policy_name)
 
-    def _sql_options(self: Any) -> SQLOptions:
+    def _sql_options(self) -> SQLOptions:
         """Return SQLOptions for SQL execution.
 
         Returns:
@@ -218,9 +242,9 @@ class _RuntimeContextMixin:
         datafusion.SQLOptions
             SQL options for use with DataFusion contexts.
         """
-        return sql_options_for_profile(self)
+        return sql_options_for_profile(_as_runtime_profile(self))
 
-    def sql_options(self: Any) -> SQLOptions:
+    def sql_options(self) -> SQLOptions:
         """Return SQLOptions derived from the resolved SQL policy.
 
         Returns:
@@ -230,7 +254,7 @@ class _RuntimeContextMixin:
         """
         return self._sql_options()
 
-    def _statement_sql_options(self: Any) -> SQLOptions:
+    def _statement_sql_options(self) -> SQLOptions:
         """Return SQLOptions that allow statement execution.
 
         Returns:
@@ -238,9 +262,11 @@ class _RuntimeContextMixin:
         datafusion.SQLOptions
             SQL options with statement execution enabled.
         """
-        return statement_sql_options_for_profile(self)
+        return statement_sql_options_for_profile(_as_runtime_profile(self))
 
-    def _diskcache(self: Any, kind: DiskCacheKind) -> Cache | FanoutCache | None:
+    def _diskcache(
+        self, kind: DiskCacheKind
+    ) -> Cache | FanoutCache | None:
         """Return a DiskCache instance for the requested kind.
 
         Returns:
@@ -253,7 +279,7 @@ class _RuntimeContextMixin:
             return None
         return cache_for_kind(profile, kind)
 
-    def _diskcache_ttl_seconds(self: Any, kind: DiskCacheKind) -> float | None:
+    def _diskcache_ttl_seconds(self, kind: DiskCacheKind) -> float | None:
         """Return the TTL in seconds for a DiskCache kind when configured.
 
         Returns:
@@ -266,7 +292,9 @@ class _RuntimeContextMixin:
             return None
         return profile.ttl_for(kind)
 
-    def _record_view_definition(self: Any, *, artifact: DataFusionViewArtifact) -> None:
+    def _record_view_definition(
+        self, *, artifact: DataFusionViewArtifact
+    ) -> None:
         """Record a view artifact for diagnostics snapshots.
 
         Parameters
@@ -274,9 +302,11 @@ class _RuntimeContextMixin:
         artifact:
             View artifact payload for diagnostics.
         """
-        record_view_definition(self, artifact=artifact)
+        record_view_definition(_as_runtime_profile(self), artifact=artifact)
 
-    def _schema_introspector(self: Any, ctx: SessionContext) -> SchemaIntrospector:
+    def _schema_introspector(
+        self, ctx: SessionContext
+    ) -> SchemaIntrospector:
         """Return a schema introspector for the session.
 
         Returns:
@@ -307,7 +337,7 @@ class _RuntimeContextMixin:
                 return resolved
         return None
 
-    def _settings_snapshot(self: Any, ctx: SessionContext) -> pa.Table:
+    def _settings_snapshot(self, ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion settings when information_schema is enabled.
 
         Returns:
@@ -318,7 +348,7 @@ class _RuntimeContextMixin:
         cache = _introspection_cache_for_ctx(ctx, sql_options=self._sql_options())
         return cache.snapshot.settings
 
-    def _catalog_snapshot(self: Any, ctx: SessionContext) -> pa.Table:
+    def _catalog_snapshot(self, ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion catalog tables when available.
 
         Returns:
@@ -330,7 +360,7 @@ class _RuntimeContextMixin:
         return cache.snapshot.tables
 
     def _function_catalog_snapshot(
-        self: Any,
+        self,
         ctx: SessionContext,
         *,
         include_routines: bool = False,
@@ -353,22 +383,22 @@ class _RuntimeContextMixin:
             include_parameters=include_routines,
         )
 
-    def _resolved_config_policy(self: Any) -> DataFusionConfigPolicy | None:
-        return _resolved_config_policy_for_profile(self)
+    def _resolved_config_policy(self) -> DataFusionConfigPolicy | None:
+        return _resolved_config_policy_for_profile(_as_runtime_profile(self))
 
-    def _resolved_schema_hardening(self: Any) -> SchemaHardeningProfile | None:
-        return _resolved_schema_hardening_for_profile(self)
+    def _resolved_schema_hardening(self) -> SchemaHardeningProfile | None:
+        return _resolved_schema_hardening_for_profile(_as_runtime_profile(self))
 
-    def _telemetry_payload_row(self: Any) -> dict[str, object]:
-        return _build_telemetry_payload_row(self)
+    def _telemetry_payload_row(self) -> dict[str, object]:
+        return _build_telemetry_payload_row(_as_runtime_profile(self))
 
-    def _cache_key(self: Any) -> str:
+    def _cache_key(self) -> str:
         if self.execution.session_context_key:
             return self.execution.session_context_key
         # Use the full runtime fingerprint so distinct profiles do not alias.
         return self.fingerprint()
 
-    def context_cache_key(self: Any) -> str:
+    def context_cache_key(self) -> str:
         """Return a stable cache key for the session context.
 
         Returns:
@@ -378,17 +408,17 @@ class _RuntimeContextMixin:
         """
         return self._cache_key()
 
-    def _cached_context(self: Any) -> SessionContext | None:
+    def _cached_context(self) -> SessionContext | None:
         if not self.execution.share_context or self.diagnostics.diagnostics_sink is not None:
             return None
         return SESSION_CONTEXT_CACHE.get(self._cache_key())
 
-    def _cache_context(self: Any, ctx: SessionContext) -> None:
+    def _cache_context(self, ctx: SessionContext) -> None:
         if not self.execution.share_context:
             return
         SESSION_CONTEXT_CACHE[self._cache_key()] = ctx
 
-    def _build_session_context(self: Any) -> SessionContext:
+    def _build_session_context(self) -> SessionContext:
         """Create the SessionContext base for this runtime profile.
 
         Returns:
@@ -398,18 +428,18 @@ class _RuntimeContextMixin:
         """
         from datafusion_engine.session.context_pool import SessionFactory
 
-        return SessionFactory(self).build()
+        return SessionFactory(_as_runtime_profile(self)).build()
 
-    def _apply_url_table(self: Any, ctx: SessionContext) -> SessionContext:
+    def _apply_url_table(self, ctx: SessionContext) -> SessionContext:
         return ctx.enable_url_table() if self.features.enable_url_table else ctx
 
-    def _register_local_filesystem(self: Any, ctx: SessionContext) -> None:
+    def _register_local_filesystem(self, ctx: SessionContext) -> None:
         if self.policies.local_filesystem_root is None:
             return
         store = LocalFileSystem(prefix=self.policies.local_filesystem_root)
         from datafusion_engine.io.adapter import DataFusionIOAdapter
 
-        adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=_as_runtime_profile(self))
         adapter.register_object_store(scheme="file://", store=store, host=None)
 
 

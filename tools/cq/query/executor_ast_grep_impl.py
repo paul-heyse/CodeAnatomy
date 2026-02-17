@@ -20,6 +20,7 @@ from tools.cq.astgrep.metavar import (
     extract_rule_variadic_metavars,
     partition_metavar_filters,
 )
+from tools.cq.astgrep.metavar_extract import extract_match_metavars
 from tools.cq.astgrep.sgpy_scanner import (
     SgRecord,
     is_variadic_separator,
@@ -495,56 +496,6 @@ def apply_metavar_details(
     return finding
 
 
-def extract_match_metavars(
-    match: SgNode,
-    *,
-    metavar_names: tuple[str, ...],
-    variadic_names: frozenset[str],
-    include_multi: bool = False,
-) -> dict[str, object]:
-    """Extract metavariable captures from an ast-grep-py match.
-
-    Parameters
-    ----------
-    match
-        ast-grep-py SgNode match.
-    metavar_names
-        Names of metavariables to extract.
-    variadic_names
-        Names of variadic metavariables.
-    include_multi
-        Whether to include multi-node captures.
-
-    Returns:
-    -------
-    dict[str, object]
-        Dictionary of metavariable names to capture payloads.
-    """
-    metavars: dict[str, object] = {}
-    for bare_name in metavar_names:
-        captured = match.get_match(bare_name)
-        if captured is None:
-            pass
-        else:
-            text = captured.text()
-            # Keep both bare and `$`-prefixed keys for output compatibility.
-            metavars[bare_name] = text
-            metavars[f"${bare_name}"] = text
-
-        if include_multi and bare_name in variadic_names:
-            captured_multi = match.get_multiple_matches(bare_name)
-            all_nodes: list[SgNode] = list(captured_multi) if captured_multi is not None else []
-            captured_nodes = [node for node in all_nodes if not is_variadic_separator(node)]
-            if captured_nodes:
-                text = ", ".join(node.text() for node in captured_nodes)
-                metavars[f"$$${bare_name}"] = {
-                    "kind": "multi",
-                    "text": text,
-                    "nodes": [node_payload(node) for node in captured_nodes],
-                }
-    return metavars
-
-
 def parse_sgpy_metavariables(
     match: SgNode,
     *,
@@ -806,7 +757,6 @@ __all__ = [
     "decode_pattern_fragment_payload",
     "execute_ast_grep_rules",
     "execute_rule_matches",
-    "extract_match_metavars",
     "filter_records_by_spans",
     "group_match_spans",
     "is_variadic_separator",

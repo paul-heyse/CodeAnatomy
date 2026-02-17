@@ -13,6 +13,7 @@ from tools.cq.core.cache.snapshot_fingerprint import (
     ScopeSnapshotBuildRequestV1,
     build_scope_snapshot_fingerprint,
 )
+from tools.cq.core.path_utils import safe_rel_path
 from tools.cq.core.structs import CqStruct
 
 
@@ -88,7 +89,7 @@ def resolve_scope(
     return ScopeResolutionV1(
         root=str(resolved_root),
         language=plan.language,
-        files=tuple(_to_rel_path(root=resolved_root, path=item) for item in files),
+        files=tuple(safe_rel_path(root=resolved_root, path=item) for item in files),
         scope_hash=scope_hash,
         snapshot_digest=snapshot.digest,
         inventory_token=token,
@@ -108,13 +109,6 @@ def _scope_roots(*, root: Path, paths: list[Path]) -> tuple[str, ...]:
     if roots:
         return tuple(roots)
     return (str(root.resolve()),)
-
-
-def _to_rel_path(*, root: Path, path: Path) -> str:
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.resolve().as_posix()
 
 
 __all__ = [

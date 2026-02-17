@@ -6,6 +6,7 @@ import threading
 from dataclasses import dataclass, field
 
 from tools.cq.search.tree_sitter.contracts.query_models import GrammarDriftReportV1
+from tools.cq.search.tree_sitter.core.runtime_context import get_default_context
 from tools.cq.search.tree_sitter.query.contract_snapshot import QueryContractSnapshotV1
 
 
@@ -26,7 +27,6 @@ class QueryRuntimeState:
 
 
 _STATE_LOCK = threading.Lock()
-_GLOBAL_STATE_HOLDER: dict[str, QueryRuntimeState | None] = {"value": None}
 
 
 def get_query_runtime_state() -> QueryRuntimeState:
@@ -40,9 +40,12 @@ def get_query_runtime_state() -> QueryRuntimeState:
         The global runtime state instance.
     """
     with _STATE_LOCK:
-        if _GLOBAL_STATE_HOLDER["value"] is None:
-            _GLOBAL_STATE_HOLDER["value"] = QueryRuntimeState()
-        return _GLOBAL_STATE_HOLDER["value"]
+        runtime_context = get_default_context()
+        state = runtime_context.query_runtime_state
+        if not isinstance(state, QueryRuntimeState):
+            state = QueryRuntimeState()
+            runtime_context.query_runtime_state = state
+        return state
 
 
 def set_query_runtime_state(state: QueryRuntimeState | None) -> None:
@@ -56,7 +59,7 @@ def set_query_runtime_state(state: QueryRuntimeState | None) -> None:
         New state to install, or None to clear.
     """
     with _STATE_LOCK:
-        _GLOBAL_STATE_HOLDER["value"] = state
+        get_default_context().query_runtime_state = state
 
 
 __all__ = [

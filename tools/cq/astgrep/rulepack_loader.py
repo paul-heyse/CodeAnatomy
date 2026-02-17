@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 from typing import cast
 
@@ -122,8 +121,7 @@ def load_rules_from_directory(
     return tuple(specs)
 
 
-@lru_cache(maxsize=1)
-def load_default_rulepacks() -> dict[str, tuple[RuleSpec, ...]]:
+def load_default_rulepacks(*, base: Path | None = None) -> dict[str, tuple[RuleSpec, ...]]:
     """Load all built-in rule packs from ``tools/cq/astgrep/rules``.
 
     Returns:
@@ -131,9 +129,9 @@ def load_default_rulepacks() -> dict[str, tuple[RuleSpec, ...]]:
     dict[str, tuple[RuleSpec, ...]]
         Mapping of language to loaded rule tuples.
     """
-    base = Path(__file__).parent
-    rules_base = base / "rules"
-    utils = load_utils(base / "utils")
+    resolved_base = (base or Path(__file__).parent).resolve()
+    rules_base = resolved_base / "rules"
+    utils = load_utils(resolved_base / "utils")
 
     packs: dict[str, tuple[RuleSpec, ...]] = {}
     for facts_dir in sorted(rules_base.glob("*_facts")):
@@ -144,16 +142,10 @@ def load_default_rulepacks() -> dict[str, tuple[RuleSpec, ...]]:
     return packs
 
 
-def clear_rulepack_cache() -> None:
-    """Clear cached default rulepacks (test helper)."""
-    load_default_rulepacks.cache_clear()
-
-
 __all__ = [
     "CliRuleFile",
     "CliRuleMetadata",
     "UtilityRuleFile",
-    "clear_rulepack_cache",
     "load_cli_rule_file",
     "load_default_rulepacks",
     "load_rules_from_directory",

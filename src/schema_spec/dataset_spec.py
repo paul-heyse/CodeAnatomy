@@ -10,9 +10,6 @@ register_object_store). Schema validation and introspection query DataFusion's
 information_schema.columns, information_schema.tables, information_schema.table_constraints,
 and information_schema.key_column_usage views.
 """
-# NOTE(size-exception): This module is temporarily >800 LOC during hard-cutover
-# decomposition. Remaining extraction and contraction work is tracked in
-# docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
 
 from __future__ import annotations
 

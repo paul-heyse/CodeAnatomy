@@ -9,7 +9,7 @@ import pytest
 from tools.cq.core.schema import CqResult, RunMeta
 from tools.cq.core.summary_contract import as_neighborhood_summary, summary_from_mapping
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.neighborhood.executor import NeighborhoodExecutionRequest, execute_neighborhood
+from tools.cq.neighborhood.executor import NeighborhoodExecutionRequestV1, execute_neighborhood
 from tools.cq.neighborhood.snb_renderer import RenderSnbRequest
 
 
@@ -77,7 +77,7 @@ def test_execute_neighborhood_sets_resolution_and_evicts(
     )
 
     result = execute_neighborhood(
-        NeighborhoodExecutionRequest(
+        NeighborhoodExecutionRequestV1(
             target="build_graph",
             root=tmp_path,
             argv=["cq", "neighborhood", "build_graph"],

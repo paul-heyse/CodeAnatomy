@@ -11,7 +11,8 @@ from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.front_door_contracts import FrontDoorInsightV1, InsightTargetV1
 from tools.cq.core.summary_contract import SemanticTelemetryV1, summary_from_mapping
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor_runtime import (
+from tools.cq.query.enrichment import SymtableEnricher
+from tools.cq.query.executor_plan_dispatch import (
     ExecutePlanRequestV1,
     execute_plan,
 )
@@ -68,6 +69,7 @@ def _execute_query(
             query=query,
             root=str(root),
             services=resolve_runtime_services(root),
+            symtable_enricher=SymtableEnricher(root),
             argv=argv,
             query_text=query_text,
         ),

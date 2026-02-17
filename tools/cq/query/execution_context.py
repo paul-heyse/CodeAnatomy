@@ -27,6 +27,6 @@ class QueryExecutionContext(CqStruct, frozen=True):
     started_ms: float
     run_id: str
     services: CqRuntimeServices
+    symtable_enricher: SymtableEnricher
     query_text: str | None = None
     cache_backend: CqCacheBackend | None = None
-    symtable_enricher: SymtableEnricher | None = None

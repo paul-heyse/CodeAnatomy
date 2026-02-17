@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ast_grep_py import SgNode
 
+from tools.cq.search.python.constants import MAX_PARENT_DEPTH
 from tools.cq.search.python.extractors_classification import _unwrap_decorated
 
 # ---------------------------------------------------------------------------
@@ -21,7 +22,6 @@ from tools.cq.search.python.extractors_classification import _unwrap_decorated
 _MAX_BASE_CLASSES = 6
 _MAX_BASE_CLASS_LEN = 60
 _MAX_PROPERTIES_SHOWN = 8
-_MAX_PARENT_DEPTH = 20
 
 _ENUM_BASE_NAMES: frozenset[str] = frozenset(
     {
@@ -64,7 +64,7 @@ def find_enclosing_class(node: SgNode) -> SgNode | None:
 
     current = node.parent()
     depth = 0
-    while current is not None and depth < _MAX_PARENT_DEPTH:
+    while current is not None and depth < MAX_PARENT_DEPTH:
         kind = current.kind()
         if kind == "class_definition":
             return current

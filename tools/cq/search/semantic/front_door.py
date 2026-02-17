@@ -32,7 +32,9 @@ from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.search._shared.helpers import line_col_to_byte_offset
 from tools.cq.search._shared.requests import PythonByteRangeEnrichmentRequest
 from tools.cq.search.pipeline.classifier import get_sg_root
-from tools.cq.search.python.extractors import enrich_python_context_by_byte_range
+from tools.cq.search.python.extractors_orchestrator import (
+    enrich_python_context_by_byte_range,
+)
 from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
 from tools.cq.search.semantic.models import (
     LanguageSemanticEnrichmentOutcome,
@@ -46,6 +48,7 @@ from tools.cq.search.semantic.models import (
     enrich_with_language_semantics,
     resolve_language_provider_root,
 )
+from tools.cq.search.semantic.registry import LanguageProviderRegistry
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 
 
@@ -64,6 +67,24 @@ class _PipelineContext:
     budget: SemanticRequestBudgetV1
     lane_limit: int
     lane_ttl_seconds: int
+
+
+_LANGUAGE_PROVIDER_REGISTRY_STATE: dict[str, LanguageProviderRegistry | None] = {"registry": None}
+
+
+def set_language_provider_registry(registry: LanguageProviderRegistry | None) -> None:
+    """Set process-wide semantic provider registry override (test seam)."""
+    _LANGUAGE_PROVIDER_REGISTRY_STATE["registry"] = registry
+
+
+def _get_language_provider_registry() -> LanguageProviderRegistry:
+    registry = _LANGUAGE_PROVIDER_REGISTRY_STATE.get("registry")
+    if registry is None:
+        registry = LanguageProviderRegistry()
+        registry.register("python", _execute_python_provider)
+        registry.register("rust", _execute_rust_provider)
+        _LANGUAGE_PROVIDER_REGISTRY_STATE["registry"] = registry
+    return registry
 
 
 def run_language_semantic_enrichment(
@@ -212,10 +233,9 @@ def _execute_provider(
     request: LanguageSemanticEnrichmentRequest,
     context: _PipelineContext,
 ) -> LanguageSemanticEnrichmentOutcome:
-    provider = {
-        "python": _execute_python_provider,
-        "rust": _execute_rust_provider,
-    }.get(request.language, _execute_rust_provider)
+    provider = _get_language_provider_registry().get(request.language)
+    if provider is None:
+        provider = _execute_rust_provider
     return provider(request=request, context=context)
 
 
@@ -238,8 +258,13 @@ def _source_bytes(path: Path) -> bytes | None:
 def _execute_python_provider(
     *,
     request: LanguageSemanticEnrichmentRequest,
-    context: _PipelineContext,
+    context: object,
 ) -> LanguageSemanticEnrichmentOutcome:
+    if not isinstance(context, _PipelineContext):
+        return LanguageSemanticEnrichmentOutcome(
+            timed_out=False,
+            failure_reason="invalid_context",
+        )
     source_bytes = _source_bytes(context.target_file_path)
     if source_bytes is None:
         return LanguageSemanticEnrichmentOutcome(
@@ -324,8 +349,13 @@ def _python_payload(
 def _execute_rust_provider(
     *,
     request: LanguageSemanticEnrichmentRequest,
-    context: _PipelineContext,
+    context: object,
 ) -> LanguageSemanticEnrichmentOutcome:
+    if not isinstance(context, _PipelineContext):
+        return LanguageSemanticEnrichmentOutcome(
+            timed_out=False,
+            failure_reason="invalid_context",
+        )
     source_bytes = _source_bytes(context.target_file_path)
     if source_bytes is None:
         return LanguageSemanticEnrichmentOutcome(
@@ -530,4 +560,5 @@ __all__ = [
     "enrich_with_language_semantics",
     "fail_open",
     "run_language_semantic_enrichment",
+    "set_language_provider_registry",
 ]

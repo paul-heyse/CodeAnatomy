@@ -13,14 +13,10 @@ from core_types import IdentifierStr, NonNegativeInt, RunIdStr
 from serde_msgspec import StructBaseStrict, to_builtins
 
 if TYPE_CHECKING:
-    from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.plan.cache import PlanCache
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_profile_config import ExplainRows
     from runtime_models.compile import DataFusionCompileOptionsRuntime
-
-    ExplainRows = TableLike | RecordBatchReaderLike
-else:
-    ExplainRows = object
 
 SchemaMapping = (
     Mapping[str, Mapping[str, str]]

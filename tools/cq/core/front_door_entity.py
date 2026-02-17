@@ -1,0 +1,7 @@
+"""Entity-focused front-door insight assembly."""
+
+from __future__ import annotations
+
+from tools.cq.core.front_door_assembly import augment_insight_with_semantic, build_entity_insight
+
+__all__ = ["augment_insight_with_semantic", "build_entity_insight"]

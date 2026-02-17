@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 
 from datafusion import SessionContext
 
+from datafusion_engine.extensions.required_entrypoints import REQUIRED_RUNTIME_ENTRYPOINTS
 from datafusion_engine.udf.constants import (
     ABI_VERSION_MISMATCH_MSG,
     REBUILD_WHEELS_HINT,
@@ -246,6 +247,16 @@ def validate_extension_capabilities(
         msg = report.get("error") or "Extension ABI compatibility check failed."
         raise RuntimeError(msg)
     module = extension_module_with_capabilities()
+    missing = [
+        name for name in REQUIRED_RUNTIME_ENTRYPOINTS if not callable(getattr(module, name, None))
+    ]
+    if strict and missing:
+        missing_csv = ", ".join(sorted(missing))
+        msg = (
+            "Required runtime entrypoints are missing from extension module: "
+            f"{missing_csv}. {REBUILD_WHEELS_HINT}"
+        )
+        raise RuntimeError(msg)
     probe = getattr(module, "session_context_contract_probe", None) if module is not None else None
     if strict and module is not None and callable(probe):
         probe_ctx = ctx if ctx is not None else SessionContext()

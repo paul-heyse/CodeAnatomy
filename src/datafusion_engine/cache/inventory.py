@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import pyarrow as pa
 
@@ -17,7 +17,13 @@ from datafusion_engine.arrow.field_builders import (
 )
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.write_core import (
+    WriteFormat,
+    WriteMode,
+    WriteRequest,
+    WriteResult,
+    build_write_pipeline,
+)
 from datafusion_engine.session.facade import DataFusionExecutionFacade
 from obs.otel import get_run_id
 from utils.coercion import coerce_int_or_none
@@ -80,6 +86,19 @@ class CacheInventoryEntry:
             "file_count": self.file_count,
             "partition_by": list(self.partition_by),
         }
+
+
+class _WriterPort(Protocol):
+    """Minimal writer surface used by cache inventory persistence."""
+
+    def write(self, request: WriteRequest) -> WriteResult: ...
+
+
+def _default_write_pipeline(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+) -> _WriterPort:
+    return build_write_pipeline(ctx=ctx, runtime_profile=profile)
 
 
 def ensure_cache_inventory_table(
@@ -167,6 +186,8 @@ def record_cache_inventory_entry(
     *,
     entry: CacheInventoryEntry,
     ctx: SessionContext | None = None,
+    write_pipeline_factory: Callable[[SessionContext, DataFusionRuntimeProfile], _WriterPort]
+    | None = None,
 ) -> int | None:
     """Append a cache inventory entry when enabled.
 
@@ -197,7 +218,8 @@ def record_cache_inventory_entry(
         name=f"{CACHE_INVENTORY_TABLE_NAME}_append",
         value=table,
     )
-    pipeline = WritePipeline(ctx=active_ctx, runtime_profile=profile)
+    pipeline_factory = write_pipeline_factory or _default_write_pipeline
+    pipeline = pipeline_factory(active_ctx, profile)
     from datafusion_engine.cache.commit_metadata import (
         CacheCommitMetadataRequest,
         cache_commit_metadata,
@@ -233,17 +255,25 @@ def _bootstrap_cache_inventory_table(
     table_path: Path,
     schema: pa.Schema,
 ) -> None:
-    _ = (ctx, profile)
+    _ = profile
     table_path.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist([], schema=schema)
-    from deltalake.writer import write_deltalake
-
-    write_deltalake(
-        str(table_path),
-        table,
-        mode="overwrite",
-        schema_mode="overwrite",
+    from datafusion_engine.delta.transactions import write_transaction
+    from datafusion_engine.delta.write_ipc_payload import (
+        DeltaWriteRequestOptions,
+        build_delta_write_request,
     )
+
+    request = build_delta_write_request(
+        table_uri=str(table_path),
+        table=table,
+        options=DeltaWriteRequestOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            storage_options=None,
+        ),
+    )
+    write_transaction(ctx, request=request)
 
 
 def _cache_inventory_root(profile: DataFusionRuntimeProfile) -> Path:

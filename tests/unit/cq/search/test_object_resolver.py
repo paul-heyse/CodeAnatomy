@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from tools.cq.core.locations import SourceSpan
+from tools.cq.search._shared.enrichment_contracts import PythonEnrichmentV1
 from tools.cq.search.objects.resolve import build_object_resolved_view
 from tools.cq.search.pipeline.context_window import ContextWindow
-from tools.cq.search.pipeline.enrichment_contracts import PythonEnrichmentV1
 from tools.cq.search.pipeline.smart_search import EnrichedMatch
 
 OCCURRENCE_COUNT_TWO = 2

@@ -16,6 +16,15 @@ from tools.cq.core.types import (
     is_python_language,
     is_rust_language,
 )
+from tools.cq.search._shared.enrichment_contracts import (
+    IncrementalEnrichmentV1,
+    PythonEnrichmentV1,
+    RustTreeSitterEnrichmentV1,
+    rust_enrichment_payload,
+    wrap_incremental_enrichment,
+    wrap_python_enrichment,
+    wrap_rust_enrichment,
+)
 from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search._shared.requests import PythonByteRangeEnrichmentRequest
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
@@ -41,15 +50,6 @@ from tools.cq.search.pipeline.context_window import (
     compute_search_context_window,
     extract_search_context_snippet,
 )
-from tools.cq.search.pipeline.enrichment_contracts import (
-    IncrementalEnrichmentV1,
-    PythonEnrichmentV1,
-    RustTreeSitterEnrichmentV1,
-    rust_enrichment_payload,
-    wrap_incremental_enrichment,
-    wrap_python_enrichment,
-    wrap_rust_enrichment,
-)
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.pipeline.smart_search_types import (
     ClassificationResult,
@@ -60,7 +60,9 @@ from tools.cq.search.pipeline.smart_search_types import (
     ResolvedNodeContext,
 )
 from tools.cq.search.python.analysis_session import get_python_analysis_session
-from tools.cq.search.python.extractors import enrich_python_context_by_byte_range
+from tools.cq.search.python.extractors_orchestrator import (
+    enrich_python_context_by_byte_range,
+)
 from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 from tools.cq.search.tree_sitter.core.runtime_support import budget_ms_per_anchor

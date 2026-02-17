@@ -23,7 +23,7 @@ class TestInsertTargetCandidates:
     @staticmethod
     def test_inserts_at_top_when_candidates_exist() -> None:
         """Verify section is inserted at position 0."""
-        sections: list[Section] = [Section(title="Existing", findings=[])]
+        sections: list[Section] = [Section(title="Existing", findings=())]
         candidates = [Finding(category="definition", message="candidate")]
         insert_target_candidates(sections, candidates=candidates)
         assert sections[0].title == "Target Candidates"
@@ -32,7 +32,7 @@ class TestInsertTargetCandidates:
     @staticmethod
     def test_noop_when_no_candidates() -> None:
         """Verify no insertion when candidates list is empty."""
-        sections: list[Section] = [Section(title="Existing", findings=[])]
+        sections: list[Section] = [Section(title="Existing", findings=())]
         insert_target_candidates(sections, candidates=[])
         assert len(sections) == 1
 
@@ -44,12 +44,12 @@ class TestInsertNeighborhoodPreview:
     def test_inserts_after_candidates() -> None:
         """Verify insertion at index 1 when target candidates present."""
         sections: list[Section] = [
-            Section(title="Target Candidates", findings=[]),
-            Section(title="Other", findings=[]),
+            Section(title="Target Candidates", findings=()),
+            Section(title="Other", findings=()),
         ]
         insert_neighborhood_preview(
             sections,
-            findings=[Finding(category="neighborhood", message="nbr")],
+            findings=(Finding(category="neighborhood", message="nbr"),),
             has_target_candidates=True,
         )
         assert sections[1].title == "Neighborhood Preview"
@@ -58,10 +58,10 @@ class TestInsertNeighborhoodPreview:
     @staticmethod
     def test_inserts_at_top_when_no_candidates() -> None:
         """Verify insertion at index 0 when no target candidates."""
-        sections: list[Section] = [Section(title="Other", findings=[])]
+        sections: list[Section] = [Section(title="Other", findings=())]
         insert_neighborhood_preview(
             sections,
-            findings=[Finding(category="neighborhood", message="nbr")],
+            findings=(Finding(category="neighborhood", message="nbr"),),
             has_target_candidates=False,
         )
         assert sections[0].title == "Neighborhood Preview"
@@ -69,10 +69,10 @@ class TestInsertNeighborhoodPreview:
     @staticmethod
     def test_noop_when_no_findings() -> None:
         """Verify no insertion when findings list is empty."""
-        sections: list[Section] = [Section(title="Other", findings=[])]
+        sections: list[Section] = [Section(title="Other", findings=())]
         insert_neighborhood_preview(
             sections,
-            findings=[],
+            findings=(),
             has_target_candidates=False,
         )
         assert len(sections) == 1

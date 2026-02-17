@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.delta.service_protocol import DeltaServicePort
-    from obs.datafusion_runs import DataFusionRun
+    from datafusion_engine.obs.datafusion_runs import DataFusionRun
     from semantics.program_manifest import ManifestDatasetResolver
     from serde_schema_registry import ArtifactSpec
     from storage.deltalake.delta_read import IdempotentWriteOptions
@@ -154,7 +154,7 @@ class RuntimeProfileDeltaOps:
         """
         run = self.profile.delta_commit_runs.get(key)
         if run is None:
-            from obs.datafusion_runs import create_run_context
+            from datafusion_engine.obs.datafusion_runs import create_run_context
 
             base_metadata: dict[str, str] = {"key": key}
             if metadata:

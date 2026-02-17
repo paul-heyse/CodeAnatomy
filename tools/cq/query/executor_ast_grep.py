@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tools.cq.astgrep.metavar_extract import extract_match_metavars
 from tools.cq.query.executor_ast_grep_impl import (
     AstGrepExecutionContext,
     AstGrepExecutionState,
@@ -19,7 +20,6 @@ from tools.cq.query.executor_ast_grep_impl import (
     decode_pattern_fragment_payload,
     execute_ast_grep_rules,
     execute_rule_matches,
-    extract_match_metavars,
     filter_records_by_spans,
     group_match_spans,
     is_variadic_separator,

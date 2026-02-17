@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.pipeline.enrichment_contracts import (
+from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentModeV1,
     IncrementalEnrichmentV1,
     incremental_enrichment_payload,

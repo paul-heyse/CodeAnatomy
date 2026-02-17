@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
+from tools.cq.search._shared.enrichment_contracts import RustTreeSitterEnrichmentV1
 from tools.cq.search.enrichment.rust_adapter import RustEnrichmentAdapter
-from tools.cq.search.pipeline.enrichment_contracts import RustTreeSitterEnrichmentV1
 
 _TAG_COUNT = 2
 _REMOVED_FIELD_COUNT = 2

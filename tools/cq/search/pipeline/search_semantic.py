@@ -509,7 +509,7 @@ def apply_search_semantic_insight(
     FrontDoorInsightV1
         Augmented insight with semantic contract state.
     """
-    from tools.cq.core.front_door_assembly import augment_insight_with_semantic
+    from tools.cq.core.front_door_entity import augment_insight_with_semantic
 
     outcome = collect_search_semantic_outcome(
         ctx=ctx,

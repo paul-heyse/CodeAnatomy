@@ -161,24 +161,27 @@ def build_def_evidence_map(
     return evidence_map
 
 
-def apply_call_evidence(
-    details: dict[str, object],
+def build_call_evidence(
     evidence: dict[str, object] | None,
     call_target: str,
-) -> None:
-    """Attach call evidence details to the finding payload.
+) -> dict[str, object]:
+    """Build call evidence details for one finding payload.
 
     Parameters
     ----------
-    details
-        Finding details dictionary (mutated)
     evidence
         Evidence map entry
     call_target
         Call target name
+
+    Returns:
+    -------
+    dict[str, object]
+        Normalized call-evidence payload for finding details.
     """
+    details: dict[str, object] = {}
     if not evidence:
-        return
+        return details
     resolved_globals = evidence.get("resolved_globals")
     if isinstance(resolved_globals, list):
         details["resolved_globals"] = resolved_globals
@@ -190,6 +193,7 @@ def apply_call_evidence(
         details["bytecode_calls"] = bytecode_calls
         if call_target:
             details["bytecode_has_target"] = call_target in bytecode_calls
+    return details
 
 
 def call_to_finding(
@@ -333,7 +337,7 @@ def extract_call_name(call: SgRecord) -> str | None:
 
 
 __all__ = [
-    "apply_call_evidence",
+    "build_call_evidence",
     "build_def_evidence_map",
     "call_to_finding",
     "count_callers_for_definition",

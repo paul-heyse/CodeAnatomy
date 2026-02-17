@@ -35,7 +35,7 @@ def _build_structural_neighborhood_preview(
     primary_target_finding: Finding | None,
     definition_matches: list[EnrichedMatch],
 ) -> tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]:
-    from tools.cq.core.front_door_assembly import build_neighborhood_from_slices
+    from tools.cq.core.front_door_search import build_neighborhood_from_slices
     from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectRequest
     from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
 

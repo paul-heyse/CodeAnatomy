@@ -18,6 +18,7 @@ from tools.cq.core.schema import (
     ScoreDetails,
     Section,
     append_result_section,
+    append_section_finding,
 )
 from tools.cq.core.scoring import (
     ConfidenceSignals,
@@ -170,13 +171,14 @@ def _add_shape_section(
 ) -> CqResult:
     shape_section = Section(title="Argument Shape Histogram")
     for shape, count in arg_shapes.most_common(10):
-        shape_section.findings.append(
+        shape_section = append_section_finding(
+            shape_section,
             Finding(
                 category="shape",
                 message=f"{shape}: {count} calls",
                 severity="info",
                 details=build_detail_payload(score=score),
-            )
+            ),
         )
     return append_result_section(result, shape_section)
 
@@ -190,13 +192,14 @@ def _add_kw_section(
         return result
     kw_section = Section(title="Keyword Argument Usage")
     for kw, count in kwarg_usage.most_common(15):
-        kw_section.findings.append(
+        kw_section = append_section_finding(
+            kw_section,
             Finding(
                 category="kwarg",
                 message=f"{kw}: {count} uses",
                 severity="info",
                 details=build_detail_payload(score=score),
-            )
+            ),
         )
     return append_result_section(result, kw_section)
 
@@ -208,13 +211,14 @@ def _add_context_section(
 ) -> CqResult:
     ctx_section = Section(title="Calling Contexts")
     for ctx, count in contexts.most_common(10):
-        ctx_section.findings.append(
+        ctx_section = append_section_finding(
+            ctx_section,
             Finding(
                 category="context",
                 message=f"{ctx}: {count} calls",
                 severity="info",
                 details=build_detail_payload(score=score),
-            )
+            ),
         )
     return append_result_section(result, ctx_section)
 
@@ -228,13 +232,14 @@ def _add_hazard_section(
         return result
     hazard_section = Section(title="Hazards")
     for label, count in hazard_counts.most_common():
-        hazard_section.findings.append(
+        hazard_section = append_section_finding(
+            hazard_section,
             Finding(
                 category="hazard",
                 message=f"{label}: {count} calls",
                 severity="warning",
                 details=build_detail_payload(score=score),
-            )
+            ),
         )
     return append_result_section(result, hazard_section)
 
@@ -286,14 +291,15 @@ def _add_sites_section(
             "symtable": site.symtable_info,
             "bytecode": site.bytecode_info,
         }
-        sites_section.findings.append(
+        sites_section = append_section_finding(
+            sites_section,
             Finding(
                 category="call",
                 message=f"{function_name}({site.arg_preview})",
                 anchor=Anchor(file=site.file, line=site.line, col=site.col),
                 severity="info",
                 details=build_detail_payload(score=score, data=details),
-            )
+            ),
         )
     return append_result_section(result, sites_section)
 
@@ -317,7 +323,7 @@ def _build_calls_front_door_insight(
     state: CallsFrontDoorState,
     used_fallback: bool,
 ) -> FrontDoorInsightV1:
-    from tools.cq.core.front_door_assembly import (
+    from tools.cq.core.front_door_calls import (
         build_calls_insight,
     )
     from tools.cq.core.front_door_contracts import (

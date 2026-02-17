@@ -7,7 +7,6 @@ consistency within a compilation unit and enable schema-driven optimization.
 
 from __future__ import annotations
 
-import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -19,7 +18,7 @@ from datafusion import col
 if TYPE_CHECKING:
     from datafusion import SessionContext, SQLOptions
 
-from datafusion_engine.extensions.context_adaptation import resolve_extension_module
+from datafusion_engine.extensions import datafusion_ext
 from datafusion_engine.sql.options import sql_options_for_profile
 
 
@@ -673,51 +672,18 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
 
     Raises:
         RuntimeError: If extension registration fails for non-ABI reasons.
-        TypeError: If the extension entrypoint is unavailable.
     """
-    module_names = ("datafusion_engine.extensions.datafusion_ext",)
-    resolved = resolve_extension_module(module_names, entrypoint="register_cache_tables")
-    if resolved is None:
-        msg = "Cache table registration hook is unavailable in the DataFusion extension module."
-        raise TypeError(msg)
-    _module_name, module = resolved
-    register_tables = getattr(module, "register_cache_tables", None)
-    if not callable(register_tables):
-        msg = "Cache table registration hook is unavailable in the DataFusion extension module."
-        raise TypeError(msg)
     raw_payload = _cache_table_registration_payload(ctx)
     payload = {key: str(value) for key, value in raw_payload.items() if value is not None}
-    last_error: Exception | None = None
-    context_candidates: list[object] = [ctx]
-    internal_ctx = getattr(ctx, "ctx", None)
-    if internal_ctx is not None and internal_ctx is not ctx:
-        context_candidates.append(internal_ctx)
-    for candidate in context_candidates:
-        try:
-            register_tables(candidate, payload)
-        except (RuntimeError, TypeError, ValueError) as exc:
-            last_error = exc
-            continue
-        return
-    if (
-        last_error is not None
-        and "cannot be converted to 'SessionContext'" in str(last_error)
-        and callable(getattr(ctx, "table", None))
-        and callable(getattr(ctx, "sql", None))
-    ):
-        # Mixed datafusion/datafusion_ext wheels can expose incompatible
-        # SessionContext wrappers; keep runtime functional in design mode.
-        logging.getLogger(__name__).warning(
-            "Skipping cache introspection registration due to SessionContext ABI mismatch: %s",
-            last_error,
+    try:
+        datafusion_ext.register_cache_tables(ctx, payload)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        msg = (
+            "Cache introspection table registration failed due to SessionContext ABI mismatch "
+            "or missing runtime entrypoints. Rebuild and install matching "
+            "datafusion/datafusion_ext wheels (scripts/build_datafusion_wheels.sh + uv sync)."
         )
-        return
-    msg = (
-        "Cache introspection table registration failed due to SessionContext ABI mismatch. "
-        "Rebuild and install matching datafusion/datafusion_ext wheels "
-        "(scripts/build_datafusion_wheels.sh + uv sync)."
-    )
-    raise RuntimeError(msg) from last_error
+        raise RuntimeError(msg) from exc
 
 
 def _cache_table_registration_payload(ctx: SessionContext) -> dict[str, object]:

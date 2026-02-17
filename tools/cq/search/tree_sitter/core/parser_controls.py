@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.search._shared.cache_config import env_flag
 
 
 class ParserControlSettingsV1(CqStruct, frozen=True):
@@ -24,8 +25,8 @@ def parser_controls_from_env() -> ParserControlSettingsV1:
     Returns:
         ParserControlSettingsV1: Parser control-plane settings from env flags.
     """
-    reset_before_parse = os.getenv("CQ_TREE_SITTER_PARSER_RESET", "0") == "1"
-    enable_logger = os.getenv("CQ_TREE_SITTER_PARSER_LOGGER", "0") == "1"
+    reset_before_parse = env_flag("CQ_TREE_SITTER_PARSER_RESET", default=False)
+    enable_logger = env_flag("CQ_TREE_SITTER_PARSER_LOGGER", default=False)
     dot_graph_dir = os.getenv("CQ_TREE_SITTER_DOT_GRAPH_DIR")
     if dot_graph_dir:
         try:

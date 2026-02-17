@@ -35,13 +35,20 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
-def _plan_artifacts_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
-    root = _plan_artifacts_root(profile)
+def plan_artifacts_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
+    """Return the canonical dataset location for plan artifact records.
+
+    Returns:
+    -------
+    DatasetLocation | None
+        Delta dataset location for plan artifacts, or ``None`` when unavailable.
+    """
+    root = plan_artifacts_root(profile)
     if root is None:
         return None
     dataset_spec = dataset_spec_from_schema(
         PLAN_ARTIFACTS_TABLE_NAME,
-        _plan_artifacts_schema(),
+        plan_artifacts_schema(),
     )
     location = DatasetLocation(
         path=str(root / _ARTIFACTS_DIRNAME),
@@ -50,16 +57,23 @@ def _plan_artifacts_location(profile: DataFusionRuntimeProfile) -> DatasetLocati
         delta_log_storage_options={},
         dataset_spec=dataset_spec,
     )
-    return _with_delta_settings(location)
+    return with_delta_settings(location)
 
 
-def _pipeline_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
-    root = _plan_artifacts_root(profile)
+def pipeline_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
+    """Return the canonical dataset location for pipeline event records.
+
+    Returns:
+    -------
+    DatasetLocation | None
+        Delta dataset location for pipeline events, or ``None`` when unavailable.
+    """
+    root = plan_artifacts_root(profile)
     if root is None:
         return None
     dataset_spec = dataset_spec_from_schema(
         PIPELINE_EVENTS_TABLE_NAME,
-        _pipeline_events_schema(),
+        pipeline_events_schema(),
     )
     location = DatasetLocation(
         path=str(root / _PIPELINE_EVENTS_DIRNAME),
@@ -68,10 +82,17 @@ def _pipeline_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocat
         delta_log_storage_options={},
         dataset_spec=dataset_spec,
     )
-    return _with_delta_settings(location)
+    return with_delta_settings(location)
 
 
-def _with_delta_settings(location: DatasetLocation) -> DatasetLocation:
+def with_delta_settings(location: DatasetLocation) -> DatasetLocation:
+    """Apply resolved Delta scan and log-store settings to a dataset location.
+
+    Returns:
+    -------
+    DatasetLocation
+        Dataset location with effective Delta overrides materialized.
+    """
     resolved_scan = resolve_delta_scan_options(location)
     resolved_log = location.resolved_delta_log_storage_options
     overrides = location.overrides
@@ -90,11 +111,18 @@ def _with_delta_settings(location: DatasetLocation) -> DatasetLocation:
     )
 
 
-def _delta_schema_available(
+def delta_schema_available(
     location: DatasetLocation,
     *,
     profile: DataFusionRuntimeProfile,
 ) -> bool:
+    """Return whether a Delta table schema can be resolved through runtime services.
+
+    Returns:
+    -------
+    bool
+        ``True`` when schema resolution succeeds.
+    """
     schema = profile.delta_ops.delta_service().table_schema(
         DeltaSchemaRequest(
             path=str(location.path),
@@ -108,13 +136,14 @@ def _delta_schema_available(
     return schema is not None
 
 
-def _reset_artifacts_table_path(
+def reset_artifacts_table_path(
     profile: DataFusionRuntimeProfile,
     table_path: Path,
     *,
     table_name: str,
     reason: str,
 ) -> None:
+    """Reset an artifact table directory and record the reset event."""
     if table_path.exists():
         shutil.rmtree(table_path)
     table_path.mkdir(parents=True, exist_ok=True)
@@ -132,7 +161,14 @@ def _reset_artifacts_table_path(
     )
 
 
-def _plan_artifacts_root(profile: DataFusionRuntimeProfile) -> Path | None:
+def plan_artifacts_root(profile: DataFusionRuntimeProfile) -> Path | None:
+    """Resolve and initialize the root directory used for local plan artifacts.
+
+    Returns:
+    -------
+    pathlib.Path | None
+        Local root directory, or ``None`` when storage is unavailable.
+    """
     root_value = profile.policies.plan_artifacts_root
     if root_value is None:
         if profile.policies.local_filesystem_root is not None:
@@ -158,11 +194,25 @@ def _plan_artifacts_root(profile: DataFusionRuntimeProfile) -> Path | None:
     return root_path
 
 
-def _profile_name(profile: DataFusionRuntimeProfile) -> str | None:
+def profile_name(profile: DataFusionRuntimeProfile) -> str | None:
+    """Return the configured profile name when available.
+
+    Returns:
+    -------
+    str | None
+        Profile name, or ``None`` when unnamed.
+    """
     return profile.policies.config_policy_name
 
 
-def _plan_artifacts_schema() -> pa.Schema:
+def plan_artifacts_schema() -> pa.Schema:
+    """Return the Arrow schema used for the plan artifacts Delta table.
+
+    Returns:
+    -------
+    pyarrow.Schema
+        Normalized plan artifacts schema.
+    """
     from datafusion_engine.schema import DATAFUSION_PLAN_ARTIFACTS_SCHEMA
 
     schema = DATAFUSION_PLAN_ARTIFACTS_SCHEMA
@@ -171,7 +221,7 @@ def _plan_artifacts_schema() -> pa.Schema:
     return pa.schema(schema)
 
 
-def _bootstrap_plan_artifacts_table(
+def bootstrap_plan_artifacts_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     table_path: Path,
@@ -179,7 +229,8 @@ def _bootstrap_plan_artifacts_table(
     schema: pa.Schema | None = None,
     table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
 ) -> None:
-    resolved_schema = schema or _plan_artifacts_schema()
+    """Create or overwrite the plan artifacts table with an empty bootstrap commit."""
+    resolved_schema = schema or plan_artifacts_schema()
     empty_table = pa.Table.from_pylist([], schema=resolved_schema)
     commit_metadata = {
         "codeanatomy_operation": "plan_artifacts_bootstrap",
@@ -200,13 +251,14 @@ def _bootstrap_plan_artifacts_table(
     )
 
 
-def _refresh_plan_artifacts_registration(
+def refresh_plan_artifacts_registration(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     location: DatasetLocation,
     *,
     table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
 ) -> None:
+    """Re-register the plan artifacts table in the active DataFusion context."""
     from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
     from datafusion_engine.io.adapter import DataFusionIOAdapter
     from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -223,7 +275,7 @@ def _refresh_plan_artifacts_registration(
     )
 
 
-def _record_plan_artifact_summary(
+def record_plan_artifact_summary(
     profile: DataFusionRuntimeProfile,
     *,
     rows: Sequence[PlanArtifactRow],
@@ -231,6 +283,7 @@ def _record_plan_artifact_summary(
     version: int,
     table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
 ) -> None:
+    """Emit summary and per-row telemetry artifacts for stored plan artifacts."""
     kinds = sorted({row.event_kind for row in rows})
     payload = {
         "table": table_name,
@@ -247,7 +300,14 @@ def _record_plan_artifact_summary(
         record_artifact(profile, DATAFUSION_PLAN_ARTIFACTS_SPEC, row.to_row())
 
 
-def _pipeline_events_schema() -> pa.Schema:
+def pipeline_events_schema() -> pa.Schema:
+    """Return the Arrow schema used for the pipeline events Delta table.
+
+    Returns:
+    -------
+    pyarrow.Schema
+        Normalized pipeline events schema.
+    """
     from datafusion_engine.schema import DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA
 
     schema = DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA
@@ -256,12 +316,13 @@ def _pipeline_events_schema() -> pa.Schema:
     return pa.schema(schema)
 
 
-def _bootstrap_pipeline_events_table(
+def bootstrap_pipeline_events_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     table_path: Path,
 ) -> None:
-    schema = _pipeline_events_schema()
+    """Create or overwrite the pipeline events table with an empty bootstrap commit."""
+    schema = pipeline_events_schema()
     empty_table = pa.Table.from_pylist([], schema=schema)
     commit_metadata = {
         "codeanatomy_operation": "pipeline_events_bootstrap",
@@ -282,11 +343,12 @@ def _bootstrap_pipeline_events_table(
     )
 
 
-def _refresh_pipeline_events_registration(
+def refresh_pipeline_events_registration(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     location: DatasetLocation,
 ) -> None:
+    """Re-register the pipeline events table in the active DataFusion context."""
     from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
     from datafusion_engine.io.adapter import DataFusionIOAdapter
     from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -303,13 +365,14 @@ def _refresh_pipeline_events_registration(
     )
 
 
-def _record_pipeline_events_summary(
+def record_pipeline_events_summary(
     profile: DataFusionRuntimeProfile,
     *,
     rows: Sequence[PipelineEventRow],
     path: str,
     version: int,
 ) -> None:
+    """Emit summary and per-row telemetry artifacts for stored pipeline events."""
     payload = {
         "table": PIPELINE_EVENTS_TABLE_NAME,
         "path": path,
@@ -325,54 +388,20 @@ def _record_pipeline_events_summary(
         record_artifact(profile, DATAFUSION_PIPELINE_EVENTS_SPEC, row.to_row())
 
 
-def _commit_metadata_for_rows(rows: Sequence[PlanArtifactRow]) -> dict[str, str]:
-    event_kinds = sorted({row.event_kind for row in rows})
-    view_names = sorted({row.view_name for row in rows})
-    metadata: dict[str, str] = {
-        "codeanatomy_operation": "plan_artifacts_store",
-        "codeanatomy_mode": "append",
-        "codeanatomy_row_count": str(len(rows)),
-        "codeanatomy_event_kinds": ",".join(event_kinds),
-    }
-    if view_names:
-        metadata["codeanatomy_first_view_name"] = view_names[0]
-        metadata["codeanatomy_view_count"] = str(len(view_names))
-    return metadata
-
-
-def _commit_metadata_for_pipeline_events(rows: Sequence[PipelineEventRow]) -> dict[str, str]:
-    event_names = sorted({row.event_name for row in rows})
-    run_ids = sorted({row.run_id for row in rows})
-    metadata: dict[str, str] = {
-        "codeanatomy_operation": "pipeline_events_store",
-        "codeanatomy_mode": "append",
-        "codeanatomy_row_count": str(len(rows)),
-        "codeanatomy_event_name_count": str(len(event_names)),
-    }
-    if event_names:
-        metadata["codeanatomy_first_event_name"] = event_names[0]
-    if run_ids:
-        metadata["codeanatomy_first_run_id"] = run_ids[0]
-        metadata["codeanatomy_run_id_count"] = str(len(run_ids))
-    return metadata
-
-
 __all__ = [
-    "_bootstrap_pipeline_events_table",
-    "_bootstrap_plan_artifacts_table",
-    "_commit_metadata_for_pipeline_events",
-    "_commit_metadata_for_rows",
-    "_delta_schema_available",
-    "_pipeline_events_location",
-    "_pipeline_events_schema",
-    "_plan_artifacts_location",
-    "_plan_artifacts_root",
-    "_plan_artifacts_schema",
-    "_profile_name",
-    "_record_pipeline_events_summary",
-    "_record_plan_artifact_summary",
-    "_refresh_pipeline_events_registration",
-    "_refresh_plan_artifacts_registration",
-    "_reset_artifacts_table_path",
-    "_with_delta_settings",
+    "bootstrap_pipeline_events_table",
+    "bootstrap_plan_artifacts_table",
+    "delta_schema_available",
+    "pipeline_events_location",
+    "pipeline_events_schema",
+    "plan_artifacts_location",
+    "plan_artifacts_root",
+    "plan_artifacts_schema",
+    "profile_name",
+    "record_pipeline_events_summary",
+    "record_plan_artifact_summary",
+    "refresh_pipeline_events_registration",
+    "refresh_plan_artifacts_registration",
+    "reset_artifacts_table_path",
+    "with_delta_settings",
 ]

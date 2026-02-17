@@ -449,7 +449,7 @@ def _extract_metavars(
     dict[str, dict[str, Any]]
         Dictionary of metavariable name to capture info.
     """
-    from tools.cq.query.executor_ast_grep import extract_match_metavars
+    from tools.cq.astgrep.metavar_extract import extract_match_metavars
 
     return extract_match_metavars(
         match,

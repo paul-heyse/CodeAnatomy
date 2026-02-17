@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 from tools.cq.core.locations import SourceSpan
+from tools.cq.search._shared.enrichment_contracts import IncrementalEnrichmentModeV1
 from tools.cq.search.pipeline.classification import (
     ClassificationResult,
     classify_match,
 )
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
-from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
 from tools.cq.search.pipeline.smart_search_types import MatchClassifyOptions, RawMatch
 
 

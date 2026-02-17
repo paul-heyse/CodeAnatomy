@@ -6,7 +6,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 from cyclopts import App, Parameter
 from rich.console import Console
@@ -24,6 +24,9 @@ from tools.cq.cli_app.telemetry import invoke_with_telemetry
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.cli_app.validators import validate_launcher_invariants
 from tools.cq.core.structs import CqStruct
+
+if TYPE_CHECKING:
+    from tools.cq.cli_app.protocols import ConsolePort
 
 VERSION = "0.4.0"
 
@@ -201,6 +204,8 @@ def _build_cli_context(launch: LaunchContext) -> CliContext:
         output_format=launch.output_format,
         artifact_dir=launch.artifact_dir,
         save_artifact=launch.save_artifact,
+        console=cast("ConsolePort", console),
+        error_console=cast("ConsolePort", error_console),
     )
     return CliContext.build(argv=launch.argv, options=options)
 

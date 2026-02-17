@@ -8,15 +8,15 @@ from pathlib import Path
 from types import CodeType
 
 from tools.cq.core.details_kinds import preview_for_kind, resolve_kind
-from tools.cq.search.enrichment.incremental_compound_plane import build_compound_bundle
-from tools.cq.search.enrichment.incremental_dis_plane import build_dis_bundle
-from tools.cq.search.enrichment.incremental_inspect_plane import build_inspect_bundle
-from tools.cq.search.enrichment.incremental_symtable_plane import build_incremental_symtable_plane
-from tools.cq.search.pipeline.enrichment_contracts import (
+from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentModeV1,
     IncrementalEnrichmentV1,
     wrap_incremental_enrichment,
 )
+from tools.cq.search.enrichment.incremental_compound_plane import build_compound_bundle
+from tools.cq.search.enrichment.incremental_dis_plane import build_dis_bundle
+from tools.cq.search.enrichment.incremental_inspect_plane import build_inspect_bundle
+from tools.cq.search.enrichment.incremental_symtable_plane import build_incremental_symtable_plane
 from tools.cq.search.python.analysis_session import (
     PythonAnalysisSession,
     get_python_analysis_session,

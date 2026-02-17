@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
-from deltalake import CommitProperties, DeltaTable
+from deltalake import CommitProperties
 
 from arrow_utils.core.streaming import to_reader
-from datafusion_engine.arrow.interop import RecordBatchReaderLike, as_reader
-from datafusion_engine.delta.protocol import DeltaFeatureGate, DeltaProtocolSnapshot
+from datafusion_engine.arrow.interop import RecordBatchReaderLike
+from datafusion_engine.delta.shared_types import DeltaFeatureGate, DeltaProtocolSnapshot
 from obs.otel import SCOPE_STORAGE, get_query_id, get_run_id, stage_span
 from storage.deltalake.config import DeltaMutationPolicy, DeltaRetryPolicy
 from storage.deltalake.delta_read import (
@@ -23,7 +23,6 @@ from storage.deltalake.delta_read import (
     DeltaSnapshotLookup,
     _DeltaFeatureMutationRecord,
     _DeltaMaintenanceRecord,
-    _DeltaMergeFallbackInput,
     _normalize_commit_metadata,
     _snapshot_info,
     cdf_options_to_spec,
@@ -47,33 +46,64 @@ if TYPE_CHECKING:
 type StorageOptions = Mapping[str, str]
 
 
-def _runtime_profile_for_delta(
+def runtime_profile_for_delta(
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFusionRuntimeProfile:
+    """Require and return a runtime profile for Delta operations.
+
+    Returns:
+    -------
+    DataFusionRuntimeProfile
+        The provided runtime profile.
+
+    Raises:
+        ValueError: If no runtime profile is provided.
+    """
     if runtime_profile is not None:
         return runtime_profile
     msg = "Delta operation requires an explicit DataFusionRuntimeProfile."
     raise ValueError(msg)
 
 
-def _resolve_delta_mutation_policy(
+def resolve_delta_mutation_policy(
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DeltaMutationPolicy:
+    """Resolve the effective mutation policy from runtime configuration.
+
+    Returns:
+    -------
+    DeltaMutationPolicy
+        Runtime policy when available, otherwise defaults.
+    """
     if runtime_profile is None:
         return DeltaMutationPolicy()
     return runtime_profile.policies.delta_mutation_policy or DeltaMutationPolicy()
 
 
-def _is_s3_uri(table_uri: str) -> bool:
+def is_s3_uri(table_uri: str) -> bool:
+    """Return whether the given table URI uses an S3-compatible scheme.
+
+    Returns:
+    -------
+    bool
+        ``True`` when the URI scheme is ``s3``, ``s3a``, or ``s3n``.
+    """
     scheme = urlparse(table_uri).scheme.lower()
     return scheme in {"s3", "s3a", "s3n"}
 
 
-def _has_locking_provider(
+def has_locking_provider(
     storage_options: StorageOptions | None,
     *,
     policy: DeltaMutationPolicy,
 ) -> bool:
+    """Return whether storage options include a configured locking provider.
+
+    Returns:
+    -------
+    bool
+        ``True`` when any configured locking option key has a value.
+    """
     if not storage_options:
         return False
     normalized = {str(key).lower(): str(value) for key, value in storage_options.items()}
@@ -84,17 +114,22 @@ def _has_locking_provider(
     return False
 
 
-def _enforce_locking_provider(
+def enforce_locking_provider(
     table_uri: str,
     storage_options: StorageOptions | None,
     *,
     policy: DeltaMutationPolicy,
 ) -> None:
+    """Validate locking-provider requirements for S3-backed Delta mutations.
+
+    Raises:
+        ValueError: If policy requires locking for S3 and no provider is configured.
+    """
     if not policy.require_locking_provider:
         return
-    if not _is_s3_uri(table_uri):
+    if not is_s3_uri(table_uri):
         return
-    if _has_locking_provider(storage_options, policy=policy):
+    if has_locking_provider(storage_options, policy=policy):
         return
     msg = (
         "Delta mutations on S3 require a locking provider. "
@@ -103,12 +138,17 @@ def _enforce_locking_provider(
     raise ValueError(msg)
 
 
-def _enforce_append_only_policy(
+def enforce_append_only_policy(
     *,
     policy: DeltaMutationPolicy,
     operation: str,
     updates_present: bool,
 ) -> None:
+    """Validate append-only mutation constraints.
+
+    Raises:
+        ValueError: If the requested operation would mutate existing rows.
+    """
     if not policy.append_only:
         return
     if operation == "delete" or updates_present:
@@ -116,11 +156,18 @@ def _enforce_append_only_policy(
         raise ValueError(msg)
 
 
-def _delta_retry_classification(
+def delta_retry_classification(
     exc: BaseException,
     *,
     policy: DeltaRetryPolicy,
 ) -> str:
+    """Classify an exception for Delta retry behavior.
+
+    Returns:
+    -------
+    str
+        Retry classification: ``"fatal"``, ``"retryable"``, or ``"unknown"``.
+    """
     signature_parts = [type(exc).__name__, str(exc)]
     cause = getattr(exc, "__cause__", None)
     if cause is not None:
@@ -135,14 +182,29 @@ def _delta_retry_classification(
     return "unknown"
 
 
-def _delta_retry_delay(attempt: int, *, policy: DeltaRetryPolicy) -> float:
+def delta_retry_delay(attempt: int, *, policy: DeltaRetryPolicy) -> float:
+    """Compute exponential backoff delay for a retry attempt.
+
+    Returns:
+    -------
+    float
+        Delay in seconds, bounded by policy maximum.
+    """
     delay = float(policy.base_delay_s) * (2**attempt)
     return min(delay, float(policy.max_delay_s))
 
 
-def _resolve_merge_actions(
+def resolve_merge_actions(
     request: DeltaMergeArrowRequest,
 ) -> tuple[str, str, dict[str, str], dict[str, str], bool]:
+    """Resolve effective aliases and merge action maps for an Arrow merge request.
+
+    Returns:
+    -------
+    tuple[str, str, dict[str, str], dict[str, str], bool]
+        Source alias, target alias, matched updates, not-matched inserts, and
+        whether update/delete behavior is present.
+    """
     resolved_source_alias = request.source_alias or "source"
     resolved_target_alias = request.target_alias or "target"
     resolved_updates = dict(request.matched_updates or {})
@@ -165,7 +227,14 @@ def _resolve_merge_actions(
     )
 
 
-def _merge_rows_affected(metrics: Mapping[str, object] | None) -> int | None:
+def merge_rows_affected(metrics: Mapping[str, object] | None) -> int | None:
+    """Estimate total affected rows from merge metrics.
+
+    Returns:
+    -------
+    int | None
+        Total affected rows when metrics include row counters; otherwise ``None``.
+    """
     if not isinstance(metrics, Mapping):
         return None
     rows = 0
@@ -186,13 +255,20 @@ def _merge_rows_affected(metrics: Mapping[str, object] | None) -> int | None:
     return rows if found else None
 
 
-def _execute_delta_merge(
+def execute_delta_merge(
     ctx: SessionContext,
     *,
     request: DeltaMergeRequest,
     retry_policy: DeltaRetryPolicy,
     span: Span,
 ) -> tuple[Mapping[str, object], int]:
+    """Execute a Delta merge with retry behavior driven by policy.
+
+    Returns:
+    -------
+    tuple[Mapping[str, object], int]
+        Merge report payload and number of retries performed.
+    """
     from datafusion_engine.delta.control_plane_core import delta_merge
 
     attempts = 0
@@ -200,90 +276,33 @@ def _execute_delta_merge(
         try:
             report = delta_merge(ctx, request=request)
         except Exception as exc:  # pragma: no cover - retry paths depend on delta-rs
-            classification = _delta_retry_classification(exc, policy=retry_policy)
+            classification = delta_retry_classification(exc, policy=retry_policy)
             if classification != "retryable":
                 raise
             attempts += 1
             if attempts >= retry_policy.max_attempts:
                 raise
-            delay = _delta_retry_delay(attempts - 1, policy=retry_policy)
+            delay = delta_retry_delay(attempts - 1, policy=retry_policy)
             span.set_attribute("codeanatomy.retry_attempt", attempts)
             time.sleep(delay)
         else:
             return report, attempts
 
 
-def _should_fallback_delta_merge(exc: Exception) -> bool:
-    message = str(exc)
-    if not message:
-        return False
-    lowered = message.lower()
-    return any(
-        token in lowered
-        for token in (
-            "ffi future panicked",
-            "there is no reactor running",
-            "invalid json in file stats",
-            "sessioncontext",
-            "cannot be converted",
-            "delta control-plane extension is incompatible",
-        )
-    )
-
-
-def _execute_delta_merge_fallback(
-    fallback: _DeltaMergeFallbackInput,
-) -> Mapping[str, object]:
-    from storage.deltalake.delta_write import build_commit_properties
-
-    request = fallback.request
-    commit_properties = request.commit_properties
-    if commit_properties is None and request.commit_metadata is not None:
-        commit_properties = build_commit_properties(commit_metadata=request.commit_metadata)
-    storage = dict(fallback.storage_options) if fallback.storage_options is not None else None
-    table = DeltaTable(request.path, storage_options=storage)
-    source_reader = as_reader(fallback.source)
-    merger = table.merge(
-        source_reader,
-        request.predicate,
-        source_alias=fallback.source_alias,
-        target_alias=fallback.target_alias,
-        commit_properties=commit_properties,
-    )
-    if request.update_all:
-        merger = merger.when_matched_update_all(predicate=request.matched_predicate)
-    elif fallback.matched_updates:
-        merger = merger.when_matched_update(
-            updates=dict(fallback.matched_updates),
-            predicate=request.matched_predicate,
-        )
-    if request.insert_all:
-        merger = merger.when_not_matched_insert_all(predicate=request.not_matched_predicate)
-    elif fallback.not_matched_inserts:
-        merger = merger.when_not_matched_insert(
-            updates=dict(fallback.not_matched_inserts),
-            predicate=request.not_matched_predicate,
-        )
-    if request.delete_not_matched_by_source:
-        merger = merger.when_not_matched_by_source_delete(
-            predicate=request.not_matched_by_source_predicate
-        )
-    metrics_raw = merger.execute()
-    metrics = dict(metrics_raw) if isinstance(metrics_raw, Mapping) else {"value": metrics_raw}
-    return {
-        "version": table.version(),
-        "metrics": metrics,
-        "merge_mode": "python_deltalake_fallback",
-    }
-
-
-def _storage_span_attributes(
+def storage_span_attributes(
     *,
     operation: str,
     table_path: str | None = None,
     dataset_name: str | None = None,
     extra: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    """Build OpenTelemetry span attributes for storage operations.
+
+    Returns:
+    -------
+    dict[str, object]
+        Attribute payload for storage operation spans.
+    """
     attrs: dict[str, object] = {"codeanatomy.operation": operation}
     if table_path:
         attrs["codeanatomy.table"] = str(table_path)
@@ -300,12 +319,19 @@ def _storage_span_attributes(
     return attrs
 
 
-def _feature_control_span(
+def feature_control_span(
     options: DeltaFeatureMutationOptions,
     *,
     operation: str,
 ) -> AbstractContextManager[Span]:
-    attrs = _storage_span_attributes(
+    """Create a feature-control tracing span for Delta feature mutations.
+
+    Returns:
+    -------
+    AbstractContextManager[Span]
+        Context manager that opens and closes the feature-control span.
+    """
+    attrs = storage_span_attributes(
         operation="feature_control",
         table_path=options.path,
         dataset_name=options.dataset_name,
@@ -336,7 +362,7 @@ def delta_table_features(
     dict[str, str] | None
         Feature configuration values or ``None`` if no features are set.
     """
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="metadata",
         table_path=path,
         extra={"codeanatomy.metadata_kind": "features"},
@@ -425,7 +451,7 @@ def delta_commit_metadata(
     dict[str, str] | None
         Custom commit metadata or ``None`` when not present.
     """
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="metadata",
         table_path=path,
         extra={"codeanatomy.metadata_kind": "commit_metadata"},
@@ -446,7 +472,11 @@ def delta_commit_metadata(
         )
         if snapshot is None:
             return None
-        return None
+        properties = snapshot.get("table_properties")
+        if not isinstance(properties, Mapping):
+            return None
+        metadata = {str(key): str(value) for key, value in properties.items()}
+        return metadata or None
 
 
 def delta_history_snapshot(
@@ -464,7 +494,7 @@ def delta_history_snapshot(
     dict[str, object] | None
         History entry payload or ``None`` when unavailable.
     """
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="metadata",
         table_path=path,
         extra={"codeanatomy.metadata_kind": "history"},
@@ -513,7 +543,7 @@ def delta_protocol_snapshot(
     dict[str, object] | None
         Protocol payload or ``None`` when unavailable.
     """
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="metadata",
         table_path=path,
         extra={"codeanatomy.metadata_kind": "protocol"},
@@ -534,7 +564,7 @@ def delta_protocol_snapshot(
         )
         if snapshot is None:
             return None
-        from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
+        from datafusion_engine.delta.shared_types import DeltaProtocolSnapshot
 
         payload = DeltaProtocolSnapshot(
             min_reader_version=coerce_int(snapshot.get("min_reader_version")),
@@ -577,7 +607,7 @@ def read_delta_cdf(
         ValueError: If CDF read options are invalid.
     """
     resolved_options = cdf_options or DeltaCdfOptions()
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="read_cdf",
         table_path=table_path,
         extra={
@@ -597,7 +627,7 @@ def read_delta_cdf(
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ):
-        bundle = _delta_cdf_table_provider(
+        bundle = delta_cdf_table_provider(
             table_path,
             storage_options=storage_options,
             log_storage_options=log_storage_options,
@@ -628,10 +658,11 @@ def read_delta_cdf(
         return cast("RecordBatchReaderLike", to_reader(df))
 
 
-def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None:
+def record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None:
+    """Record a mutation artifact for Delta feature-control operations."""
     if request.runtime_profile is None:
         return
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="feature_control",
         table_path=request.path,
         dataset_name=request.dataset_name,
@@ -660,7 +691,8 @@ def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None
         )
 
 
-def _record_delta_maintenance(request: _DeltaMaintenanceRecord) -> None:
+def record_delta_maintenance(request: _DeltaMaintenanceRecord) -> None:
+    """Record a maintenance artifact for Delta maintenance operations."""
     if request.runtime_profile is None:
         return
     metrics_payload: dict[str, object] = {}
@@ -689,18 +721,25 @@ def _record_delta_maintenance(request: _DeltaMaintenanceRecord) -> None:
     )
 
 
-def _constraint_status(
+def constraint_status(
     extra_constraints: Sequence[str] | None,
     *,
     checked: bool,
 ) -> str:
+    """Resolve constraint-check status for mutation reporting.
+
+    Returns:
+    -------
+    str
+        ``"skipped"``, ``"passed"``, or ``"not_applicable"``.
+    """
     if not extra_constraints:
         return "skipped"
     return "passed" if checked else "not_applicable"
 
 
 @dataclass(frozen=True)
-class _MutationArtifactRequest:
+class MutationArtifactRequest:
     """Inputs required to record a Delta mutation artifact."""
 
     profile: DataFusionRuntimeProfile | None
@@ -715,14 +754,22 @@ class _MutationArtifactRequest:
     dataset_name: str | None
 
 
-def _commit_metadata_from_properties(commit_properties: CommitProperties) -> dict[str, str]:
+def commit_metadata_from_properties(commit_properties: CommitProperties) -> dict[str, str]:
+    """Extract custom commit metadata from ``CommitProperties``.
+
+    Returns:
+    -------
+    dict[str, str]
+        Stringified custom metadata dictionary.
+    """
     custom_metadata = getattr(commit_properties, "custom_metadata", None)
     if not isinstance(custom_metadata, Mapping):
         return {}
     return {str(key): str(value) for key, value in custom_metadata.items()}
 
 
-def _record_mutation_artifact(request: _MutationArtifactRequest) -> None:
+def record_mutation_artifact(request: MutationArtifactRequest) -> None:
+    """Emit a normalized Delta mutation artifact from a mutation request."""
     if request.profile is None:
         return
     from datafusion_engine.delta.observability import (
@@ -734,7 +781,7 @@ def _record_mutation_artifact(request: _MutationArtifactRequest) -> None:
     commit_version: int | None = None
     commit_run_id: str | None = None
     if request.commit_properties is not None:
-        commit_payload = _commit_metadata_from_properties(request.commit_properties)
+        commit_payload = commit_metadata_from_properties(request.commit_properties)
         commit_app_id = commit_payload.get("commit_app_id")
         commit_version_value = commit_payload.get("commit_version")
         commit_run_id = commit_payload.get("commit_run_id")
@@ -742,7 +789,7 @@ def _record_mutation_artifact(request: _MutationArtifactRequest) -> None:
             commit_version = int(commit_version_value)
     commit_metadata = request.commit_metadata
     if commit_metadata is None and request.commit_properties is not None:
-        commit_metadata = _commit_metadata_from_properties(request.commit_properties)
+        commit_metadata = commit_metadata_from_properties(request.commit_properties)
     record_delta_mutation(
         request.profile,
         artifact=DeltaMutationArtifact(
@@ -761,13 +808,20 @@ def _record_mutation_artifact(request: _MutationArtifactRequest) -> None:
     )
 
 
-def _delta_commit_options(
+def delta_commit_options(
     *,
     commit_properties: CommitProperties | None,
     commit_metadata: Mapping[str, str] | None,
     app_id: str | None,
     app_version: int | None,
 ) -> DeltaCommitOptions:
+    """Build control-plane commit options from Python delta commit inputs.
+
+    Returns:
+    -------
+    DeltaCommitOptions
+        Normalized metadata and optional app transaction payload.
+    """
     metadata: dict[str, str] = {}
     app_transaction: DeltaAppTransaction | None = None
     if commit_properties is not None:
@@ -807,7 +861,14 @@ def _delta_commit_options(
     return DeltaCommitOptions(metadata=metadata, app_transaction=app_transaction)
 
 
-def _mutation_version(report: Mapping[str, object]) -> int | None:
+def mutation_version(report: Mapping[str, object]) -> int | None:
+    """Extract mutation version from a mutation/maintenance report payload.
+
+    Returns:
+    -------
+    int | None
+        Parsed version when present and valid.
+    """
     for key in ("mutation_version", "maintenance_version", "version"):
         value = report.get(key)
         if isinstance(value, int):
@@ -820,31 +881,52 @@ def _mutation_version(report: Mapping[str, object]) -> int | None:
     return None
 
 
-def _delta_json_value(value: object) -> dict[str, object]:
+def delta_json_value(value: object) -> dict[str, object]:
+    """Normalize a value into a JSON-object-shaped payload.
+
+    Returns:
+    -------
+    dict[str, object]
+        JSON-serializable mapping for the input value.
+    """
     if isinstance(value, dict):
-        return {str(key): _delta_json_scalar(item) for key, item in value.items()}
-    return {"value": _delta_json_scalar(value)}
+        return {str(key): delta_json_scalar(item) for key, item in value.items()}
+    return {"value": delta_json_scalar(value)}
 
 
-def _delta_json_scalar(value: object) -> object:
+def delta_json_scalar(value: object) -> object:
+    """Normalize scalar/container values into JSON-serializable structures.
+
+    Returns:
+    -------
+    object
+        JSON-serializable scalar, list, or mapping representation.
+    """
     if value is None or isinstance(value, (bool, float, int, str)):
         return value
     if isinstance(value, list):
-        return [_delta_json_scalar(item) for item in value]
+        return [delta_json_scalar(item) for item in value]
     if isinstance(value, tuple):
-        return [_delta_json_scalar(item) for item in value]
+        return [delta_json_scalar(item) for item in value]
     if isinstance(value, dict):
-        return {str(key): _delta_json_scalar(item) for key, item in value.items()}
+        return {str(key): delta_json_scalar(item) for key, item in value.items()}
     return str(value)
 
 
-def _delta_cdf_table_provider(
+def delta_cdf_table_provider(
     table_path: str,
     *,
     storage_options: StorageOptions | None,
     log_storage_options: StorageOptions | None,
     options: DeltaCdfOptions | None,
 ) -> DeltaCdfProviderBundle | None:
+    """Build a Rust control-plane provider bundle for Delta CDF reads.
+
+    Returns:
+    -------
+    DeltaCdfProviderBundle | None
+        Provider bundle when extension support is available, else ``None``.
+    """
     storage = merged_storage_options(storage_options, log_storage_options)
     try:
         from datafusion_engine.delta.control_plane_core import DeltaCdfRequest, delta_cdf_provider
@@ -863,37 +945,35 @@ def _delta_cdf_table_provider(
 
 
 __all__ = [
-    "_MutationArtifactRequest",
-    "_commit_metadata_from_properties",
-    "_constraint_status",
-    "_delta_cdf_table_provider",
-    "_delta_commit_options",
-    "_delta_json_scalar",
-    "_delta_json_value",
-    "_delta_retry_classification",
-    "_delta_retry_delay",
-    "_enforce_append_only_policy",
-    "_enforce_locking_provider",
-    "_execute_delta_merge",
-    "_execute_delta_merge_fallback",
-    "_feature_control_span",
-    "_has_locking_provider",
-    "_is_s3_uri",
-    "_merge_rows_affected",
-    "_mutation_version",
-    "_record_delta_feature_mutation",
-    "_record_delta_maintenance",
-    "_record_mutation_artifact",
-    "_resolve_delta_mutation_policy",
-    "_resolve_merge_actions",
-    "_runtime_profile_for_delta",
-    "_should_fallback_delta_merge",
-    "_storage_span_attributes",
+    "MutationArtifactRequest",
+    "commit_metadata_from_properties",
+    "constraint_status",
     "delta_cdf_enabled",
+    "delta_cdf_table_provider",
     "delta_commit_metadata",
+    "delta_commit_options",
     "delta_history_snapshot",
+    "delta_json_scalar",
+    "delta_json_value",
     "delta_protocol_snapshot",
+    "delta_retry_classification",
+    "delta_retry_delay",
     "delta_table_features",
+    "enforce_append_only_policy",
+    "enforce_locking_provider",
+    "execute_delta_merge",
+    "feature_control_span",
+    "has_locking_provider",
+    "is_s3_uri",
+    "merge_rows_affected",
+    "mutation_version",
     "read_delta_cdf",
     "read_delta_cdf_eager",
+    "record_delta_feature_mutation",
+    "record_delta_maintenance",
+    "record_mutation_artifact",
+    "resolve_delta_mutation_policy",
+    "resolve_merge_actions",
+    "runtime_profile_for_delta",
+    "storage_span_attributes",
 ]

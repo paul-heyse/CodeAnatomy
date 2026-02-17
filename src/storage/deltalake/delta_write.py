@@ -119,21 +119,21 @@ def delta_delete_where(
 
     from obs.otel import SCOPE_STORAGE, stage_span
     from storage.deltalake.delta_runtime_ops import (
-        _constraint_status,
-        _delta_commit_options,
-        _delta_retry_classification,
-        _delta_retry_delay,
-        _enforce_append_only_policy,
-        _enforce_locking_provider,
-        _MutationArtifactRequest,
-        _record_mutation_artifact,
-        _resolve_delta_mutation_policy,
-        _storage_span_attributes,
+        MutationArtifactRequest,
+        constraint_status,
+        delta_commit_options,
+        delta_retry_classification,
+        delta_retry_delay,
+        enforce_append_only_policy,
+        enforce_locking_provider,
+        record_mutation_artifact,
+        resolve_delta_mutation_policy,
+        storage_span_attributes,
     )
     from utils.storage_options import merged_storage_options
     from utils.value_coercion import coerce_int
 
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="delete",
         table_path=request.path,
         dataset_name=request.dataset_name,
@@ -145,19 +145,19 @@ def delta_delete_where(
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ) as span:
-        mutation_policy = _resolve_delta_mutation_policy(request.runtime_profile)
+        mutation_policy = resolve_delta_mutation_policy(request.runtime_profile)
         storage = merged_storage_options(request.storage_options, request.log_storage_options)
-        _enforce_locking_provider(
+        enforce_locking_provider(
             request.path,
             storage,
             policy=mutation_policy,
         )
-        _enforce_append_only_policy(
+        enforce_append_only_policy(
             policy=mutation_policy,
             operation="delete",
             updates_present=True,
         )
-        commit_options = _delta_commit_options(
+        commit_options = delta_commit_options(
             commit_properties=request.commit_properties,
             commit_metadata=request.commit_metadata,
             app_id=None,
@@ -183,13 +183,13 @@ def delta_delete_where(
                 )
                 break
             except Exception as exc:  # pragma: no cover - retry paths depend on delta-rs
-                classification = _delta_retry_classification(exc, policy=retry_policy)
+                classification = delta_retry_classification(exc, policy=retry_policy)
                 if classification != "retryable":
                     raise
                 attempts += 1
                 if attempts >= retry_policy.max_attempts:
                     raise
-                delay = _delta_retry_delay(attempts - 1, policy=retry_policy)
+                delay = delta_retry_delay(attempts - 1, policy=retry_policy)
                 span.set_attribute("codeanatomy.retry_attempt", attempts)
                 time.sleep(delay)
         metrics = report.get("metrics") if isinstance(report, Mapping) else None
@@ -203,8 +203,8 @@ def delta_delete_where(
                     break
         if attempts:
             span.set_attribute("codeanatomy.retry_attempts", attempts)
-        _record_mutation_artifact(
-            _MutationArtifactRequest(
+        record_mutation_artifact(
+            MutationArtifactRequest(
                 profile=request.runtime_profile,
                 report=report,
                 table_uri=request.path,
@@ -212,7 +212,7 @@ def delta_delete_where(
                 mode="delete",
                 commit_metadata=request.commit_metadata,
                 commit_properties=request.commit_properties,
-                constraint_status=_constraint_status(request.extra_constraints, checked=False),
+                constraint_status=constraint_status(request.extra_constraints, checked=False),
                 constraint_violations=(),
                 dataset_name=request.dataset_name,
             )
@@ -229,28 +229,28 @@ def _build_delta_merge_state(
     from datafusion_engine.delta.control_plane_core import DeltaMergeRequest
     from storage.deltalake.delta_read import _DeltaMergeExecutionState
     from storage.deltalake.delta_runtime_ops import (
-        _delta_commit_options,
-        _enforce_append_only_policy,
-        _enforce_locking_provider,
-        _resolve_delta_mutation_policy,
-        _resolve_merge_actions,
+        delta_commit_options,
+        enforce_append_only_policy,
+        enforce_locking_provider,
+        resolve_delta_mutation_policy,
+        resolve_merge_actions,
     )
     from utils.storage_options import merged_storage_options
 
-    mutation_policy = _resolve_delta_mutation_policy(request.runtime_profile)
+    mutation_policy = resolve_delta_mutation_policy(request.runtime_profile)
     storage = merged_storage_options(request.storage_options, request.log_storage_options)
-    _enforce_locking_provider(request.path, storage, policy=mutation_policy)
+    enforce_locking_provider(request.path, storage, policy=mutation_policy)
     source_alias, target_alias, matched_updates, not_matched_inserts, updates_present = (
-        _resolve_merge_actions(request)
+        resolve_merge_actions(request)
     )
-    _enforce_append_only_policy(
+    enforce_append_only_policy(
         policy=mutation_policy,
         operation="merge",
         updates_present=updates_present,
     )
     source_table = register_temp_table(ctx, delta_input.data)
     try:
-        commit_options = _delta_commit_options(
+        commit_options = delta_commit_options(
             commit_properties=request.commit_properties,
             commit_metadata=request.commit_metadata,
             app_id=None,
@@ -298,39 +298,15 @@ def _execute_delta_merge_state(
     span: Span,
 ) -> _DeltaMergeExecutionResult:
     from storage.deltalake.delta_read import _DeltaMergeExecutionResult
-    from storage.deltalake.delta_runtime_ops import (
-        _DeltaMergeFallbackInput,
-        _execute_delta_merge,
-        _execute_delta_merge_fallback,
-        _should_fallback_delta_merge,
-    )
+    from storage.deltalake.delta_runtime_ops import execute_delta_merge
 
     retry_policy = state.mutation_policy.retry_policy
-    try:
-        report, attempts = _execute_delta_merge(
-            ctx=state.ctx,
-            request=state.merge_request,
-            retry_policy=retry_policy,
-            span=span,
-        )
-    except Exception as exc:
-        if not _should_fallback_delta_merge(exc):
-            raise
-        merge_fallback = True
-        span.set_attribute("codeanatomy.merge_fallback", merge_fallback)
-        span.set_attribute("codeanatomy.merge_fallback_error", str(exc))
-        report = _execute_delta_merge_fallback(
-            _DeltaMergeFallbackInput(
-                source=state.delta_input.data,
-                request=state.request,
-                storage_options=state.storage,
-                source_alias=state.source_alias,
-                target_alias=state.target_alias,
-                matched_updates=state.matched_updates,
-                not_matched_inserts=state.not_matched_inserts,
-            )
-        )
-        attempts = 0
+    report, attempts = execute_delta_merge(
+        ctx=state.ctx,
+        request=state.merge_request,
+        retry_policy=retry_policy,
+        span=span,
+    )
     return _DeltaMergeExecutionResult(report=report, attempts=attempts)
 
 
@@ -346,15 +322,15 @@ def delta_merge_arrow(
     """
     from obs.otel import SCOPE_STORAGE, stage_span
     from storage.deltalake.delta_runtime_ops import (
-        _constraint_status,
-        _merge_rows_affected,
-        _MutationArtifactRequest,
-        _record_mutation_artifact,
-        _storage_span_attributes,
+        MutationArtifactRequest,
+        constraint_status,
+        merge_rows_affected,
+        record_mutation_artifact,
+        storage_span_attributes,
     )
 
     delta_input = coerce_delta_input(request.source, prefer_reader=True)
-    attrs = _storage_span_attributes(
+    attrs = storage_span_attributes(
         operation="merge",
         table_path=request.path,
         dataset_name=request.dataset_name,
@@ -377,13 +353,13 @@ def delta_merge_arrow(
                 candidate = result.report.get("metrics")
                 if isinstance(candidate, Mapping):
                     metrics = {str(key): value for key, value in candidate.items()}
-            rows = _merge_rows_affected(metrics)
+            rows = merge_rows_affected(metrics)
             if rows is not None:
                 span.set_attribute("codeanatomy.rows_affected", rows)
             if result.attempts:
                 span.set_attribute("codeanatomy.retry_attempts", result.attempts)
-            _record_mutation_artifact(
-                _MutationArtifactRequest(
+            record_mutation_artifact(
+                MutationArtifactRequest(
                     profile=request.runtime_profile,
                     report=result.report,
                     table_uri=request.path,
@@ -391,7 +367,7 @@ def delta_merge_arrow(
                     mode="merge",
                     commit_metadata=request.commit_metadata,
                     commit_properties=request.commit_properties,
-                    constraint_status=_constraint_status(request.extra_constraints, checked=True),
+                    constraint_status=constraint_status(request.extra_constraints, checked=True),
                     constraint_violations=(),
                     dataset_name=request.dataset_name,
                 )

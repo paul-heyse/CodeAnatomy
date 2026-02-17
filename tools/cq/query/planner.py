@@ -373,24 +373,10 @@ def _entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
     if is_rust_language(query.primary_language):
         return _rust_entity_to_ast_grep_rules(query)
 
-    # Python defaults
-    entity_patterns = {
-        "function": "$FUNC",
-        "class": "$CLASS",
-        "method": "$METHOD",
-        "decorator": "@$DECORATOR($$$)",
-        "import": "import $MODULE",
-        "callsite": "$FUNC($$$)",
-    }
-    entity_kinds = {
-        "function": "function_definition",
-        "class": "class_definition",
-        "method": "function_definition",
-    }
-    base_pattern = entity_patterns.get(query.entity)
+    base_pattern = ENTITY_KINDS.pattern_for_entity(query.entity, language="python")
     if not base_pattern:
         return ()
-    kind = entity_kinds.get(query.entity)
+    kind = ENTITY_KINDS.kind_for_entity(query.entity, language="python")
     if query.name and kind is None and not query.name.startswith("~"):
         base_pattern = base_pattern.replace("$FUNC", query.name)
         base_pattern = base_pattern.replace("$CLASS", query.name)

@@ -141,6 +141,7 @@ def _delta_provider_bundle(
     request: DeltaProviderRequest,
     scan_files: Sequence[str] | None,
 ) -> DeltaProviderBundle:
+    _register_dataset_provider_bridge(ctx, request=request)
     try:
         if scan_files:
             return delta_provider_with_files(ctx, files=scan_files, request=request)
@@ -148,6 +149,47 @@ def _delta_provider_bundle(
     except (DataFusionEngineError, RuntimeError, TypeError, ValueError) as exc:
         msg = (
             "Delta provider control-plane failed; degraded Python fallback paths have been removed."
+        )
+        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
+
+
+def _register_dataset_provider_bridge(
+    ctx: SessionContext,
+    *,
+    request: DeltaProviderRequest,
+) -> Mapping[str, object]:
+    """Register provider through the canonical Rust bridge before resolution.
+
+    Returns:
+        Mapping[str, object]: Provider registration payload returned by the bridge.
+
+    Raises:
+        DataFusionEngineError: If the Rust bridge cannot be imported or fails to register.
+    """
+    try:
+        from extraction.rust_session_bridge import register_dataset_provider
+    except ImportError as exc:
+        msg = (
+            "Rust dataset-provider bridge is required for Delta provider resolution "
+            "and could not be imported."
+        )
+        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
+
+    payload: dict[str, object] = {
+        "table_name": "__codeanatomy_dataset_provider__",
+        "table_uri": request.table_uri,
+        "storage_options": dict(request.storage_options or {}),
+        "version": request.version,
+        "timestamp": request.timestamp,
+        "predicate": request.predicate,
+        "overwrite": True,
+    }
+    try:
+        return register_dataset_provider(ctx, payload)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        msg = (
+            "Rust dataset-provider bridge failed during Delta provider resolution. "
+            "Degraded Python fallback paths have been removed."
         )
         raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
 

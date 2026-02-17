@@ -38,7 +38,7 @@ def _apply_calls_semantic(
     result: CqResult,
     request: CallsSemanticRequest,
 ) -> tuple[FrontDoorInsightV1, QueryLanguage | None, int, int, int, int, tuple[str, ...]]:
-    from tools.cq.core.front_door_assembly import augment_insight_with_semantic
+    from tools.cq.core.front_door_entity import augment_insight_with_semantic
     from tools.cq.search.semantic.models import (
         LanguageSemanticEnrichmentRequest,
         enrich_with_language_semantics,

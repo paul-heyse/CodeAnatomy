@@ -10,7 +10,8 @@ from tools.cq.cli_app.context import CliContext
 from tools.cq.core.schema import CqResult
 from tools.cq.core.types import QueryLanguage
 from tools.cq.query import batch as batch_queries
-from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.enrichment import SymtableEnricher
+from tools.cq.query.executor_plan_dispatch import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.run.runner import execute_run_plan
@@ -70,6 +71,7 @@ def test_batch_equivalence_single_query(tmp_path: Path) -> None:
             query=parsed,
             root=str(ctx.root),
             services=ctx.services,
+            symtable_enricher=SymtableEnricher(ctx.root),
             argv=tuple(ctx.argv),
         ),
         tc=ctx.toolchain,

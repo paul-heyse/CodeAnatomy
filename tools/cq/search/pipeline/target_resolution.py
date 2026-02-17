@@ -81,7 +81,10 @@ def _build_object_candidate_finding(
         message=f"{kind}: {symbol}",
         anchor=anchor,
         severity="info",
-        details=DetailPayload(kind=kind, data=cast("dict[str, object]", details)),
+        details=DetailPayload(
+            kind=kind,
+            data_items=tuple(sorted(cast("dict[str, object]", details).items())),
+        ),
     )
 
 

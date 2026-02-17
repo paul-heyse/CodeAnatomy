@@ -1688,9 +1688,9 @@ def pick_primary_label(labels: Sequence[str], kind_priority: Sequence[str], deli
 ```python
 # src/codeintel/build/hamilton/native/spans/__init__.py
 # Re-export modules so Hamilton discovery finds them.
-from . import syntax_nodes as _syntax_nodes  # noqa: F401
-from . import scip_occurrences as _scip_occurrences  # noqa: F401
-from . import segments_normalize as _segments_normalize  # noqa: F401
+from . import syntax_nodes as _syntax_nodes
+from . import scip_occurrences as _scip_occurrences
+from . import segments_normalize as _segments_normalize
 ```
 
 ## 3.2 Syntax nodes projection
@@ -3689,7 +3689,7 @@ def _coerce_arrow(obj: Any, *, run_id: str, repo_id: str) -> pa.Table:
 
     # polars fallback (optional)
     if hasattr(obj, "to_pandas") and callable(getattr(obj, "to_pandas")):
-        import pandas as pd  # noqa: F401
+        import pandas as pd
         df = obj.to_pandas()
         return pa.Table.from_pandas(df, preserve_index=False)
 

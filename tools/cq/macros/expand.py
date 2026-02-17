@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.details_kinds import resolve_kind
 from tools.cq.core.result_factory import build_error_result
-from tools.cq.core.schema import DetailPayload, Finding, Section, ms
+from tools.cq.core.schema import Finding, Section, ms
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.macros.result_builder import MacroResultBuilder
 
 if TYPE_CHECKING:
@@ -85,7 +86,7 @@ def cmd_expand(
         category="details_expand",
         message=f"Expanded {kind}",
         severity="info",
-        details=DetailPayload(
+        details=build_detail_payload(
             kind=kind,
             data={
                 "kind": kind,

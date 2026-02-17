@@ -62,7 +62,7 @@ def test_information_schema_snapshot_skips_udf_catalog_when_udfs_disabled(
 
     monkeypatch.setattr(plan_bundle, "SchemaIntrospector", _FakeIntrospector)
 
-    snapshot_fn = plan_bundle._information_schema_snapshot  # noqa: SLF001
+    snapshot_fn = plan_bundle.__dict__["_information_schema_snapshot"]
     snapshot = snapshot_fn(ctx, session_runtime=runtime)
     assert snapshot["routines"] == []
     assert snapshot["parameters"] == []

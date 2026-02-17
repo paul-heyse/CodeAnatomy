@@ -1,13 +1,18 @@
-# ruff: noqa: D100, D103, ANN001
+"""Tests for observability schema/runtime validation adapters."""
+
 from __future__ import annotations
 
 import pyarrow as pa
+import pytest
 from datafusion import SessionContext
 
 from datafusion_engine.schema import observability_validation
 
 
-def test_validate_observability_schema_delegates(monkeypatch) -> None:
+def test_validate_observability_schema_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Schema validation delegates to metadata validator."""
     calls: list[pa.Schema] = []
 
     def _fake_validate(schema: pa.Schema) -> None:
@@ -19,7 +24,10 @@ def test_validate_observability_schema_delegates(monkeypatch) -> None:
     assert calls == [schema]
 
 
-def test_validate_observability_runtime_delegates(monkeypatch) -> None:
+def test_validate_observability_runtime_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime validation delegates to semantic/runtime checks."""
     calls: list[str] = []
     monkeypatch.setattr(
         observability_validation, "validate_semantic_types", lambda _ctx: calls.append("semantic")

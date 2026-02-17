@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103, INP001
+"""Tests for UDF extension constants and user-facing messages."""
+
 from __future__ import annotations
 
 from datafusion_engine.udf.constants import (
@@ -14,6 +15,7 @@ from datafusion_engine.udf.constants import (
 
 
 def test_extension_module_constants_are_stable() -> None:
+    """Extension module constants remain stable for ABI loading."""
     assert EXTENSION_MODULE_PATH == "datafusion_engine.extensions.datafusion_ext"
     assert EXTENSION_MODULE_LABEL == "datafusion_ext"
     assert EXTENSION_MODULE_PREFIX == "datafusion_engine.extensions."
@@ -21,6 +23,7 @@ def test_extension_module_constants_are_stable() -> None:
 
 
 def test_user_facing_messages_include_expected_markers() -> None:
+    """User-facing ABI messages retain expected placeholders and hints."""
     assert "Extension ABI mismatch" in ABI_MISMATCH_PREFIX
     assert "{expected}" in ABI_VERSION_MISMATCH_MSG
     assert "{actual}" in ABI_VERSION_MISMATCH_MSG

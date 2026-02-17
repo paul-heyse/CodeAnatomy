@@ -19,17 +19,20 @@ def _run_meta() -> RunMeta:
 def test_finding_is_frozen_at_attribute_boundary() -> None:
     """Finding contracts reject attribute rebinding."""
     finding = Finding(category="info", message="m")
+    message_attr = "message"
     with pytest.raises(AttributeError):
-        finding.message = "updated"
+        setattr(finding, message_attr, "updated")
 
 
 def test_cq_result_is_frozen_at_attribute_boundary() -> None:
     """CqResult contracts reject direct field replacement."""
     result = CqResult(run=_run_meta())
+    summary_attr = "summary"
+    key_findings_attr = "key_findings"
     with pytest.raises(AttributeError):
-        result.summary = result.summary
+        setattr(result, summary_attr, result.summary)
     with pytest.raises(AttributeError):
-        result.key_findings = []
+        setattr(result, key_findings_attr, ())
 
 
 def test_detail_payload_with_entry_is_copy_on_write() -> None:

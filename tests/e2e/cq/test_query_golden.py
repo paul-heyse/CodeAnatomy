@@ -227,7 +227,7 @@ def test_query_with_spec_validation(toolchain: Toolchain, repo_root: Path) -> No
     assert result is not None
 
     # Validate against spec expectations
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 

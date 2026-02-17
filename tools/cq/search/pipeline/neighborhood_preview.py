@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.core.schema import Finding
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
@@ -35,7 +36,6 @@ def _build_structural_neighborhood_preview(
     definition_matches: list[EnrichedMatch],
 ) -> tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]:
     from tools.cq.core.front_door_assembly import build_neighborhood_from_slices
-    from tools.cq.core.schema import DetailPayload
     from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectRequest
     from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
 
@@ -92,7 +92,7 @@ def _build_structural_neighborhood_preview(
                 category="neighborhood",
                 message=message,
                 severity="info",
-                details=DetailPayload(
+                details=build_detail_payload(
                     kind="neighborhood",
                     data={
                         "slice_kind": slice_item.kind,

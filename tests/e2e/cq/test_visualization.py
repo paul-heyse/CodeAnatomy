@@ -39,7 +39,7 @@ class TestMermaidFlowchart:
     @staticmethod
     def test_render_empty_result() -> None:
         """Empty result produces minimal diagram."""
-        result = CqResult(run=_make_run_meta(), key_findings=[], sections=[])
+        result = CqResult(run=_make_run_meta(), key_findings=(), sections=())
         output = render_mermaid_flowchart(result)
         assert "```mermaid" in output
         assert "flowchart TD" in output
@@ -56,7 +56,7 @@ class TestMermaidFlowchart:
                 details=DetailPayload.from_legacy({"name": "foo", "kind": "function"}),
             )
         ]
-        result = CqResult(run=_make_run_meta(), key_findings=findings, sections=[])
+        result = CqResult(run=_make_run_meta(), key_findings=tuple(findings), sections=())
         output = render_mermaid_flowchart(result)
         assert "foo" in output
 
@@ -73,8 +73,8 @@ class TestMermaidFlowchart:
         ]
         result = CqResult(
             run=_make_run_meta(),
-            key_findings=[],
-            sections=[Section(title="Callers", findings=callers)],
+            key_findings=(),
+            sections=(Section(title="Callers", findings=callers),),
         )
         output = render_mermaid_flowchart(result)
         assert "-->" in output
@@ -86,7 +86,7 @@ class TestMermaidClassDiagram:
     @staticmethod
     def test_render_empty_result() -> None:
         """Empty result produces minimal diagram."""
-        result = CqResult(run=_make_run_meta(), key_findings=[], sections=[])
+        result = CqResult(run=_make_run_meta(), key_findings=(), sections=())
         output = render_mermaid_class_diagram(result)
         assert "```mermaid" in output
         assert "classDiagram" in output
@@ -103,7 +103,7 @@ class TestMermaidClassDiagram:
                 details=DetailPayload.from_legacy({"name": "MyClass", "kind": "class"}),
             )
         ]
-        result = CqResult(run=_make_run_meta(), key_findings=findings, sections=[])
+        result = CqResult(run=_make_run_meta(), key_findings=tuple(findings), sections=())
         output = render_mermaid_class_diagram(result)
         assert "MyClass" in output
 
@@ -118,7 +118,7 @@ class TestMermaidClassDiagram:
                 details=DetailPayload.from_legacy({"name": "standalone", "kind": "function"}),
             )
         ]
-        result = CqResult(run=_make_run_meta(), key_findings=findings, sections=[])
+        result = CqResult(run=_make_run_meta(), key_findings=tuple(findings), sections=())
         output = render_mermaid_class_diagram(result)
         assert "<<function>>" in output
 
@@ -156,7 +156,7 @@ class TestDotRenderer:
     @staticmethod
     def test_render_empty_result() -> None:
         """Empty result produces valid DOT graph."""
-        result = CqResult(run=_make_run_meta(), key_findings=[], sections=[])
+        result = CqResult(run=_make_run_meta(), key_findings=(), sections=())
         output = render_dot(result)
         assert "digraph" in output
         assert "rankdir=LR" in output
@@ -172,7 +172,7 @@ class TestDotRenderer:
                 details=DetailPayload.from_legacy({"name": "foo", "kind": "function"}),
             )
         ]
-        result = CqResult(run=_make_run_meta(), key_findings=findings, sections=[])
+        result = CqResult(run=_make_run_meta(), key_findings=tuple(findings), sections=())
         output = render_dot(result)
         assert "foo" in output
         assert "[label=" in output
@@ -190,8 +190,8 @@ class TestDotRenderer:
         ]
         result = CqResult(
             run=_make_run_meta(),
-            key_findings=[],
-            sections=[Section(title="Callers", findings=callers)],
+            key_findings=(),
+            sections=(Section(title="Callers", findings=callers),),
         )
         output = render_dot(result)
         assert "->" in output

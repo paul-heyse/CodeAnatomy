@@ -37,7 +37,7 @@ def test_persist_result_artifacts_no_save_pops_search_view() -> None:
     )
 
     assert popped == ["rid"]
-    assert result.artifacts == []
+    assert result.artifacts == ()
 
 
 def test_persist_result_artifacts_no_save_ignores_non_search() -> None:

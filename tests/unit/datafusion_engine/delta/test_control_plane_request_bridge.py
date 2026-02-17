@@ -1,7 +1,9 @@
-# ruff: noqa: D100, D103, ANN001
+"""Tests for control-plane MessagePack request bridges."""
+
 from __future__ import annotations
 
 import msgspec
+import pytest
 from datafusion import SessionContext
 
 from datafusion_engine.delta import control_plane_maintenance, control_plane_mutation
@@ -14,7 +16,10 @@ _DELTA_VERSION = 7
 _TARGET_SIZE_BYTES = 1_048_576
 
 
-def test_mutation_bridge_uses_messagepack_request_payload(monkeypatch) -> None:
+def test_mutation_bridge_uses_messagepack_request_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mutation bridge encodes control-plane requests as MessagePack."""
     ctx = SessionContext()
     captured: dict[str, object] = {}
 
@@ -59,7 +64,10 @@ def test_mutation_bridge_uses_messagepack_request_payload(monkeypatch) -> None:
     assert decoded["version"] == _DELTA_VERSION
 
 
-def test_maintenance_bridge_uses_messagepack_request_payload(monkeypatch) -> None:
+def test_maintenance_bridge_uses_messagepack_request_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Maintenance bridge encodes control-plane requests as MessagePack."""
     ctx = SessionContext()
     captured: dict[str, object] = {}
 

@@ -1,5 +1,8 @@
-# ruff: noqa: D100, D103, ANN001, INP001
+"""Tests for datafusion runtime metric recording helpers."""
+
 from __future__ import annotations
+
+import pytest
 
 import obs.datafusion_engine_runtime_metrics as runtime_metrics
 
@@ -20,7 +23,10 @@ class _Histogram:
         self.calls.append((value, dict(attrs)))
 
 
-def test_record_delta_maintenance_run_emits_counter_and_histogram(monkeypatch) -> None:
+def test_record_delta_maintenance_run_emits_counter_and_histogram(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Counter and histogram metrics are emitted for maintenance runs."""
     counter = _Counter()
     histogram = _Histogram()
     monkeypatch.setattr(runtime_metrics, "_DELTA_MAINTENANCE_RUNS", counter)
@@ -38,5 +44,6 @@ def test_record_delta_maintenance_run_emits_counter_and_histogram(monkeypatch) -
 
 
 def test_maintenance_tracer_returns_tracer() -> None:
+    """Tracer factory returns span-compatible tracer instance."""
     tracer = runtime_metrics.maintenance_tracer()
     assert hasattr(tracer, "start_as_current_span")

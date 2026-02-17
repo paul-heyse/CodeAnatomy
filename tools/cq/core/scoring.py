@@ -231,7 +231,7 @@ def build_detail_payload(
     return DetailPayload(
         kind=kind,
         score=score,
-        data=payload_data,
+        data_items=tuple(sorted(payload_data.items())),
     )
 
 

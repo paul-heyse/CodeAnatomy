@@ -1,17 +1,66 @@
-# ruff: noqa: D100, D103, INP001, RUF012
+"""Tests for lineage protocol runtime compatibility."""
+
 from __future__ import annotations
 
-from datafusion_engine.lineage.protocols import LineageQuery
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+from datafusion_engine.lineage.protocols import (
+    LineageExpr,
+    LineageJoin,
+    LineageQuery,
+    LineageScan,
+)
+
+
+@dataclass
+class _Scan:
+    dataset_name: str = "dataset"
+    projected_columns: Sequence[str] = ()
+    pushed_filters: Sequence[str] = ()
+
+
+@dataclass
+class _Join:
+    join_type: str = "inner"
+    left_keys: Sequence[str] = ()
+    right_keys: Sequence[str] = ()
+
+
+@dataclass
+class _Expr:
+    kind: str = "column"
+    referenced_columns: Sequence[Sequence[str]] = ()
+    referenced_udfs: Sequence[str] = ()
+    text: str | None = None
 
 
 class _Lineage:
-    required_udfs = ("f",)
-    required_rewrite_tags = ("tag",)
-    scans = ()
-    joins = ()
-    exprs = ()
-    required_columns_by_dataset = {"dataset": ("column",)}
+    @property
+    def required_udfs(self) -> Sequence[str]:
+        return ("f",)
+
+    @property
+    def required_rewrite_tags(self) -> Sequence[str]:
+        return ("tag",)
+
+    @property
+    def scans(self) -> Sequence[LineageScan]:
+        return (_Scan(),)
+
+    @property
+    def joins(self) -> Sequence[LineageJoin]:
+        return (_Join(),)
+
+    @property
+    def exprs(self) -> Sequence[LineageExpr]:
+        return (_Expr(),)
+
+    @property
+    def required_columns_by_dataset(self) -> dict[str, Sequence[str]]:
+        return {"dataset": ("column",)}
 
 
 def test_lineage_query_protocol_runtime_checkable() -> None:
+    """Lineage query test double satisfies runtime-checkable protocol."""
     assert isinstance(_Lineage(), LineageQuery)

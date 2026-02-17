@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from tools.cq.astgrep.sgpy_scanner import RuleSpec
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 from tools.cq.search.pipeline import classifier_runtime
 
 

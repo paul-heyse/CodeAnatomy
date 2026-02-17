@@ -203,7 +203,7 @@ def build_resolved_objects_section(
                 ),
                 anchor=anchor,
                 severity="info",
-                details=DetailPayload(kind=kind, data=details_data),
+                details=DetailPayload(kind=kind, data_items=tuple(sorted(details_data.items()))),
             )
         )
     return Section(title="Resolved Objects", findings=findings)
@@ -241,26 +241,30 @@ def build_occurrences_section(
                 severity="info",
                 details=DetailPayload(
                     kind="occurrence",
-                    data={
-                        "occurrence_id": row.occurrence_id,
-                        "line_id": row.line_id or row.occurrence_id,
-                        "object_id": row.object_id,
-                        "symbol": symbol,
-                        "file": row.file,
-                        "line": row.line,
-                        "col": row.col,
-                        "block_start_line": row.block_start_line or row.context_start_line,
-                        "block_end_line": row.block_end_line or row.context_end_line,
-                        "context_start_line": row.context_start_line,
-                        "context_end_line": row.context_end_line,
-                        "byte_start": row.byte_start,
-                        "byte_end": row.byte_end,
-                        "category": row.category,
-                        "node_kind": row.node_kind,
-                        "containing_scope": row.containing_scope,
-                        "confidence": row.confidence,
-                        "evidence_kind": row.evidence_kind,
-                    },
+                    data_items=tuple(
+                        sorted(
+                            {
+                                "occurrence_id": row.occurrence_id,
+                                "line_id": row.line_id or row.occurrence_id,
+                                "object_id": row.object_id,
+                                "symbol": symbol,
+                                "file": row.file,
+                                "line": row.line,
+                                "col": row.col,
+                                "block_start_line": row.block_start_line or row.context_start_line,
+                                "block_end_line": row.block_end_line or row.context_end_line,
+                                "context_start_line": row.context_start_line,
+                                "context_end_line": row.context_end_line,
+                                "byte_start": row.byte_start,
+                                "byte_end": row.byte_end,
+                                "category": row.category,
+                                "node_kind": row.node_kind,
+                                "containing_scope": row.containing_scope,
+                                "confidence": row.confidence,
+                                "evidence_kind": row.evidence_kind,
+                            }.items()
+                        )
+                    ),
                 ),
             )
         )
@@ -281,7 +285,7 @@ def build_occurrence_kind_counts_section(occurrences: list[SearchOccurrenceV1]) 
             severity="info",
             details=DetailPayload(
                 kind="count",
-                data={"category": category, "count": count},
+                data_items=(("category", category), ("count", count)),
             ),
         )
         for category, count in counts.most_common()
@@ -302,7 +306,7 @@ def build_occurrence_hot_files_section(occurrences: list[SearchOccurrenceV1]) ->
             message=f"{file}: {count} matches",
             anchor=Anchor(file=file, line=_DEFAULT_CONTEXT_LINE),
             severity="info",
-            details=DetailPayload(kind="hot_file", data={"count": count}),
+            details=DetailPayload(kind="hot_file", data_items=(("count", count),)),
         )
         for file, count in counts.most_common(10)
     ]
@@ -326,11 +330,11 @@ def build_non_code_occurrence_section(occurrences: list[SearchOccurrenceV1]) -> 
             severity="info",
             details=DetailPayload(
                 kind="non_code_occurrence",
-                data={
-                    "occurrence_id": row.occurrence_id,
-                    "object_id": row.object_id,
-                    "category": row.category,
-                },
+                data_items=(
+                    ("category", row.category),
+                    ("object_id", row.object_id),
+                    ("occurrence_id", row.occurrence_id),
+                ),
             ),
         )
         for row in non_code[:_MAX_NON_CODE_ROWS]

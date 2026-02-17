@@ -9,7 +9,8 @@ from __future__ import annotations
 from contextlib import suppress
 from pathlib import Path
 
-from tools.cq.core.schema import Anchor, DetailPayload, Finding
+from tools.cq.core.schema import Anchor, Finding
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.search.semantic.diagnostics import (
     build_capability_diagnostics,
     features_from_macro,
@@ -60,7 +61,7 @@ def rust_fallback_search(
                 ),
                 anchor=Anchor(file=rel_path, line=line_no),
                 severity="info",
-                details=DetailPayload(
+                details=build_detail_payload(
                     kind="rust_reference",
                     data={
                         "language": "rust",

@@ -69,7 +69,7 @@ def test_delta_provider_bundle_fails_fast_when_control_plane_fails(
         raise RuntimeError(msg)
 
     monkeypatch.setattr(resolution, "delta_provider_from_session", _raise_provider)
-    provider_bundle = resolution._delta_provider_bundle  # noqa: SLF001
+    provider_bundle = resolution.__dict__["_delta_provider_bundle"]
 
     with pytest.raises(DataFusionEngineError) as excinfo:
         _ = provider_bundle(
@@ -104,7 +104,7 @@ def test_resolve_delta_cdf_fails_fast_when_control_plane_fails(
         lambda _location: cast("DeltaCdfContract", contract),
     )
     monkeypatch.setattr(resolution, "delta_cdf_provider", _raise_cdf_provider)
-    resolve_delta_cdf = resolution._resolve_delta_cdf  # noqa: SLF001
+    resolve_delta_cdf = resolution.__dict__["_resolve_delta_cdf"]
     location = DatasetLocation(
         path="memory://delta/events",
         format="delta",

@@ -10,8 +10,7 @@ from ast_grep_py import SgNode, SgRoot
 
 from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import SgRecord, scan_files
-from tools.cq.core.types import QueryLanguage
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE
+from tools.cq.core.types import DEFAULT_QUERY_LANGUAGE, QueryLanguage
 from tools.cq.utils.interval_index import IntervalIndex
 
 

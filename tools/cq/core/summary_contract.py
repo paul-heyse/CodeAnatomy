@@ -3,11 +3,60 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, Literal, cast
 
 import msgspec
 
 type SummaryVariantName = Literal["search", "calls", "impact", "run", "neighborhood"]
+
+
+class _ComparableSequence(tuple[object, ...]):
+    """Tuple-like sequence with list/tuple equality compatibility."""
+
+    __slots__ = ()
+    __hash__ = tuple.__hash__
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, (list, tuple)):
+            return tuple(self) == tuple(other)
+        return super().__eq__(other)
+
+
+def _empty_mapping() -> Mapping[str, object]:
+    return MappingProxyType({})
+
+
+def _empty_int_mapping() -> Mapping[str, int]:
+    return MappingProxyType({})
+
+
+def _empty_float_mapping() -> Mapping[str, float]:
+    return MappingProxyType({})
+
+
+def _empty_nested_mapping() -> Mapping[str, Mapping[str, object]]:
+    return MappingProxyType({})
+
+
+def _summary_value_to_builtins(value: object) -> Any:
+    """Convert frozen summary boundary values to JSON-safe builtins.
+
+    Returns:
+        Any: Builtins payload safe for summary serialization.
+    """
+    if isinstance(value, Mapping):
+        items = sorted(value.items(), key=lambda item: str(item[0]))
+        return {str(key): _summary_value_to_builtins(item) for key, item in items}
+    if isinstance(value, (list, tuple)):
+        return [_summary_value_to_builtins(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        values = sorted(value, key=repr)
+        return [_summary_value_to_builtins(item) for item in values]
+    if isinstance(value, msgspec.Struct):
+        raw = msgspec.structs.asdict(value)
+        return {key: _summary_value_to_builtins(item) for key, item in raw.items()}
+    return value
 
 
 class SemanticTelemetryV1(msgspec.Struct, frozen=True, omit_defaults=True):
@@ -41,21 +90,25 @@ class SummaryEnvelopeV1(msgspec.Struct, omit_defaults=True, frozen=True):
     mode: str | None = None
     lang_scope: str | None = None
     language: str | None = None
-    file_filters: list[str] = msgspec.field(default_factory=list)
-    language_order: list[str] = msgspec.field(default_factory=list)
-    languages: dict[str, object] = msgspec.field(default_factory=dict)
-    steps: list[str] = msgspec.field(default_factory=list)
-    step_summaries: dict[str, dict[str, object]] = msgspec.field(default_factory=dict)
-    macro_summaries: dict[str, dict[str, object]] = msgspec.field(default_factory=dict)
+    file_filters: tuple[str, ...] = ()
+    language_order: tuple[str, ...] = ()
+    languages: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    steps: tuple[str, ...] = ()
+    step_summaries: Mapping[str, Mapping[str, object]] = msgspec.field(
+        default_factory=_empty_nested_mapping
+    )
+    macro_summaries: Mapping[str, Mapping[str, object]] = msgspec.field(
+        default_factory=_empty_nested_mapping
+    )
     python_semantic_telemetry: SemanticTelemetryV1 | None = None
     rust_semantic_telemetry: SemanticTelemetryV1 | None = None
-    python_semantic_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
-    python_semantic_overview: dict[str, object] = msgspec.field(default_factory=dict)
-    semantic_planes: dict[str, object] = msgspec.field(default_factory=dict)
-    language_capabilities: dict[str, object] = msgspec.field(default_factory=dict)
-    cross_language_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
-    cache_backend: dict[str, object] = msgspec.field(default_factory=dict)
-    front_door_insight: dict[str, object] | None = None
+    python_semantic_diagnostics: tuple[Mapping[str, object], ...] = ()
+    python_semantic_overview: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    semantic_planes: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    language_capabilities: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    cross_language_diagnostics: tuple[Mapping[str, object], ...] = ()
+    cache_backend: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    front_door_insight: Mapping[str, object] | None = None
     target: str | None = None
     target_file: str | None = None
     target_line: int | None = None
@@ -77,14 +130,21 @@ class SummaryEnvelopeV1(msgspec.Struct, omit_defaults=True, frozen=True):
         if key not in self.__struct_fields__:
             msg = f"Unknown summary key: {key}"
             raise KeyError(msg)
-        return getattr(self, key)
+        value = getattr(self, key)
+        if key == "language_order" and isinstance(value, (list, tuple)):
+            return _ComparableSequence(value)
+        return value
 
     def get(self, key: str, default: object | None = None) -> object | None:
         """Return *key* when present and non-``None``, else *default*."""
         if key not in self.__struct_fields__:
             return default
         value = getattr(self, key)
-        return default if value is None else value
+        if value is None:
+            return default
+        if key == "language_order" and isinstance(value, (list, tuple)):
+            return _ComparableSequence(value)
+        return value
 
     def __contains__(self, key: object) -> bool:
         """Return whether *key* exists in summary fields."""
@@ -102,7 +162,7 @@ class SummaryEnvelopeV1(msgspec.Struct, omit_defaults=True, frozen=True):
         """Return summary field ``(name, value)`` pairs."""
         return tuple((key, getattr(self, key)) for key in self.__struct_fields__)
 
-    def __iter__(self) -> Iterator[str]:  # type: ignore[override]
+    def __iter__(self) -> Iterator[str]:
         """Iterate summary field names.
 
         Returns:
@@ -120,7 +180,9 @@ class SummaryEnvelopeV1(msgspec.Struct, omit_defaults=True, frozen=True):
         Returns:
             dict[str, Any]: Deterministic mapping representation.
         """
-        payload = msgspec.to_builtins(self, str_keys=True, order="deterministic")
+        payload = {
+            key: _summary_value_to_builtins(getattr(self, key)) for key in self.__struct_fields__
+        }
         payload["summary_variant"] = self.summary_variant
         return payload
 
@@ -134,19 +196,21 @@ class SearchSummaryV1(SummaryEnvelopeV1, frozen=True):
     pattern_selector: str | None = None
     mode_requested: str | None = None
     mode_effective: str | None = None
-    mode_chain: list[str] = msgspec.field(default_factory=list)
-    file_globs: list[str] = msgspec.field(default_factory=list)
-    include: list[str] = msgspec.field(default_factory=list)
-    exclude: list[str] = msgspec.field(default_factory=list)
-    context_lines: dict[str, int] = msgspec.field(default_factory=dict)
+    mode_chain: tuple[str, ...] = ()
+    file_globs: tuple[str, ...] = ()
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
+    context_lines: Mapping[str, int] = msgspec.field(default_factory=_empty_int_mapping)
     fallback_applied: bool | None = None
     limit: int | None = None
-    plan: dict[str, object] = msgspec.field(default_factory=dict)
-    cache_maintenance: dict[str, object] = msgspec.field(default_factory=dict)
-    enrichment_telemetry: dict[str, object] = msgspec.field(default_factory=dict)
-    query_pack_lint: dict[str, object] = msgspec.field(default_factory=dict)
-    search_stage_timings_ms: dict[str, float] = msgspec.field(default_factory=dict)
-    tree_sitter_neighborhood: dict[str, object] = msgspec.field(default_factory=dict)
+    plan: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    cache_maintenance: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    enrichment_telemetry: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    query_pack_lint: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    search_stage_timings_ms: Mapping[str, float] = msgspec.field(
+        default_factory=_empty_float_mapping
+    )
+    tree_sitter_neighborhood: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
     dropped_by_scope: object | None = None
     case_sensitive: bool | None = None
     with_neighborhood: bool | None = None
@@ -155,7 +219,7 @@ class SearchSummaryV1(SummaryEnvelopeV1, frozen=True):
     scan_method: str | None = None
     rg_pcre2_available: bool | None = None
     rg_pcre2_version: str | None = None
-    rg_stats: dict[str, object] = msgspec.field(default_factory=dict)
+    rg_stats: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
     entity_kind: str | None = None
     is_pattern_query: bool | None = None
     total_defs: int = 0
@@ -186,7 +250,7 @@ class SearchSummaryV1(SummaryEnvelopeV1, frozen=True):
     unique_exception_types: int = 0
     code_objects: int = 0
     reraises: int = 0
-    bundle: dict[str, object] | None = None
+    bundle: Mapping[str, object] | None = None
     scopes_with_captures: int = 0
 
 
@@ -230,8 +294,8 @@ class RunSummaryV1(SummaryEnvelopeV1, frozen=True):
 
     summary_variant: SummaryVariantName = "run"
     plan_version: int | None = None
-    plan: dict[str, object] = msgspec.field(default_factory=dict)
-    cache_maintenance: dict[str, object] = msgspec.field(default_factory=dict)
+    plan: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
+    cache_maintenance: Mapping[str, object] = msgspec.field(default_factory=_empty_mapping)
 
 
 class NeighborhoodSummaryV1(SummaryEnvelopeV1, frozen=True):
@@ -250,7 +314,7 @@ class NeighborhoodSummaryV1(SummaryEnvelopeV1, frozen=True):
     total_diagnostics: int = 0
     total_nodes: int = 0
     total_edges: int = 0
-    bundle: dict[str, object] | None = None
+    bundle: Mapping[str, object] | None = None
 
 
 type SummaryV1 = (
@@ -511,6 +575,21 @@ def as_neighborhood_summary(summary: SummaryV1) -> NeighborhoodSummaryV1:
     raise TypeError(msg)
 
 
+def _freeze_summary_value(value: object) -> object:
+    """Normalize mutable containers to immutable summary boundary values.
+
+    Returns:
+        object: Frozen-equivalent scalar/container value.
+    """
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_summary_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_summary_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_summary_value(item) for item in value)
+    return value
+
+
 def apply_summary_mapping[SummaryEnvelopeT: SummaryEnvelopeV1](
     summary: SummaryEnvelopeT,
     mapping: Mapping[str, object] | Iterable[tuple[str, object]],
@@ -533,7 +612,7 @@ def apply_summary_mapping[SummaryEnvelopeT: SummaryEnvelopeV1](
         if key_obj not in summary.__struct_fields__:
             msg = f"Unknown summary key: {key_obj}"
             raise KeyError(msg)
-        updates[key_obj] = value
+        updates[key_obj] = _freeze_summary_value(value)
     return msgspec.structs.replace(summary, **updates)
 
 

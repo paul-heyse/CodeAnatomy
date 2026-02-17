@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import tools.cq.search.enrichment.language_registry as registry
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 
 
 class _Adapter:

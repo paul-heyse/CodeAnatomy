@@ -1,6 +1,8 @@
-# ruff: noqa: D100, D103, PT011, B903
+"""Tests for plan artifact identity validation."""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
 import pytest
@@ -9,14 +11,15 @@ from datafusion_engine.plan.artifact_validation import validate_plan_identity
 from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 
 
+@dataclass
 class _Bundle:
-    def __init__(self, plan_identity_hash: str | None, plan_fingerprint: str | None) -> None:
-        self.plan_identity_hash = plan_identity_hash
-        self.plan_fingerprint = plan_fingerprint
+    plan_identity_hash: str | None
+    plan_fingerprint: str | None
 
 
 def test_validate_plan_identity_requires_hashes() -> None:
-    with pytest.raises(ValueError):
+    """Validator rejects bundles missing required identity fields."""
+    with pytest.raises(ValueError, match="plan_identity_hash"):
         validate_plan_identity(cast("DataFusionPlanArtifact", _Bundle(None, "fp")))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="plan_fingerprint"):
         validate_plan_identity(cast("DataFusionPlanArtifact", _Bundle("id", None)))

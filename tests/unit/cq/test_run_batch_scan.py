@@ -8,9 +8,9 @@ import pytest
 from tools.cq.astgrep.sgpy_scanner import RuleSpec, SgRecord
 from tools.cq.cli_app.context import CliContext
 from tools.cq.core.schema import CqResult
+from tools.cq.core.types import QueryLanguage
 from tools.cq.query import batch as batch_queries
 from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
-from tools.cq.query.language import QueryLanguage
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.run.runner import execute_run_plan
@@ -127,7 +127,7 @@ def test_batch_q_steps_auto_scope_collapses_per_parent_step(
     assert calls == 1
     assert observed_prefilter == [True]
     steps = result.summary.get("steps")
-    assert isinstance(steps, list)
+    assert isinstance(steps, tuple)
     assert steps.count("q_auto_0") == 1
     assert steps.count("q_auto_1") == 1
 
@@ -144,7 +144,7 @@ def test_run_top_level_summary_uses_single_q_metadata(tmp_path: Path) -> None:
     assert result.summary.get("mode") == "entity"
     assert result.summary.get("query") == "entity=function name=foo lang=python"
     assert result.summary.get("lang_scope") == "python"
-    assert result.summary.get("language_order") == ["python"]
+    assert result.summary.get("language_order") == ("python",)
 
 
 def test_run_top_level_summary_synthesizes_for_mixed_steps(tmp_path: Path) -> None:
@@ -164,4 +164,4 @@ def test_run_top_level_summary_synthesizes_for_mixed_steps(tmp_path: Path) -> No
     assert result.summary.get("mode") == "run"
     assert result.summary.get("query") == "multi-step plan (2 steps)"
     assert result.summary.get("lang_scope") == "auto"
-    assert result.summary.get("language_order") == ["python", "rust"]
+    assert result.summary.get("language_order") == ("python", "rust")

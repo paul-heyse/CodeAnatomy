@@ -50,7 +50,11 @@ def _definition_finding(name: str = "target") -> Finding:
             score=ScoreDetails(
                 confidence_score=0.9, confidence_bucket="high", evidence_kind="resolved_ast"
             ),
-            data={"name": name, "kind": "function", "signature": f"def {name}()"},
+            data_items=(
+                ("kind", "function"),
+                ("name", name),
+                ("signature", f"def {name}()"),
+            ),
         ),
     )
 

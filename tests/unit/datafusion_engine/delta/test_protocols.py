@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103, PLR6301
+"""Tests for runtime-checkable delta protocol contracts."""
+
 from __future__ import annotations
 
 from datafusion_engine.delta.protocols import (
@@ -23,35 +24,44 @@ class _CdfOptions:
 
 
 class _TableHandle:
-    def version(self) -> int:
+    @staticmethod
+    def version() -> int:
         return 1
 
-    def table_uri(self) -> str:
+    @staticmethod
+    def table_uri() -> str:
         return "memory://table"
 
-    def schema(self) -> object:
+    @staticmethod
+    def schema() -> object:
         return {"schema": "ok"}
 
-    def files(self) -> list[str]:
+    @staticmethod
+    def files() -> list[str]:
         return ["part-000.parquet"]
 
 
 class _ProviderCapsule:
-    def datafusion_table_provider(self) -> object:
+    @staticmethod
+    def datafusion_table_provider() -> object:
         return object()
 
 
 def test_rust_entrypoint_protocol_is_runtime_checkable() -> None:
+    """Entrypoint test double satisfies runtime-checkable protocol."""
     assert isinstance(_Entrypoint(), RustDeltaEntrypoint)
 
 
 def test_cdf_options_protocol_is_runtime_checkable() -> None:
+    """CDF options test double satisfies runtime-checkable protocol."""
     assert isinstance(_CdfOptions(), RustCdfOptionsHandle)
 
 
 def test_delta_table_handle_protocol_is_runtime_checkable() -> None:
+    """Table-handle test double satisfies runtime-checkable protocol."""
     assert isinstance(_TableHandle(), DeltaTableHandle)
 
 
 def test_provider_capsule_protocol_is_runtime_checkable() -> None:
+    """Provider-capsule double satisfies runtime-checkable protocol."""
     assert isinstance(_ProviderCapsule(), DeltaProviderCapsuleHandle)

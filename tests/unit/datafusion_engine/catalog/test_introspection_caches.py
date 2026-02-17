@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103
+"""Tests for introspection cache scoping behavior."""
+
 from __future__ import annotations
 
 from datafusion import SessionContext
@@ -10,6 +11,7 @@ from datafusion_engine.catalog.introspection import (
 
 
 def test_introspection_cache_is_scoped_by_injected_cache_container() -> None:
+    """Injected cache containers isolate per-context introspection caches."""
     ctx = SessionContext()
     first_container = IntrospectionCaches()
     second_container = IntrospectionCaches()

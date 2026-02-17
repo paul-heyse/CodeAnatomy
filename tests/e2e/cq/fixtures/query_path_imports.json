@@ -12,13 +12,26 @@
       },
       "category": "from_import",
       "details": {
-        "data": {
-          "kind": "from_import",
-          "language": "python",
-          "name": "Path",
-          "text": "from pathlib import Path"
-        },
-        "kind": "from_import"
+        "data_items": [
+          [
+            "kind",
+            "from_import"
+          ],
+          [
+            "language",
+            "python"
+          ],
+          [
+            "name",
+            "Path"
+          ],
+          [
+            "text",
+            "from pathlib import Path"
+          ]
+        ],
+        "kind": "from_import",
+        "score": null
       },
       "message": "from_import: Path",
       "severity": "info"
@@ -40,6 +53,27 @@
   },
   "sections": [],
   "summary": {
+    "ambient_reads": 0,
+    "bare_excepts": 0,
+    "bundle": null,
+    "cache_maintenance": {},
+    "caps_hit": null,
+    "case_sensitive": null,
+    "code_objects": 0,
+    "context_lines": {},
+    "cross_language_diagnostics": [],
+    "cycles_found": 0,
+    "dropped_by_scope": null,
+    "enrichment_telemetry": {},
+    "entity_kind": null,
+    "error": null,
+    "exclude": [],
+    "external_dependencies": 0,
+    "fallback_applied": null,
+    "file_filters": [],
+    "file_globs": [],
+    "files_analyzed": 0,
+    "files_scanned": 0,
     "front_door_insight": {
       "artifact_refs": {
         "diagnostics": null,
@@ -123,7 +157,16 @@
         "symbol": "entity=import name=Path"
       }
     },
+    "global_writes": 0,
+    "in_dir": null,
+    "include": [],
+    "incremental_enrichment_enabled": null,
+    "incremental_enrichment_mode": null,
+    "internal_dependencies": 0,
+    "is_pattern_query": null,
+    "lang": null,
     "lang_scope": "auto",
+    "language": null,
     "language_capabilities": {
       "python": {
         "bytecode_surface_macro": {
@@ -219,18 +262,18 @@
     ],
     "languages": {
       "python": {
-        "caps_hit": "none",
+        "caps_hit": "None",
         "files_scanned": 1,
         "matched_files": 0,
         "matches": 1,
-        "scanned_files": 1,
+        "scanned_files": 0,
         "scanned_files_is_estimate": false,
         "timed_out": false,
-        "total_matches": 1,
+        "total_matches": 0,
         "truncated": false
       },
       "rust": {
-        "caps_hit": "none",
+        "caps_hit": "None",
         "files_scanned": 0,
         "matched_files": 0,
         "matches": 0,
@@ -241,9 +284,77 @@
         "truncated": false
       }
     },
+    "limit": null,
+    "macro_summaries": {},
+    "matched_files": 0,
+    "matches": 0,
     "mode": "entity",
-    "python_semantic_telemetry": {},
+    "mode_chain": [],
+    "mode_effective": null,
+    "mode_requested": null,
+    "module_filter": null,
+    "pattern": null,
+    "pattern_context": null,
+    "pattern_selector": null,
+    "plan": {},
+    "python_semantic_diagnostics": [],
+    "python_semantic_overview": {},
+    "python_semantic_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "query": "entity=import name=Path",
-    "rust_semantic_telemetry": {}
+    "query_pack_lint": {},
+    "query_text": null,
+    "reraises": 0,
+    "resolved_objects": 0,
+    "resolved_occurrences": 0,
+    "returned_matches": 0,
+    "rg_pcre2_available": null,
+    "rg_pcre2_version": null,
+    "rg_stats": {},
+    "rust_semantic_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
+    "scan_method": null,
+    "scanned_files": 0,
+    "scanned_files_is_estimate": null,
+    "schema_version": 1,
+    "scope_file_count": 0,
+    "scope_filter_applied": null,
+    "scopes_with_captures": 0,
+    "search_stage_timings_ms": {},
+    "skipped": null,
+    "status": null,
+    "steps": [],
+    "summary_variant": "search",
+    "symbol": null,
+    "target": null,
+    "target_file": null,
+    "target_line": null,
+    "target_name": null,
+    "timed_out": false,
+    "top_level_calls": 0,
+    "total_calls": 0,
+    "total_catches": 0,
+    "total_defs": 0,
+    "total_effects": 0,
+    "total_files": 0,
+    "total_imports": 0,
+    "total_matches": 0,
+    "total_raises": 0,
+    "tree_sitter_neighborhood": {},
+    "truncated": false,
+    "unique_attrs": 0,
+    "unique_exception_types": 0,
+    "unique_globals": 0,
+    "with_neighborhood": null
   }
 }

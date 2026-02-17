@@ -43,18 +43,20 @@ def _sample_result() -> CqResult:
             }
         ),
     )
-    result.key_findings[:] = [
-        Finding(category="definition", message=f"finding-{index}") for index in range(1, 8)
-    ]
-    result.sections[:] = [
-        Section(
-            title="Definitions",
-            findings=[
-                Finding(category="context", message=f"context-{index}") for index in range(1, 8)
-            ],
-        )
-    ]
-    return result
+    return msgspec.structs.replace(
+        result,
+        key_findings=tuple(
+            Finding(category="definition", message=f"finding-{index}") for index in range(1, 8)
+        ),
+        sections=(
+            Section(
+                title="Definitions",
+                findings=[
+                    Finding(category="context", message=f"context-{index}") for index in range(1, 8)
+                ],
+            ),
+        ),
+    )
 
 
 def test_render_ldmd_from_cq_result_has_balanced_markers() -> None:

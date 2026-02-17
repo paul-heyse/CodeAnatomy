@@ -7,12 +7,13 @@ from pathlib import Path
 
 from tools.cq.core.enrichment_mode import parse_incremental_enrichment_mode
 from tools.cq.core.schema import ms
-from tools.cq.core.types import QueryLanguage, QueryLanguageScope
-from tools.cq.orchestration.multilang_orchestrator import merge_partitioned_items
-from tools.cq.query.language import (
+from tools.cq.core.types import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
+    QueryLanguage,
+    QueryLanguageScope,
     ripgrep_types_for_scope,
 )
+from tools.cq.orchestration.multilang_orchestrator import merge_partitioned_items
 from tools.cq.search._shared.requests import RgRunRequest
 from tools.cq.search._shared.types import SearchLimits
 from tools.cq.search.pipeline.classifier import QueryMode, detect_query_mode

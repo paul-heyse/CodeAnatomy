@@ -517,7 +517,8 @@ def test_engine_boundary_error_preserves_typed_stage_code(
         spec_hash=b"",
     )
 
+    execute_engine_phase = build_pipeline_mod.__dict__["_execute_engine_phase"]
     with pytest.raises(_TypedEngineError) as exc_info:
-        build_pipeline_mod._execute_engine_phase({}, spec, "small")  # noqa: SLF001
+        execute_engine_phase({}, spec, "small")
     assert exc_info.value.stage == "runtime"
     assert exc_info.value.code == "RUN_BUILD_EXECUTION_FAILED"

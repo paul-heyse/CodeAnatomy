@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103
+"""Tests for typed delta compatibility payload contracts."""
+
 from __future__ import annotations
 
 from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
@@ -10,6 +11,7 @@ from datafusion_engine.delta.provider_artifacts import (
 
 
 def test_provider_artifact_uses_typed_compatibility_fields() -> None:
+    """Provider artifact payload reflects typed compatibility fields."""
     compatibility = DeltaExtensionCompatibility(
         available=True,
         compatible=True,
@@ -36,6 +38,7 @@ def test_provider_artifact_uses_typed_compatibility_fields() -> None:
 
 
 def test_control_plane_compatibility_message_uses_typed_contract() -> None:
+    """Compatibility message includes typed compatibility metadata."""
     compatibility = DeltaExtensionCompatibility(
         available=True,
         compatible=False,

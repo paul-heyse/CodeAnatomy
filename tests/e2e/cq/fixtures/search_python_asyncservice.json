@@ -5,8 +5,8 @@
     "./tests/e2e/cq/_golden_workspace/python_project/app/services.py"
   ],
   "key_findings": [
-    "module: AsyncService",
-    "function: AsyncService",
+    "function: build_pipeline",
+    "class: __init__",
     "module: AsyncService",
     "Query pack lint failed: 2 errors"
   ],
@@ -14,41 +14,43 @@
     {
       "count": 3,
       "messages": [
-        "module: AsyncService",
-        "function: AsyncService",
+        "function: build_pipeline",
+        "class: __init__",
         "module: AsyncService"
       ],
       "title": "Target Candidates"
     },
     {
-      "count": 4,
+      "count": 5,
       "messages": [
-        "Enclosing Context: 1 (top: AsyncService)",
-        "Parent Scopes: 1 (top: \"\"\"Public API surface for hermetic Python fixture.\"\"\"\n\nfrom __future__ import annotations\n\nfrom .dispatch import DynamicRouter\nfrom .models import BuildContext\nfrom .services import AsyncService, ServiceRegistry\nfrom .services import resolve as service_resolve\n\n\n# Intentional name collision with app.services.resolve.\ndef resolve(ctx: BuildContext) -> str:\n    \"\"\"Top-level resolver used for target ambiguity tests.\"\"\"\n    return f\"api:{ctx.module_name}:{ctx.symbol_name}:{ctx.line}\"\n\n\ndef build_pipeline() -> tuple[ServiceRegistry, DynamicRouter, AsyncService]:\n    \"\"\"Build fixture pipeline components.\"\"\"\n    events: list[str] = []\n\n    def recorder(message: str) -> None:\n        events.append(message)\n\n    registry = ServiceRegistry()\n    registry.register(\"direct\", service_resolve)\n\n    router = DynamicRouter(registry)\n    service = AsyncService(name=\"alpha\", value=\"resolved\", on_emit=recorder)\n    service.handle(\"payload\")\n\n    ctx = BuildContext(module_name=\"app.api\", symbol_name=\"resolve\", line=27)\n    _ = resolve(ctx)\n    _ = service_resolve(ctx)\n    return registry, router, service)",
-        "Children: 3 (top: .services, AsyncService, ServiceRegistry)",
-        "Siblings: 4 (top: BuildContext, resolve as service_resolve)"
+        "Enclosing Context: 1 (top: build_pipeline)",
+        "Parent Scopes: 1 (top: \"\"\"Public API surface for hermetic Python fixture.\"\"\"\n\nfrom __future__ import annotations\n\nfrom app.dispatch import DynamicRouter\nfrom app.models import BuildContext\nfrom app.services import AsyncService, ServiceRegistry\nfrom app.services import resolve as service_resolve\n\n\n# Intentional name collision with app.services.resolve.\ndef resolve(ctx: BuildContext) -> str:\n    \"\"\"Resolve API symbol identity for target ambiguity tests.\n\n    Returns:\n        str: Resolver output keyed by module/symbol/line.\n    \"\"\"\n    return f\"api:{ctx.module_name}:{ctx.symbol_name}:{ctx.line}\"\n\n\ndef build_pipeline() -> tuple[ServiceRegistry, DynamicRouter, AsyncService]:\n    \"\"\"Build fixture pipeline components.\n\n    Returns:\n        tuple[ServiceRegistry, DynamicRouter, AsyncService]: Fixture pipeline parts.\n    \"\"\"\n    events: list[str] = []\n\n    def recorder(message: str) -> None:\n        events.append(message)\n\n    registry = ServiceRegistry()\n    registry.register(\"direct\", service_resolve)\n\n    router = DynamicRouter(registry)\n    service = AsyncService(name=\"alpha\", value=\"resolved\", on_emit=recorder)\n    service.handle(\"payload\")\n\n    ctx = BuildContext(module_name=\"app.api\", symbol_name=\"resolve\", line=27)\n    _ = resolve(ctx)\n    _ = service_resolve(ctx)\n    return registry, router, service)",
+        "Children: 4 (top: build_pipeline, (), tuple[ServiceRegistry, DynamicRouter, AsyncService], \"\"\"Build fixture pipeline components.\n\n    Returns:\n        tuple[ServiceRegistry, DynamicRouter, AsyncService]: Fixture pipeline parts.\n    \"\"\"\n    events: list[str] = []\n\n    def recorder(message: str) -> None:\n        events.append(message)\n\n    registry = ServiceRegistry()\n    registry.register(\"direct\", service_resolve)\n\n    router = DynamicRouter(registry)\n    service = AsyncService(name=\"alpha\", value=\"resolved\", on_emit=recorder)\n    service.handle(\"payload\")\n\n    ctx = BuildContext(module_name=\"app.api\", symbol_name=\"resolve\", line=27)\n    _ = resolve(ctx)\n    _ = service_resolve(ctx)\n    return registry, router, service)",
+        "Siblings: 2 (top: resolve)",
+        "Callees: 9 (top: events.append(message), ServiceRegistry(), registry.register(\"direct\", service_resolve), DynamicRouter(registry), AsyncService(name=\"alpha\", value=\"resolved\", on_emit=recorder))"
       ],
       "title": "Neighborhood Preview"
     },
     {
-      "count": 5,
+      "count": 6,
       "messages": [
-        "reference: AsyncService (2 occurrences) [object_id=obj_64fc5f784f881b63bbaa352c]",
-        "module: AsyncService (1 occurrences) [object_id=obj_5122dd862cd2469ca48a865f]",
-        "function: AsyncService (1 occurrences) [object_id=obj_519f0745ce1757af9dcae97e]",
-        "module: AsyncService (1 occurrences) [object_id=obj_9d1c3d80a774abca2b657d74]",
-        "class: AsyncService (1 occurrences) [object_id=obj_a8c41b319ce7a02bbc064830]"
+        "function: build_pipeline (2 occurrences) [object_id=obj_603105605b3d64060f9165d8]",
+        "reference: __all__ (1 occurrences) [object_id=obj_5d0f6478f9775a7e1f1647ac]",
+        "class: __init__ (1 occurrences) [object_id=obj_0c6c2e2387b0054bd45f66a1]",
+        "reference: AsyncService (1 occurrences) [object_id=obj_30011743a28c999d459335d2]",
+        "module: AsyncService (1 occurrences) [object_id=obj_8819fb69cb8bf00bf0218fbc]",
+        "module: AsyncService (1 occurrences) [object_id=obj_cc1ff9d9607462d503a1f03c]"
       ],
       "title": "Resolved Objects"
     },
     {
       "count": 5,
       "messages": [
-        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:7:22 (block ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:1-11) [from_import] [object_id=obj_9d1c3d80a774abca2b657d74] [line_id=8c57617d74f6ecc4b3ca93fe]",
-        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:8:22 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:6-12) [from_import] [object_id=obj_5122dd862cd2469ca48a865f] [line_id=bba1806f5f0604af90700116]",
-        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:18:62 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:18-35) [annotation] [object_id=obj_519f0745ce1757af9dcae97e] [line_id=fa4ad6b676a9705217646670]",
-        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:29:14 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:22-35) [reference] [object_id=obj_64fc5f784f881b63bbaa352c] [line_id=19db5db50c8267f02ca83ee6]",
-        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:22:6 (block ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:22-39) [reference] [object_id=obj_a8c41b319ce7a02bbc064830] [line_id=74ec48f139aa7cade837fb1a]"
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:6:25 (block ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:1-10) [from_import] [object_id=obj_cc1ff9d9607462d503a1f03c] [line_id=ae8e6eaa16c0adf4d37876e3]",
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:7:25 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:5-11) [from_import] [object_id=obj_8819fb69cb8bf00bf0218fbc] [line_id=6460e90205328a006b7f26ff]",
+        "build_pipeline: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:21:62 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:21-42) [annotation] [object_id=obj_603105605b3d64060f9165d8] [line_id=aee4a8ac1ad892144ca9b7d4]",
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:36:14 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:29-42) [reference] [object_id=obj_30011743a28c999d459335d2] [line_id=a8273df42dd5d37d50a89e9e]",
+        "__init__: ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:25:6 (block ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:25-53) [reference] [object_id=obj_0c6c2e2387b0054bd45f66a1] [line_id=0d796fabd151630bbc40076b]"
       ],
       "title": "Occurrences"
     },
@@ -62,9 +64,10 @@
       "title": "Uses by Kind"
     },
     {
-      "count": 1,
+      "count": 2,
       "messages": [
-        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:10 [string_match]"
+        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:9 [string_match]",
+        "./tests/e2e/cq/_golden_workspace/python_project/app/api.py:25 [string_match]"
       ],
       "title": "Non-Code Matches (Strings / Comments / Docstrings)"
     },
@@ -103,8 +106,8 @@
       },
       "neighborhood": {
         "callees": {
-          "availability": "unavailable",
-          "total": 0
+          "availability": "full",
+          "total": 9
         },
         "callers": {
           "availability": "unavailable",
@@ -112,7 +115,7 @@
         },
         "hierarchy_or_scope": {
           "availability": "full",
-          "total": 9
+          "total": 8
         },
         "references": {
           "availability": "unavailable",
@@ -121,7 +124,7 @@
       },
       "risk": {
         "counters": {
-          "callees": 0,
+          "callees": 9,
           "callers": 0,
           "forwarding_count": 0,
           "hazard_count": 0
@@ -130,14 +133,14 @@
       },
       "source": "search",
       "target": {
-        "kind": "module",
+        "kind": "function",
         "location": {
-          "col": 22,
+          "col": 62,
           "file": "tests/e2e/cq/_golden_workspace/python_project/app/api.py",
-          "line": 8
+          "line": 25
         },
         "selection_reason": "top_definition",
-        "symbol": "AsyncService"
+        "symbol": "build_pipeline"
       }
     },
     "lang_scope": "python",

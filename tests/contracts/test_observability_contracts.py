@@ -105,8 +105,9 @@ def test_record_observability_emits_required_engine_events(
 
     monkeypatch.setattr(orchestrator_mod, "emit_diagnostics_event", _capture_event)
     monkeypatch.setattr("obs.engine_metrics_bridge.record_engine_metrics", lambda _run: None)
+    record_observability = orchestrator_mod.__dict__["_record_observability"]
 
-    orchestrator_mod._record_observability(  # noqa: SLF001
+    record_observability(
         _spec_fixture(),
         _run_result_fixture(),
     )

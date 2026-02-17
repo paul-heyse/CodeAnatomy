@@ -130,7 +130,8 @@ def test_delta_service_provider_artifact_payload_includes_canonical_fields() -> 
         add_actions=[{"path": "part-000.parquet"}],
         predicate_error="predicate parse failed",
     )
-    request = delta_service._ProviderArtifactRecordRequest(  # noqa: SLF001
+    provider_artifact_request_cls = delta_service.__dict__["_ProviderArtifactRecordRequest"]
+    request = provider_artifact_request_cls(
         ctx=profile.session_context(),
         resolution=resolution,
         location=location,
@@ -147,8 +148,9 @@ def test_delta_service_provider_artifact_payload_includes_canonical_fields() -> 
         ctx_kind="outer",
         probe_result="ok",
     )
+    provider_artifact_payload = service.__dict__["_provider_artifact_payload"]
 
-    payload = service._provider_artifact_payload(  # noqa: SLF001
+    payload = provider_artifact_payload(
         request=request,
         compatibility=compatibility,
     )

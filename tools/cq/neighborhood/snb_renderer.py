@@ -122,7 +122,7 @@ def _populate_findings(
         ]
         result = msgspec.structs.replace(
             result,
-            sections=[*result.sections, *rendered_sections],
+            sections=(*result.sections, *tuple(rendered_sections)),
         )
 
     enrichment_payload: dict[str, object] = {
@@ -158,7 +158,7 @@ def _populate_artifacts(*, result: CqResult, bundle: SemanticNeighborhoodBundleV
         for pointer in bundle.artifacts
         if pointer.storage_path
     )
-    return msgspec.structs.replace(result, artifacts=artifacts)
+    return msgspec.structs.replace(result, artifacts=tuple(artifacts))
 
 
 def _degrade_event_dict(event: DegradeEventV1) -> dict[str, object]:

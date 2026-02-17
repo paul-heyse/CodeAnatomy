@@ -1,8 +1,10 @@
-# ruff: noqa: D100, D103, ANN001, ANN002, ANN003, ANN202
+"""Tests for dataset registration delegation from session facade."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
 from datafusion import SessionContext
 
 from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
@@ -15,7 +17,14 @@ from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 class _FakeFacade:
     called: bool = False
 
-    def register_dataset_df(self, *, name, location, cache_policy, overwrite):
+    def register_dataset_df(
+        self,
+        *,
+        name: str,
+        location: DatasetLocation,
+        cache_policy: DataFusionCachePolicy,
+        overwrite: bool,
+    ) -> str:
         self.called = True
         assert name == "dataset"
         assert isinstance(location, DatasetLocation)
@@ -24,12 +33,15 @@ class _FakeFacade:
         return "ok"
 
 
-def test_register_dataset_df_delegates_to_registry_facade(monkeypatch) -> None:
+def test_register_dataset_df_delegates_to_registry_facade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Public registration helper delegates to runtime registry facade."""
     ctx = SessionContext()
     profile = DataFusionRuntimeProfile()
     facade = _FakeFacade()
 
-    def _fake_registry_facade_for_context(*_args, **_kwargs):
+    def _fake_registry_facade_for_context(*_args: object, **_kwargs: object) -> _FakeFacade:
         return facade
 
     monkeypatch.setattr(

@@ -135,6 +135,20 @@ def _fork_cursor(cursor: Any) -> Any | None:
         return None
 
 
+def _native_tree_sitter_cursor(cursor: Any) -> bool:
+    cursor_type = type(cursor)
+    module_name = str(getattr(cursor_type, "__module__", ""))
+    if module_name.startswith("tree_sitter"):
+        return True
+    return module_name in {"_binding", "tree_sitter._binding"}
+
+
+def _enable_cursor_reset_path(cursor: Any) -> bool:
+    # Native tree-sitter cursor reset/reset_to can segfault intermittently in
+    # the Python binding. Keep the optimized reset path for test doubles only.
+    return not _native_tree_sitter_cursor(cursor)
+
+
 def _reset_cursor_to(
     cursor: Any,
     *,
@@ -206,7 +220,7 @@ def _collect_structural_rows(
     nodes: list[TreeSitterStructuralNodeV1] = []
     edges: list[TreeSitterStructuralEdgeV1] = []
     cursor = root.walk()
-    scratch_cursor = _fork_cursor(cursor)
+    scratch_cursor = _fork_cursor(cursor) if _enable_cursor_reset_path(cursor) else None
     parent_stack: list[str] = []
     child_index_stack: list[int] = [0]
     while True:

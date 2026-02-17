@@ -69,7 +69,7 @@ def test_full_query_syntax(
     )
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -105,7 +105,7 @@ def test_scoped_import_with_name(
     result = run_query("entity=import name=dataclasses in=src/")
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -140,7 +140,7 @@ def test_class_with_methods_and_callers(
     result = run_query("entity=class name=Toolchain expand=callers(depth=1)")
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -173,7 +173,7 @@ def test_method_query_with_scope(
     result = run_query("entity=method in=tools/cq/core/")
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -256,7 +256,7 @@ def test_empty_query_all_entities(
     result = run_query("entity=function")
 
     # Should find many functions
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -291,7 +291,7 @@ def test_query_with_invalid_depth(
     assert result.run.elapsed_ms >= 0
 
     # Should not crash
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 

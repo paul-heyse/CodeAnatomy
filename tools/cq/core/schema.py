@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping
+from types import MappingProxyType
 from typing import Annotated, Literal
 
 import msgspec
@@ -56,7 +57,7 @@ def coerce_str(value: object) -> str | None:
     return str(value)
 
 
-class ScoreDetails(msgspec.Struct, omit_defaults=True):
+class ScoreDetails(msgspec.Struct, omit_defaults=True, frozen=True):
     """Scoring metadata for a finding."""
 
     impact_score: float | None = None
@@ -71,7 +72,7 @@ class DetailPayload(msgspec.Struct, omit_defaults=True, frozen=True):
 
     kind: str | None = None
     score: ScoreDetails | None = None
-    data: dict[str, object] = msgspec.field(default_factory=dict)
+    data_items: tuple[tuple[str, object], ...] = ()
 
     @classmethod
     def from_legacy(cls, details: dict[str, object]) -> DetailPayload:
@@ -103,7 +104,12 @@ class DetailPayload(msgspec.Struct, omit_defaults=True, frozen=True):
                 confidence_bucket=coerce_str(score_values.get("confidence_bucket")),
                 evidence_kind=coerce_str(score_values.get("evidence_kind")),
             )
-        return cls(kind=kind, score=score, data=data)
+        return cls(kind=kind, score=score, data_items=tuple(sorted(data.items())))
+
+    @property
+    def data(self) -> Mapping[str, object]:
+        """Return a read-only mapping view of non-score detail entries."""
+        return MappingProxyType(dict(self.data_items))
 
     def get(self, key: str, default: object | None = None) -> object | None:
         """Mapping-style get for detail payloads.
@@ -118,7 +124,8 @@ class DetailPayload(msgspec.Struct, omit_defaults=True, frozen=True):
         if key in _SCORE_FIELDS and self.score is not None:
             value = getattr(self.score, key, None)
             return value if value is not None else default
-        return self.data.get(key, default)
+        data = dict(self.data_items)
+        return data.get(key, default)
 
     def __getitem__(self, key: str) -> object:
         """Return the value for a key, raising KeyError if absent.
@@ -144,9 +151,9 @@ class DetailPayload(msgspec.Struct, omit_defaults=True, frozen=True):
                 self,
                 score=msgspec.structs.replace(base, **{key: value}),
             )
-        data = dict(self.data)
+        data = dict(self.data_items)
         data[key] = value
-        return msgspec.structs.replace(self, data=data)
+        return msgspec.structs.replace(self, data_items=tuple(sorted(data.items())))
 
     def __contains__(self, key: object) -> bool:
         """Return whether the key exists in the detail payload.
@@ -160,7 +167,7 @@ class DetailPayload(msgspec.Struct, omit_defaults=True, frozen=True):
             return self.kind is not None
         if key in _SCORE_FIELDS:
             return self.score is not None and getattr(self.score, key) is not None
-        return key in self.data
+        return key in dict(self.data_items)
 
     def to_legacy_dict(self) -> dict[str, object]:
         """Convert structured details back to legacy dict format.
@@ -170,7 +177,7 @@ class DetailPayload(msgspec.Struct, omit_defaults=True, frozen=True):
         dict[str, object]
             Legacy detail mapping with score fields and data.
         """
-        legacy = dict(self.data)
+        legacy = dict(self.data_items)
         if self.kind is not None:
             legacy["kind"] = self.kind
         if self.score is not None:
@@ -373,10 +380,10 @@ class CqResult(msgspec.Struct, frozen=True):
 
     run: RunMeta
     summary: SummaryV1 = msgspec.field(default_factory=SearchSummaryV1)
-    key_findings: list[Finding] = msgspec.field(default_factory=list)
-    evidence: list[Finding] = msgspec.field(default_factory=list)
-    sections: list[Section] = msgspec.field(default_factory=list)
-    artifacts: list[Artifact] = msgspec.field(default_factory=list)
+    key_findings: tuple[Finding, ...] = ()
+    evidence: tuple[Finding, ...] = ()
+    sections: tuple[Section, ...] = ()
+    artifacts: tuple[Artifact, ...] = ()
 
 
 def mk_runmeta(
@@ -455,7 +462,7 @@ def append_result_key_finding(result: CqResult, finding: Finding) -> CqResult:
     """Return a result with one key finding appended."""
     return msgspec.structs.replace(
         result,
-        key_findings=[*result.key_findings, finding],
+        key_findings=(*result.key_findings, finding),
     )
 
 
@@ -463,7 +470,7 @@ def extend_result_key_findings(result: CqResult, findings: Iterable[Finding]) ->
     """Return a result with multiple key findings appended."""
     return msgspec.structs.replace(
         result,
-        key_findings=[*result.key_findings, *findings],
+        key_findings=(*result.key_findings, *tuple(findings)),
     )
 
 
@@ -471,7 +478,7 @@ def append_result_evidence(result: CqResult, finding: Finding) -> CqResult:
     """Return a result with one evidence finding appended."""
     return msgspec.structs.replace(
         result,
-        evidence=[*result.evidence, finding],
+        evidence=(*result.evidence, finding),
     )
 
 
@@ -479,7 +486,7 @@ def extend_result_evidence(result: CqResult, findings: Iterable[Finding]) -> CqR
     """Return a result with multiple evidence findings appended."""
     return msgspec.structs.replace(
         result,
-        evidence=[*result.evidence, *findings],
+        evidence=(*result.evidence, *tuple(findings)),
     )
 
 
@@ -487,15 +494,15 @@ def append_result_section(result: CqResult, section: Section) -> CqResult:
     """Return a result with one section appended."""
     return msgspec.structs.replace(
         result,
-        sections=[*result.sections, section],
+        sections=(*result.sections, section),
     )
 
 
 def insert_result_section(result: CqResult, index: int, section: Section) -> CqResult:
     """Return a result with one section inserted at index."""
-    sections = [*result.sections]
+    sections = list(result.sections)
     sections.insert(index, section)
-    return msgspec.structs.replace(result, sections=sections)
+    return msgspec.structs.replace(result, sections=tuple(sections))
 
 
 def _stable_finding_id(finding: Finding) -> str:
@@ -534,15 +541,15 @@ def assign_result_finding_ids(result: CqResult) -> CqResult:
             id_taxonomy="stable_execution",
         )
 
-    key_findings = [_assign(finding) for finding in result.key_findings]
-    evidence = [_assign(finding) for finding in result.evidence]
-    sections = [
+    key_findings = tuple(_assign(finding) for finding in result.key_findings)
+    evidence = tuple(_assign(finding) for finding in result.evidence)
+    sections = tuple(
         msgspec.structs.replace(
             section,
             findings=[_assign(finding) for finding in section.findings],
         )
         for section in result.sections
-    ]
+    )
     return msgspec.structs.replace(
         result,
         key_findings=key_findings,

@@ -99,9 +99,9 @@ def _make_result(
     )
     return CqResult(
         run=run,
-        key_findings=key_findings or [],
-        sections=sections or [],
-        evidence=evidence or [],
+        key_findings=tuple(key_findings or ()),
+        sections=tuple(sections or ()),
+        evidence=tuple(evidence or ()),
     )
 
 

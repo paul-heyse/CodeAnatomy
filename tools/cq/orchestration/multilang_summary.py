@@ -13,8 +13,7 @@ from tools.cq.core.contracts import (
 from tools.cq.core.contracts_constraints import enforce_mapping_constraints
 from tools.cq.core.summary_contract import SummaryEnvelopeV1
 from tools.cq.core.summary_contracts import build_summary_envelope, summary_envelope_to_mapping
-from tools.cq.core.types import QueryLanguage, QueryLanguageScope
-from tools.cq.query.language import expand_language_scope
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope, expand_language_scope
 from tools.cq.search._shared.search_contracts import (
     LanguagePartitionStats,
     SearchSummaryContract,

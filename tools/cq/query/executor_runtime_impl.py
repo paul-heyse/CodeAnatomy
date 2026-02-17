@@ -32,7 +32,12 @@ from tools.cq.core.summary_contract import (
     apply_summary_mapping,
     as_search_summary,
 )
-from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+from tools.cq.core.types import (
+    QueryLanguage,
+    QueryLanguageScope,
+    expand_language_scope,
+    file_extensions_for_language,
+)
 from tools.cq.orchestration.multilang_orchestrator import (
     execute_by_language_scope,
 )
@@ -82,7 +87,6 @@ from tools.cq.query.finding_builders import (
 from tools.cq.query.finding_builders import (
     record_key as _record_key,
 )
-from tools.cq.query.language import expand_language_scope, file_extensions_for_language
 from tools.cq.query.planner import ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.query_scan import (
     scan_entity_records as _scan_entity_records,

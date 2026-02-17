@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
-from tools.cq.core.schema import DetailPayload, Finding
-from tools.cq.core.types import QueryLanguage, QueryLanguageScope
-from tools.cq.query.language import expand_language_scope
+from tools.cq.core.schema import Finding
+from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope, expand_language_scope
 from tools.cq.search._shared.search_contracts import (
     CapabilitySupport,
     CrossLanguageDiagnostic,
@@ -169,7 +169,7 @@ def build_cross_language_diagnostics(
             category="cross_language_hint",
             message="Python-oriented query produced no Python matches; Rust matches were found.",
             severity="warning",
-            details=DetailPayload(
+            details=build_detail_payload(
                 kind="cross_language_hint",
                 data={
                     "code": "ML001",
@@ -220,7 +220,7 @@ def build_capability_diagnostics(
                     category="capability_limitation",
                     message=message,
                     severity="info",
-                    details=DetailPayload(
+                    details=build_detail_payload(
                         kind="capability_limitation",
                         data={
                             "code": _code_for_feature(feature),

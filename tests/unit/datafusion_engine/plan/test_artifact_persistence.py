@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103, PLR6301
+"""Tests for plan artifact persistence helpers."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,10 +16,12 @@ class _Row:
 
 @dataclass
 class _Store:
-    def persist_plan(self, bundle: DataFusionPlanArtifact) -> object:
+    @staticmethod
+    def persist_plan(bundle: DataFusionPlanArtifact) -> object:
         _ = bundle
         return _Row(plan_identity_hash="abc")
 
 
 def test_persist_bundle_returns_identity_hash() -> None:
+    """Persist helper returns identity hash from row payload."""
     assert persist_bundle(_Store(), cast("DataFusionPlanArtifact", object())) == "abc"

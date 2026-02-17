@@ -98,7 +98,7 @@ def _save_search_artifacts(
     )
     if search_artifact is None:
         return result
-    result = msgspec.structs.replace(result, artifacts=[*result.artifacts, search_artifact])
+    result = msgspec.structs.replace(result, artifacts=(*result.artifacts, search_artifact))
     return _attach_insight_artifact_refs(
         result,
         diagnostics_ref=search_artifact.path,
@@ -116,7 +116,7 @@ def _save_general_artifacts(result: CqResult, artifact_dir: str | None) -> CqRes
     overflow_artifact = save_neighborhood_overflow_artifact(result, artifact_dir)
     if overflow_artifact is not None:
         artifacts.append(overflow_artifact)
-    result = msgspec.structs.replace(result, artifacts=artifacts)
+    result = msgspec.structs.replace(result, artifacts=tuple(artifacts))
     return _attach_insight_artifact_refs(
         result,
         diagnostics_ref=diagnostics_artifact.path if diagnostics_artifact is not None else None,

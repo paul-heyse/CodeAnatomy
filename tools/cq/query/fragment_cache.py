@@ -221,7 +221,7 @@ def build_pattern_fragment_context(
     Returns:
         PatternFragmentContext: Fragment context and digest metadata for pattern scans.
     """
-    from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE
+    from tools.cq.core.types import DEFAULT_QUERY_LANGUAGE
 
     lang = query.primary_language if query is not None else DEFAULT_QUERY_LANGUAGE
     rules_digest = hashlib.sha256(

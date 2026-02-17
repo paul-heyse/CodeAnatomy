@@ -63,10 +63,10 @@ class MacroResultBuilder:
         return CqResult(
             run=self._run_meta,
             summary=self._summary,
-            key_findings=self._key_findings,
-            evidence=self._evidence,
-            sections=self._sections,
-            artifacts=self._artifacts,
+            key_findings=tuple(self._key_findings),
+            evidence=tuple(self._evidence),
+            sections=tuple(self._sections),
+            artifacts=tuple(self._artifacts),
         )
 
     def add_finding(self, finding: Finding) -> MacroResultBuilder:
@@ -208,10 +208,10 @@ class MacroResultBuilder:
             CqResult(
                 run=self._run_meta,
                 summary=self._summary,
-                key_findings=self._key_findings,
-                evidence=self._evidence,
-                sections=self._sections,
-                artifacts=self._artifacts,
+                key_findings=tuple(self._key_findings),
+                evidence=tuple(self._evidence),
+                sections=tuple(self._sections),
+                artifacts=tuple(self._artifacts),
             )
         )
 

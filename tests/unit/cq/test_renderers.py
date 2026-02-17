@@ -8,6 +8,8 @@ Verifies:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from tools.cq.core.renderers.dot import render_dot
 from tools.cq.core.renderers.mermaid import (
     render_mermaid_class_diagram,
@@ -17,8 +19,8 @@ from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMe
 
 
 def _make_result(
-    key_findings: list[Finding] | None = None,
-    sections: list[Section] | None = None,
+    key_findings: Sequence[Finding] | None = None,
+    sections: Sequence[Section] | None = None,
 ) -> CqResult:
     """Create a CqResult for testing.
 
@@ -36,8 +38,8 @@ def _make_result(
     )
     return CqResult(
         run=run,
-        key_findings=key_findings or [],
-        sections=sections or [],
+        key_findings=tuple(key_findings or ()),
+        sections=tuple(sections or ()),
     )
 
 

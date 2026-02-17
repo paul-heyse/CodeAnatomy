@@ -41,7 +41,7 @@ def test_render_summary_includes_non_search_variants() -> None:
     summaries = (
         CallsSummaryV1(mode="macro:calls", query="foo"),
         ImpactSummaryV1(mode="impact", query="foo --param x"),
-        RunSummaryV1(mode="run", query="multi-step plan (2 steps)", steps=["a", "b"]),
+        RunSummaryV1(mode="run", query="multi-step plan (2 steps)", steps=("a", "b")),
         NeighborhoodSummaryV1(mode="neighborhood", target="foo.py:10"),
     )
 
@@ -54,7 +54,7 @@ def test_render_summary_includes_non_search_variants() -> None:
 def test_summary_string_keeps_query_and_mode_fallbacks() -> None:
     """Summary string fallback behavior remains intact with variant summaries."""
     result = _result("run")
-    result = msgspec.structs.replace(result, summary=RunSummaryV1(steps=["q_0", "search_1"]))
+    result = msgspec.structs.replace(result, summary=RunSummaryV1(steps=("q_0", "search_1")))
 
     query_value = summary_string(result, key="query", missing_reason="missing")
     mode_value = summary_string(result, key="mode", missing_reason="missing")

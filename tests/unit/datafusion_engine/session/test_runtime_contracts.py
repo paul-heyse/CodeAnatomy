@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103
+"""Tests for runtime contract enums and telemetry payload shape."""
+
 from __future__ import annotations
 
 from datafusion_engine.session.contracts import (
@@ -11,12 +12,14 @@ from datafusion_engine.session.runtime_profile_config import FeatureGatesConfig
 
 
 def test_identifier_normalization_mode_values_are_stable() -> None:
+    """Identifier normalization enum values remain stable."""
     assert IdentifierNormalizationMode.RAW.value == "raw"
     assert IdentifierNormalizationMode.SQL_SAFE.value == "sql_safe"
     assert IdentifierNormalizationMode.STRICT.value == "strict"
 
 
 def test_effective_ident_normalization_respects_mode_and_delta_defaults() -> None:
+    """Effective normalization respects configured mode and defaults."""
     strict_profile = DataFusionRuntimeProfile(
         features=FeatureGatesConfig(
             identifier_normalization_mode=IdentifierNormalizationMode.STRICT,
@@ -35,6 +38,7 @@ def test_effective_ident_normalization_respects_mode_and_delta_defaults() -> Non
 
 
 def test_telemetry_contract_defaults() -> None:
+    """Telemetry enrichment policy defaults match runtime contract."""
     policy = TelemetryEnrichmentPolicy()
 
     assert policy.include_query_text is False
@@ -43,6 +47,7 @@ def test_telemetry_contract_defaults() -> None:
 
 
 def test_telemetry_payload_includes_identifier_mode() -> None:
+    """Runtime telemetry payload includes identifier mode."""
     profile = DataFusionRuntimeProfile(
         features=FeatureGatesConfig(
             identifier_normalization_mode=IdentifierNormalizationMode.SQL_SAFE,

@@ -195,11 +195,17 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
         and python_facts is not None
         and python_facts.resolution
     ):
+        qualified_rows = [
+            row
+            for row in python_facts.resolution.qualified_name_candidates
+            if isinstance(row, dict)
+        ]
+        binding_rows = [
+            row for row in python_facts.resolution.binding_candidates if isinstance(row, dict)
+        ]
         resolution_raw = {
-            "qualified_name_candidates": list(python_facts.resolution.qualified_name_candidates),
-            "binding_candidates": [
-                {"name": name} for name in python_facts.resolution.binding_candidates
-            ],
+            "qualified_name_candidates": qualified_rows,
+            "binding_candidates": binding_rows,
             "enclosing_callable": python_facts.resolution.enclosing_callable,
             "enclosing_class": python_facts.resolution.enclosing_class,
         }

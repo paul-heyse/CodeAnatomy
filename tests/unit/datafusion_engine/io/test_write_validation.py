@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103, INP001, PT011
+"""Tests for write destination validation helpers."""
+
 from __future__ import annotations
 
 import pytest
@@ -7,5 +8,6 @@ from datafusion_engine.io.write_validation import validate_destination
 
 
 def test_validate_destination_rejects_empty_strings() -> None:
-    with pytest.raises(ValueError):
+    """Blank destinations are rejected with a clear validation error."""
+    with pytest.raises(ValueError, match="destination"):
         validate_destination("   ")

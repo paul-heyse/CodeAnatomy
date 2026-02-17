@@ -1,4 +1,3 @@
-# ruff: noqa: D103
 """Tests for semantic pipeline build module."""
 
 from __future__ import annotations
@@ -9,4 +8,5 @@ pipeline_build = import_module("semantics.pipeline_build")
 
 
 def test_pipeline_build_exports_cpg_entrypoint() -> None:
+    """Pipeline build module exports canonical CPG entrypoint."""
     assert hasattr(pipeline_build, "build_cpg")

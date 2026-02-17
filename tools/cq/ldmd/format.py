@@ -61,9 +61,6 @@ def _is_collapsed(
 ) -> bool:
     """Determine if section should be collapsed by default.
 
-    Uses lazy import to avoid dependency on R5 section_layout module.
-    Falls back to True if the module isn't available yet.
-
     Returns:
         `True` when section should be collapsed by default.
     """

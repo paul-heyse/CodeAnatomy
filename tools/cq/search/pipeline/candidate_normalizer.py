@@ -88,7 +88,11 @@ def build_definition_candidate_finding(
         message=f"{kind}: {symbol}",
         anchor=finding.anchor,
         severity=finding.severity,
-        details=DetailPayload(kind=kind, score=finding.details.score, data=data),
+        details=DetailPayload(
+            kind=kind,
+            score=finding.details.score,
+            data_items=tuple(sorted(data.items())),
+        ),
     )
 
 

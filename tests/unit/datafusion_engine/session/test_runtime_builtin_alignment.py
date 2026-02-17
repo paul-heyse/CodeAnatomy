@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103
+"""Tests for runtime builtin settings alignment."""
+
 from __future__ import annotations
 
 from datafusion_engine.catalog import introspection
@@ -6,6 +7,7 @@ from datafusion_engine.session.runtime_config_policies import DEFAULT_DF_POLICY
 
 
 def test_default_runtime_policy_contains_builtin_datafusion_tuning_keys() -> None:
+    """Default policy includes expected DataFusion tuning settings."""
     settings = DEFAULT_DF_POLICY.settings
     assert settings["datafusion.execution.collect_statistics"] == "true"
     assert settings["datafusion.execution.planning_concurrency"] == "8"
@@ -14,6 +16,7 @@ def test_default_runtime_policy_contains_builtin_datafusion_tuning_keys() -> Non
 
 
 def test_catalog_introspection_exports_builtin_cache_snapshots() -> None:
+    """Catalog introspection exports builtin cache snapshot helpers."""
     assert callable(introspection.list_files_cache_snapshot)
     assert callable(introspection.statistics_cache_snapshot)
     assert callable(introspection.predicate_cache_snapshot)

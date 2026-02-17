@@ -1,4 +1,3 @@
-# ruff: noqa: T201
 """Scan for Hamilton and rustworkx residuals outside hamilton_pipeline/.
 
 This script detects leftover Hamilton/rustworkx imports and references
@@ -177,7 +176,7 @@ def main() -> int:
     root: Path = args.root.resolve()
     src_dir = root / "src"
     if not src_dir.is_dir():
-        print(f"ERROR: {src_dir} is not a directory", file=sys.stderr)
+        sys.stderr.write(f"ERROR: {src_dir} is not a directory\n")
         return 1
 
     exclude_dirs = () if args.include_hamilton_pipeline else ("hamilton_pipeline",)
@@ -198,15 +197,15 @@ def main() -> int:
                 for r in result.residuals
             ],
         }
-        print(json.dumps(payload, indent=2))
+        sys.stdout.write(f"{json.dumps(payload, indent=2)}\n")
     else:
-        print(f"Scanned {result.files_scanned} files in {src_dir}")
+        sys.stdout.write(f"Scanned {result.files_scanned} files in {src_dir}\n")
         if result.clean:
-            print("CLEAN: No Hamilton/rustworkx residuals found.")
+            sys.stdout.write("CLEAN: No Hamilton/rustworkx residuals found.\n")
         else:
-            print(f"FOUND {len(result.residuals)} residual(s):")
+            sys.stdout.write(f"FOUND {len(result.residuals)} residual(s):\n")
             for r in result.residuals:
-                print(f"  {r.file}:{r.line_number} [{r.pattern_name}] {r.line_text}")
+                sys.stdout.write(f"  {r.file}:{r.line_number} [{r.pattern_name}] {r.line_text}\n")
 
     return 0 if result.clean else 1
 

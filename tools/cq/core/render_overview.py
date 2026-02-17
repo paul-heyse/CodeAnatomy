@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from tools.cq.core.render_utils import clean_scalar as _clean_scalar
@@ -120,7 +120,7 @@ def _format_python_semantic_overview(summary: SummaryEnvelopeV1) -> str:
         Formatted overview or N/A message.
     """
     payload = summary.python_semantic_overview
-    if not isinstance(payload, dict) or not payload:
+    if not isinstance(payload, Mapping) or not payload:
         return _na("python_semantic_overview_missing")
     fields: tuple[tuple[str, str], ...] = (
         ("primary_symbol", "primary"),
@@ -149,7 +149,7 @@ def _merge_language_order(ordered: list[str], raw_order: object) -> None:
     raw_order : object
         Raw language order from step summary.
     """
-    if not isinstance(raw_order, list):
+    if not isinstance(raw_order, Sequence) or isinstance(raw_order, (str, bytes, bytearray)):
         return
     for item in raw_order:
         if isinstance(item, str) and item in {"python", "rust"} and item not in ordered:
@@ -172,7 +172,7 @@ def _scope_from_step_summaries(step_summaries: Mapping[str, object]) -> str | No
     scopes: set[str] = set()
     ordered: list[str] = []
     for step_summary in step_summaries.values():
-        if not isinstance(step_summary, dict):
+        if not isinstance(step_summary, Mapping):
             continue
         step_scope = step_summary.get("lang_scope")
         if isinstance(step_scope, str) and step_scope:
@@ -204,10 +204,14 @@ def _format_language_scope(summary: SummaryEnvelopeV1) -> str:
     if isinstance(lang_scope, str) and lang_scope:
         return f"`{lang_scope}`"
     language_order = summary.language_order
-    if isinstance(language_order, list) and language_order:
+    if (
+        isinstance(language_order, Sequence)
+        and not isinstance(language_order, (str, bytes, bytearray))
+        and language_order
+    ):
         return f"`{', '.join(str(item) for item in language_order)}`"
     step_summaries = summary.step_summaries
-    if isinstance(step_summaries, dict):
+    if isinstance(step_summaries, Mapping):
         inferred_scope = _scope_from_step_summaries(step_summaries)
         if inferred_scope is not None:
             return f"`{inferred_scope}`"

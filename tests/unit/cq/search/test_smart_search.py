@@ -14,15 +14,15 @@ from tools.cq.search.pipeline.classifier import QueryMode, clear_caches
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.context_window import ContextWindow
 from tools.cq.search.pipeline.contracts import SearchConfig
+from tools.cq.search.pipeline.relevance import compute_relevance_score
+from tools.cq.search.pipeline.search_runtime import build_candidate_searcher
 from tools.cq.search.pipeline.smart_search import (
     SMART_SEARCH_LIMITS,
     _run_single_partition,
-    build_candidate_searcher,
     build_finding,
     build_followups,
     build_sections,
     build_summary,
-    compute_relevance_score,
     smart_search,
 )
 from tools.cq.search.pipeline.smart_search_types import (
@@ -695,7 +695,7 @@ class TestSmartSearch:
         assert result.run.macro == "search"
         assert "query" in result.summary
         assert result.summary["mode"] == "identifier"
-        assert isinstance(result.summary.get("enrichment_telemetry"), dict)
+        assert isinstance(result.summary.get("enrichment_telemetry"), Mapping)
         # Should find matches
         assert len(result.evidence) > 0
 
@@ -705,13 +705,13 @@ class TestSmartSearch:
         clear_caches()
         result = smart_search(sample_repo, "build_graph", lang_scope="python")
         telemetry = result.summary.get("enrichment_telemetry")
-        assert isinstance(telemetry, dict)
+        assert isinstance(telemetry, Mapping)
         python_bucket = telemetry.get("python")
-        assert isinstance(python_bucket, dict)
+        assert isinstance(python_bucket, Mapping)
         stages = python_bucket.get("stages")
         timings = python_bucket.get("timings_ms")
-        assert isinstance(stages, dict)
-        assert isinstance(timings, dict)
+        assert isinstance(stages, Mapping)
+        assert isinstance(timings, Mapping)
         assert "python_resolution" in stages
         assert "python_resolution" in timings
         assert "libcst" not in stages
@@ -887,7 +887,9 @@ class TestSmartSearch:
         """Test that key findings are populated."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
-        assert len(result.key_findings) > 0 or len(result.sections) == 0
+        if not result.key_findings:
+            assert not result.sections
+            return
         first = result.key_findings[0]
         assert first.category in {
             "definition",
@@ -982,7 +984,7 @@ class TestSmartSearch:
         clear_caches()
         result = smart_search(tmp_path, "build_graph")
         summary = cast("Mapping[str, object]", result.summary)
-        assert summary["language_order"] == ["python", "rust"]
+        assert summary["language_order"] == ("python", "rust")
         assert result.evidence
         assert result.evidence[0].details.get("language") == "python"
 
@@ -1078,7 +1080,7 @@ class TestSmartSearchFiltersAndEnrichment:
         assert result.evidence
         assert result.summary.get("mode_requested") == "auto"
         assert result.summary.get("mode_effective") == "literal"
-        assert result.summary.get("mode_chain") == ["identifier", "literal"]
+        assert result.summary.get("mode_chain") == ("identifier", "literal")
         assert result.summary.get("fallback_applied") is True
 
     @staticmethod
@@ -1090,7 +1092,7 @@ class TestSmartSearchFiltersAndEnrichment:
         assert not result.evidence
         assert result.summary.get("mode_requested") == "identifier"
         assert result.summary.get("mode_effective") == "identifier"
-        assert result.summary.get("mode_chain") == ["identifier"]
+        assert result.summary.get("mode_chain") == ("identifier",)
         assert result.summary.get("fallback_applied") is False
 
     @staticmethod
@@ -1153,10 +1155,10 @@ class TestSmartSearchFiltersAndEnrichment:
         (tmp_path / "only.rs").write_text("// decorator\nfn f() {}\n", encoding="utf-8")
         clear_caches()
         result = smart_search(tmp_path, "decorator")
-        diagnostics = cast("list[object]", result.summary["cross_language_diagnostics"])
+        diagnostics = cast("tuple[object, ...]", result.summary["cross_language_diagnostics"])
         assert diagnostics
-        assert isinstance(diagnostics[0], dict)
-        first = cast("dict[str, object]", diagnostics[0])
+        assert isinstance(diagnostics[0], Mapping)
+        first = cast("Mapping[str, object]", diagnostics[0])
         assert first.get("code") == "ML001"
         assert "Python-oriented query produced no Python matches" in str(first.get("message"))
 
@@ -1175,12 +1177,12 @@ class TestSmartSearchFiltersAndEnrichment:
         result = smart_search(tmp_path, "build_graph", lang_scope="rust")
         assert result.evidence
         detail_data = result.evidence[0].details.data if result.evidence[0].details else None
-        assert isinstance(detail_data, dict)
+        assert isinstance(detail_data, Mapping)
         enrichment = detail_data.get("enrichment")
-        assert isinstance(enrichment, dict)
+        assert isinstance(enrichment, Mapping)
         assert enrichment.get("language") == "rust"
         rust_payload = enrichment.get("rust")
-        assert isinstance(rust_payload, dict)
+        assert isinstance(rust_payload, Mapping)
         assert rust_payload.get("enrichment_status") in {"applied", "degraded", "skipped"}
 
     @staticmethod
@@ -1192,12 +1194,12 @@ class TestSmartSearchFiltersAndEnrichment:
         payloads = [
             finding.details.data.get("enrichment")
             for finding in result.evidence
-            if isinstance(finding.details.data.get("enrichment"), dict)
+            if isinstance(finding.details.data.get("enrichment"), Mapping)
         ]
         assert payloads
-        first = cast("dict[str, object]", payloads[0])
+        first = cast("Mapping[str, object]", payloads[0])
         assert first.get("language") == "python"
-        assert isinstance(first.get("python"), dict)
+        assert isinstance(first.get("python"), Mapping)
 
     @staticmethod
     def test_python_semantic_summary_fields_present(sample_repo: Path) -> None:
@@ -1430,9 +1432,9 @@ def test_search_python_semantic_timeout_stub_is_not_invoked_when_skipped(
     )
 
     result = smart_search(tmp_path, "build_graph", lang_scope="python")
-    insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
-    degradation = cast("dict[str, object]", insight.get("degradation", {}))
-    diagnostics = cast("list[object]", result.summary.get("python_semantic_diagnostics", []))
+    insight = cast("Mapping[str, object]", result.summary.get("front_door_insight", {}))
+    degradation = cast("Mapping[str, object]", insight.get("degradation", {}))
+    diagnostics = cast("tuple[object, ...]", result.summary.get("python_semantic_diagnostics", ()))
     assert calls["count"] == 0
     assert degradation.get("semantic") == "skipped"
-    assert diagnostics == []
+    assert diagnostics == ()

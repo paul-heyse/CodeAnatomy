@@ -9,8 +9,7 @@ from tools.cq.core.enrichment_mode import (
     IncrementalEnrichmentModeV1,
     parse_incremental_enrichment_mode,
 )
-from tools.cq.core.types import QueryLanguageScope
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
+from tools.cq.core.types import DEFAULT_QUERY_LANGUAGE_SCOPE, QueryLanguageScope
 from tools.cq.search._shared.types import SearchLimits
 from tools.cq.search.pipeline.classifier import QueryMode
 from tools.cq.search.pipeline.contracts import SearchRequest

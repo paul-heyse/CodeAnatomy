@@ -1,7 +1,9 @@
-# ruff: noqa: D100, D103, ANN001
+"""Tests for transaction API delegation to control-plane bridges."""
+
 from __future__ import annotations
 
 import msgspec
+import pytest
 from datafusion import SessionContext
 
 from datafusion_engine.delta import transactions
@@ -13,7 +15,8 @@ from datafusion_engine.delta.control_plane_core import (
 )
 
 
-def test_transactions_delegate_to_control_plane(monkeypatch) -> None:
+def test_transactions_delegate_to_control_plane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Transaction helpers delegate to control-plane operations."""
     monkeypatch.setattr(transactions, "delta_write_ipc", lambda _ctx, **_kwargs: {"op": "write"})
     monkeypatch.setattr(transactions, "delta_delete", lambda _ctx, **_kwargs: {"op": "delete"})
     monkeypatch.setattr(transactions, "delta_update", lambda _ctx, **_kwargs: {"op": "update"})

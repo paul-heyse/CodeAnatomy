@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -49,20 +50,22 @@ def extract_missing_languages(summary: SummaryEnvelopeV1) -> list[str]:
         List of language names that had no matches.
     """
     languages = summary.languages
-    if not isinstance(languages, dict):
+    if not isinstance(languages, Mapping):
         return []
     missing: list[str] = []
     for lang, payload in languages.items():
         lang_name = str(lang)
-        if not isinstance(payload, dict):
+        if not isinstance(payload, Mapping):
             missing.append(lang_name)
+            continue
+        matches = payload.get("matches")
+        if isinstance(matches, int) and matches > 0:
             continue
         total = payload.get("total_matches")
         if isinstance(total, int):
             if total <= 0:
                 missing.append(lang_name)
             continue
-        matches = payload.get("matches")
         if isinstance(matches, int) and matches <= 0:
             missing.append(lang_name)
     return missing

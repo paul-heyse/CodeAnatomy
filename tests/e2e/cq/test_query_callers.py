@@ -58,7 +58,7 @@ def test_callers_with_depth(
         "entity=function name=build_graph_product expand=callers(depth=1) fields=def,callers"
     )
 
-    findings_d1 = result_d1.key_findings + result_d1.evidence
+    findings_d1 = list(result_d1.key_findings + result_d1.evidence)
     for section in result_d1.sections:
         findings_d1.extend(section.findings)
 
@@ -91,7 +91,7 @@ def test_callers_in_scope(
     result = run_query("entity=function name=build_graph_product fields=def,callers in=src/graph/")
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -156,7 +156,7 @@ def test_callers_multiple_matches(
     result = run_query("entity=function name=~parse fields=def,callers")
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 

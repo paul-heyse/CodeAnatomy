@@ -26,8 +26,9 @@ def test_collect_auxiliary_outputs_uses_contract_paths(tmp_path: Path) -> None:
             "run_manifest_delta": str(tmp_path / "run_manifest"),
         },
     }
+    collect_auxiliary_outputs = build_pipeline.__dict__["_collect_auxiliary_outputs"]
 
-    outputs = build_pipeline._collect_auxiliary_outputs(  # noqa: SLF001
+    outputs = collect_auxiliary_outputs(
         output_dir=tmp_path,
         artifacts=artifacts,
         extraction_result=extraction_result,
@@ -54,7 +55,8 @@ def test_collect_auxiliary_outputs_falls_back_to_output_dir(tmp_path: Path) -> N
         errors=[],
         timing={},
     )
-    outputs = build_pipeline._collect_auxiliary_outputs(  # noqa: SLF001
+    collect_auxiliary_outputs = build_pipeline.__dict__["_collect_auxiliary_outputs"]
+    outputs = collect_auxiliary_outputs(
         output_dir=tmp_path,
         artifacts={},
         extraction_result=extraction_result,

@@ -12,8 +12,9 @@ from tools.cq.index.def_index import DefIndex, ParamInfo
 def test_param_info_is_frozen() -> None:
     """ParamInfo instances are immutable after construction."""
     info = ParamInfo(name="arg")
+    kind_attr = "kind"
     with pytest.raises(FrozenInstanceError):
-        info.kind = "KEYWORD_ONLY"  # type: ignore[misc]
+        setattr(info, kind_attr, "KEYWORD_ONLY")
 
 
 def test_def_index_build_sets_parameter_kinds_without_mutation(tmp_path: Path) -> None:

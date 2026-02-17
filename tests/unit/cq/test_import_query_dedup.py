@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 from tools.cq.core.bootstrap import resolve_runtime_services
@@ -46,9 +47,9 @@ def test_import_query_does_not_duplicate_from_import_multi(tmp_path: Path) -> No
     )
 
     languages = result.summary.get("languages")
-    assert isinstance(languages, dict)
+    assert isinstance(languages, MappingProxyType)
     python_summary = languages.get("python")
-    assert isinstance(python_summary, dict)
+    assert isinstance(python_summary, MappingProxyType)
     assert python_summary.get("matches") == 1
     assert len(result.key_findings) == 1
     finding = result.key_findings[0]
@@ -86,9 +87,9 @@ def test_import_query_ignores_commas_in_inline_comments(tmp_path: Path) -> None:
     )
 
     languages = result.summary.get("languages")
-    assert isinstance(languages, dict)
+    assert isinstance(languages, MappingProxyType)
     python_summary = languages.get("python")
-    assert isinstance(python_summary, dict)
+    assert isinstance(python_summary, MappingProxyType)
     assert python_summary.get("matches") == 1
     assert len(result.key_findings) == 1
     finding = result.key_findings[0]

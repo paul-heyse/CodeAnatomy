@@ -239,9 +239,10 @@ class TestRustBoundaryContracts:
             "import_module",
             lambda _name: _FakeEngineModule(),
         )
+        execute_engine_phase = build_pipeline_mod.__dict__["_execute_engine_phase"]
 
         with pytest.raises(_TypedEngineError) as exc_info:
-            build_pipeline_mod._execute_engine_phase(  # noqa: SLF001
+            execute_engine_phase(
                 semantic_input_locations={},
                 spec=_spec_fixture(),
                 engine_profile="small",
@@ -266,8 +267,9 @@ class TestRustBoundaryContracts:
             "import_module",
             lambda _name: _FakeEngineModule(),
         )
+        execute_engine_phase = build_pipeline_mod.__dict__["_execute_engine_phase"]
 
-        payload = build_pipeline_mod._execute_engine_phase(  # noqa: SLF001
+        payload = execute_engine_phase(
             semantic_input_locations={},
             spec=_spec_fixture(),
             engine_profile="small",
@@ -300,8 +302,9 @@ class TestRustBoundaryContracts:
             "import_module",
             lambda _name: _FakeEngineModule(),
         )
+        execute_engine_phase = build_pipeline_mod.__dict__["_execute_engine_phase"]
 
-        run_result, artifacts = build_pipeline_mod._execute_engine_phase(  # noqa: SLF001
+        run_result, artifacts = execute_engine_phase(
             semantic_input_locations={},
             spec=_spec_fixture(),
             engine_profile="small",

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from tools.cq.query.ir import CompositeRule, MetaVarFilter, NthChildSpec
-from tools.cq.query.metavar import (
+from tools.cq.astgrep.metavar import (
     extract_metavar_names,
     extract_rule_metavars,
     extract_rule_variadic_metavars,
     extract_variadic_metavar_names,
     partition_metavar_filters,
 )
+from tools.cq.query.ir import CompositeRule, MetaVarFilter, NthChildSpec
 from tools.cq.query.planner import AstGrepRule
 
 

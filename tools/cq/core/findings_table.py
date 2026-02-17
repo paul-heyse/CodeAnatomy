@@ -486,8 +486,8 @@ def rehydrate_result(original: CqResult, filtered_df: pl.DataFrame) -> CqResult:
     return CqResult(
         run=original.run,
         summary=original.summary,
-        key_findings=key_findings,
-        evidence=evidence,
-        sections=sections,
+        key_findings=tuple(key_findings),
+        evidence=tuple(evidence),
+        sections=tuple(sections),
         artifacts=original.artifacts,
     )

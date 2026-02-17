@@ -220,8 +220,9 @@ def test_run_repo_scan_propagates_diff_options(
         include_globs=("**/*.py",),
         exclude_globs=("**/.venv/**",),
     )
+    run_repo_scan = orchestrator_mod.__dict__["_run_repo_scan"]
 
-    outputs = orchestrator_mod._run_repo_scan(  # noqa: SLF001
+    outputs = run_repo_scan(
         tmp_path,
         options=options,
     )

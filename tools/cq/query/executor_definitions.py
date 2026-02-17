@@ -87,7 +87,7 @@ def process_import_query(
             enricher,
             matching_imports,
         )
-        result = msgspec.structs.replace(result, key_findings=filtered)
+        result = msgspec.structs.replace(result, key_findings=tuple(filtered))
 
     return update_result_summary(
         result,
@@ -150,7 +150,7 @@ def process_def_query(
             enricher,
             matching_defs,
         )
-        result = msgspec.structs.replace(result, key_findings=filtered)
+        result = msgspec.structs.replace(result, key_findings=tuple(filtered))
 
     result = append_def_query_sections(
         result=result,

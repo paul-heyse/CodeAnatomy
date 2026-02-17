@@ -160,8 +160,9 @@ def test_delta_policy_context_uses_plan_signals_for_adaptive_target_file_size(
         return PlanSignals(stats=NormalizedPlanStats(num_rows=1))
 
     monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake_extract_plan_signals)
+    delta_policy_context = write_module.__dict__["_delta_policy_context"]
 
-    policy_context = write_module._delta_policy_context(  # noqa: SLF001
+    policy_context = delta_policy_context(
         options={"target_file_size": 64 * 1024 * 1024},
         dataset_location=None,
         request_partition_by=None,
@@ -180,8 +181,9 @@ def test_delta_policy_context_keeps_target_file_size_when_stats_missing(
         return PlanSignals(stats=None)
 
     monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake_extract_plan_signals)
+    delta_policy_context = write_module.__dict__["_delta_policy_context"]
 
-    policy_context = write_module._delta_policy_context(  # noqa: SLF001
+    policy_context = delta_policy_context(
         options={"target_file_size": 64 * 1024 * 1024},
         dataset_location=None,
         request_partition_by=None,
@@ -200,8 +202,9 @@ def test_delta_policy_context_carries_adaptive_decision(
         return PlanSignals(stats=NormalizedPlanStats(num_rows=50))
 
     monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake_extract_plan_signals)
+    delta_policy_context = write_module.__dict__["_delta_policy_context"]
 
-    policy_context = write_module._delta_policy_context(  # noqa: SLF001
+    policy_context = delta_policy_context(
         options={"target_file_size": 64 * 1024 * 1024},
         dataset_location=None,
         request_partition_by=None,
@@ -219,7 +222,8 @@ def test_delta_policy_context_carries_adaptive_decision(
 
 def test_delta_policy_context_no_adaptive_decision_without_bundle() -> None:
     """Policy context should have no adaptive decision when plan_bundle is None."""
-    policy_context = write_module._delta_policy_context(  # noqa: SLF001
+    delta_policy_context = write_module.__dict__["_delta_policy_context"]
+    policy_context = delta_policy_context(
         options={"target_file_size": 64 * 1024 * 1024},
         dataset_location=None,
         request_partition_by=None,
@@ -237,8 +241,9 @@ def test_delta_policy_context_no_adaptive_decision_mid_range(
         return PlanSignals(stats=NormalizedPlanStats(num_rows=500_000))
 
     monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake_extract_plan_signals)
+    delta_policy_context = write_module.__dict__["_delta_policy_context"]
 
-    policy_context = write_module._delta_policy_context(  # noqa: SLF001
+    policy_context = delta_policy_context(
         options={"target_file_size": 64 * 1024 * 1024},
         dataset_location=None,
         request_partition_by=None,

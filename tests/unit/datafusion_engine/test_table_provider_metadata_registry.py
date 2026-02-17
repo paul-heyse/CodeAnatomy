@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103
+"""Tests for table provider metadata registry scoping."""
+
 from __future__ import annotations
 
 from datafusion import SessionContext
@@ -13,6 +14,7 @@ from datafusion_engine.tables.metadata import (
 
 
 def test_table_provider_metadata_is_scoped_by_context() -> None:
+    """Metadata registry stores values per session context."""
     ctx_one = SessionContext()
     ctx_two = SessionContext()
 
@@ -27,6 +29,7 @@ def test_table_provider_metadata_is_scoped_by_context() -> None:
 
 
 def test_clear_table_provider_metadata_only_clears_target_context() -> None:
+    """Clearing metadata only affects the target context registry."""
     ctx_one = SessionContext()
     ctx_two = SessionContext()
 

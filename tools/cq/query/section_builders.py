@@ -166,7 +166,7 @@ def append_expander_sections(
 
 
 def build_entity_neighborhood_preview_section(
-    findings: list[Finding],
+    findings: Sequence[Finding],
 ) -> Section:
     """Build bounded neighborhood preview for entity query top results.
 

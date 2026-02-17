@@ -10,6 +10,7 @@ import msgspec
 from tools.cq.core.contracts_constraints import enforce_mapping_constraints
 from tools.cq.core.schema import Artifact, CqResult, Finding, RunMeta, Section
 from tools.cq.core.summary_contract import (
+    SummaryV1,
     SummaryVariantName,
     resolve_summary_variant_name,
     summary_class_for_variant,
@@ -65,6 +66,13 @@ def _infer_summary_variant(
     *,
     macro: str | None,
 ) -> SummaryVariantName:
+    if isinstance(macro, str) and macro:
+        return resolve_summary_variant_name(
+            mode=summary_mapping.get("mode"),
+            explicit=summary_mapping.get("summary_variant"),
+            macro=macro,
+        )
+
     keys = {key for key in summary_mapping if isinstance(key, str)}
     if keys & _NEIGHBORHOOD_SUMMARY_HINTS:
         return "neighborhood"
@@ -97,12 +105,72 @@ def _normalize_summary_mapping(
     return cast("Mapping[str, object]", normalized)
 
 
+def _thaw_summary_container(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _thaw_summary_container(item)
+            for key, item in value.items()
+            if isinstance(key, str)
+        }
+    if isinstance(value, tuple):
+        return [_thaw_summary_container(item) for item in value]
+    if isinstance(value, list):
+        return [_thaw_summary_container(item) for item in value]
+    return value
+
+
+def _thaw_summary_for_decoded_result(summary: object) -> object:
+    if not isinstance(summary, msgspec.Struct):
+        return summary
+    fields = getattr(summary, "__struct_fields__", ())
+    if not isinstance(fields, tuple):
+        return summary
+    updates: dict[str, object] = {}
+    for field_name in fields:
+        value = getattr(summary, field_name)
+        thawed = _thaw_summary_container(value)
+        if field_name in {"steps", "language_order"} and isinstance(thawed, list) and not thawed:
+            thawed = None
+        if thawed is not value:
+            updates[field_name] = thawed
+    return msgspec.structs.replace(summary, **updates) if updates else summary
+
+
 JSON_ENCODER = msgspec.json.Encoder(order="deterministic")
 JSON_DECODER = msgspec.json.Decoder(strict=True)
 JSON_RESULT_DECODER = msgspec.json.Decoder(type=object, strict=True)
 MSGPACK_ENCODER = msgspec.msgpack.Encoder()
 MSGPACK_DECODER = msgspec.msgpack.Decoder(type=object)
 MSGPACK_RESULT_DECODER = msgspec.msgpack.Decoder(type=object)
+
+
+def _to_contract_builtins_recursive(value: object) -> object:
+    """Normalize payloads into deterministic builtins for wire encoding.
+
+    Returns:
+        object: Builtins payload safe for JSON/msgpack encoding.
+    """
+    normalized: object
+    if isinstance(value, msgspec.Struct):
+        normalized = _to_contract_builtins_recursive(msgspec.structs.asdict(value))
+    elif isinstance(value, Mapping):
+        normalized_items = sorted(
+            ((str(key), _to_contract_builtins_recursive(item)) for key, item in value.items()),
+            key=lambda item: item[0],
+        )
+        normalized = dict(normalized_items)
+    elif isinstance(value, (list, tuple)):
+        normalized = [_to_contract_builtins_recursive(item) for item in value]
+    elif isinstance(value, (set, frozenset)):
+        normalized = [_to_contract_builtins_recursive(item) for item in value]
+        normalized.sort(key=repr)
+    elif isinstance(value, bytes | bytearray | memoryview):
+        normalized = bytes(value)
+    elif value is None or isinstance(value, str | int | float | bool):
+        normalized = value
+    else:
+        normalized = msgspec.to_builtins(value, order="deterministic", str_keys=True)
+    return normalized
 
 
 def _decode_result_payload(payload: object) -> CqResult:
@@ -113,22 +181,22 @@ def _decode_result_payload(payload: object) -> CqResult:
     run = msgspec.convert(payload.get("run"), type=RunMeta, strict=True)
     key_findings = msgspec.convert(
         payload.get("key_findings", ()),
-        type=list[Finding],
+        type=tuple[Finding, ...],
         strict=True,
     )
     evidence = msgspec.convert(
         payload.get("evidence", ()),
-        type=list[Finding],
+        type=tuple[Finding, ...],
         strict=True,
     )
     sections = msgspec.convert(
         payload.get("sections", ()),
-        type=list[Section],
+        type=tuple[Section, ...],
         strict=True,
     )
     artifacts = msgspec.convert(
         payload.get("artifacts", ()),
-        type=list[Artifact],
+        type=tuple[Artifact, ...],
         strict=True,
     )
 
@@ -145,6 +213,7 @@ def _decode_result_payload(payload: object) -> CqResult:
     else:
         msg = f"Expected summary mapping, got {type(summary_raw).__name__}"
         raise TypeError(msg)
+    summary = cast("SummaryV1", _thaw_summary_for_decoded_result(summary))
 
     return CqResult(
         run=run,
@@ -196,7 +265,7 @@ def encode_msgpack(value: object) -> bytes:
     Returns:
         bytes: Function return value.
     """
-    return MSGPACK_ENCODER.encode(value)
+    return MSGPACK_ENCODER.encode(to_contract_builtins(value))
 
 
 def decode_msgpack(payload: bytes | bytearray | memoryview) -> object:
@@ -223,7 +292,7 @@ def to_contract_builtins(value: object) -> object:
     Returns:
         object: Function return value.
     """
-    return msgspec.to_builtins(value, order="deterministic", str_keys=True)
+    return _to_contract_builtins_recursive(value)
 
 
 def to_public_dict(value: msgspec.Struct) -> dict[str, object]:

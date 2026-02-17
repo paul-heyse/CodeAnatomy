@@ -151,7 +151,7 @@ def _prepare_search_assembly_inputs(
         Complete assembly inputs for result construction.
     """
     from tools.cq.search.objects.resolve import build_object_resolved_view
-    from tools.cq.search.pipeline.smart_search import merge_language_matches
+    from tools.cq.search.pipeline.search_runtime import merge_language_matches
     from tools.cq.search.pipeline.smart_search_sections import build_sections
     from tools.cq.search.pipeline.smart_search_summary import build_search_summary
 
@@ -262,9 +262,9 @@ def _assemble_smart_search_result(
     result = CqResult(
         run=run,
         summary=inputs.summary,
-        sections=inputs.sections,
-        key_findings=_build_search_result_key_findings(inputs),
-        evidence=[build_finding(m, ctx.root) for m in inputs.enriched_matches[:MAX_EVIDENCE]],
+        sections=tuple(inputs.sections),
+        key_findings=tuple(_build_search_result_key_findings(inputs)),
+        evidence=tuple(build_finding(m, ctx.root) for m in inputs.enriched_matches[:MAX_EVIDENCE]),
     )
     register_search_object_view(run_id=run.run_id, view=inputs.object_runtime.view)
     result = msgspec.structs.replace(

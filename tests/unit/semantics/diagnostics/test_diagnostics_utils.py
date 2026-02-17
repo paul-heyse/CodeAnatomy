@@ -1,4 +1,3 @@
-# ruff: noqa: D103, PLR6301
 """Tests for diagnostics utility helpers."""
 
 from __future__ import annotations
@@ -11,11 +10,13 @@ from semantics.diagnostics._utils import empty_diagnostic_frame
 
 
 class _FakeCtx:
-    def from_arrow_table(self, table: pa.Table) -> pa.Table:
+    @staticmethod
+    def from_arrow_table(table: pa.Table) -> pa.Table:
         return table
 
 
 def test_empty_diagnostic_frame_builds_empty_table() -> None:
+    """Utility builds empty table with provided schema."""
     schema = pa.schema([("x", pa.string())])
     table = empty_diagnostic_frame(cast("Any", _FakeCtx()), schema)
     assert cast("Any", table).num_rows == 0

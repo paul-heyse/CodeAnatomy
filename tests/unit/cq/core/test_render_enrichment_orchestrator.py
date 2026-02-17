@@ -53,7 +53,7 @@ def test_select_enrichment_target_files_returns_ranked_files(tmp_path: Path) -> 
     """Target file selection keeps highest-priority ranked files."""
     result = CqResult(
         run=_run_meta(tmp_path),
-        key_findings=[_finding("src/a.py", score=8.0), _finding("src/b.py", score=3.0)],
+        key_findings=(_finding("src/a.py", score=8.0), _finding("src/b.py", score=3.0)),
     )
     selected = select_enrichment_target_files(result)
     assert "src/a.py" in selected
@@ -64,7 +64,7 @@ def test_precompute_render_enrichment_cache_populates_cache(tmp_path: Path) -> N
     """Precompute helper materializes enrichment payload cache entries."""
     result = CqResult(
         run=_run_meta(tmp_path),
-        key_findings=[_finding("src/a.py", score=8.0)],
+        key_findings=(_finding("src/a.py", score=8.0),),
     )
     cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
 

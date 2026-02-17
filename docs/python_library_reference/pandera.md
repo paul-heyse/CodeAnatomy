@@ -1481,7 +1481,7 @@ class ContractRegistry:
                     continue
                 try:
                     _ = c.get_schema(b)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     warnings.append(f"{c.dataset} backend={b}: schema factory failed: {type(e).__name__}: {e}")
         return warnings
 ```
@@ -1600,7 +1600,7 @@ def pandera_policy_context(profile: ValidationProfile):
     try:
         import pandera
         from pandera import config as pandera_config
-    except Exception:  # noqa: BLE001
+    except Exception:
         # If pandera isn't importable, caller will fail later anyway.
         yield
         return
@@ -1673,7 +1673,7 @@ def _failure_cases_to_records(fc: Any, *, limit: int = 50) -> list[dict[str, Any
         # DataFrame-like
         recs = fc.to_dict(orient="records")
         return recs[:limit]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -1777,7 +1777,7 @@ def validate(*, dataset: str, stage: str, schema: Any, obj: Any, profile: Valida
         failure_cases = None
         try:
             failure_cases = fc.to_dicts()[:50] if fc is not None else None  # polars df
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return obj, ValidationResult(
             ok=False,
@@ -1896,7 +1896,7 @@ def validate(*, dataset: str, stage: str, schema: Any, obj: Any, profile: Valida
     errors = None
     try:
         errors = getattr(df_out, "pandera").errors  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001
+    except Exception:
         errors = None
 
     ok = not errors

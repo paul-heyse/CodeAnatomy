@@ -1,12 +1,16 @@
-# ruff: noqa: D103, PLR2004, RUF069
 """Tests for compiled policy typed payload shapes."""
 
 from __future__ import annotations
 
+import math
+
 from relspec.compiled_policy import CompiledInferenceConfidence, CompiledScanPolicyOverride
+
+EXPECTED_CONFIDENCE = 0.9
 
 
 def test_compiled_scan_policy_override_requires_structured_reasons() -> None:
+    """Scan policy override preserves structured reason payload."""
     payload = CompiledScanPolicyOverride(
         policy={"enabled": True},
         reasons=("explicit",),
@@ -16,5 +20,8 @@ def test_compiled_scan_policy_override_requires_structured_reasons() -> None:
 
 
 def test_compiled_inference_confidence_payload_mapping() -> None:
-    confidence = CompiledInferenceConfidence(payload={"confidence": 0.9})
-    assert confidence.payload["confidence"] == 0.9
+    """Inference confidence payload maps confidence scalar correctly."""
+    confidence = CompiledInferenceConfidence(payload={"confidence": EXPECTED_CONFIDENCE})
+    value = confidence.payload["confidence"]
+    assert isinstance(value, float)
+    assert math.isclose(value, EXPECTED_CONFIDENCE)

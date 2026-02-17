@@ -34,7 +34,7 @@ def test_imports_in_module(
     result = run_query("entity=import in=src/graph/")
 
     # Should find at least some imports
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -64,7 +64,7 @@ def test_import_entity(
     result = run_query("entity=import in=src/graph/product_build.py")
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -114,7 +114,7 @@ def test_imports_in_nonexistent_scope(
     result = run_query("entity=import in=nonexistent_directory/")
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -138,7 +138,7 @@ def test_import_details_structure(
     result = run_query("entity=import in=src/graph/product_build.py")
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -168,7 +168,7 @@ def test_imports_across_codebase(
     result = run_query("entity=import")
 
     # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 

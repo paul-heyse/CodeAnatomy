@@ -29,11 +29,12 @@ class PythonResolutionFacts(CqStruct, frozen=True):
     enclosing_class: str | None = None
 
     # Qualified name resolution
-    qualified_name_candidates: list[str] = msgspec.field(default_factory=list)
-    binding_candidates: list[str] = msgspec.field(default_factory=list)
+    qualified_name_candidates: list[dict[str, object]] = msgspec.field(default_factory=list)
+    binding_candidates: list[dict[str, object]] = msgspec.field(default_factory=list)
 
     # Import resolution
     import_alias_chain: list[dict[str, object]] = msgspec.field(default_factory=list)
+    symbol_role: str | None = None
 
 
 class PythonBehaviorFacts(CqStruct, frozen=True):

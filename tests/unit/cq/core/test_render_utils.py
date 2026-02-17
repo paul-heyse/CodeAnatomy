@@ -65,7 +65,7 @@ def test_extract_symbol_hint_prefers_detail_fields() -> None:
     finding = Finding(
         category="callsite",
         message="call: fallback",
-        details=DetailPayload(data={"name": "target"}),
+        details=DetailPayload(data_items=(("name", "target"),)),
     )
     assert extract_symbol_hint(finding) == "target"
 
@@ -77,8 +77,8 @@ def test_iter_result_findings_preserves_section_order() -> None:
     evidence = Finding(category="evidence", message="evidence: sample")
     result = CqResult(
         run=_run_meta(),
-        key_findings=[key],
-        sections=[Section(title="Section", findings=[section_finding])],
-        evidence=[evidence],
+        key_findings=(key,),
+        sections=(Section(title="Section", findings=[section_finding]),),
+        evidence=(evidence,),
     )
     assert iter_result_findings(result) == [key, section_finding, evidence]

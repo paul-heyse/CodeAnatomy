@@ -37,7 +37,7 @@ def search(
     Returns:
         CliResult: Renderable command result payload.
     """
-    from tools.cq.query.language import parse_query_language_scope
+    from tools.cq.core.types import parse_query_language_scope
     from tools.cq.search._shared.types import QueryMode
     from tools.cq.search.pipeline.enrichment_contracts import parse_incremental_enrichment_mode
     from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS

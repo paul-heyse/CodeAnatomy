@@ -1,4 +1,3 @@
-# ruff: noqa: D103
 """Tests for runtime hub decomposition boundaries."""
 
 from __future__ import annotations
@@ -10,6 +9,7 @@ _RUNTIME_IMPORT = re.compile(r"^from datafusion_engine\.session\.runtime import 
 
 
 def test_runtime_imports_are_core_profile_only() -> None:
+    """Imports from runtime module outside core profile are rejected."""
     violations: list[str] = []
     for path in Path("src").rglob("*.py"):
         if path.as_posix() == "src/datafusion_engine/session/runtime.py":

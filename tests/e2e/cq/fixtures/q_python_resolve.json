@@ -70,7 +70,7 @@
         "location": {
           "col": 0,
           "file": "tests/e2e/cq/_golden_workspace/python_project/app/api.py",
-          "line": 13
+          "line": 12
         },
         "selection_reason": "top_entity_result",
         "symbol": "resolve"

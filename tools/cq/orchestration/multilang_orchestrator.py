@@ -13,13 +13,13 @@ from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import (
     CqResult,
-    DetailPayload,
     Finding,
     Section,
     extend_result_key_findings,
     mk_result,
     update_result_summary,
 )
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.summary_contract import (
     coerce_semantic_telemetry as coerce_summary_semantic_telemetry,
 )
@@ -28,12 +28,11 @@ from tools.cq.core.summary_contract import (
     summary_from_mapping,
 )
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
-from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope, expand_language_scope
 from tools.cq.orchestration.multilang_summary import (
     build_multilang_summary,
     partition_stats_from_result_summary,
 )
-from tools.cq.query.language import expand_language_scope
 
 if TYPE_CHECKING:
     from tools.cq.core.front_door_contracts import FrontDoorInsightV1
@@ -143,7 +142,7 @@ def _clone_finding_with_language(
 ) -> Finding:
     data = dict(finding.details.data)
     data.setdefault("language", lang)
-    details = DetailPayload(
+    details = build_detail_payload(
         kind=finding.details.kind or finding.category,
         score=finding.details.score,
         data=data,
@@ -245,11 +244,11 @@ def _select_semantic_planes_payload(
         if result is None:
             continue
         planes = result.summary.semantic_planes
-        if isinstance(planes, dict) and planes:
+        if isinstance(planes, Mapping) and planes:
             return dict(planes)
     for result in results.values():
         planes = result.summary.semantic_planes
-        if isinstance(planes, dict) and planes:
+        if isinstance(planes, Mapping) and planes:
             return dict(planes)
     return {}
 

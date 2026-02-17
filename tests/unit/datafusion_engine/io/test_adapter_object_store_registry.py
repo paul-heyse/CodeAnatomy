@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103, INP001
+"""Tests for object store registration deduplication in IO adapter."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ class _FakeSessionContext:
 
 
 def test_register_object_store_deduplicates_with_injected_registry() -> None:
+    """Adapter deduplicates object-store registrations by registry state."""
     ctx = _FakeSessionContext()
     registries = ObjectStoreRegistries()
     adapter = DataFusionIOAdapter(

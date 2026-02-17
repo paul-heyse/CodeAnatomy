@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails, Section
-from tools.cq.query.language import is_python_language
+from tools.cq.core.types import is_python_language
 from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.objects.render import (
     SearchOccurrenceV1,
@@ -116,7 +116,11 @@ def build_finding(match: EnrichedMatch, _root: Path) -> Finding:
     """
     score = _build_score_details(match)
     data = _build_match_data(match)
-    details = DetailPayload(kind=match.category, score=score, data=data)
+    details = DetailPayload(
+        kind=match.category,
+        score=score,
+        data_items=tuple(sorted(data.items())),
+    )
     return Finding(
         category=match.category,
         message=_category_message(match.category, match),

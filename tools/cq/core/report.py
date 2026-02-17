@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import msgspec
+
 from tools.cq.core.render_context import RenderContext
+from tools.cq.core.render_diagnostics import (
+    summary_with_render_enrichment_metrics as _summary_with_render_enrichment_metrics,
+)
 from tools.cq.core.render_enrichment import (
     extract_enrichment_payload as _extract_enrichment_payload,
 )
@@ -15,10 +21,19 @@ from tools.cq.core.render_enrichment import (
     format_enrichment_facts as _format_enrichment_facts,
 )
 from tools.cq.core.render_enrichment_orchestrator import (
+    RenderEnrichmentSessionV1,
+)
+from tools.cq.core.render_enrichment_orchestrator import (
+    count_render_enrichment_tasks as _count_render_enrichment_tasks_orchestrator,
+)
+from tools.cq.core.render_enrichment_orchestrator import (
     maybe_attach_render_enrichment as _maybe_attach_render_enrichment_orchestrator,
 )
 from tools.cq.core.render_enrichment_orchestrator import (
-    prepare_render_enrichment_session as _prepare_render_enrichment_session_orchestrator,
+    precompute_render_enrichment_cache as _precompute_render_enrichment_cache_orchestrator,
+)
+from tools.cq.core.render_enrichment_orchestrator import (
+    select_enrichment_target_files as _select_enrichment_target_files_orchestrator,
 )
 from tools.cq.core.render_overview import render_code_overview as _render_code_overview
 from tools.cq.core.render_summary import (
@@ -272,7 +287,7 @@ def _format_section(
 
 
 def _render_key_findings(
-    findings: list[Finding],
+    findings: Sequence[Finding],
     *,
     context: _RenderPassContext,
 ) -> list[str]:
@@ -314,12 +329,12 @@ def _finding_dedupe_key(finding: Finding) -> tuple[object, ...]:
 
 
 def _dedupe_findings(
-    findings: list[Finding],
+    findings: Sequence[Finding],
     *,
     seen_keys: set[tuple[object, ...]] | None,
 ) -> list[Finding]:
     if seen_keys is None:
-        return findings
+        return list(findings)
     deduped: list[Finding] = []
     for finding in findings:
         key = _finding_dedupe_key(finding)
@@ -331,7 +346,7 @@ def _dedupe_findings(
 
 
 def _render_sections(
-    sections: list[Section],
+    sections: Sequence[Section],
     *,
     context: _RenderPassContext,
 ) -> list[str]:
@@ -358,7 +373,7 @@ def _render_sections(
 
 
 def _render_evidence(
-    findings: list[Finding],
+    findings: Sequence[Finding],
     *,
     context: _RenderPassContext,
 ) -> list[str]:
@@ -390,7 +405,7 @@ def _render_evidence(
     return lines
 
 
-def _render_artifacts(artifacts: list[Artifact]) -> list[str]:
+def _render_artifacts(artifacts: Sequence[Artifact]) -> list[str]:
     """Render artifact section lines.
 
     Returns:
@@ -418,7 +433,7 @@ def _render_footer(result: CqResult) -> list[str]:
     return ["---", footer]
 
 
-def _reorder_sections(sections: list[Section], macro: str) -> list[Section]:
+def _reorder_sections(sections: Sequence[Section], macro: str) -> list[Section]:
     """Reorder sections according to fixed order for the command.
 
     Sections not in the order map are appended at end.
@@ -437,7 +452,7 @@ def _reorder_sections(sections: list[Section], macro: str) -> list[Section]:
     """
     order = _SECTION_ORDER_MAP.get(macro)
     if order is None:
-        return sections
+        return list(sections)
     order_index = {title: idx for idx, title in enumerate(order)}
     known = [s for s in sections if s.title in order_index]
     unknown = [s for s in sections if s.title not in order_index]
@@ -465,6 +480,80 @@ def _assemble_report_body(
     return lines
 
 
+def _prepare_render_enrichment_session(
+    *,
+    result: CqResult,
+    root: Path,
+    port: RenderEnrichmentPort | None,
+) -> RenderEnrichmentSessionV1:
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
+    allowed_files = set(_select_enrichment_target_files_orchestrator(result))
+    all_task_count = _count_render_enrichment_tasks_orchestrator(
+        result=result,
+        root=root,
+        allowed_files=None,
+    )
+    rendered_tasks = _precompute_render_enrichment_cache_orchestrator(
+        result=result,
+        root=root,
+        cache=enrich_cache,
+        allowed_files=allowed_files,
+        port=port,
+    )
+    applied = sum(
+        1
+        for task in rendered_tasks
+        if enrich_cache.get((task.file, task.line, task.col, task.language))
+    )
+    attempted = len(rendered_tasks)
+    failed = max(0, attempted - applied)
+    skipped = max(0, all_task_count - attempted)
+    summary_with_metrics = _summary_with_render_enrichment_metrics(
+        result.summary,
+        attempted=attempted,
+        applied=applied,
+        failed=failed,
+        skipped=skipped,
+    )
+    return RenderEnrichmentSessionV1(
+        cache=enrich_cache,
+        allowed_files=allowed_files,
+        summary_with_metrics=summary_with_metrics,
+    )
+
+
+def _apply_render_enrichment_in_place(
+    result: CqResult,
+    *,
+    root: Path,
+    cache: dict[tuple[str, int, int, str], dict[str, object]],
+    allowed_files: set[str] | None,
+    port: RenderEnrichmentPort | None,
+) -> CqResult:
+    def _apply(finding: Finding) -> Finding:
+        return _maybe_attach_render_enrichment_orchestrator(
+            finding,
+            root=root,
+            cache=cache,
+            allowed_files=allowed_files,
+            port=port,
+        )
+
+    enriched_sections = tuple(
+        msgspec.structs.replace(
+            section,
+            findings=[_apply(finding) for finding in section.findings],
+        )
+        for section in result.sections
+    )
+    return msgspec.structs.replace(
+        result,
+        key_findings=tuple(_apply(finding) for finding in result.key_findings),
+        evidence=tuple(_apply(finding) for finding in result.evidence),
+        sections=enriched_sections,
+    )
+
+
 def render_markdown(
     result: CqResult,
     *,
@@ -484,9 +573,16 @@ def render_markdown(
     """
     resolved_context = render_context or RenderContext.minimal()
     root = Path(result.run.root)
-    session = _prepare_render_enrichment_session_orchestrator(
+    session = _prepare_render_enrichment_session(
         result=result,
         root=root,
+        port=resolved_context.enrichment_port,
+    )
+    result = _apply_render_enrichment_in_place(
+        result,
+        root=root,
+        cache=session.cache,
+        allowed_files=session.allowed_files,
         port=resolved_context.enrichment_port,
     )
     compact_summary, _offloaded = compact_summary_for_rendering(session.summary_with_metrics)

@@ -1,7 +1,5 @@
 """Unit tests for join key inference in the semantic compiler."""
 
-# ruff: noqa: SLF001
-
 from __future__ import annotations
 
 import pytest
@@ -17,6 +15,7 @@ from semantics.quality import (
 from semantics.schema import SemanticSchemaError
 
 EXPECTED_INNER_JOIN_MATCH_COUNT = 2
+resolve_join_keys = SemanticCompiler.__dict__["_resolve_join_keys"]
 
 
 class TestResolveJoinKeysStatic:
@@ -31,7 +30,7 @@ class TestResolveJoinKeysStatic:
         left_info = TableInfo.analyze("left_t", left_df)
         right_info = TableInfo.analyze("right_t", right_df)
 
-        left_on, right_on = SemanticCompiler._resolve_join_keys(
+        left_on, right_on = resolve_join_keys(
             left_info=left_info,
             right_info=right_info,
             left_on=["file_id"],
@@ -53,7 +52,7 @@ class TestResolveJoinKeysStatic:
         left_info = TableInfo.analyze("left_infer", left_df)
         right_info = TableInfo.analyze("right_infer", right_df)
 
-        left_on, right_on = SemanticCompiler._resolve_join_keys(
+        left_on, right_on = resolve_join_keys(
             left_info=left_info,
             right_info=right_info,
             left_on=[],
@@ -79,7 +78,7 @@ class TestResolveJoinKeysStatic:
         left_info = TableInfo.analyze("left_both", left_df)
         right_info = TableInfo.analyze("right_both", right_df)
 
-        left_on, right_on = SemanticCompiler._resolve_join_keys(
+        left_on, right_on = resolve_join_keys(
             left_info=left_info,
             right_info=right_info,
             left_on=[],
@@ -102,7 +101,7 @@ class TestResolveJoinKeysStatic:
         right_info = TableInfo.analyze("right_asym", right_df)
 
         with pytest.raises(SemanticSchemaError, match="symmetric"):
-            SemanticCompiler._resolve_join_keys(
+            resolve_join_keys(
                 left_info=left_info,
                 right_info=right_info,
                 left_on=["file_id"],
@@ -119,7 +118,7 @@ class TestResolveJoinKeysStatic:
         right_info = TableInfo.analyze("right_asym2", right_df)
 
         with pytest.raises(SemanticSchemaError, match="symmetric"):
-            SemanticCompiler._resolve_join_keys(
+            resolve_join_keys(
                 left_info=left_info,
                 right_info=right_info,
                 left_on=[],
@@ -136,7 +135,7 @@ class TestResolveJoinKeysStatic:
         right_info = TableInfo.analyze("right_no_fid", right_df)
 
         with pytest.raises(SemanticSchemaError, match="FILE_IDENTITY"):
-            SemanticCompiler._resolve_join_keys(
+            resolve_join_keys(
                 left_info=left_info,
                 right_info=right_info,
                 left_on=[],
@@ -153,7 +152,7 @@ class TestResolveJoinKeysStatic:
         right_info = TableInfo.analyze("right_span_only", right_df)
 
         with pytest.raises(SemanticSchemaError, match="FILE_IDENTITY"):
-            SemanticCompiler._resolve_join_keys(
+            resolve_join_keys(
                 left_info=left_info,
                 right_info=right_info,
                 left_on=[],
@@ -344,7 +343,7 @@ class TestIRInferredKeysParityWithCompiler:
         right_info = TableInfo.analyze("right_parity", right_df)
 
         # Compiler resolution
-        compiler_left, compiler_right = SemanticCompiler._resolve_join_keys(
+        compiler_left, compiler_right = resolve_join_keys(
             left_info=left_info,
             right_info=right_info,
             left_on=[],
@@ -398,7 +397,7 @@ class TestIRInferredKeysParityWithCompiler:
         left_info = TableInfo.analyze("left_parity2", left_df)
         right_info = TableInfo.analyze("right_parity2", right_df)
 
-        compiler_left, compiler_right = SemanticCompiler._resolve_join_keys(
+        compiler_left, compiler_right = resolve_join_keys(
             left_info=left_info,
             right_info=right_info,
             left_on=[],
@@ -443,7 +442,7 @@ class TestIRInferredKeysParityWithCompiler:
 
         # Compiler raises on no FILE_IDENTITY columns
         with pytest.raises(SemanticSchemaError, match="FILE_IDENTITY"):
-            SemanticCompiler._resolve_join_keys(
+            resolve_join_keys(
                 left_info=left_info,
                 right_info=right_info,
                 left_on=[],

@@ -395,7 +395,7 @@ name = "codeanatomy-engine"
 version = "0.1.0"
 source = { path = "dist/wheels/codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl" }
 wheels = [
-    { filename = "codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:80d43cd8f6608becdb802bc710237e407f9dfc6d14395119783f451ddb763fa7" },
+    { filename = "codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:a18778475f31df5da19bc6aedeacafb1d7ea0b6e27f2db3e17c1be849eecb296" },
 ]
 
 [[package]]
@@ -505,7 +505,7 @@ dependencies = [
     { name = "pyarrow" },
 ]
 wheels = [
-    { filename = "datafusion-51.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:64ae57b17dc045cc2c86cabf84b3ed15482bdcf1a38749a8e53748f04d25a6c8" },
+    { filename = "datafusion-51.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:a375054fa19880f7cb930c280e5d7905cb55012cfcf2fd7e4cadcabb1a072231" },
 ]
 
 [package.metadata]
@@ -523,7 +523,7 @@ dependencies = [
     { name = "datafusion" },
 ]
 wheels = [
-    { filename = "datafusion_ext-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:cbdad51121f0bf0d12585ab2dd3b04726f368578975c2fa9ee0f7a64ae15ff49" },
+    { filename = "datafusion_ext-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:0344e0fe26fe7cc53348124ca923507200ee3a1fb7393884f355b54c20a56dbf" },
 ]
 
 [package.metadata]

@@ -30,7 +30,7 @@
       "count": 2,
       "messages": [
         "function: dispatch_wrapper (1 occurrences) [object_id=obj_1d591aa7c5bd4178092fd052]",
-        "reference: dispatch_wrapper (1 occurrences) [object_id=obj_356da6662cd3b6f152f1bf1a]"
+        "reference: dispatch_wrapper (1 occurrences) [object_id=obj_9a6a131a3c12ab22756f9290]"
       ],
       "title": "Resolved Objects"
     },
@@ -38,7 +38,7 @@
       "count": 2,
       "messages": [
         "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:32:4 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:32-37) [reference] [object_id=obj_1d591aa7c5bd4178092fd052] [line_id=79f005e1e2c3e7ffc0c534b1]",
-        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:40:27 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:39-42) [reference] [object_id=obj_356da6662cd3b6f152f1bf1a] [line_id=55f42d385ad5bd2f11545d6d]"
+        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:40:27 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:39-42) [reference] [object_id=obj_9a6a131a3c12ab22756f9290] [line_id=4440880f8d06e0c255bd41f9]"
       ],
       "title": "Occurrences"
     },

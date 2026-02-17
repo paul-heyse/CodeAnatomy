@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 from tools.cq.core.contracts import SummaryBuildRequest
-from tools.cq.core.schema import DetailPayload, Finding
-from tools.cq.core.types import QueryLanguage, QueryLanguageScope
-from tools.cq.orchestration.multilang_summary import (
-    assert_multilang_summary,
-    build_multilang_summary,
-)
-from tools.cq.query.language import (
+from tools.cq.core.schema import Finding
+from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.types import (
+    QueryLanguage,
+    QueryLanguageScope,
     expand_language_scope,
     file_globs_for_scope,
     is_python_language,
     is_rust_language,
+)
+from tools.cq.orchestration.multilang_summary import (
+    assert_multilang_summary,
+    build_multilang_summary,
 )
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search_telemetry import (
@@ -175,7 +177,7 @@ def _build_tree_sitter_runtime_diagnostics(
                 category="tree_sitter_runtime",
                 message=f"tree-sitter match limit exceeded on {did_exceed} anchors",
                 severity="warning",
-                details=DetailPayload(
+                details=build_detail_payload(
                     kind="tree_sitter_runtime",
                     data={
                         "reason": "did_exceed_match_limit",
@@ -190,7 +192,7 @@ def _build_tree_sitter_runtime_diagnostics(
                 category="tree_sitter_runtime",
                 message=f"tree-sitter query cancelled on {cancelled} anchors",
                 severity="warning",
-                details=DetailPayload(
+                details=build_detail_payload(
                     kind="tree_sitter_runtime",
                     data={
                         "reason": "cancelled",
@@ -271,7 +273,7 @@ def build_search_summary(
                 category="query_pack_lint",
                 message=f"Query pack lint failed: {len(query_pack_lint.errors)} errors",
                 severity="warning",
-                details=DetailPayload(
+                details=build_detail_payload(
                     kind="query_pack_lint",
                     data={"errors": list(query_pack_lint.errors)},
                 ),

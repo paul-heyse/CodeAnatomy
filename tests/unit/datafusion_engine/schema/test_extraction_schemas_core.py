@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103
+"""Tests for core and extended extraction schema helpers."""
+
 from __future__ import annotations
 
 import pyarrow as pa
@@ -8,12 +9,14 @@ from datafusion_engine.schema.extraction_schemas_extended import extended_extrac
 
 
 def test_core_extraction_schemas_returns_arrow_schemas() -> None:
+    """Core extraction schema helper returns Arrow schema payloads."""
     payload = core_extraction_schemas()
     assert "ast_files_v1" in payload
     assert isinstance(payload["ast_files_v1"], pa.Schema)
 
 
 def test_extended_extraction_schemas_returns_arrow_schemas() -> None:
+    """Extended extraction schema helper returns Arrow schema payloads."""
     payload = extended_extraction_schemas()
     assert "libcst_files_v1" in payload
     assert isinstance(payload["libcst_files_v1"], pa.Schema)

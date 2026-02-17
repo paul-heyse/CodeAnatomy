@@ -8,8 +8,7 @@ from typing import TypeGuard
 import msgspec
 
 from tools.cq.core.typed_boundary import convert_strict
-from tools.cq.core.types import QueryLanguageScope
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
+from tools.cq.core.types import DEFAULT_QUERY_LANGUAGE_SCOPE, QueryLanguageScope
 from tools.cq.search._shared.types import QueryMode
 
 

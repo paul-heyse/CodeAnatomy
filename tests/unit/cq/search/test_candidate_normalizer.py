@@ -37,7 +37,10 @@ def _build_finding(match: EnrichedMatch, _root: Path) -> Finding:
         category=match.category,
         message=match.match_text,
         anchor=Anchor(file=match.file, line=match.line, col=match.col),
-        details=DetailPayload(kind=match.category, data={"match_text": match.match_text}),
+        details=DetailPayload(
+            kind=match.category,
+            data_items=(("match_text", match.match_text),),
+        ),
     )
 
 

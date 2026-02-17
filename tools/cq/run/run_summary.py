@@ -7,8 +7,12 @@ from typing import cast
 
 from tools.cq.core.schema import CqResult, update_result_summary
 from tools.cq.core.summary_contract import SemanticTelemetryV1, build_semantic_telemetry
-from tools.cq.core.types import QueryLanguage, QueryLanguageScope
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, expand_language_scope
+from tools.cq.core.types import (
+    DEFAULT_QUERY_LANGUAGE_SCOPE,
+    QueryLanguage,
+    QueryLanguageScope,
+    expand_language_scope,
+)
 
 _EMPTY_OVERVIEW: dict[str, object] = {}
 _EMPTY_DIAGNOSTICS: list[dict[str, object]] = []
@@ -80,10 +84,10 @@ def _aggregate_run_semantic_telemetry(
         "skipped": 0,
         "timed_out": 0,
     }
-    if not isinstance(step_summaries, dict):
+    if not isinstance(step_summaries, Mapping):
         return build_semantic_telemetry(**totals)
     for step_summary in step_summaries.values():
-        if not isinstance(step_summary, dict):
+        if not isinstance(step_summary, Mapping):
             continue
         raw = step_summary.get(telemetry_key)
         if isinstance(raw, SemanticTelemetryV1):
@@ -93,7 +97,7 @@ def _aggregate_run_semantic_telemetry(
             totals["skipped"] += raw.skipped
             totals["timed_out"] += raw.timed_out
             continue
-        if not isinstance(raw, dict):
+        if not isinstance(raw, Mapping):
             continue
         for key in totals:
             value = raw.get(key)
@@ -121,25 +125,26 @@ def _select_run_semantic_planes(
     *,
     step_order: object,
 ) -> dict[str, object]:
-    if not isinstance(step_summaries, dict):
+    if not isinstance(step_summaries, Mapping):
         return {}
     ordered_steps = (
         [step for step in step_order if isinstance(step, str)]
-        if isinstance(step_order, list)
+        if isinstance(step_order, Sequence) and not isinstance(step_order, (str, bytes, bytearray))
         else list(step_summaries)
     )
     best_planes: dict[str, object] = {}
     best_score = -1
     for step_id in ordered_steps:
         summary = step_summaries.get(step_id)
-        if not isinstance(summary, dict):
+        if not isinstance(summary, Mapping):
             continue
         raw = summary.get("semantic_planes")
-        if not isinstance(raw, dict) or not raw:
+        if not isinstance(raw, Mapping) or not raw:
             continue
-        score = _semantic_plane_signal_score(raw)
+        raw_payload = dict(raw)
+        score = _semantic_plane_signal_score(raw_payload)
         if score > best_score:
-            best_planes = dict(raw)
+            best_planes = raw_payload
             best_score = score
     return best_planes
 
@@ -204,7 +209,7 @@ def _derive_run_scope_metadata(
         if raw_scope in {"auto", "python", "rust"}:
             scopes.append(cast("QueryLanguageScope", raw_scope))
         raw_order = summary.language_order
-        if isinstance(raw_order, list):
+        if isinstance(raw_order, Sequence) and not isinstance(raw_order, (str, bytes, bytearray)):
             normalized: tuple[QueryLanguage, ...] = tuple(
                 cast("QueryLanguage", item) for item in raw_order if item in {"python", "rust"}
             )

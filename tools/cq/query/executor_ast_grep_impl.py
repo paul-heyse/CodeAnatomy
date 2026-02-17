@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 from ast_grep_py import Config, Rule, SgRoot
 
-from tools.cq.astgrep.metavar import extract_rule_metavars, extract_rule_variadic_metavars
+from tools.cq.astgrep.metavar import (
+    apply_metavar_filters,
+    extract_rule_metavars,
+    extract_rule_variadic_metavars,
+    partition_metavar_filters,
+)
 from tools.cq.astgrep.sgpy_scanner import (
     SgRecord,
     is_variadic_separator,
@@ -24,7 +29,7 @@ from tools.cq.core.locations import SourceSpan
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.schema import Anchor, Finding
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.core.types import QueryLanguage
+from tools.cq.core.types import QueryLanguage, is_rust_language
 from tools.cq.query.fragment_cache import (
     PatternFragmentContext,
     assemble_pattern_output,
@@ -34,12 +39,7 @@ from tools.cq.query.fragment_cache import (
     pattern_fragment_entries,
     scan_pattern_fragment_misses,
 )
-from tools.cq.query.language import is_rust_language
 from tools.cq.query.match_contracts import MatchData, MatchRange, MatchRangePoint
-from tools.cq.query.metavar import (
-    apply_metavar_filters,
-    partition_metavar_filters,
-)
 from tools.cq.query.planner import AstGrepRule
 from tools.cq.query.query_cache import (
     run_query_fragment_scan,
@@ -51,9 +51,9 @@ if TYPE_CHECKING:
 
     from tools.cq.query.ir import MetaVarCapture, MetaVarFilter, Query
 
+from tools.cq.core.types import file_extensions_for_scope
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.query.language import file_extensions_for_scope
 
 _MIN_PREFILTER_LITERAL_LEN = 3
 logger = logging.getLogger(__name__)

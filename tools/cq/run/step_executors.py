@@ -11,12 +11,12 @@ import msgspec
 from tools.cq.core.run_context import RunExecutionContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding
+from tools.cq.core.types import DEFAULT_QUERY_LANGUAGE_SCOPE
 from tools.cq.orchestration.request_factory import (
     RequestContextV1,
     RequestFactory,
     SearchRequestOptionsV1,
 )
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
 from tools.cq.run.helpers import error_result as _error_result
 from tools.cq.run.helpers import merge_in_dir as _merge_in_dir
 from tools.cq.run.spec import (
@@ -417,9 +417,9 @@ def _apply_run_scope_filter(
     return CqResult(
         run=result.run,
         summary=result.summary,
-        key_findings=key_findings,
-        evidence=evidence,
-        sections=sections,
+        key_findings=tuple(key_findings),
+        evidence=tuple(evidence),
+        sections=tuple(sections),
         artifacts=result.artifacts,
     )
 

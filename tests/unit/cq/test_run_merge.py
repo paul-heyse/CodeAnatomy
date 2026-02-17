@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import msgspec
 from tools.cq.core.contracts import MergeResultsRequest
@@ -31,8 +33,8 @@ def test_merge_step_results_adds_provenance() -> None:
     finding = Finding(category="test", message="example")
     step_result = CqResult(
         run=run,
-        key_findings=[finding],
-        sections=[Section(title="Section", findings=[finding])],
+        key_findings=(finding,),
+        sections=(Section(title="Section", findings=[finding]),),
     )
 
     merged = CqResult(run=run)
@@ -56,12 +58,12 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
     py_result = CqResult(
         run=run,
         summary=summary_from_mapping({"matches": 1}),
-        key_findings=[Finding(category="d", message="py")],
+        key_findings=(Finding(category="d", message="py"),),
     )
     rs_result = CqResult(
         run=run,
         summary=summary_from_mapping({"matches": 2}),
-        key_findings=[Finding(category="d", message="rs")],
+        key_findings=(Finding(category="d", message="rs"),),
     )
     merged = merge_language_cq_results(
         MergeResultsRequest(
@@ -71,14 +73,14 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
         )
     )
     assert merged.summary["lang_scope"] == "auto"
-    assert merged.summary["language_order"] == ["python", "rust"]
-    assert isinstance(merged.summary["languages"], dict)
+    assert merged.summary["language_order"] == ("python", "rust")
+    assert isinstance(merged.summary["languages"], MappingProxyType)
     languages = merged.summary["languages"]
-    assert isinstance(languages, dict)
+    assert isinstance(languages, MappingProxyType)
     assert "python" in languages
     assert "rust" in languages
-    assert isinstance(merged.summary["cross_language_diagnostics"], list)
-    assert isinstance(merged.summary["language_capabilities"], dict)
+    assert isinstance(merged.summary["cross_language_diagnostics"], tuple)
+    assert isinstance(merged.summary["language_capabilities"], MappingProxyType)
     assert "python_semantic_overview" in merged.summary
     assert "python_semantic_telemetry" in merged.summary
     assert "rust_semantic_telemetry" in merged.summary
@@ -99,12 +101,12 @@ def test_merge_language_cq_results_preserves_summary_common() -> None:
     py_result = CqResult(
         run=run,
         summary=summary_from_mapping({"matches": 1}),
-        key_findings=[Finding(category="d", message="py")],
+        key_findings=(Finding(category="d", message="py"),),
     )
     rs_result = CqResult(
         run=run,
         summary=summary_from_mapping({"matches": 2}),
-        key_findings=[Finding(category="d", message="rs")],
+        key_findings=(Finding(category="d", message="rs"),),
     )
     merged = merge_language_cq_results(
         MergeResultsRequest(
@@ -154,12 +156,12 @@ def test_merge_language_results_preserves_front_door_insight() -> None:
         summary=summary_from_mapping(
             {"matches": 1, "front_door_insight": msgspec.to_builtins(py_insight)}
         ),
-        key_findings=[Finding(category="definition", message="py")],
+        key_findings=(Finding(category="definition", message="py"),),
     )
     rs_result = CqResult(
         run=run,
         summary=summary_from_mapping({"matches": 0}),
-        key_findings=[],
+        key_findings=(),
     )
     merged = merge_language_cq_results(
         MergeResultsRequest(
@@ -170,10 +172,10 @@ def test_merge_language_results_preserves_front_door_insight() -> None:
         )
     )
     raw = merged.summary.get("front_door_insight")
-    assert isinstance(raw, dict)
+    assert isinstance(raw, Mapping)
     assert raw.get("source") == "entity"
     target = raw.get("target")
-    assert isinstance(target, dict)
+    assert isinstance(target, Mapping)
     assert target.get("symbol") == "target"
 
 
@@ -214,17 +216,17 @@ def test_merge_language_results_marks_partial_when_language_missing_insight() ->
         )
     )
     raw = merged.summary.get("front_door_insight")
-    assert isinstance(raw, dict)
+    assert isinstance(raw, Mapping)
     neighborhood = raw.get("neighborhood")
-    assert isinstance(neighborhood, dict)
+    assert isinstance(neighborhood, Mapping)
     callers = neighborhood.get("callers")
-    assert isinstance(callers, dict)
+    assert isinstance(callers, Mapping)
     assert callers.get("availability") == "partial"
     degradation = raw.get("degradation")
-    assert isinstance(degradation, dict)
+    assert isinstance(degradation, MappingProxyType)
     assert degradation.get("scope_filter") == "partial"
     notes = degradation.get("notes")
-    assert isinstance(notes, list)
+    assert isinstance(notes, tuple)
     assert any("missing_languages=rust" in str(note) for note in notes)
 
 
@@ -252,7 +254,7 @@ def test_merge_language_results_aggregates_semantic_telemetry() -> None:
                 },
             }
         ),
-        key_findings=[Finding(category="definition", message="py")],
+        key_findings=(Finding(category="definition", message="py"),),
     )
     rust_result = CqResult(
         run=run,
@@ -268,7 +270,7 @@ def test_merge_language_results_aggregates_semantic_telemetry() -> None:
                 },
             }
         ),
-        key_findings=[Finding(category="definition", message="rs")],
+        key_findings=(Finding(category="definition", message="rs"),),
     )
 
     merged = merge_language_cq_results(

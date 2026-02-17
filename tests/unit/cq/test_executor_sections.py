@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import msgspec
@@ -106,12 +107,12 @@ def test_auto_scope_summary_uses_multilang_partitions(tmp_path: Path) -> None:
     assert "rust_semantic_telemetry" in result.summary
     assert "python_semantic_diagnostics" in result.summary
     assert result.summary["lang_scope"] == "auto"
-    assert result.summary["language_order"] == ["python", "rust"]
+    assert result.summary["language_order"] == ("python", "rust")
     languages = result.summary["languages"]
-    assert isinstance(languages, dict)
+    assert isinstance(languages, MappingProxyType)
     assert "python" in languages
     assert "rust" in languages
-    assert isinstance(languages["python"], dict)
+    assert isinstance(languages["python"], MappingProxyType)
     assert "query" not in languages["python"]
     assert "front_door_insight" in result.summary
 
@@ -125,15 +126,15 @@ def test_single_scope_summary_uses_canonical_multilang_keys(tmp_path: Path) -> N
     result = _execute_query(plan=plan, query=query, tc=tc, root=tmp_path)
 
     assert result.summary["lang_scope"] == "python"
-    assert result.summary["language_order"] == ["python"]
+    assert result.summary["language_order"] == ("python",)
     assert "python_semantic_overview" in result.summary
     assert "python_semantic_telemetry" in result.summary
     assert "rust_semantic_telemetry" in result.summary
     assert "python_semantic_diagnostics" in result.summary
     languages = result.summary["languages"]
-    assert isinstance(languages, dict)
+    assert isinstance(languages, MappingProxyType)
     assert set(languages) == {"python"}
-    assert isinstance(languages["python"], dict)
+    assert isinstance(languages["python"], MappingProxyType)
 
 
 def test_entity_definition_finding_includes_counts_and_scope(tmp_path: Path) -> None:
@@ -174,12 +175,12 @@ def test_auto_scope_entity_insight_marks_missing_language_partial(tmp_path: Path
     result = _execute_query(plan=plan, query=query, tc=tc, root=tmp_path)
 
     insight = result.summary.get("front_door_insight")
-    assert isinstance(insight, dict)
+    assert isinstance(insight, MappingProxyType)
     degradation = insight.get("degradation")
-    assert isinstance(degradation, dict)
+    assert isinstance(degradation, MappingProxyType)
     assert degradation.get("scope_filter") == "partial"
     notes = degradation.get("notes")
-    assert isinstance(notes, list)
+    assert isinstance(notes, tuple)
     assert any("missing_languages=python" in str(note) for note in notes)
 
 
@@ -217,12 +218,12 @@ def test_entity_insight_skips_semantic_for_high_cardinality_query(tmp_path: Path
     result = _execute_query(plan=plan, query=query, tc=tc, root=tmp_path)
 
     insight = result.summary.get("front_door_insight")
-    assert isinstance(insight, dict)
+    assert isinstance(insight, MappingProxyType)
     degradation = insight.get("degradation")
-    assert isinstance(degradation, dict)
+    assert isinstance(degradation, MappingProxyType)
     assert degradation.get("semantic") == "skipped"
     notes = degradation.get("notes")
-    assert isinstance(notes, list)
+    assert isinstance(notes, tuple)
     assert any("not_attempted_by_budget" in str(note) for note in notes)
 
     python_semantic_telemetry = result.summary.get("python_semantic_telemetry")
@@ -274,9 +275,9 @@ def test_mark_entity_insight_semantic_from_merged_telemetry() -> None:
         ),
     )
 
-    _mark_entity_insight_partial_from_summary(result)
-    updated = result.summary.get("front_door_insight")
-    assert isinstance(updated, dict)
+    updated_result = _mark_entity_insight_partial_from_summary(result)
+    updated = updated_result.summary.get("front_door_insight")
+    assert isinstance(updated, MappingProxyType)
     degradation = updated.get("degradation")
-    assert isinstance(degradation, dict)
+    assert isinstance(degradation, MappingProxyType)
     assert degradation.get("semantic") == "partial"

@@ -1,8 +1,11 @@
-# ruff: noqa: D100, D103, ANN001
+"""Tests for builtin preference in delta feature operations."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import cast
+
+import pytest
 
 from datafusion_engine.delta.service import DeltaFeatureOps, DeltaService
 from storage.deltalake.delta_write import DeltaFeatureMutationOptions
@@ -18,7 +21,10 @@ class _ServiceStub:
         return self.resolved
 
 
-def test_feature_ops_prefers_storage_builtin_enable_change_data_feed(monkeypatch) -> None:
+def test_feature_ops_prefers_storage_builtin_enable_change_data_feed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Delta feature ops delegate to builtin storage mutation helper."""
     called: list[tuple[object, bool]] = []
 
     def _fake_enable(

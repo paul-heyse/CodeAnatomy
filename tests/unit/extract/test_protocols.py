@@ -1,4 +1,3 @@
-# ruff: noqa: D103
 """Tests for extractor protocol definitions."""
 
 from __future__ import annotations
@@ -9,4 +8,5 @@ from extract.protocols import ExtractorPort
 
 
 def test_extractor_port_is_protocol() -> None:
+    """ExtractorPort remains a typing.Protocol contract."""
     assert issubclass(ExtractorPort, Protocol)

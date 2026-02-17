@@ -68,6 +68,7 @@ def test_maybe_record_explain_analyze_threshold_uses_plan_signals(
 
     monkeypatch.setattr(graph_module, "extract_plan_signals", _fake_extract_plan_signals)
     monkeypatch.setattr(graph_module, "record_artifact", _fake_record_artifact)
+    maybe_record_explain = graph_module.__dict__["_maybe_record_explain_analyze_threshold"]
 
     context = _Context(runtime=_Runtime(runtime_profile=_Profile(diagnostics=_Diagnostics(10.0))))
     node = _Node(
@@ -75,7 +76,7 @@ def test_maybe_record_explain_analyze_threshold_uses_plan_signals(
         plan_bundle=_Bundle(plan_fingerprint="fp:view_x", plan_identity_hash="pid:view_x"),
     )
 
-    graph_module._maybe_record_explain_analyze_threshold(  # noqa: SLF001
+    maybe_record_explain(
         context=cast("ViewGraphContext", context),
         node=cast("ViewNode", node),
     )
@@ -102,6 +103,7 @@ def test_maybe_record_explain_analyze_threshold_skips_below_threshold(
 
     monkeypatch.setattr(graph_module, "extract_plan_signals", _fake_extract_plan_signals)
     monkeypatch.setattr(graph_module, "record_artifact", _fake_record_artifact)
+    maybe_record_explain = graph_module.__dict__["_maybe_record_explain_analyze_threshold"]
 
     context = _Context(runtime=_Runtime(runtime_profile=_Profile(diagnostics=_Diagnostics(10.0))))
     node = _Node(
@@ -109,7 +111,7 @@ def test_maybe_record_explain_analyze_threshold_skips_below_threshold(
         plan_bundle=_Bundle(plan_fingerprint="fp:view_y", plan_identity_hash="pid:view_y"),
     )
 
-    graph_module._maybe_record_explain_analyze_threshold(  # noqa: SLF001
+    maybe_record_explain(
         context=cast("ViewGraphContext", context),
         node=cast("ViewNode", node),
     )

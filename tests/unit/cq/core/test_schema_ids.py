@@ -22,21 +22,21 @@ def _build_result(*, run_id: str) -> CqResult:
             elapsed_ms=1.0,
             run_id=run_id,
         ),
-        key_findings=[
+        key_findings=(
             Finding(
                 category="call_site",
                 message="foo called",
                 anchor=Anchor(file="a.py", line=10, col=2),
-            )
-        ],
-        evidence=[
+            ),
+        ),
+        evidence=(
             Finding(
                 category="import",
                 message="imports pathlib",
                 anchor=Anchor(file="a.py", line=1, col=0),
-            )
-        ],
-        sections=[
+            ),
+        ),
+        sections=(
             Section(
                 title="Preview",
                 findings=[
@@ -46,8 +46,8 @@ def _build_result(*, run_id: str) -> CqResult:
                         anchor=Anchor(file="a.py", line=1, col=0),
                     )
                 ],
-            )
-        ],
+            ),
+        ),
     )
 
 

@@ -443,10 +443,10 @@ class SymtableEnricher:
 
 
 def filter_by_scope(
-    findings: list[Finding],
+    findings: Sequence[Finding],
     scope_filter: ScopeFilter,
     enricher: SymtableEnricher,
-    records: list[SgRecord],
+    records: Sequence[SgRecord],
 ) -> list[Finding]:
     """Filter findings by scope criteria.
 
@@ -467,7 +467,7 @@ def filter_by_scope(
         Filtered findings matching scope criteria.
     """
     if not findings or len(findings) != len(records):
-        return findings
+        return list(findings)
 
     filtered: list[Finding] = []
 

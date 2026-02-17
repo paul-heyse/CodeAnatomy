@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from tools.cq.core.entity_kinds import ENTITY_KINDS
-from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+from tools.cq.core.types import (
+    DEFAULT_QUERY_LANGUAGE,
+    DEFAULT_QUERY_LANGUAGE_SCOPE,
+    QueryLanguage,
+    QueryLanguageScope,
+    is_rust_language,
+)
 from tools.cq.query.ir import (
     CompositeRule,
     Expander,
@@ -20,11 +26,6 @@ from tools.cq.query.ir import (
     Query,
     RelationalConstraint,
     Scope,
-)
-from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE,
-    DEFAULT_QUERY_LANGUAGE_SCOPE,
-    is_rust_language,
 )
 
 if TYPE_CHECKING:

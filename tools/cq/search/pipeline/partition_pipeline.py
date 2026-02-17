@@ -31,8 +31,7 @@ from tools.cq.core.cache.telemetry import (
 )
 from tools.cq.core.contracts import contract_to_builtins, require_mapping
 from tools.cq.core.enrichment_mode import IncrementalEnrichmentModeV1
-from tools.cq.core.types import QueryLanguage
-from tools.cq.query.language import constrain_include_globs_for_language
+from tools.cq.core.types import QueryLanguage, constrain_include_globs_for_language
 from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.cache.contracts import SearchCandidatesCacheV1, SearchEnrichmentAnchorCacheV1
 from tools.cq.search.pipeline.candidate_phase import run_candidate_phase

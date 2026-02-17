@@ -8,14 +8,12 @@ SearchContext: Any = None
 SearchPipeline: Any = None
 SearchResultAssembly: Any = None
 assemble_result: Any = None
-run_smart_search_pipeline: Any = None
 
 __all__ = [
     "SearchContext",
     "SearchPipeline",
     "SearchResultAssembly",
     "assemble_result",
-    "run_smart_search_pipeline",
 ]
 
 
@@ -33,9 +31,5 @@ def __getattr__(name: str) -> Any:
         from tools.cq.search.pipeline.contracts import SearchConfig
 
         return SearchConfig
-    if name == "run_smart_search_pipeline":
-        from tools.cq.search.pipeline.smart_search import run_smart_search_pipeline
-
-        return run_smart_search_pipeline
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)

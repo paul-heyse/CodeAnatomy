@@ -1,4 +1,5 @@
-# ruff: noqa: D100, D103
+"""Tests for runtime profile config struct defaults."""
+
 from __future__ import annotations
 
 from datafusion_engine.session.config_structs import (
@@ -8,6 +9,7 @@ from datafusion_engine.session.config_structs import (
 
 
 def test_runtime_profile_config_defaults() -> None:
+    """Runtime profile config initializes expected nested defaults."""
     config = RuntimeProfileConfig()
 
     assert isinstance(config.execution, ExecutionConfig)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType
 
 import msgspec
 from tools.cq.core.bootstrap import resolve_runtime_services
@@ -51,20 +52,20 @@ def test_finalize_single_scope_summary_builds_language_partition(tmp_path: Path)
     )
     result = msgspec.structs.replace(
         result,
-        key_findings=[
+        key_findings=(
             *result.key_findings,
             Finding(
                 category="definition",
                 message="target definition",
                 anchor=Anchor(file="a.py", line=1),
             ),
-        ],
+        ),
     )
 
     finalized = finalize_single_scope_summary(ctx, result)
 
     assert finalized.summary["lang_scope"] == "python"
-    assert finalized.summary["language_order"] == ["python"]
+    assert finalized.summary["language_order"] == ("python",)
     languages = finalized.summary["languages"]
-    assert isinstance(languages, dict)
+    assert isinstance(languages, MappingProxyType)
     assert "python" in languages

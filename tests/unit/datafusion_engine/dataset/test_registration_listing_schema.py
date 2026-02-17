@@ -1,4 +1,3 @@
-# ruff: noqa: D103
 """Tests for listing/schema registration split modules."""
 
 from __future__ import annotations
@@ -9,6 +8,7 @@ from datafusion_engine.dataset import registration_listing, registration_schema
 
 
 def test_registration_listing_contains_local_ddl_logic() -> None:
+    """Listing module owns local DDL registration logic."""
     source = inspect.getsource(registration_listing)
     assert "def _external_table_ddl" in source
     assert "def _register_dataset_with_context" in source
@@ -18,6 +18,7 @@ def test_registration_listing_contains_local_ddl_logic() -> None:
 
 
 def test_registration_schema_contains_local_contract_logic() -> None:
+    """Schema module owns local schema contract logic."""
     source = inspect.getsource(registration_schema)
     assert "def _validate_schema_contracts" in source
     assert "def _partition_schema_validation" in source

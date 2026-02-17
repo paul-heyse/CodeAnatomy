@@ -1,15 +1,20 @@
-# ruff: noqa: D100, D103, ANN001, INP001
+"""Tests for async UDF config bridge in modular runtime install."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from datafusion import SessionContext
 
 from datafusion_engine.udf import extension_core
 from datafusion_engine.udf.extension_core import ExtensionRegistries
 
 
-def test_modular_runtime_bridge_passes_async_udf_policy(monkeypatch) -> None:
+def test_modular_runtime_bridge_passes_async_udf_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime bridge forwards async policy to UDF modular entrypoints."""
     ctx = SessionContext()
     registries = ExtensionRegistries()
     call_log: list[tuple[str, tuple[object, ...]]] = []

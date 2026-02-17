@@ -84,7 +84,7 @@ def test_regression_known_callers(toolchain: Toolchain, repo_root: Path) -> None
     result = _execute_query("entity=function name=execute_plan", toolchain, repo_root)
 
     assert result is not None
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -116,7 +116,7 @@ def test_regression_class_detection(toolchain: Toolchain, repo_root: Path) -> No
     result = _execute_query("entity=class name=Toolchain", toolchain, repo_root)
 
     assert result is not None
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -149,7 +149,7 @@ def test_regression_import_detection(toolchain: Toolchain, repo_root: Path) -> N
     result = _execute_query("entity=import name=Path", toolchain, repo_root)
 
     assert result is not None
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -179,7 +179,7 @@ def test_regression_scope_filtering(toolchain: Toolchain, repo_root: Path) -> No
     result = _execute_query("entity=class in=tools/cq/", toolchain, repo_root)
 
     assert result is not None
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -207,7 +207,7 @@ def test_regression_name_pattern_matching(toolchain: Toolchain, repo_root: Path)
     result = _execute_query("entity=function name=~parse", toolchain, repo_root)
 
     assert result is not None
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -237,7 +237,7 @@ def test_regression_multiple_filters(toolchain: Toolchain, repo_root: Path) -> N
     )
 
     assert result is not None
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 
@@ -267,7 +267,7 @@ def test_regression_empty_query_handling(toolchain: Toolchain, repo_root: Path) 
     result = _execute_query("entity=class name=ThisClassDoesNotExistAnywhere", toolchain, repo_root)
 
     assert result is not None
-    all_findings = result.key_findings + result.evidence
+    all_findings = list(result.key_findings + result.evidence)
     for section in result.sections:
         all_findings.extend(section.findings)
 

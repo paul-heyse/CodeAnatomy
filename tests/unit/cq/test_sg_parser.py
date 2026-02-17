@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 from tools.cq.astgrep.sgpy_scanner import RuleSpec
+from tools.cq.core.types import QueryLanguage
 from tools.cq.query import sg_parser
-from tools.cq.query.language import QueryLanguage
 from tools.cq.query.parser import QueryParseError
 from tools.cq.query.sg_parser import normalize_record_types, sg_scan
 

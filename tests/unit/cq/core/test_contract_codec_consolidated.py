@@ -69,7 +69,7 @@ class TestDecodeJsonResult:
                 elapsed_ms=0.0,
             )
         )
-        encoded = msgspec.json.encode(result)
+        encoded = encode_json(result)
         decoded = decode_json_result(encoded)
         assert isinstance(decoded, CqResult)
 

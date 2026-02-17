@@ -11,7 +11,7 @@ concurrent updates. Unit tests already cover API fundamentals like
 from __future__ import annotations
 
 import json
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -348,44 +348,29 @@ def test_concurrent_cursor_updates(tmp_path: Path) -> None:
     store = CdfCursorStore(cursors_path=cursors_path)
     dataset_name = "concurrent_dataset"
 
-    # Track results from each thread
+    # Track results from each task
     results: list[CdfCursor] = []
-    errors: list[Exception] = []
-    lock = threading.Lock()
 
-    def update_cursor(version: int) -> None:
+    def update_cursor(version: int) -> CdfCursor:
         """Update cursor to specific version.
 
         Parameters
         ----------
         version
             Version to update to.
+
+        Returns:
+        -------
+        CdfCursor
+            Updated cursor snapshot.
         """
-        try:
-            cursor = store.update_version(dataset_name, version)
-            with lock:
-                results.append(cursor)
-        except Exception as e:  # noqa: BLE001
-            with lock:
-                errors.append(e)
+        return store.update_version(dataset_name, version)
 
-    # Create multiple threads that update the cursor concurrently
-    threads = []
+    # Create multiple tasks that update the cursor concurrently
     versions = [10, 20, 30, 40, 50]
-    for version in versions:
-        thread = threading.Thread(target=update_cursor, args=(version,))
-        threads.append(thread)
-
-    # Start all threads
-    for thread in threads:
-        thread.start()
-
-    # Wait for all threads to complete
-    for thread in threads:
-        thread.join()
-
-    # Verify no errors occurred
-    assert len(errors) == 0, f"Concurrent updates should not raise errors: {errors}"
+    with ThreadPoolExecutor(max_workers=len(versions)) as executor:
+        futures = [executor.submit(update_cursor, version) for version in versions]
+        results.extend(future.result() for future in futures)
 
     # Verify all threads completed successfully
     assert len(results) == len(versions), "All threads should complete their updates"

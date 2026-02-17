@@ -199,9 +199,9 @@ def filter_result_by_scope(
     return CqResult(
         run=result.run,
         summary=result.summary,
-        key_findings=key_findings,
-        evidence=evidence,
-        sections=sections,
+        key_findings=tuple(key_findings),
+        evidence=tuple(evidence),
+        sections=tuple(sections),
         artifacts=result.artifacts,
     )
 

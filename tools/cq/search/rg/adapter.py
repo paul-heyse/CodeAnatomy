@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tools.cq.core.pathing import normalize_repo_relative_path
-from tools.cq.core.types import QueryLanguageScope
-from tools.cq.query.language import (
+from tools.cq.core.types import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
+    QueryLanguageScope,
     is_path_in_lang_scope,
     ripgrep_types_for_scope,
 )

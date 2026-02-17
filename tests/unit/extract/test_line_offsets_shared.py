@@ -1,4 +1,3 @@
-# ruff: noqa: D103
 """Tests for shared line-offset extraction helper."""
 
 from __future__ import annotations
@@ -8,6 +7,7 @@ from extract.coordination.line_offsets import line_offsets_from_file_ctx
 
 
 def test_line_offsets_from_file_context() -> None:
+    """Line offset helper computes offsets from FileContext payload."""
     code = "a\n b\n"
     file_ctx = FileContext(
         file_id="f",

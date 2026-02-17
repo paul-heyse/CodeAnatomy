@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from tools.cq.core.front_door_contracts import (
     FrontDoorInsightV1,
@@ -142,10 +142,15 @@ def coerce_front_door_insight(payload: object) -> FrontDoorInsightV1 | None:
     """
     if isinstance(payload, FrontDoorInsightV1):
         return payload
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
+        return None
+    raw_payload = dict(payload)
+    if not raw_payload:
+        return None
+    if "source" not in raw_payload and "target" not in raw_payload:
         return None
     try:
-        return convert_lax(payload, type_=FrontDoorInsightV1)
+        return convert_lax(raw_payload, type_=FrontDoorInsightV1)
     except BoundaryDecodeError:
         return None
 

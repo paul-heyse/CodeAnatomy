@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from tools.cq.core.contract_codec import encode_json
@@ -65,10 +65,10 @@ def _derive_query_fallback(result: CqResult) -> str | None:
     run = result.run
     if run.macro == "run":
         steps = result.summary.steps
-        if isinstance(steps, list):
+        if isinstance(steps, (list, tuple)):
             return f"multi-step plan ({len(steps)} steps)"
         step_summaries = result.summary.step_summaries
-        if isinstance(step_summaries, dict):
+        if isinstance(step_summaries, Mapping):
             return f"multi-step plan ({len(step_summaries)} steps)"
         return "multi-step plan"
     if len(run.argv) > RUN_QUERY_ARG_START_INDEX:
@@ -204,9 +204,9 @@ def render_insight_card_from_summary(summary: SummaryEnvelopeV1 | dict[str, obje
         return []
     if isinstance(raw, FrontDoorInsightV1):
         return render_insight_card(raw)
-    if isinstance(raw, dict):
+    if isinstance(raw, Mapping):
         try:
-            insight = convert_lax(raw, type_=FrontDoorInsightV1)
+            insight = convert_lax(dict(raw), type_=FrontDoorInsightV1)
             return render_insight_card(insight)
         except BoundaryDecodeError:
             return []
@@ -229,11 +229,11 @@ def _derive_enrichment_status(value: object) -> str:
     applied = 0
     total = 0
     degraded = 0
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         for lang_data in value.values():
-            if isinstance(lang_data, dict):
+            if isinstance(lang_data, Mapping):
                 for stage_data in lang_data.values():
-                    if isinstance(stage_data, dict):
+                    if isinstance(stage_data, Mapping):
                         applied += int(stage_data.get("applied", 0) or 0)
                         total += int(stage_data.get("total", 0) or 0)
                         degraded += int(stage_data.get("degraded", 0) or 0)
@@ -258,7 +258,7 @@ def _derive_python_semantic_telemetry_status(value: object) -> str:
     str
         Compact status line.
     """
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         return "Python semantic: skipped"
     applied = value.get("applied", 0)
     attempted = value.get("attempted", 0)
@@ -280,7 +280,7 @@ def _derive_rust_semantic_telemetry_status(value: object) -> str:
     str
         Compact status line.
     """
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         return "Rust semantic: skipped"
     applied = value.get("applied", 0)
     attempted = value.get("attempted", 0)
@@ -302,10 +302,10 @@ def _derive_semantic_advanced_status(value: object) -> str:
     str
         Compact status line.
     """
-    if not isinstance(value, dict) or not value:
+    if not isinstance(value, Mapping) or not value:
         return "Semantic planes: none"
     counts = value.get("counts")
-    if not isinstance(counts, dict):
+    if not isinstance(counts, Mapping):
         return "Semantic planes: present"
     tokens = int(counts.get("semantic_tokens", 0) or 0)
     locals_count = int(counts.get("locals", 0) or 0)
@@ -326,7 +326,7 @@ def _derive_python_semantic_diagnostics_status(value: object) -> str:
     str
         Compact status line.
     """
-    count = len(value) if isinstance(value, (list, dict)) else 0
+    count = len(value) if isinstance(value, (list, tuple, Mapping)) else 0
     if count == 0:
         return "Python semantic diagnostics: clean"
     return f"Python semantic diagnostics: {count} items"
@@ -346,7 +346,7 @@ def _derive_capabilities_status(value: object) -> str:
         Compact status line.
     """
     langs: list[str] = []
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         langs = [str(key) for key in value]
     return f"Capabilities: {', '.join(langs)}" if langs else "Capabilities: none"
 
@@ -365,11 +365,11 @@ def _derive_cross_lang_status(value: object) -> str:
         Compact status line.
     """
     count = 0
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         count = len(value)
-    elif isinstance(value, dict):
+    elif isinstance(value, Mapping):
         raw = value.get("diagnostics")
-        count = len(raw) if isinstance(raw, list) else 0
+        count = len(raw) if isinstance(raw, (list, tuple)) else 0
     if count == 0:
         return "Cross-lang: clean"
     return f"Cross-lang: {count} diagnostics"

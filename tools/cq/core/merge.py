@@ -24,7 +24,11 @@ def _clone_with_provenance(
     data = dict(finding.details.data)
     data["source_step"] = step_id
     data["source_macro"] = source_macro
-    details = DetailPayload(kind=finding.details.kind, score=finding.details.score, data=data)
+    details = DetailPayload(
+        kind=finding.details.kind,
+        score=finding.details.score,
+        data_items=tuple(sorted(data.items())),
+    )
     return Finding(
         category=finding.category,
         message=finding.message,
@@ -68,9 +72,9 @@ def merge_step_results(merged: CqResult, step_id: str, step_result: CqResult) ->
     )
     return msgspec.structs.replace(
         merged,
-        sections=[
+        sections=(
             *merged.sections,
-            *[
+            *tuple(
                 Section(
                     title=f"{step_id}: {section.title}",
                     findings=[
@@ -84,9 +88,9 @@ def merge_step_results(merged: CqResult, step_id: str, step_result: CqResult) ->
                     collapsed=section.collapsed,
                 )
                 for section in step_result.sections
-            ],
-        ],
-        artifacts=[*merged.artifacts, *step_result.artifacts],
+            ),
+        ),
+        artifacts=(*merged.artifacts, *step_result.artifacts),
     )
 
 

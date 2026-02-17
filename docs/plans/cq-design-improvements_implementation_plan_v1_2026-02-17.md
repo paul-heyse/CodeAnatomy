@@ -2152,8 +2152,8 @@ high-risk immutability migration.
 
 **Status Snapshot**
 
-- Completed items: 34 / 43
-- Not complete (partial): 9 / 43
+- Completed items: 43 / 43
+- Not complete (partial): 0 / 43
 - Not started: 0 / 43
 
 **Phase 1: Safe Deletions and Renames**
@@ -2189,55 +2189,58 @@ high-risk immutability migration.
       place)
 - [x] S12: Extract from `assembly.py`
 - [x] S13: Extract pure analysis from macros
-- [ ] S14: Split `smart_search.py` (partial: relevance/request parsing extracted, but
-      `smart_search.py` remains 317 LOC and still contains compatibility wrapper/orchestration
-      helpers beyond the target thin entrypoint shape)
+- [x] S14: Split `smart_search.py` (`relevance.py` and `request_parsing.py` are in place with
+      dedicated tests; `smart_search.py` is reduced to 187 LOC and now acts as an orchestration
+      shell)
 - [x] S15: Fix core→search reverse dependencies with hard cutover (no re-export shim)
 - [x] S26: Invert LDMD collapse dependency
-- [ ] S28: Remove AST-grep/query dependency inversion (partial: metavar helpers moved, but
-      `tools/cq/query/metavar.py` still exports AST-grep helper wrapper functions and
-      `tools/cq/query/language.py` still carries language helper/constant logic not fully folded
-      into core typed vocabulary)
+- [x] S28: Remove AST-grep/query dependency inversion (`tools/cq/query/metavar.py` and
+      `tools/cq/query/language.py` are removed; AST-grep metavariable helpers live in
+      `tools/cq/astgrep/metavar.py` with dedicated tests; query/runtime imports now resolve via
+      `tools/cq/core/types.py`)
 - [x] S29: Split `search/_shared/core.py` (`_shared/core.py` removed; imports cut over to
       `_shared/helpers.py`, `_shared/requests.py`, `_shared/timeouts.py`)
 - [x] S32: Move render-enrichment session assembly out of `report.py`
-- [ ] D4: Delete extracted functions from source modules (after S11, S14) (partial: query
-      extraction target is met, but search-side thin-module threshold for S14 remains open)
-- [ ] D7: Delete reverse-dependency artifacts (after S26, S28, S29, S32) (partial: LDMD/report
-      cleanup and `_shared/core.py` deletion are complete; S28 hard-cutover remains incomplete)
+- [x] D4: Delete extracted functions from source modules (after S11, S14) (`executor_runtime.py`
+      is 105 LOC, `executor_ast_grep.py` is 77 LOC, and `smart_search.py` is 187 LOC with
+      extracted relevance/request-parsing helpers removed from source module bodies)
+- [x] D7: Delete reverse-dependency artifacts (after S26, S28, S29, S32) (verification grep only
+      shows expected neighborhood `section_layout` references; no residual
+      `tools.cq.search._shared.core`, `tools.cq.query.metavar`, or
+      `_prepare_render_enrichment_session` references remain)
 
 **Phase 4: Immutability Migration**
 
 - [x] S27: Freeze query scan context contracts (`ScanContext`, `EntityCandidates`)
 - [x] S31: Make `build_error_result` CQS-compliant
-- [ ] S16: Enforce deep immutability for core schema boundaries (`DetailPayload`, `Finding`,
-      `SummaryEnvelopeV1`, `CqResult`) with refreshed mutation baseline (partial: boundary structs
-      are now frozen and mutation helpers are copy-on-write, but deep immutability is incomplete
-      because key summary/result containers are still mutable `list`/`dict` fields)
+- [x] S16: Enforce deep immutability for core schema boundaries (`DetailPayload`, `Finding`,
+      `SummaryEnvelopeV1`, `CqResult`) with caller/test migration complete across CQ scope
+      (tuple/mapping boundary assertions updated; front-door/summary mapping consumers updated for
+      immutable mapping inputs)
 - [x] S17: Extend `MacroResultBuilder` and migrate mutation callsites (`MacroResultBuilder` API
       is expanded and macros are migrated off direct `result.key_findings/evidence/sections`
       mutation patterns)
 - [x] S18: Refactor executor CQS (handler pipeline now returns findings/summary updates and
       top-level execution functions perform centralized assembly via copy-on-write summary updates)
-- [ ] D5: Delete mutation-supporting methods and direct mutation patterns (after S16, S17, S18,
-      S27, S31) (partial: direct `result.*.append/extend/insert` and summary field-assignment
-      patterns are removed, but deep immutability cleanup tied to S16 remains open)
+- [x] D5: Delete mutation-supporting methods and direct mutation patterns (after S16, S17, S18,
+      S27, S31) (`DetailPayload.__setitem__` and direct result/summary mutation patterns are
+      removed; CQ tests now validate copy-on-write contract behavior end-to-end)
 
 **Phase 5: Typed Internal Flow**
 
 - [x] S19: Define enrichment payload view structs
-- [ ] S20: Build typed enrichment facts directly (partial: typed `PythonEnrichmentFacts` flow
-      introduced, but enrichment state/stage accumulation still relies on mixed dict-based
-      intermediates before boundary serialization)
+- [x] S20: Build typed enrichment facts directly (stage ingestion now uses typed stage-fact
+      patches and typed `PythonEnrichmentFacts` merges end-to-end; legacy dict-first stage
+      ingestion helpers removed)
 - [x] S21: Add DI seams to enrichment entry points
 - [x] S22: Add Rust enrichment stage timings
 
 **Phase 6: Final Hard-Cutover Cleanup**
 
-- [ ] S33: Collapse CLI Params/Options duplication into a single command schema (partial: command
-      schema and projection layer are in place and wired, but duplicate command-field declarations
-      still exist in `cli_app/params.py`)
-- [ ] D8: Delete CLI duplication artifacts (after S33) (partial: blocked by remaining S33
-      duplication)
+- [x] S33: Collapse CLI Params/Options duplication into a single command schema (`params.py`
+      now generates Cyclopts parameter dataclasses from canonical command schema structs; runtime
+      options remain direct schema aliases)
+- [x] D8: Delete CLI duplication artifacts (after S33) (hand-maintained params/options duplication
+      removed in favor of schema-driven projection and canonical option aliases)
 - [x] S34: Simplify query registry caching with diskcache built-ins
 - [x] D9: Delete redundant query-registry memoization layer (after S34)

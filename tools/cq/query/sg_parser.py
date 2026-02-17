@@ -38,14 +38,14 @@ from tools.cq.core.cache.telemetry import (
 )
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.structs import CqStruct
-from tools.cq.core.types import QueryLanguage
-from tools.cq.index.files import build_repo_file_index, tabulate_files
-from tools.cq.index.repo import RepoContext, resolve_repo_context
-from tools.cq.query.language import (
+from tools.cq.core.types import (
     DEFAULT_QUERY_LANGUAGE,
+    QueryLanguage,
     file_extensions_for_language,
     is_rust_language,
 )
+from tools.cq.index.files import build_repo_file_index, tabulate_files
+from tools.cq.index.repo import RepoContext, resolve_repo_context
 from tools.cq.query.parser import QueryParseError
 
 # Record types from ast-grep rules

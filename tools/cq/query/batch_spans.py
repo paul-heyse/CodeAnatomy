@@ -9,7 +9,7 @@ from ast_grep_py import SgNode, SgRoot
 
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.pathing import normalize_repo_relative_path
-from tools.cq.core.types import QueryLanguage
+from tools.cq.core.types import QueryLanguage, file_extensions_for_language
 from tools.cq.query.executor_ast_grep import (
     AstGrepMatchSpan,
     execute_rule_matches,
@@ -19,7 +19,6 @@ from tools.cq.query.executor_ast_grep import (
     resolve_rule_metavar_names,
     resolve_rule_variadic_metavars,
 )
-from tools.cq.query.language import file_extensions_for_language
 
 if TYPE_CHECKING:
     from tools.cq.query.ir import Query

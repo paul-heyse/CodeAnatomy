@@ -15,8 +15,7 @@ import msgspec
 from ast_grep_py import SgNode, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
-from tools.cq.core.types import QueryLanguage
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE
+from tools.cq.core.types import DEFAULT_QUERY_LANGUAGE, QueryLanguage
 from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.pipeline.classifier_runtime import (
     ClassifierCacheContext,

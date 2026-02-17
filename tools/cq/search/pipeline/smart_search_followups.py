@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from tools.cq.core.schema import DetailPayload, Finding
+from tools.cq.core.schema import Finding
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
@@ -29,7 +30,7 @@ def build_followups(
                     category="next_step",
                     message=f"Find callers: /cq calls {query}",
                     severity="info",
-                    details=DetailPayload(
+                    details=build_detail_payload(
                         kind="next_step",
                         data={"cmd": f"/cq calls {query}"},
                     ),
@@ -40,7 +41,7 @@ def build_followups(
                     category="next_step",
                     message=f'Find definitions: /cq q "entity=function name={query}"',
                     severity="info",
-                    details=DetailPayload(
+                    details=build_detail_payload(
                         kind="next_step",
                         data={"cmd": f'/cq q "entity=function name={query}"'},
                     ),
@@ -51,7 +52,7 @@ def build_followups(
                     category="next_step",
                     message=f'Find callers (transitive): /cq q "entity=function name={query} expand=callers(depth=2)"',
                     severity="info",
-                    details=DetailPayload(
+                    details=build_detail_payload(
                         kind="next_step",
                         data={
                             "cmd": f'/cq q "entity=function name={query} expand=callers(depth=2)"'
@@ -67,7 +68,7 @@ def build_followups(
                     category="next_step",
                     message=f"Analyze impact: /cq impact {query}",
                     severity="info",
-                    details=DetailPayload(
+                    details=build_detail_payload(
                         kind="next_step",
                         data={"cmd": f"/cq impact {query}"},
                     ),

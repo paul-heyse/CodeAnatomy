@@ -53,7 +53,7 @@ def _build_enrichment_result(root: Path, file_count: int) -> CqResult:
         elapsed_ms=12.0,
         toolchain={},
     )
-    return CqResult(run=run, key_findings=findings)
+    return CqResult(run=run, key_findings=tuple(findings))
 
 
 def _extract_python_enrichment_pids(result: CqResult) -> set[int]:
@@ -129,8 +129,8 @@ def test_render_search_hides_summary_and_context_blocks() -> None:
     result = CqResult(
         run=_run_meta(),
         summary=summary_from_mapping({"query": "build_graph", "mode": "identifier"}),
-        key_findings=[finding],
-        sections=[Section(title="Resolved Objects", findings=[finding])],
+        key_findings=(finding,),
+        sections=(Section(title="Resolved Objects", findings=[finding]),),
     )
     output = render_markdown(result)
     assert "## Summary" not in output
@@ -160,8 +160,8 @@ def test_render_finding_includes_enrichment_tables() -> None:
     )
     result = CqResult(
         run=_run_meta(),
-        key_findings=[finding],
-        sections=[Section(title="Top Contexts", findings=[finding])],
+        key_findings=(finding,),
+        sections=(Section(title="Top Contexts", findings=[finding]),),
     )
 
     output = render_markdown(result)
@@ -216,7 +216,7 @@ def test_render_includes_python_semantic_overview_and_code_facts() -> None:
                 "python_semantic_overview": {"primary_symbol": "target", "matches_enriched": 1},
             }
         ),
-        key_findings=[finding],
+        key_findings=(finding,),
     )
 
     output = render_markdown(result)
@@ -251,7 +251,7 @@ def test_render_enrichment_parameters_uses_params_alias() -> None:
             }
         ),
     )
-    result = CqResult(run=_run_meta(), key_findings=[finding])
+    result = CqResult(run=_run_meta(), key_findings=(finding,))
 
     output = render_markdown(result)
     assert "Parameters: value: int" in output
@@ -277,7 +277,7 @@ def test_render_hides_unresolved_facts_by_default() -> None:
             }
         ),
     )
-    output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
+    output = render_markdown(CqResult(run=_run_meta(), key_findings=(finding,)))
     assert "N/A - not resolved" not in output
     assert "N/A - not applicable" not in output
     assert "Identity" in output
@@ -305,7 +305,7 @@ def test_render_can_show_unresolved_facts_with_env(
             }
         ),
     )
-    output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
+    output = render_markdown(CqResult(run=_run_meta(), key_findings=(finding,)))
     assert "N/A - not resolved" in output
     assert "N/A - not applicable" not in output
 
@@ -327,7 +327,7 @@ def test_render_falls_back_to_top_level_enrichment_when_nested_language_payload_
             }
         ),
     )
-    output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
+    output = render_markdown(CqResult(run=_run_meta(), key_findings=(finding,)))
     assert "Language: python" in output
     assert "Symbol Role: callsite" in output
 
@@ -354,7 +354,7 @@ def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None
             {"language": "python", "line_text": "import os", "match_text": "os"}
         ),
     )
-    result = CqResult(run=run, key_findings=[finding])
+    result = CqResult(run=run, key_findings=(finding,))
 
     output = render_markdown(result)
     assert "Code Facts:" in output
@@ -390,7 +390,7 @@ def test_render_query_finding_attaches_enrichment_without_context_by_default(
         anchor=Anchor(file="src/module.py", line=4, col=4),
         details=DetailPayload.from_legacy({"name": "target"}),
     )
-    result = CqResult(run=run, key_findings=[finding])
+    result = CqResult(run=run, key_findings=(finding,))
     output = render_markdown(result)
     assert "Context (lines" not in output
     assert "Code Facts:" in output
@@ -609,7 +609,7 @@ def test_render_markdown_keeps_compact_diagnostics_without_payload_dump() -> Non
                 "cross_language_diagnostics": [{"code": "ML001"}],
             }
         ),
-        key_findings=[Finding(category="definition", message="function: target")],
+        key_findings=(Finding(category="definition", message="function: target"),),
     )
     output = render_markdown(result)
     assert "Python semantic diagnostics: 1 items" in output

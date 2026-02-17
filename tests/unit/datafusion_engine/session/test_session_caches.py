@@ -1,4 +1,3 @@
-# ruff: noqa: D103
 """Tests for shared runtime session caches."""
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ from datafusion_engine.session._session_caches import (
 
 
 def test_session_caches_are_mutable_singletons() -> None:
+    """Session cache maps hold mutable singleton entries per key."""
     key = "test-session-key"
     marker = SessionContext()
     SESSION_CONTEXT_CACHE[key] = marker
@@ -24,4 +24,5 @@ def test_session_caches_are_mutable_singletons() -> None:
 
 
 def test_runtime_settings_overlay_is_available() -> None:
+    """Runtime settings overlay singleton is available."""
     assert RUNTIME_SETTINGS_OVERLAY is not None

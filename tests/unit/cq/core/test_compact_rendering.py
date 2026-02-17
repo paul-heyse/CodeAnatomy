@@ -52,13 +52,13 @@ def _result_with_diagnostics() -> CqResult:
     return CqResult(
         run=_run_meta(),
         summary=summary_from_mapping(summary),
-        key_findings=[Finding(category="definition", message="function: target")],
-        sections=[
+        key_findings=(Finding(category="definition", message="function: target"),),
+        sections=(
             Section(
                 title="Definitions",
                 findings=[Finding(category="definition", message="function: target")],
-            )
-        ],
+            ),
+        ),
     )
 
 

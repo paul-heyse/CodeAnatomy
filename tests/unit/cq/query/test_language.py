@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.query.language import constrain_include_globs_for_language
+from tools.cq.core.types import constrain_include_globs_for_language
 
 
 def test_constrain_include_globs_directory_python() -> None:

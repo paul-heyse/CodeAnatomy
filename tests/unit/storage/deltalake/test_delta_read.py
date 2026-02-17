@@ -1,4 +1,3 @@
-# ruff: noqa: D103, INP001
 """Tests for Delta read module surface."""
 
 from __future__ import annotations
@@ -7,6 +6,7 @@ from storage.deltalake import delta_read
 
 
 def test_delta_data_checker_not_exported() -> None:
+    """Legacy delta_read helper symbols remain removed from public API."""
     assert "delta_data_checker" not in delta_read.__all__
     assert "build_commit_properties" not in delta_read.__all__
     assert "idempotent_commit_properties" not in delta_read.__all__

@@ -99,8 +99,14 @@ async fn phase_only_mode_instruments_phases_without_rule_wrappers() {
 
     let state = state.ctx.state();
     let analyzers = &state.analyzer().rules;
-    assert_eq!(analyzers.first().expect("sentinel start").name(), "__trace_analyzer_phase");
-    assert_eq!(analyzers.last().expect("sentinel end").name(), "__trace_analyzer_phase");
+    assert_eq!(
+        analyzers.first().expect("sentinel start").name(),
+        "__trace_analyzer_phase"
+    );
+    assert_eq!(
+        analyzers.last().expect("sentinel end").name(),
+        "__trace_analyzer_phase"
+    );
     assert!(
         !analyzers
             .iter()
@@ -108,4 +114,3 @@ async fn phase_only_mode_instruments_phases_without_rule_wrappers() {
         "phase-only mode should not wrap analyzer rules",
     );
 }
-

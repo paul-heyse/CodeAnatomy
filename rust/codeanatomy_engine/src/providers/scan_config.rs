@@ -2,7 +2,10 @@
 //!
 //! Provides validated scan config builders for CPG extraction inputs.
 
-use deltalake::delta_datafusion::DeltaScanConfig;
+use datafusion::catalog::Session;
+use deltalake::delta_datafusion::{DeltaScanConfig, DeltaScanConfigBuilder};
+use deltalake::errors::DeltaTableError;
+use deltalake::kernel::EagerSnapshot;
 use serde::{Deserialize, Serialize};
 
 /// Build a standardized scan config for CPG extraction inputs.
@@ -12,26 +15,52 @@ use serde::{Deserialize, Serialize};
 /// - File column for lineage (optional, configured via DeltaScanConfigBuilder)
 ///
 /// # Arguments
+/// * `session` - DataFusion session for session-aware defaults
+/// * `snapshot` - Optional eager snapshot for builder-side validation
 /// * `requires_lineage` - Whether to track source file lineage
 ///
 /// # Returns
 /// DeltaScanConfig instance.
-///
-/// # Note
-/// This function provides a default config. For lineage tracking, use
-/// `registration::build_scan_config()` which uses DeltaScanConfigBuilder.
-pub fn standard_scan_config(requires_lineage: bool) -> DeltaScanConfig {
-    // DeltaScanConfig::default() provides sensible defaults for DL 0.30.1:
-    // - enable_parquet_pushdown: true
-    // - wrap_partition_values: true
-    // - schema_force_view_types: false
-    // - file_column_name: None
-    //
-    let mut config = DeltaScanConfig::default();
-    if requires_lineage {
-        config.file_column_name = Some("__source_file".to_string());
+pub fn standard_scan_config(
+    session: &dyn Session,
+    snapshot: Option<&EagerSnapshot>,
+    requires_lineage: bool,
+) -> Result<DeltaScanConfig, DeltaTableError> {
+    let base = DeltaScanConfig::new_from_session(session);
+
+    match snapshot {
+        Some(snapshot) => {
+            let mut builder = DeltaScanConfigBuilder::new()
+                .with_parquet_pushdown(base.enable_parquet_pushdown)
+                .wrap_partition_values(base.wrap_partition_values);
+            if requires_lineage {
+                let lineage_col = "__source_file".to_string();
+                builder = builder.with_file_column_name(&lineage_col);
+            } else if let Some(file_column_name) = base.file_column_name.as_ref() {
+                builder = builder.with_file_column_name(file_column_name);
+            }
+            if let Some(schema) = base.schema.clone() {
+                builder = builder.with_schema(schema);
+            }
+            let config = builder.build(snapshot)?;
+            Ok(DeltaScanConfig {
+                schema_force_view_types: base.schema_force_view_types,
+                ..config
+            })
+        }
+        None => {
+            let mut config = base.clone();
+            if requires_lineage {
+                config = config.with_file_column_name("__source_file".to_string());
+            } else if let Some(file_column_name) = base.file_column_name {
+                config = config.with_file_column_name(file_column_name);
+            }
+            if let Some(schema) = base.schema {
+                config = config.with_schema(schema);
+            }
+            Ok(config)
+        }
     }
-    config
 }
 
 /// Validate that the scan config is compatible with our engine requirements.
@@ -43,19 +72,8 @@ pub fn standard_scan_config(requires_lineage: bool) -> DeltaScanConfig {
 /// Ok if config is valid, Err with explanation otherwise.
 ///
 /// # Current checks
-/// - Parquet pushdown must remain enabled
-/// - Partition values must remain wrapped for stable typing semantics
 /// - Optional lineage column names must be non-empty `[A-Za-z0-9_]`
 pub fn validate_scan_config(config: &DeltaScanConfig) -> Result<(), String> {
-    if !config.enable_parquet_pushdown {
-        return Err("Delta scan config must keep parquet pushdown enabled".to_string());
-    }
-    if !config.wrap_partition_values {
-        return Err(
-            "Delta scan config must keep partition values wrapped for deterministic typing"
-                .to_string(),
-        );
-    }
     if let Some(file_col) = config.file_column_name.as_deref() {
         if file_col.is_empty() {
             return Err("Delta lineage column name must not be empty".to_string());
@@ -178,50 +196,57 @@ pub struct CapabilityPushdownSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::prelude::SessionContext;
+
+    fn baseline_config() -> DeltaScanConfig {
+        let ctx = SessionContext::new();
+        standard_scan_config(&ctx.state(), None, false).unwrap()
+    }
 
     #[test]
     fn test_standard_scan_config_default() {
-        let config = standard_scan_config(false);
-        assert!(config.enable_parquet_pushdown);
+        let ctx = SessionContext::new();
+        let config = standard_scan_config(&ctx.state(), None, false).unwrap();
+        let baseline = DeltaScanConfig::new_from_session(&ctx.state());
+        assert_eq!(
+            config.enable_parquet_pushdown,
+            baseline.enable_parquet_pushdown
+        );
+        assert_eq!(config.wrap_partition_values, baseline.wrap_partition_values);
         assert_eq!(config.file_column_name, None);
     }
 
     #[test]
     fn test_validate_scan_config_accepts_default() {
-        let config = DeltaScanConfig::default();
+        let config = baseline_config();
         assert!(validate_scan_config(&config).is_ok());
     }
 
     #[test]
-    fn test_validate_scan_config_rejects_unwrapped_partitions() {
-        let config = DeltaScanConfig {
-            wrap_partition_values: false,
-            ..DeltaScanConfig::default()
-        };
-        assert!(validate_scan_config(&config).is_err());
+    fn test_validate_scan_config_accepts_session_toggles() {
+        let mut config = baseline_config();
+        config.enable_parquet_pushdown = false;
+        config.wrap_partition_values = false;
+        assert!(validate_scan_config(&config).is_ok());
     }
 
     #[test]
     fn test_has_lineage_tracking() {
-        let config_no_lineage = DeltaScanConfig::default();
+        let config_no_lineage = baseline_config();
         assert!(!has_lineage_tracking(&config_no_lineage));
 
-        let config_with_lineage = DeltaScanConfig {
-            file_column_name: Some("__source_file".to_string()),
-            ..DeltaScanConfig::default()
-        };
+        let ctx = SessionContext::new();
+        let config_with_lineage = standard_scan_config(&ctx.state(), None, true).unwrap();
         assert!(has_lineage_tracking(&config_with_lineage));
     }
 
     #[test]
     fn test_lineage_column_name() {
-        let config_no_lineage = DeltaScanConfig::default();
+        let config_no_lineage = baseline_config();
         assert_eq!(lineage_column_name(&config_no_lineage), None);
 
-        let config_with_lineage = DeltaScanConfig {
-            file_column_name: Some("__source_file".to_string()),
-            ..DeltaScanConfig::default()
-        };
+        let ctx = SessionContext::new();
+        let config_with_lineage = standard_scan_config(&ctx.state(), None, true).unwrap();
         assert_eq!(
             lineage_column_name(&config_with_lineage),
             Some("__source_file")
@@ -230,20 +255,18 @@ mod tests {
 
     #[test]
     fn test_capabilities_inferred_from_config() {
-        let config = DeltaScanConfig::default();
+        let config = baseline_config();
         let caps = infer_capabilities(&config);
-        assert!(caps.predicate_pushdown);
+        assert_eq!(caps.predicate_pushdown, config.enable_parquet_pushdown);
         assert!(caps.projection_pushdown);
-        assert!(caps.partition_pruning);
+        assert_eq!(caps.partition_pruning, config.wrap_partition_values);
     }
 
     #[test]
     fn test_capabilities_with_pushdown_disabled() {
-        let config = DeltaScanConfig {
-            enable_parquet_pushdown: false,
-            wrap_partition_values: false,
-            ..DeltaScanConfig::default()
-        };
+        let mut config = baseline_config();
+        config.enable_parquet_pushdown = false;
+        config.wrap_partition_values = false;
         let caps = infer_capabilities(&config);
         assert!(!caps.predicate_pushdown);
         assert!(caps.projection_pushdown); // always true

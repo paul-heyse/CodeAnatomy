@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tools.cq.search._shared.core import CandidateCollectionRequest
+from tools.cq.search._shared.requests import CandidateCollectionRequest
 from tools.cq.search._shared.types import QueryMode, SearchLimits
 from tools.cq.search.pipeline.candidate_phase import run_candidate_phase
 from tools.cq.search.pipeline.contracts import SearchConfig

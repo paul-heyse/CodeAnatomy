@@ -21,7 +21,15 @@ def search_sync_with_timeout[T](
     args: tuple[object, ...] | None = None,
     kwargs: dict[str, object] | None = None,
 ) -> T:
-    """Execute a synchronous function with a timeout."""
+    """Execute a synchronous function with a timeout.
+
+    Returns:
+        T: Function result.
+
+    Raises:
+        ValueError: If timeout is negative.
+        TimeoutError: If execution exceeds timeout.
+    """
     if timeout < 0:
         msg = "Timeout must be positive"
         raise ValueError(msg)
@@ -39,7 +47,15 @@ def search_sync_with_timeout[T](
 
 
 async def search_async_with_timeout[T](coro: Awaitable[T], timeout_seconds: float) -> T:
-    """Execute an awaitable with a timeout."""
+    """Execute an awaitable with a timeout.
+
+    Returns:
+        T: Awaitable result.
+
+    Raises:
+        ValueError: If timeout is negative.
+        TimeoutError: If execution exceeds timeout.
+    """
     if timeout_seconds < 0:
         msg = "Timeout must be positive"
         raise ValueError(msg)

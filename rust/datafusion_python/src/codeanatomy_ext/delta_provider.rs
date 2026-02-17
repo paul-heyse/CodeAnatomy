@@ -276,14 +276,22 @@ pub(crate) fn delta_snapshot_info(
     let runtime = runtime()?;
     let table_version = table_version_from_options(version, timestamp)?;
     let snapshot = runtime
-        .block_on(delta_snapshot_info_native(&table_uri, storage, table_version, gate))
+        .block_on(delta_snapshot_info_native(
+            &table_uri,
+            storage,
+            table_version,
+            gate,
+        ))
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to load Delta snapshot: {err}")))?;
     snapshot_to_pydict(py, &snapshot)
 }
 
 #[pyfunction]
 #[instrument(skip(snapshot_msgpack, gate_msgpack))]
-pub(crate) fn validate_protocol_gate(snapshot_msgpack: Vec<u8>, gate_msgpack: Vec<u8>) -> PyResult<()> {
+pub(crate) fn validate_protocol_gate(
+    snapshot_msgpack: Vec<u8>,
+    gate_msgpack: Vec<u8>,
+) -> PyResult<()> {
     crate::delta_protocol::validate_protocol_gate_payload(&snapshot_msgpack, &gate_msgpack).map_err(
         |err| PyRuntimeError::new_err(format!("Delta protocol gate validation failed: {err}")),
     )

@@ -276,10 +276,10 @@ def _group_effects_by_kind(all_effects: list[SideEffect]) -> dict[str, list[Side
 
 
 def _append_kind_sections(
-    result: CqResult,
     by_kind: dict[str, list[SideEffect]],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> list[Section]:
+    sections: list[Section] = []
     kind_titles = {
         "top_level_call": "Top Level Calls",
         "global_write": "Global Writes",
@@ -315,23 +315,23 @@ def _append_kind_sections(
                     details=build_detail_payload(scoring=scoring_details),
                 )
             )
-        result.sections.append(section)
+        sections.append(section)
+    return sections
 
 
 def _append_evidence(
-    result: CqResult,
     all_effects: list[SideEffect],
     scoring_details: ScoringDetailsV1,
-) -> None:
-    for effect in all_effects:
-        result.evidence.append(
-            Finding(
-                category=effect.kind,
-                message=effect.description,
-                anchor=Anchor(file=effect.file, line=effect.line),
-                details=build_detail_payload(scoring=scoring_details),
-            )
+) -> list[Finding]:
+    return [
+        Finding(
+            category=effect.kind,
+            message=effect.description,
+            anchor=Anchor(file=effect.file, line=effect.line),
+            details=build_detail_payload(scoring=scoring_details),
         )
+        for effect in all_effects
+    ]
 
 
 def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
@@ -363,12 +363,10 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
         tc=request.tc,
         started_ms=started,
     )
-    result = builder.result
-
     # Categorize effects
     by_kind = _group_effects_by_kind(all_effects)
 
-    result.summary = summary_from_mapping(
+    updated_summary = summary_from_mapping(
         {
             "files_scanned": files_scanned,
             "scope_file_count": files_scanned,
@@ -382,6 +380,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
             "ambient_reads": len(by_kind.get("ambient_read", [])),
         }
     )
+    builder.with_summary(updated_summary)
 
     # Compute scoring signals
     unique_files = len({e.file for e in all_effects})
@@ -393,7 +392,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
 
     # Key findings
     if by_kind.get("top_level_call"):
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="warning",
                 message=f"{len(by_kind['top_level_call'])} import-time function calls",
@@ -402,7 +401,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
             )
         )
     if by_kind.get("global_write"):
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="warning",
                 message=f"{len(by_kind['global_write'])} module-level mutations",
@@ -411,7 +410,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
             )
         )
     if by_kind.get("ambient_read"):
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="info",
                 message=f"{len(by_kind['ambient_read'])} ambient state accesses",
@@ -421,7 +420,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
         )
 
     if not all_effects:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="info",
                 message="No import-time side effects detected",
@@ -430,11 +429,12 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
             )
         )
 
-    _append_kind_sections(result, by_kind, scoring_details)
-    _append_evidence(result, all_effects, scoring_details)
+    for section in _append_kind_sections(by_kind, scoring_details):
+        builder.add_section(section)
+    builder.add_evidences(_append_evidence(all_effects, scoring_details))
 
     return apply_rust_fallback_policy(
-        result,
+        builder.build(),
         root=request.root,
         policy=RustFallbackPolicyV1(
             macro_name="side-effects",

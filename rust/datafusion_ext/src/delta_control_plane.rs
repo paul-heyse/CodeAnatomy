@@ -211,30 +211,27 @@ pub fn scan_config_from_session(
     let base = DeltaScanConfig::new_from_session(session);
     match snapshot {
         None => {
-            let mut config = base
-                .clone()
-                .with_parquet_pushdown(
-                    overrides
-                        .enable_parquet_pushdown
-                        .unwrap_or(base.enable_parquet_pushdown),
-                )
-                .with_wrap_partition_values(
-                    overrides
-                        .wrap_partition_values
-                        .unwrap_or(base.wrap_partition_values),
-                );
+            let mut config = base.clone();
+            config = config.with_parquet_pushdown(
+                overrides
+                    .enable_parquet_pushdown
+                    .unwrap_or(base.enable_parquet_pushdown),
+            );
+            config = config.with_wrap_partition_values(
+                overrides
+                    .wrap_partition_values
+                    .unwrap_or(base.wrap_partition_values),
+            );
             if let Some(file_column_name) = overrides.file_column_name.or(base.file_column_name) {
                 config = config.with_file_column_name(file_column_name);
             }
             if let Some(schema) = overrides.schema.or(base.schema) {
                 config = config.with_schema(schema);
             }
-            Ok(DeltaScanConfig {
-                schema_force_view_types: overrides
-                    .schema_force_view_types
-                    .unwrap_or(base.schema_force_view_types),
-                ..config
-            })
+            config.schema_force_view_types = overrides
+                .schema_force_view_types
+                .unwrap_or(base.schema_force_view_types);
+            Ok(config)
         }
         Some(snapshot) => {
             let mut builder = DeltaScanConfigBuilder::new()
@@ -254,13 +251,11 @@ pub fn scan_config_from_session(
             if let Some(schema) = overrides.schema.or(base.schema) {
                 builder = builder.with_schema(schema);
             }
-            let config = builder.build(snapshot)?;
-            Ok(DeltaScanConfig {
-                schema_force_view_types: overrides
-                    .schema_force_view_types
-                    .unwrap_or(base.schema_force_view_types),
-                ..config
-            })
+            let mut config = builder.build(snapshot)?;
+            config.schema_force_view_types = overrides
+                .schema_force_view_types
+                .unwrap_or(base.schema_force_view_types);
+            Ok(config)
         }
     }
 }
@@ -312,13 +307,8 @@ pub async fn delta_provider_from_session_request(
         overrides,
         gate,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     update_datafusion_session(&table, session_ctx)?;
     let snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let eager_snapshot = eager_snapshot(&table)?;
@@ -413,22 +403,21 @@ pub async fn delta_provider_with_files_request(
         files,
         gate,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     update_datafusion_session(&table, session_ctx)?;
     let snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let eager_snapshot = eager_snapshot(&table)?;
     let session_state = session_ctx.state();
     let scan_config = scan_config_from_session(&session_state, Some(&eager_snapshot), overrides)?;
     let add_actions = add_actions_for_paths(&table, &files)?;
-    let provider =
-        build_table_provider(&table, eager_snapshot, scan_config.clone(), Some(add_actions.clone()))
-            .await?;
+    let provider = build_table_provider(
+        &table,
+        eager_snapshot,
+        scan_config.clone(),
+        Some(add_actions.clone()),
+    )
+    .await?;
     let add_payloads = add_actions.into_iter().map(delta_add_payload).collect();
     Ok((provider, snapshot, scan_config, add_payloads))
 }

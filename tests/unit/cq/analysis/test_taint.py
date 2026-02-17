@@ -1,9 +1,12 @@
+"""Tests for taint-analysis primitives."""
+
 from __future__ import annotations
 
 from tools.cq.analysis.taint import analyze_function_node, find_function_node
 
 
 def test_find_function_node_top_level() -> None:
+    """Find a top-level function node by identity."""
     source = """
 def target(a):
     return a
@@ -18,6 +21,7 @@ def target(a):
 
 
 def test_analyze_function_node_tracks_assign_call_and_return() -> None:
+    """Capture assign/call/return taint events for a simple function."""
     source = """
 def target(a):
     x = a

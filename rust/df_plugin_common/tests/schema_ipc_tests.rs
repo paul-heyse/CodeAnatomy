@@ -8,7 +8,11 @@ use df_plugin_common::schema_from_ipc;
 
 #[test]
 fn schema_from_ipc_round_trips_schema() {
-    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int32, true)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        true,
+    )]));
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![Arc::new(Int32Array::from(vec![Some(1), None]))],
@@ -24,4 +28,3 @@ fn schema_from_ipc_round_trips_schema() {
     let decoded = schema_from_ipc(&bytes).expect("decode schema");
     assert_eq!(decoded.as_ref(), schema.as_ref());
 }
-

@@ -91,8 +91,8 @@ pub fn load_plugin(path: &Path) -> Result<PluginHandle> {
 mod tests {
     use super::validate_manifest;
     use abi_stable::std_types::{RString, RVec};
-    use df_plugin_common::parse_major;
     use df_plugin_api::{DfPluginManifestV1, DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR};
+    use df_plugin_common::parse_major;
     use std::mem::size_of;
 
     #[test]

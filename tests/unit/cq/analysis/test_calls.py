@@ -1,3 +1,5 @@
+"""Tests for callsite-vs-signature compatibility classification."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,6 +20,7 @@ class _Site:
 
 
 def test_classify_call_would_break_missing_required() -> None:
+    """Classify missing required parameters as breaking."""
     params = parse_signature("foo(a, b)")
     bucket, reason = classify_call_against_signature(_Site(num_args=1, kwargs=[]), params)
     assert bucket == "would_break"
@@ -25,12 +28,16 @@ def test_classify_call_would_break_missing_required() -> None:
 
 
 def test_classify_call_ambiguous_with_star_args() -> None:
+    """Classify *args callsites as ambiguous."""
     params = parse_signature("foo(a)")
-    bucket, _ = classify_call_against_signature(_Site(num_args=0, kwargs=[], has_star_args=True), params)
+    bucket, _ = classify_call_against_signature(
+        _Site(num_args=0, kwargs=[], has_star_args=True), params
+    )
     assert bucket == "ambiguous"
 
 
 def test_classify_calls_groups_buckets() -> None:
+    """Group calls into compatibility buckets."""
     params = parse_signature("foo(a)")
     buckets = classify_calls_against_signature(
         [_Site(num_args=1, kwargs=[]), _Site(num_args=0, kwargs=[])],

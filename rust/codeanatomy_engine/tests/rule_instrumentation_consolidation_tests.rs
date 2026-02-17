@@ -128,8 +128,14 @@ async fn test_full_rule_mode_instruments_all_three_rule_phases() {
 
     let state = state.ctx.state();
     let analyzers = &state.analyzer().rules;
-    assert_eq!(analyzers.first().expect("sentinel start").name(), "__trace_analyzer_phase");
-    assert_eq!(analyzers.last().expect("sentinel end").name(), "__trace_analyzer_phase");
+    assert_eq!(
+        analyzers.first().expect("sentinel start").name(),
+        "__trace_analyzer_phase"
+    );
+    assert_eq!(
+        analyzers.last().expect("sentinel end").name(),
+        "__trace_analyzer_phase"
+    );
     assert!(
         analyzers
             .iter()
@@ -138,8 +144,14 @@ async fn test_full_rule_mode_instruments_all_three_rule_phases() {
     );
 
     let optimizers = state.optimizers();
-    assert_eq!(optimizers.first().expect("sentinel start").name(), "__trace_optimizer_phase");
-    assert_eq!(optimizers.last().expect("sentinel end").name(), "__trace_optimizer_phase");
+    assert_eq!(
+        optimizers.first().expect("sentinel start").name(),
+        "__trace_optimizer_phase"
+    );
+    assert_eq!(
+        optimizers.last().expect("sentinel end").name(),
+        "__trace_optimizer_phase"
+    );
     assert!(
         optimizers
             .iter()

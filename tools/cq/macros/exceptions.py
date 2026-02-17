@@ -317,12 +317,11 @@ def _summarize_exception_types(
 
 
 def _append_exception_sections(
-    result: CqResult,
     *,
     raise_types: dict[str, int],
     catch_types: dict[str, int],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> tuple[Section, Section]:
     raise_section = Section(title="Raised Exception Types")
     for exc_type, count in sorted(raise_types.items(), key=lambda item: -item[1])[
         :_TOP_EXCEPTION_TYPES
@@ -335,7 +334,6 @@ def _append_exception_sections(
                 details=build_detail_payload(scoring=scoring_details),
             )
         )
-    result.sections.append(raise_section)
     catch_section = Section(title="Caught Exception Types")
     for exc_type, count in sorted(catch_types.items(), key=lambda item: -item[1])[
         :_TOP_EXCEPTION_TYPES
@@ -348,7 +346,7 @@ def _append_exception_sections(
                 details=build_detail_payload(scoring=scoring_details),
             )
         )
-    result.sections.append(catch_section)
+    return raise_section, catch_section
 
 
 def _has_matching_catch(
@@ -366,12 +364,11 @@ def _has_matching_catch(
 
 
 def _append_uncaught_section(
-    result: CqResult,
     *,
     all_raises: list[RaiseSite],
     all_catches: list[CatchSite],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> Section:
     uncaught_section = Section(title="Potentially Uncaught Exceptions")
     for raised in all_raises:
         if raised.is_reraise:
@@ -390,17 +387,16 @@ def _append_uncaught_section(
                 details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
-    result.sections.append(uncaught_section)
+    return uncaught_section
 
 
 def _append_bare_except_section(
-    result: CqResult,
     *,
     bare_excepts: list[CatchSite],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> Section | None:
     if not bare_excepts:
-        return
+        return None
     bare_section = Section(title="Bare Except Clauses")
     for caught in bare_excepts[:_BARE_EXCEPT_LIMIT]:
         details = {"reraises": caught.reraises}
@@ -413,16 +409,16 @@ def _append_bare_except_section(
                 details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
-    result.sections.append(bare_section)
+    return bare_section
 
 
 def _append_exception_evidence(
-    result: CqResult,
     *,
     all_raises: list[RaiseSite],
     all_catches: list[CatchSite],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> list[Finding]:
+    evidence: list[Finding] = []
     for raised in all_raises:
         message = f"raise {raised.exception_type}"
         if raised.message:
@@ -432,7 +428,7 @@ def _append_exception_evidence(
             "class": raised.in_class,
             "is_reraise": raised.is_reraise,
         }
-        result.evidence.append(
+        evidence.append(
             Finding(
                 category="raise",
                 message=message,
@@ -447,7 +443,7 @@ def _append_exception_evidence(
             "bare": caught.is_bare_except,
             "reraises": caught.reraises,
         }
-        result.evidence.append(
+        evidence.append(
             Finding(
                 category="catch",
                 message=f"except {', '.join(caught.exception_types)}",
@@ -455,6 +451,7 @@ def _append_exception_evidence(
                 details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
+    return evidence
 
 
 def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
@@ -490,11 +487,9 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
         tc=request.tc,
         started_ms=started,
     )
-    result = builder.result
-
     raise_types, catch_types = _summarize_exception_types(all_raises, all_catches)
 
-    result.summary = summary_from_mapping(
+    updated_summary = summary_from_mapping(
         {
             "files_scanned": files_scanned,
             "scope_file_count": files_scanned,
@@ -506,6 +501,7 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
             "reraises": sum(1 for r in all_raises if r.is_reraise),
         }
     )
+    builder.with_summary(updated_summary)
 
     bare_excepts = [caught for caught in all_catches if caught.is_bare_except]
     scoring_details = macro_scoring_details(
@@ -517,7 +513,7 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
 
     # Key findings
     if bare_excepts:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="warning",
                 message=f"Found {len(bare_excepts)} bare except: clauses",
@@ -528,7 +524,7 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
 
     empty_handlers = [c for c in all_catches if not c.has_handler]
     if empty_handlers:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="warning",
                 message=f"Found {len(empty_handlers)} empty exception handlers",
@@ -537,29 +533,37 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
             )
         )
 
-    _append_exception_sections(
-        result,
+    raised_section, caught_section = _append_exception_sections(
         raise_types=raise_types,
         catch_types=catch_types,
         scoring_details=scoring_details,
     )
-    _append_uncaught_section(
-        result,
-        all_raises=all_raises,
-        all_catches=all_catches,
+    builder.add_section(raised_section)
+    builder.add_section(caught_section)
+    builder.add_section(
+        _append_uncaught_section(
+            all_raises=all_raises,
+            all_catches=all_catches,
+            scoring_details=scoring_details,
+        )
+    )
+    bare_section = _append_bare_except_section(
+        bare_excepts=bare_excepts,
         scoring_details=scoring_details,
     )
-    _append_bare_except_section(result, bare_excepts=bare_excepts, scoring_details=scoring_details)
-    _append_exception_evidence(
-        result,
-        all_raises=all_raises,
-        all_catches=all_catches,
-        scoring_details=scoring_details,
+    if bare_section is not None:
+        builder.add_section(bare_section)
+    builder.add_evidences(
+        _append_exception_evidence(
+            all_raises=all_raises,
+            all_catches=all_catches,
+            scoring_details=scoring_details,
+        )
     )
 
     pattern = request.function if request.function else "panic!\\|unwrap\\|expect\\|Result<\\|Err("
     return apply_rust_fallback_policy(
-        result,
+        builder.build(),
         root=request.root,
         policy=RustFallbackPolicyV1(
             macro_name="exceptions",

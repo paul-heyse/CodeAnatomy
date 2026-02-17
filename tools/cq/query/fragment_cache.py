@@ -440,4 +440,8 @@ def raw_match_sort_key(match: MatchData) -> tuple[str, int, int]:
     Returns:
         tuple[str, int, int]: Sort key `(file, line, col)`.
     """
-    return (match.file, match.line, match.col)
+    return (
+        match.file,
+        int(match.range.start.line),
+        int(match.range.start.column),
+    )

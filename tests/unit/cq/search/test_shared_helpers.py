@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
-from tools.cq.search._shared.core import line_col_to_byte_offset, node_text, source_hash, truncate
+from tools.cq.search._shared.helpers import (
+    line_col_to_byte_offset,
+    node_text,
+    source_hash,
+    truncate,
+)
 
 UTF8_BYTE_OFFSET = 8
 

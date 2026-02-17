@@ -15,36 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Display, Formatter};
-
 use datafusion::logical_expr::{CreateView, DdlStatement, LogicalPlan};
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt;
 
 use super::logical_node::LogicalNode;
 use crate::errors::py_type_err;
 use crate::sql::logical::PyLogicalPlan;
 
-#[pyclass(frozen, name = "CreateView", module = "datafusion.expr", subclass)]
-#[derive(Clone)]
-pub struct PyCreateView {
-    create: CreateView,
-}
-
-impl From<PyCreateView> for CreateView {
-    fn from(create: PyCreateView) -> Self {
-        create.create
-    }
-}
-
-impl From<CreateView> for PyCreateView {
-    fn from(create: CreateView) -> PyCreateView {
-        PyCreateView { create }
-    }
-}
-
-impl Display for PyCreateView {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+logical_plan_wrapper!(
+    wrapper = PyCreateView,
+    inner = CreateView,
+    field = create,
+    py_name = "CreateView",
+    display = |this, f| {
         write!(
             f,
             "CreateView
@@ -52,10 +35,11 @@ impl Display for PyCreateView {
             input: {:?}
             or_replace: {:?}
             definition: {:?}",
-            &self.create.name, &self.create.input, &self.create.or_replace, &self.create.definition,
+            &this.create.name, &this.create.input, &this.create.or_replace, &this.create.definition,
         )
-    }
-}
+    },
+    inputs = |this| { vec![PyLogicalPlan::from((*this.create.input).clone())] }
+);
 
 #[pymethods]
 impl PyCreateView {
@@ -83,17 +67,6 @@ impl PyCreateView {
         Ok("CreateView".to_string())
     }
 }
-
-impl LogicalNode for PyCreateView {
-    fn inputs(&self) -> Vec<PyLogicalPlan> {
-        vec![PyLogicalPlan::from((*self.create.input).clone())]
-    }
-
-    fn to_variant<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.clone().into_bound_py_any(py)
-    }
-}
-
 impl TryFrom<LogicalPlan> for PyCreateView {
     type Error = PyErr;
 

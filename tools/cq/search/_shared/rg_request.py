@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from tools.cq.search._shared.core import CandidateCollectionRequest, RgRunRequest
+from tools.cq.search._shared.requests import CandidateCollectionRequest, RgRunRequest
 
 __all__ = ["CandidateCollectionRequest", "RgRunRequest"]

@@ -849,3 +849,38 @@ pub(crate) fn init_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn to_variant_includes_scalar_function_conversion() {
+        let source = include_str!("expr.rs");
+        let compact: String = source.chars().filter(|ch| !ch.is_whitespace()).collect();
+
+        assert!(
+            compact.contains("Expr::ScalarFunction(value)=>Ok(PyExpr::from(Expr::ScalarFunction(value.clone())).into_bound_py_any(py)?)"),
+            "to_variant should convert ScalarFunction via PyExpr wrapper"
+        );
+    }
+
+    #[test]
+    fn to_variant_includes_window_function_conversion() {
+        let source = include_str!("expr.rs");
+        let compact: String = source.chars().filter(|ch| !ch.is_whitespace()).collect();
+
+        assert!(
+            compact.contains("Expr::WindowFunction(value)=>Ok(PyExpr::from(Expr::WindowFunction(value.clone())).into_bound_py_any(py)?)"),
+            "to_variant should convert WindowFunction via PyExpr wrapper"
+        );
+    }
+
+    #[test]
+    fn expr_module_no_longer_exposes_signature_submodule() {
+        let source = include_str!("expr.rs");
+        let pre_test_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+        assert!(
+            !pre_test_source.contains("pub mod signature;"),
+            "dead signature module should remain removed"
+        );
+    }
+}

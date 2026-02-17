@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Tests for Rust tags runtime helpers."""
 
 from __future__ import annotations
@@ -18,7 +17,8 @@ class _FakeNode:
     start_point: tuple[int, int] = (0, 0)
     end_point: tuple[int, int] = (0, 0)
 
-    def child_by_field_name(self, name: str, /) -> _FakeNode | None:
+    @staticmethod
+    def child_by_field_name(name: str, /) -> _FakeNode | None:
         _ = name
         return None
 

@@ -13,10 +13,10 @@ from ast_grep_py import SgRoot
 from tools.cq.core.locations import byte_offset_to_line_col
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 from tools.cq.search._shared.bounded_cache import BoundedCache
-from tools.cq.search._shared.core import RustEnrichmentRequest
-from tools.cq.search._shared.core import sg_node_text as _shared_sg_node_text
-from tools.cq.search._shared.core import source_hash as _shared_source_hash
 from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
+from tools.cq.search._shared.helpers import sg_node_text as shared_sg_node_text
+from tools.cq.search._shared.helpers import source_hash as shared_source_hash
+from tools.cq.search._shared.requests import RustEnrichmentRequest
 from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.enrichment.core import (
     append_source,
@@ -68,10 +68,11 @@ from tools.cq.search.rust.extractors_shared import (
 )
 from tools.cq.search.rust.node_access import SgRustNodeAccess
 from tools.cq.search.tree_sitter.rust_lane.runtime import (
-    enrich_rust_context_by_byte_range as _ts_enrich,
+    RustLaneEnrichmentSettingsV1,
+    is_tree_sitter_rust_available,
 )
 from tools.cq.search.tree_sitter.rust_lane.runtime import (
-    is_tree_sitter_rust_available,
+    enrich_rust_context_by_byte_range as _ts_enrich,
 )
 
 if TYPE_CHECKING:
@@ -93,7 +94,7 @@ _CROSSCHECK_METADATA_KEYS: frozenset[str] = frozenset(
 
 
 def _source_hash(source_bytes: bytes) -> str:
-    return _shared_source_hash(source_bytes)
+    return shared_source_hash(source_bytes)
 
 
 def _get_sg_root(source: str, *, cache_key: str | None) -> SgRoot:
@@ -123,7 +124,7 @@ CACHE_REGISTRY.register_clear_callback("rust", clear_rust_enrichment_cache)
 
 
 def _node_text(node: SgNode | None) -> str | None:
-    return _shared_sg_node_text(node)
+    return shared_sg_node_text(node)
 
 
 def _scope_name(scope_node: SgNode) -> str | None:
@@ -533,8 +534,10 @@ def _safe_tree_sitter_payload(
                 byte_start=byte_start,
                 byte_end=byte_end,
                 cache_key=cache_key,
-                max_scope_depth=max_scope_depth,
-                query_budget_ms=query_budget_ms,
+                settings=RustLaneEnrichmentSettingsV1(
+                    max_scope_depth=max_scope_depth,
+                    query_budget_ms=query_budget_ms,
+                ),
             )
         )
     except ENRICHMENT_ERRORS as exc:

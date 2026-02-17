@@ -15,8 +15,8 @@ from tools.cq.core.render_enrichment import extract_enrichment_payload, merge_en
 from tools.cq.core.render_utils import iter_result_findings
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding
-from tools.cq.core.summary_contract import SummaryV1
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.summary_contract import SummaryV1
 from tools.cq.core.type_coercion import coerce_float_optional
 from tools.cq.core.types import QueryLanguage
 
@@ -338,17 +338,21 @@ def maybe_attach_render_enrichment(
     cache: dict[tuple[str, int, int, str], dict[str, object]] | None,
     allowed_files: set[str] | None,
     port: RenderEnrichmentPort | None,
-) -> None:
-    """Attach precomputed/on-demand render enrichment to finding details."""
+) -> Finding:
+    """Attach precomputed/on-demand render enrichment to finding details.
+
+    Returns:
+        Finding: Enriched finding payload (or original when enrichment is skipped).
+    """
     anchor = finding.anchor
     if anchor is None:
-        return
+        return finding
     if allowed_files is not None and anchor.file not in allowed_files:
-        return
+        return finding
     needs_context = not isinstance(finding.details.get("context_snippet"), str)
     needs_enrichment = extract_enrichment_payload(finding) is None
     if not (needs_context or needs_enrichment):
-        return
+        return finding
 
     cache_key = (anchor.file, anchor.line, int(anchor.col or 0), infer_language(finding))
     payload: dict[str, object] | None = cache.get(cache_key) if cache is not None else None
@@ -365,8 +369,7 @@ def maybe_attach_render_enrichment(
         payload = result.payload
         if cache is not None:
             cache[cache_key] = payload
-    enriched = merge_enrichment_details(finding, payload)
-    finding.details = enriched.details
+    return merge_enrichment_details(finding, payload)
 
 
 def prepare_render_enrichment_session(
@@ -375,7 +378,11 @@ def prepare_render_enrichment_session(
     root: Path,
     port: RenderEnrichmentPort | None,
 ) -> RenderEnrichmentSessionV1:
-    """Prepare enrichment cache/session payload for one report render."""
+    """Prepare enrichment cache/session payload for one report render.
+
+    Returns:
+        RenderEnrichmentSessionV1: Prepared enrichment session payload.
+    """
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
     allowed_files = set(select_enrichment_target_files(result))
     all_task_count = count_render_enrichment_tasks(
@@ -413,12 +420,12 @@ def prepare_render_enrichment_session(
 
 
 __all__ = [
-    "RenderEnrichmentSessionV1",
     "RenderEnrichmentResult",
+    "RenderEnrichmentSessionV1",
     "RenderEnrichmentTask",
     "count_render_enrichment_tasks",
     "maybe_attach_render_enrichment",
-    "prepare_render_enrichment_session",
     "precompute_render_enrichment_cache",
+    "prepare_render_enrichment_session",
     "select_enrichment_target_files",
 ]

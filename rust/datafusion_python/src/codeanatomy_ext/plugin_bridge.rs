@@ -52,7 +52,8 @@ fn ensure_plugin_manifest_compat(handle: &PluginHandle) -> PyResult<()> {
             actual = manifest.df_ffi_major,
         )));
     }
-    let datafusion_major = parse_major(datafusion::DATAFUSION_VERSION).map_err(PyValueError::new_err)?;
+    let datafusion_major =
+        parse_major(datafusion::DATAFUSION_VERSION).map_err(PyValueError::new_err)?;
     if manifest.datafusion_major != datafusion_major {
         return Err(PyRuntimeError::new_err(format!(
             "Plugin DataFusion major mismatch: expected {expected} got {actual}",
@@ -182,7 +183,8 @@ pub(crate) fn register_df_plugin_udfs(
     };
     options_value = match options_value {
         JsonValue::Object(mut map) => {
-            map.entry("udf_config".to_string()).or_insert(config_payload);
+            map.entry("udf_config".to_string())
+                .or_insert(config_payload);
             JsonValue::Object(map)
         }
         _ => {
@@ -191,10 +193,10 @@ pub(crate) fn register_df_plugin_udfs(
             JsonValue::Object(map)
         }
     };
-    let options_json = Some(
-        serde_json::to_string(&options_value)
-            .map_err(|err| PyValueError::new_err(format!("Failed to encode UDF options: {err}")))?,
-    );
+    let options_json =
+        Some(serde_json::to_string(&options_value).map_err(|err| {
+            PyValueError::new_err(format!("Failed to encode UDF options: {err}"))
+        })?);
     handle
         .register_udfs(&extract_session_ctx(ctx)?, options_json.as_deref())
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
@@ -208,9 +210,11 @@ pub(crate) fn register_df_plugin_table_functions(
     plugin: Py<PyAny>,
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
-    handle.register_table_functions(&extract_session_ctx(ctx)?).map_err(|err| {
-        PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
-    })?;
+    handle
+        .register_table_functions(&extract_session_ctx(ctx)?)
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
+        })?;
     Ok(())
 }
 
@@ -248,8 +252,9 @@ pub(crate) fn register_df_plugin_table_providers(
     let mut resolved = HashMap::new();
     if let Some(options) = options_json {
         for (name, value) in options {
-            let injected = inject_delta_scan_defaults(&extract_session_ctx(ctx)?, name.as_str(), Some(&value))
-                .map_err(PyValueError::new_err)?;
+            let injected =
+                inject_delta_scan_defaults(&extract_session_ctx(ctx)?, name.as_str(), Some(&value))
+                    .map_err(PyValueError::new_err)?;
             if let Some(injected) = injected {
                 resolved.insert(name, injected);
             }
@@ -260,14 +265,23 @@ pub(crate) fn register_df_plugin_table_providers(
         .map_or(true, |names| names.iter().any(|name| name == "delta"));
     if wants_delta && !resolved.contains_key("delta") {
         if let Some(injected) =
-            inject_delta_scan_defaults(&extract_session_ctx(ctx)?, "delta", None).map_err(PyValueError::new_err)?
+            inject_delta_scan_defaults(&extract_session_ctx(ctx)?, "delta", None)
+                .map_err(PyValueError::new_err)?
         {
             resolved.insert("delta".to_string(), injected);
         }
     }
-    let resolved_options = if resolved.is_empty() { None } else { Some(resolved) };
+    let resolved_options = if resolved.is_empty() {
+        None
+    } else {
+        Some(resolved)
+    };
     handle
-        .register_table_providers(&extract_session_ctx(ctx)?, table_names.as_deref(), resolved_options.as_ref())
+        .register_table_providers(
+            &extract_session_ctx(ctx)?,
+            table_names.as_deref(),
+            resolved_options.as_ref(),
+        )
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table providers: {err}"))
         })?;
@@ -286,15 +300,18 @@ pub(crate) fn register_df_plugin(
     handle
         .register_udfs(&extract_session_ctx(ctx)?, None)
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
-    handle.register_table_functions(&extract_session_ctx(ctx)?).map_err(|err| {
-        PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
-    })?;
+    handle
+        .register_table_functions(&extract_session_ctx(ctx)?)
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
+        })?;
     install_delta_plan_codecs_inner(&extract_session_ctx(ctx)?)?;
     let resolved_options = if let Some(options) = options_json {
         let mut resolved = HashMap::with_capacity(options.len());
         for (name, value) in options {
-            let injected = inject_delta_scan_defaults(&extract_session_ctx(ctx)?, name.as_str(), Some(&value))
-                .map_err(PyValueError::new_err)?;
+            let injected =
+                inject_delta_scan_defaults(&extract_session_ctx(ctx)?, name.as_str(), Some(&value))
+                    .map_err(PyValueError::new_err)?;
             if let Some(injected) = injected {
                 resolved.insert(name, injected);
             }
@@ -304,7 +321,11 @@ pub(crate) fn register_df_plugin(
         None
     };
     handle
-        .register_table_providers(&extract_session_ctx(ctx)?, table_names.as_deref(), resolved_options.as_ref())
+        .register_table_providers(
+            &extract_session_ctx(ctx)?,
+            table_names.as_deref(),
+            resolved_options.as_ref(),
+        )
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table providers: {err}"))
         })?;
@@ -375,9 +396,15 @@ pub(crate) fn plugin_manifest(py: Python<'_>, path: Option<String>) -> PyResult<
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(load_df_plugin, module)?)?;
     module.add_function(wrap_pyfunction!(register_df_plugin_udfs, module)?)?;
-    module.add_function(wrap_pyfunction!(register_df_plugin_table_functions, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        register_df_plugin_table_functions,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(create_df_plugin_table_provider, module)?)?;
-    module.add_function(wrap_pyfunction!(register_df_plugin_table_providers, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        register_df_plugin_table_providers,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(register_df_plugin, module)?)?;
     module.add_function(wrap_pyfunction!(plugin_library_path, module)?)?;
     module.add_function(wrap_pyfunction!(plugin_manifest, module)?)?;

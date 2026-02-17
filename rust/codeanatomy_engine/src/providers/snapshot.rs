@@ -3,6 +3,7 @@
 //! Version resolution, validation, and snapshot metadata extraction.
 
 use datafusion_common::Result as DFResult;
+use deltalake::kernel::EagerSnapshot;
 use deltalake::DeltaTable;
 
 /// Snapshot resolution mode.
@@ -13,6 +14,14 @@ use deltalake::DeltaTable;
 pub enum SnapshotMode {
     Latest,
     Pinned(i64),
+}
+
+/// Materialize an eager snapshot for builder-based scan configuration.
+pub fn eager_snapshot(table: &DeltaTable) -> DFResult<EagerSnapshot> {
+    let snapshot = table
+        .snapshot()
+        .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+    Ok(snapshot.snapshot().clone())
 }
 
 /// Get the version of the loaded table.
@@ -69,11 +78,8 @@ pub fn validate_version_pin(table: &DeltaTable, expected: i64) -> DFResult<()> {
 /// # Errors
 /// Returns error if snapshot access fails.
 pub fn snapshot_metadata(table: &DeltaTable) -> DFResult<(i64, usize, i64)> {
-    let snapshot = table
-        .snapshot()
-        .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
-    let version = snapshot.version();
-    let eager = snapshot.snapshot();
+    let version = table_version(table)?;
+    let eager = eager_snapshot(table)?;
 
     // Count files and sum sizes from log_data
     let num_files = eager.log_data().iter().count();

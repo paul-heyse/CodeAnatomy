@@ -15,45 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use datafusion::logical_expr::DropView;
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt;
 
-use super::logical_node::LogicalNode;
 use crate::common::df_schema::PyDFSchema;
-use crate::sql::logical::PyLogicalPlan;
 
-#[pyclass(frozen, name = "DropView", module = "datafusion.expr", subclass)]
-#[derive(Clone)]
-pub struct PyDropView {
-    drop: DropView,
-}
-
-impl From<PyDropView> for DropView {
-    fn from(drop: PyDropView) -> Self {
-        drop.drop
-    }
-}
-
-impl From<DropView> for PyDropView {
-    fn from(drop: DropView) -> PyDropView {
-        PyDropView { drop }
-    }
-}
-
-impl Display for PyDropView {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+logical_plan_wrapper!(
+    wrapper = PyDropView,
+    inner = DropView,
+    field = drop,
+    py_name = "DropView",
+    display = |this, f| {
         write!(
             f,
             "DropView: {name:?} if not exist:={if_exists}",
-            name = self.drop.name,
-            if_exists = self.drop.if_exists
+            name = this.drop.name,
+            if_exists = this.drop.if_exists
         )
-    }
-}
+    },
+    inputs = |_this| { vec![] }
+);
 
 #[pymethods]
 impl PyDropView {
@@ -86,15 +69,5 @@ impl PyDropView {
 
     fn __name__(&self) -> PyResult<String> {
         Ok("DropView".to_string())
-    }
-}
-
-impl LogicalNode for PyDropView {
-    fn inputs(&self) -> Vec<PyLogicalPlan> {
-        vec![]
-    }
-
-    fn to_variant<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.clone().into_bound_py_any(py)
     }
 }

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.contracts import MergeResultsRequest
-from tools.cq.core.schema import CqResult
+from tools.cq.core.schema import CqResult, update_result_summary
 from tools.cq.core.services import EntityFrontDoorRequest
 from tools.cq.core.summary_contract import SummaryEnvelopeV1, coerce_semantic_telemetry
 from tools.cq.core.toolchain import Toolchain
@@ -73,7 +73,7 @@ def _merge_semantic_contract_inputs(
     return provider, provider != "none", attempted, applied, failed, timed_out
 
 
-def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
+def _mark_entity_insight_partial_from_summary(result: CqResult) -> CqResult:
     import msgspec
 
     from tools.cq.core.front_door_assembly import mark_partial_for_missing_languages
@@ -89,7 +89,7 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
 
     insight = coerce_front_door_insight(result.summary.front_door_insight)
     if insight is None:
-        return
+        return result
     lang_scope = result.summary.lang_scope
     if isinstance(lang_scope, str) and lang_scope == "auto":
         missing = extract_missing_languages(result.summary)
@@ -116,7 +116,10 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
             notes=tuple(dict.fromkeys([*insight.degradation.notes, *semantic_state.reasons])),
         ),
     )
-    result.summary.front_door_insight = to_public_front_door_insight_dict(insight)
+    return update_result_summary(
+        result,
+        {"front_door_insight": to_public_front_door_insight_dict(insight)},
+    )
 
 
 def merge_auto_scope_query_results(request: MergeAutoScopeQueryRequestV1) -> CqResult:
@@ -160,12 +163,10 @@ def merge_auto_scope_query_results(request: MergeAutoScopeQueryRequestV1) -> CqR
     if query.is_pattern_query:
         return merged
     if merged.summary.front_door_insight is not None:
-        _mark_entity_insight_partial_from_summary(merged)
-        return merged
-    request.services.entity.attach_front_door(
+        return _mark_entity_insight_partial_from_summary(merged)
+    return request.services.entity.attach_front_door(
         EntityFrontDoorRequest(result=merged),
     )
-    return merged
 
 
 __all__ = ["MergeAutoScopeQueryRequestV1", "merge_auto_scope_query_results"]

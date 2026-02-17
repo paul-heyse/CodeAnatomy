@@ -29,7 +29,8 @@ from tools.cq.core.cache.telemetry import (
     record_cache_set,
 )
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
-from tools.cq.search._shared.core import PythonByteRangeEnrichmentRequest, line_col_to_byte_offset
+from tools.cq.search._shared.helpers import line_col_to_byte_offset
+from tools.cq.search._shared.requests import PythonByteRangeEnrichmentRequest
 from tools.cq.search.pipeline.classifier import get_sg_root
 from tools.cq.search.python.extractors import enrich_python_context_by_byte_range
 from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range

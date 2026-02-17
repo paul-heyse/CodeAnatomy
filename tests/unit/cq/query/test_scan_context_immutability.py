@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from typing import Any
 
 import pytest
 from tools.cq.astgrep.sgpy_scanner import SgRecord
@@ -47,11 +48,13 @@ def test_scan_context_uses_frozen_tuple_backed_fields() -> None:
     assert isinstance(scan.all_records, tuple)
     assert isinstance(scan.calls_by_def.get(records[0]), tuple)
 
+    frozen_attr = "def_records"
     with pytest.raises(FrozenInstanceError):
-        scan.def_records = ()
+        setattr(scan, frozen_attr, ())
 
+    mutable_calls_by_def: Any = scan.calls_by_def
     with pytest.raises(TypeError):
-        scan.calls_by_def[records[0]] = ()
+        mutable_calls_by_def[records[0]] = ()
 
 
 def test_entity_candidates_are_frozen_and_tuple_backed() -> None:
@@ -64,5 +67,6 @@ def test_entity_candidates_are_frozen_and_tuple_backed() -> None:
     assert isinstance(candidates.import_records, tuple)
     assert isinstance(candidates.call_records, tuple)
 
+    frozen_attr = "def_records"
     with pytest.raises(FrozenInstanceError):
-        candidates.def_records = ()
+        setattr(candidates, frozen_attr, ())

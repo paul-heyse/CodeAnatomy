@@ -235,13 +235,8 @@ pub async fn delta_data_check_request(
         data_ipc,
         extra_constraints,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let snapshot = eager_snapshot(&table)?;
     let batches = batches_from_ipc(data_ipc)?;
@@ -302,13 +297,8 @@ pub async fn delta_write_batches_request(
         commit_options,
         extra_constraints,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let eager_snapshot = eager_snapshot(&table)?;
     let violations =
@@ -351,13 +341,8 @@ pub async fn delta_delete_request(
         gate,
         commit_options,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let mut builder = table.delete();
     if let Some(predicate) = predicate {
@@ -390,13 +375,8 @@ pub async fn delta_update_request(
         gate,
         commit_options,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let session_state: Arc<dyn Session> = Arc::new(session_ctx.state());
     let mut builder = table.update().with_session_state(session_state);
@@ -442,13 +422,8 @@ pub async fn delta_merge_request(
         commit_options,
         extra_constraints,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let eager_snapshot = eager_snapshot(&table)?;
     let source_df = session_ctx.table(source_table).await.map_err(|err| {

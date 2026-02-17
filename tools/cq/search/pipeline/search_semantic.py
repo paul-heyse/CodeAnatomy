@@ -322,7 +322,7 @@ def collect_search_semantic_outcome(
 def update_search_summary_semantic_telemetry(
     summary: SummaryEnvelopeV1,
     outcome: _SearchSemanticOutcome,
-) -> None:
+) -> SummaryEnvelopeV1:
     """Update search summary with semantic enrichment telemetry.
 
     Parameters
@@ -331,9 +331,14 @@ def update_search_summary_semantic_telemetry(
         Summary dictionary to update.
     outcome
         Semantic enrichment outcome.
+
+    Returns:
+    -------
+    SummaryEnvelopeV1
+        Updated summary with merged semantic telemetry counters.
     """
     if outcome.attempted <= 0 or outcome.target_language not in {"python", "rust"}:
-        return
+        return summary
     telemetry_key = (
         "python_semantic_telemetry"
         if outcome.target_language == "python"
@@ -350,9 +355,8 @@ def update_search_summary_semantic_telemetry(
         timed_out=telemetry.timed_out + outcome.timed_out,
     )
     if telemetry_key == "python_semantic_telemetry":
-        summary.python_semantic_telemetry = updated
-    else:
-        summary.rust_semantic_telemetry = updated
+        return msgspec.structs.replace(summary, python_semantic_telemetry=updated)
+    return msgspec.structs.replace(summary, rust_semantic_telemetry=updated)
 
 
 def read_semantic_telemetry(
@@ -516,8 +520,8 @@ def apply_search_semantic_insight(
         insight = augment_insight_with_semantic(insight, outcome.payload)
         semantic_planes = outcome.payload.get("semantic_planes")
         if isinstance(semantic_planes, dict):
-            summary.semantic_planes = dict(semantic_planes)
-    update_search_summary_semantic_telemetry(summary, outcome)
+            summary = msgspec.structs.replace(summary, semantic_planes=dict(semantic_planes))
+    summary = update_search_summary_semantic_telemetry(summary, outcome)
     semantic_state = derive_search_semantic_state(summary, outcome)
     return msgspec.structs.replace(
         insight,

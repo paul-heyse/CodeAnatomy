@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201, TRY004
 """Pytest fixtures and utilities for cq E2E tests.
 
 Provides reusable test infrastructure for end-to-end cq command testing.
@@ -183,7 +182,11 @@ def run_command(repo_root: Path) -> Callable[[list[str]], subprocess.CompletedPr
 def run_cq_command(
     repo_root: Path,
 ) -> Callable[[list[str], Path | None], subprocess.CompletedProcess[str]]:
-    """Run the CQ CLI with optional working directory override."""
+    """Run the CQ CLI with optional working directory override.
+
+    Returns:
+        Callable[[list[str], Path | None], subprocess.CompletedProcess[str]]: CQ runner.
+    """
 
     def _run(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         command = ["./cq", *args]
@@ -207,7 +210,11 @@ def run_cq_command(
 def run_cq_json(
     run_cq_command: Callable[[list[str], Path | None], subprocess.CompletedProcess[str]],
 ) -> Callable[[list[str], Path | None], dict[str, Any]]:
-    """Run CQ CLI and decode a JSON payload from stdout."""
+    """Run CQ CLI and decode a JSON payload from stdout.
+
+    Returns:
+        Callable[[list[str], Path | None], dict[str, Any]]: JSON-decoding CQ runner.
+    """
 
     def _run(args: list[str], cwd: Path | None = None) -> dict[str, Any]:
         proc = run_cq_command(args, cwd)
@@ -217,7 +224,7 @@ def run_cq_json(
         data = json.loads(proc.stdout)
         if not isinstance(data, dict):
             msg = f"Expected JSON object payload, got: {type(data).__name__}"
-            raise RuntimeError(msg)
+            raise TypeError(msg)
         return data
 
     return _run
@@ -227,7 +234,11 @@ def run_cq_json(
 def run_cq_result(
     run_cq_command: Callable[[list[str], Path | None], subprocess.CompletedProcess[str]],
 ) -> Callable[[list[str], Path | None], CqResult]:
-    """Run CQ CLI and decode CqResult JSON payload."""
+    """Run CQ CLI and decode CqResult JSON payload.
+
+    Returns:
+        Callable[[list[str], Path | None], CqResult]: Result-decoding CQ runner.
+    """
 
     def _run(args: list[str], cwd: Path | None = None) -> CqResult:
         proc = run_cq_command(args, cwd)
@@ -243,7 +254,11 @@ def run_cq_result(
 def run_cq_text(
     run_cq_command: Callable[[list[str], Path | None], subprocess.CompletedProcess[str]],
 ) -> Callable[[list[str], Path | None], str]:
-    """Run CQ CLI and return stdout text with command failure surfaced."""
+    """Run CQ CLI and return stdout text with command failure surfaced.
+
+    Returns:
+        Callable[[list[str], Path | None], str]: Text-returning CQ runner.
+    """
 
     def _run(args: list[str], cwd: Path | None = None) -> str:
         proc = run_cq_command(args, cwd)
@@ -319,25 +334,41 @@ def run_query(
 
 @pytest.fixture(scope="session")
 def golden_workspace_root(repo_root: Path) -> Path:
-    """Root path for hermetic CQ golden workspaces."""
+    """Root path for hermetic CQ golden workspaces.
+
+    Returns:
+        Path: Root directory containing CQ golden workspaces.
+    """
     return repo_root / "tests" / "e2e" / "cq" / "_golden_workspace"
 
 
 @pytest.fixture(scope="session")
 def python_golden_workspace(golden_workspace_root: Path) -> Path:
-    """Python golden workspace fixture path."""
+    """Python golden workspace fixture path.
+
+    Returns:
+        Path: Python golden workspace directory.
+    """
     return golden_workspace_root / "python_project"
 
 
 @pytest.fixture(scope="session")
 def rust_golden_workspace(golden_workspace_root: Path) -> Path:
-    """Rust golden workspace fixture path."""
+    """Rust golden workspace fixture path.
+
+    Returns:
+        Path: Rust golden workspace directory.
+    """
     return golden_workspace_root / "rust_workspace"
 
 
 @pytest.fixture(scope="session")
 def mixed_golden_workspace(golden_workspace_root: Path) -> Path:
-    """Mixed-language golden workspace fixture path."""
+    """Mixed-language golden workspace fixture path.
+
+    Returns:
+        Path: Mixed-language golden workspace directory.
+    """
     return golden_workspace_root / "mixed_workspace"
 
 

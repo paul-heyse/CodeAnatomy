@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.search._shared.core import RgRunRequest
+from tools.cq.search._shared.requests import RgRunRequest
 from tools.cq.search._shared.types import QueryMode, SearchLimits
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.codec import RgAnyEvent, decode_rg_event

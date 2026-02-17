@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import msgspec
 import pytest
 from tools.cq.cli_app.context import CliContext
 from tools.cq.core.schema import CqResult, RunMeta
@@ -31,51 +32,54 @@ def test_populate_run_summary_aggregates_step_semantic_telemetry() -> None:
         toolchain={},
     )
     merged = CqResult(run=run)
-    merged.summary = summary_from_mapping(
-        {
-            "mode": "run",
-            "query": "multi-step plan (2 steps)",
-            "steps": ["search_0", "q_1"],
-            "step_summaries": {
-                "search_0": {
-                    "python_semantic_telemetry": {
-                        "attempted": 2,
-                        "applied": 1,
-                        "failed": 1,
-                        "skipped": 0,
-                        "timed_out": 0,
+    merged = msgspec.structs.replace(
+        merged,
+        summary=summary_from_mapping(
+            {
+                "mode": "run",
+                "query": "multi-step plan (2 steps)",
+                "steps": ["search_0", "q_1"],
+                "step_summaries": {
+                    "search_0": {
+                        "python_semantic_telemetry": {
+                            "attempted": 2,
+                            "applied": 1,
+                            "failed": 1,
+                            "skipped": 0,
+                            "timed_out": 0,
+                        },
+                        "rust_semantic_telemetry": {
+                            "attempted": 1,
+                            "applied": 1,
+                            "failed": 0,
+                            "skipped": 0,
+                            "timed_out": 0,
+                        },
+                        "semantic_planes": {"semantic_tokens_count": 6},
                     },
-                    "rust_semantic_telemetry": {
-                        "attempted": 1,
-                        "applied": 1,
-                        "failed": 0,
-                        "skipped": 0,
-                        "timed_out": 0,
+                    "q_1": {
+                        "python_semantic_telemetry": {
+                            "attempted": 1,
+                            "applied": 1,
+                            "failed": 0,
+                            "skipped": 0,
+                            "timed_out": 1,
+                        },
+                        "rust_semantic_telemetry": {
+                            "attempted": 3,
+                            "applied": 1,
+                            "failed": 2,
+                            "skipped": 0,
+                            "timed_out": 1,
+                        },
+                        "semantic_planes": {"semantic_tokens_count": 2, "inlay_hints_count": 1},
                     },
-                    "semantic_planes": {"semantic_tokens_count": 6},
-                },
-                "q_1": {
-                    "python_semantic_telemetry": {
-                        "attempted": 1,
-                        "applied": 1,
-                        "failed": 0,
-                        "skipped": 0,
-                        "timed_out": 1,
-                    },
-                    "rust_semantic_telemetry": {
-                        "attempted": 3,
-                        "applied": 1,
-                        "failed": 2,
-                        "skipped": 0,
-                        "timed_out": 1,
-                    },
-                    "semantic_planes": {"semantic_tokens_count": 2, "inlay_hints_count": 1},
                 },
             },
-        }
+        ),
     )
 
-    populate_run_summary_metadata(merged, executed_results=[], total_steps=2)
+    merged = populate_run_summary_metadata(merged, executed_results=[], total_steps=2)
 
     python_telemetry = merged.summary["python_semantic_telemetry"]
     rust_telemetry = merged.summary["rust_semantic_telemetry"]

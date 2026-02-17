@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from tools.cq.analysis.calls import (
+    CallClassification,
     classify_call_against_signature,
     classify_calls_against_signature,
 )
@@ -42,6 +43,7 @@ class SigImpactRequest(MacroRequestBase, frozen=True):
     symbol: str
     to: str
 
+
 def _collect_sites(
     root: Path,
     symbol: str,
@@ -72,13 +74,13 @@ def _collect_sites(
 def _classify_sites(
     all_sites: list[CallSite],
     new_params: list[SigParam],
-) -> dict[str, list[tuple[CallSite, str]]]:
+) -> dict[CallClassification, list[tuple[CallSite, str]]]:
     return classify_calls_against_signature(all_sites, new_params)
 
 
 def _append_bucket_sections(
-    result: CqResult,
-    buckets: dict[str, list[tuple[CallSite, str]]],
+    builder: MacroResultBuilder,
+    buckets: dict[CallClassification, list[tuple[CallSite, str]]],
     symbol: str,
     scoring_details: ScoringDetailsV1,
 ) -> None:
@@ -111,11 +113,11 @@ def _append_bucket_sections(
                     details=build_detail_payload(scoring=scoring_details),
                 )
             )
-        result.sections.append(section)
+        builder.add_section(section)
 
 
 def _append_evidence(
-    result: CqResult,
+    builder: MacroResultBuilder,
     all_sites: list[CallSite],
     new_params: list[SigParam],
     symbol: str,
@@ -124,13 +126,13 @@ def _append_evidence(
     for site in all_sites:
         bucket_name, reason = classify_call_against_signature(site, new_params)
         details = {"preview": site.arg_preview}
-        result.evidence.append(
+        builder.add_evidence(
             Finding(
                 category=bucket_name,
                 message=f"{site.context} calls {symbol}: {reason}",
                 anchor=Anchor(file=site.file, line=site.line),
                 details=build_detail_payload(scoring=scoring_details, data=details),
-            )
+            ),
         )
 
 
@@ -159,19 +161,19 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
         tc=request.tc,
         started_ms=started,
     )
-    result = builder.result
-
-    result.summary = summary_from_mapping(
-        {
-            "query": request.symbol,
-            "mode": "sig-impact",
-            "symbol": request.symbol,
-            "new_signature": request.to,
-            "call_sites": len(all_sites),
-            "would_break": len(buckets["would_break"]),
-            "ambiguous": len(buckets["ambiguous"]),
-            "ok": len(buckets["ok"]),
-        }
+    builder.with_summary(
+        summary_from_mapping(
+            {
+                "query": request.symbol,
+                "mode": "sig-impact",
+                "symbol": request.symbol,
+                "new_signature": request.to,
+                "call_sites": len(all_sites),
+                "would_break": len(buckets["would_break"]),
+                "ambiguous": len(buckets["ambiguous"]),
+                "ok": len(buckets["ok"]),
+            }
+        )
     )
 
     # Compute scoring signals
@@ -190,45 +192,46 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
 
     # Key findings
     if buckets["would_break"]:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="break",
                 message=f"{len(buckets['would_break'])} call sites would break",
                 severity="error",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
     if buckets["ambiguous"]:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="ambiguous",
                 message=f"{len(buckets['ambiguous'])} call sites need manual review",
                 severity="warning",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
     if buckets["ok"]:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="ok",
                 message=f"{len(buckets['ok'])} call sites are compatible",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
 
     if not all_sites:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="info",
                 message=f"No call sites found for '{request.symbol}'",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
 
-    _append_bucket_sections(result, buckets, request.symbol, scoring_details)
-    _append_evidence(result, all_sites, new_params, request.symbol, scoring_details)
+    _append_bucket_sections(builder, buckets, request.symbol, scoring_details)
+    _append_evidence(builder, all_sites, new_params, request.symbol, scoring_details)
+    result = builder.build()
 
     return apply_rust_fallback_policy(
         result,

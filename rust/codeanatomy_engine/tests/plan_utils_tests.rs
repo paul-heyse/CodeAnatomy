@@ -86,7 +86,12 @@ async fn normalize_and_hash_helpers_are_deterministic() {
     let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
     ctx.register_table("t", Arc::new(table)).unwrap();
 
-    let df = ctx.table("t").await.unwrap().filter(datafusion::prelude::col("id").gt_eq(datafusion::prelude::lit(2))).unwrap();
+    let df = ctx
+        .table("t")
+        .await
+        .unwrap()
+        .filter(datafusion::prelude::col("id").gt_eq(datafusion::prelude::lit(2)))
+        .unwrap();
     let logical = df.logical_plan().clone();
     let physical = ctx.state().create_physical_plan(&logical).await.unwrap();
 

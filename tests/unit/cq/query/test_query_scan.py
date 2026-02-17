@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from tools.cq.astgrep.sgpy_scanner import SgRecord
+from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.query_scan import scan_entity_records
 
 
@@ -30,7 +32,7 @@ def test_scan_entity_records_returns_empty_for_empty_fragment_files(
     fragment_ctx = SimpleNamespace(cache_ctx=SimpleNamespace(files=[], root=None))
     monkeypatch.setattr(
         "tools.cq.query.query_scan.build_entity_fragment_context",
-        lambda _ctx, _paths, _scope_globs: fragment_ctx,
+        lambda *_args, **_kwargs: fragment_ctx,
     )
 
     called = {"run": False}
@@ -44,7 +46,11 @@ def test_scan_entity_records_returns_empty_for_empty_fragment_files(
         _fail_run_query_fragment_scan,
     )
 
-    result = scan_entity_records(ctx=SimpleNamespace(run_id="r"), paths=[], scope_globs=None)
+    result = scan_entity_records(
+        ctx=cast("QueryExecutionContext", SimpleNamespace(run_id="r")),
+        paths=[],
+        scope_globs=None,
+    )
 
     assert result == []
     assert called["run"] is False
@@ -60,7 +66,7 @@ def test_scan_entity_records_applies_miss_payload_after_hits(
 
     monkeypatch.setattr(
         "tools.cq.query.query_scan.build_entity_fragment_context",
-        lambda _ctx, _paths, _scope_globs: fragment_ctx,
+        lambda *_args, **_kwargs: fragment_ctx,
     )
     monkeypatch.setattr(
         "tools.cq.query.query_scan.entity_fragment_entries",
@@ -80,7 +86,7 @@ def test_scan_entity_records_applies_miss_payload_after_hits(
     )
 
     result = scan_entity_records(
-        ctx=SimpleNamespace(run_id="run-1"),
+        ctx=cast("QueryExecutionContext", SimpleNamespace(run_id="run-1")),
         paths=[],
         scope_globs=None,
     )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.core.schema import CqResult, mk_result, mk_runmeta
+from tools.cq.core.schema import CqResult, mk_result, mk_runmeta, update_result_summary
 from tools.cq.core.summary_contract import SemanticTelemetryV1
 from tools.cq.run.run_summary import populate_run_summary_metadata
 
@@ -28,29 +28,52 @@ def test_populate_run_summary_aggregates_semantic_telemetry() -> None:
     step_a = _result("search")
     step_b = _result("q")
 
-    step_a.summary.mode = "identifier"
-    step_a.summary.query = "build_graph"
-    step_a.summary.lang_scope = "python"
-    step_a.summary.language_order = ["python"]
-
-    step_b.summary.mode = "identifier"
-    step_b.summary.query = "build_graph"
-    step_b.summary.lang_scope = "python"
-    step_b.summary.language_order = ["python"]
-
-    merged.summary.steps = ["a", "b"]
-    merged.summary.step_summaries = {
-        "a": {
-            "python_semantic_telemetry": SemanticTelemetryV1(attempted=2, applied=1, failed=1),
-            "semantic_planes": {"python": {"ast": 1}},
+    step_a = update_result_summary(
+        step_a,
+        {
+            "mode": "identifier",
+            "query": "build_graph",
+            "lang_scope": "python",
+            "language_order": ["python"],
         },
-        "b": {
-            "python_semantic_telemetry": SemanticTelemetryV1(attempted=1, applied=1, failed=0),
-            "semantic_planes": {"python": {"ast": 2, "imports": 1}},
-        },
-    }
+    )
 
-    populate_run_summary_metadata(
+    step_b = update_result_summary(
+        step_b,
+        {
+            "mode": "identifier",
+            "query": "build_graph",
+            "lang_scope": "python",
+            "language_order": ["python"],
+        },
+    )
+
+    merged = update_result_summary(
+        merged,
+        {
+            "steps": ["a", "b"],
+            "step_summaries": {
+                "a": {
+                    "python_semantic_telemetry": SemanticTelemetryV1(
+                        attempted=2,
+                        applied=1,
+                        failed=1,
+                    ),
+                    "semantic_planes": {"python": {"ast": 1}},
+                },
+                "b": {
+                    "python_semantic_telemetry": SemanticTelemetryV1(
+                        attempted=1,
+                        applied=1,
+                        failed=0,
+                    ),
+                    "semantic_planes": {"python": {"ast": 2, "imports": 1}},
+                },
+            },
+        },
+    )
+
+    merged = populate_run_summary_metadata(
         merged,
         [("a", step_a), ("b", step_b)],
         total_steps=2,

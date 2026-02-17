@@ -91,7 +91,10 @@ def _apply_calls_semantic(
                     )
                 semantic_planes = semantic_payload.get("semantic_planes")
                 if isinstance(semantic_planes, dict):
-                    result.summary.semantic_planes = dict(semantic_planes)
+                    existing_planes = result.summary.semantic_planes
+                    if isinstance(existing_planes, dict):
+                        existing_planes.clear()
+                        existing_planes.update(dict(semantic_planes))
             else:
                 semantic_failed = 1
                 semantic_reasons.append(

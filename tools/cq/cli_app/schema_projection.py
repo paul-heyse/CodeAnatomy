@@ -65,6 +65,11 @@ def project_filter_params(params: FilterParams | None) -> CommonFilterCommandSch
 
 
 def filter_options_from_projected_params(params: FilterParams | None) -> CommonFilters:
+    """Project filter params into typed CLI filter options.
+
+    Returns:
+        CommonFilters: Typed filter options payload.
+    """
     return _options(
         params or FilterParams(),
         schema_type=CommonFilterCommandSchema,
@@ -77,7 +82,14 @@ def project_query_params(params: QueryParams | None) -> QueryCommandSchema:
 
 
 def query_options_from_projected_params(params: QueryParams | None) -> QueryOptions:
-    return _options(params or QueryParams(), schema_type=QueryCommandSchema, options_type=QueryOptions)
+    """Project query params into typed query options.
+
+    Returns:
+        QueryOptions: Typed query options payload.
+    """
+    return _options(
+        params or QueryParams(), schema_type=QueryCommandSchema, options_type=QueryOptions
+    )
 
 
 def project_search_params(params: SearchParams | None) -> SearchCommandSchema:
@@ -85,6 +97,11 @@ def project_search_params(params: SearchParams | None) -> SearchCommandSchema:
 
 
 def search_options_from_projected_params(params: SearchParams | None) -> SearchOptions:
+    """Project search params into typed search options.
+
+    Returns:
+        SearchOptions: Typed search options payload.
+    """
     return _options(
         params or SearchParams(),
         schema_type=SearchCommandSchema,
@@ -97,6 +114,11 @@ def project_report_params(params: ReportParams) -> ReportCommandSchema:
 
 
 def report_options_from_projected_params(params: ReportParams) -> ReportOptions:
+    """Project report params into typed report options.
+
+    Returns:
+        ReportOptions: Typed report options payload.
+    """
     return _options(params, schema_type=ReportCommandSchema, options_type=ReportOptions)
 
 
@@ -105,6 +127,11 @@ def project_impact_params(params: ImpactParams) -> ImpactCommandSchema:
 
 
 def impact_options_from_projected_params(params: ImpactParams) -> ImpactOptions:
+    """Project impact params into typed impact options.
+
+    Returns:
+        ImpactOptions: Typed impact options payload.
+    """
     return _options(params, schema_type=ImpactCommandSchema, options_type=ImpactOptions)
 
 
@@ -113,6 +140,11 @@ def project_imports_params(params: ImportsParams | None) -> ImportsCommandSchema
 
 
 def imports_options_from_projected_params(params: ImportsParams | None) -> ImportsOptions:
+    """Project imports params into typed imports options.
+
+    Returns:
+        ImportsOptions: Typed imports options payload.
+    """
     return _options(
         params or ImportsParams(),
         schema_type=ImportsCommandSchema,
@@ -127,6 +159,11 @@ def project_exceptions_params(params: ExceptionsParams | None) -> ExceptionsComm
 def exceptions_options_from_projected_params(
     params: ExceptionsParams | None,
 ) -> ExceptionsOptions:
+    """Project exceptions params into typed exceptions options.
+
+    Returns:
+        ExceptionsOptions: Typed exceptions options payload.
+    """
     return _options(
         params or ExceptionsParams(),
         schema_type=ExceptionsCommandSchema,
@@ -139,6 +176,11 @@ def project_sig_impact_params(params: SigImpactParams) -> SigImpactCommandSchema
 
 
 def sig_impact_options_from_projected_params(params: SigImpactParams) -> SigImpactOptions:
+    """Project signature-impact params into typed signature-impact options.
+
+    Returns:
+        SigImpactOptions: Typed signature-impact options payload.
+    """
     return _options(params, schema_type=SigImpactCommandSchema, options_type=SigImpactOptions)
 
 
@@ -149,6 +191,11 @@ def project_side_effects_params(params: SideEffectsParams | None) -> SideEffects
 def side_effects_options_from_projected_params(
     params: SideEffectsParams | None,
 ) -> SideEffectsOptions:
+    """Project side-effects params into typed side-effects options.
+
+    Returns:
+        SideEffectsOptions: Typed side-effects options payload.
+    """
     return _options(
         params or SideEffectsParams(),
         schema_type=SideEffectsCommandSchema,
@@ -165,6 +212,11 @@ def project_bytecode_surface_params(
 def bytecode_surface_options_from_projected_params(
     params: BytecodeSurfaceParams | None,
 ) -> BytecodeSurfaceOptions:
+    """Project bytecode-surface params into typed bytecode-surface options.
+
+    Returns:
+        BytecodeSurfaceOptions: Typed bytecode-surface options payload.
+    """
     return _options(
         params or BytecodeSurfaceParams(),
         schema_type=BytecodeSurfaceCommandSchema,
@@ -177,6 +229,11 @@ def project_run_params(params: RunParams | None) -> RunCommandSchema:
 
 
 def run_options_from_projected_params(params: RunParams | None) -> RunOptions:
+    """Project run params into typed run options.
+
+    Returns:
+        RunOptions: Typed run options payload.
+    """
     return _options(params or RunParams(), schema_type=RunCommandSchema, options_type=RunOptions)
 
 

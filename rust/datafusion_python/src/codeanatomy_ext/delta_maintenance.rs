@@ -12,9 +12,8 @@ use crate::delta_maintenance::{
     delta_restore_request as delta_restore_native,
     delta_set_properties_request as delta_set_properties_native,
     delta_vacuum_request as delta_vacuum_native, DeltaAddConstraintsRequest,
-    DeltaAddFeaturesRequest, DeltaDropConstraintsRequest,
-    DeltaOptimizeCompactRequest, DeltaRestoreRequest, DeltaSetPropertiesRequest,
-    DeltaVacuumRequest,
+    DeltaAddFeaturesRequest, DeltaDropConstraintsRequest, DeltaOptimizeCompactRequest,
+    DeltaRestoreRequest, DeltaSetPropertiesRequest, DeltaVacuumRequest,
 };
 use datafusion_ext::{DeltaCommitOptions, DeltaFeatureGate};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -378,14 +377,35 @@ pub(crate) fn delta_cleanup_metadata_request_payload(
 }
 
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(delta_optimize_compact_request_payload, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        delta_optimize_compact_request_payload,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(delta_vacuum_request_payload, module)?)?;
     module.add_function(wrap_pyfunction!(delta_restore_request_payload, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_set_properties_request_payload, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_add_features_request_payload, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_add_constraints_request_payload, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_drop_constraints_request_payload, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_create_checkpoint_request_payload, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_cleanup_metadata_request_payload, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        delta_set_properties_request_payload,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        delta_add_features_request_payload,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        delta_add_constraints_request_payload,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        delta_drop_constraints_request_payload,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        delta_create_checkpoint_request_payload,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        delta_cleanup_metadata_request_payload,
+        module
+    )?)?;
     Ok(())
 }

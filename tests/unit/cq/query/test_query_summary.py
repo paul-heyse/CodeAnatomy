@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import msgspec
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.schema import Anchor, Finding, mk_result
 from tools.cq.core.summary_contract import apply_summary_mapping
@@ -44,13 +45,20 @@ def test_finalize_single_scope_summary_builds_language_partition(tmp_path: Path)
     )
 
     result = mk_result(build_runmeta(ctx))
-    result.summary = apply_summary_mapping(result.summary, summary_common_for_context(ctx))
-    result.key_findings.append(
-        Finding(
-            category="definition",
-            message="target definition",
-            anchor=Anchor(file="a.py", line=1),
-        )
+    result = msgspec.structs.replace(
+        result,
+        summary=apply_summary_mapping(result.summary, summary_common_for_context(ctx)),
+    )
+    result = msgspec.structs.replace(
+        result,
+        key_findings=[
+            *result.key_findings,
+            Finding(
+                category="definition",
+                message="target definition",
+                anchor=Anchor(file="a.py", line=1),
+            ),
+        ],
     )
 
     finalized = finalize_single_scope_summary(ctx, result)

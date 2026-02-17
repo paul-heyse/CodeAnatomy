@@ -15,45 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Display, Formatter};
-
 use datafusion::logical_expr::logical_plan::Union;
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt;
 
 use crate::common::df_schema::PyDFSchema;
 use crate::expr::logical_node::LogicalNode;
 use crate::sql::logical::PyLogicalPlan;
 
-#[pyclass(frozen, name = "Union", module = "datafusion.expr", subclass)]
-#[derive(Clone)]
-pub struct PyUnion {
-    union_: Union,
-}
-
-impl From<Union> for PyUnion {
-    fn from(union_: Union) -> PyUnion {
-        PyUnion { union_ }
-    }
-}
-
-impl From<PyUnion> for Union {
-    fn from(union_: PyUnion) -> Self {
-        union_.union_
-    }
-}
-
-impl Display for PyUnion {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+logical_plan_wrapper!(
+    wrapper = PyUnion,
+    inner = Union,
+    field = union_,
+    py_name = "Union",
+    display = |this, f| {
         write!(
             f,
             "Union
             Inputs: {:?}
             Schema: {:?}",
-            &self.union_.inputs, &self.union_.schema,
+            &this.union_.inputs, &this.union_.schema,
         )
+    },
+    inputs = |this| {
+        this.union_
+            .inputs
+            .iter()
+            .map(|x| x.as_ref().clone().into())
+            .collect()
     }
-}
+);
 
 #[pymethods]
 impl PyUnion {
@@ -73,19 +63,5 @@ impl PyUnion {
 
     fn __name__(&self) -> PyResult<String> {
         Ok("Union".to_string())
-    }
-}
-
-impl LogicalNode for PyUnion {
-    fn inputs(&self) -> Vec<PyLogicalPlan> {
-        self.union_
-            .inputs
-            .iter()
-            .map(|x| x.as_ref().clone().into())
-            .collect()
-    }
-
-    fn to_variant<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.clone().into_bound_py_any(py)
     }
 }

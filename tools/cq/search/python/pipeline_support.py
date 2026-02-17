@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from tools.cq.core.structs import CqOutputStruct
-from tools.cq.search._shared.core import PythonByteRangeEnrichmentRequest
+from tools.cq.search._shared.requests import PythonByteRangeEnrichmentRequest
 from tools.cq.search.python.extractors import extract_python_byte_range
 from tools.cq.search.python.resolution_index import build_resolution_index
 

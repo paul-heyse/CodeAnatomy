@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search._shared.core import (
-    PythonByteRangeEnrichmentRequest,
-    PythonNodeEnrichmentRequest,
+from tools.cq.search._shared.helpers import (
     assert_no_runtime_only_keys,
     has_runtime_only_keys,
+)
+from tools.cq.search._shared.requests import (
+    PythonByteRangeEnrichmentRequest,
+    PythonNodeEnrichmentRequest,
 )
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 

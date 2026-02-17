@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 
-from tools.cq.search._shared.core import line_col_to_byte_offset
+from tools.cq.search._shared.helpers import line_col_to_byte_offset
 
 
 def node_byte_span(node: ast.AST, source_bytes: bytes) -> tuple[int, int] | None:

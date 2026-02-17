@@ -13,6 +13,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "tracing")]
+use tracing::instrument;
 
 use crate::compiler::plan_utils::{blake3_hash_bytes, normalize_logical, normalize_physical};
 use crate::executor::warnings::RunWarning;
@@ -77,6 +79,7 @@ pub struct OptimizerCompileReport {
     pub warnings: Vec<RunWarning>,
 }
 
+#[cfg_attr(feature = "tracing", instrument(skip(ctx, unoptimized_plan, config)))]
 pub async fn run_optimizer_pipeline(
     ctx: &SessionContext,
     unoptimized_plan: LogicalPlan,
@@ -143,6 +146,7 @@ pub async fn run_optimizer_pipeline(
     })
 }
 
+#[cfg_attr(feature = "tracing", instrument(skip(ctx, unoptimized_plan, config)))]
 pub async fn run_optimizer_compile_only(
     ctx: &SessionContext,
     unoptimized_plan: LogicalPlan,

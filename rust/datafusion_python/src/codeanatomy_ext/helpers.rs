@@ -9,8 +9,8 @@ use datafusion::catalog::TableProvider;
 use datafusion::execution::context::SessionContext;
 use datafusion_ext::DeltaFeatureGate;
 use datafusion_ffi::table_provider::FFI_TableProvider;
-use df_plugin_common::{schema_from_ipc, DELTA_SCAN_CONFIG_VERSION};
 use deltalake::delta_datafusion::DeltaScanConfig;
+use df_plugin_common::{schema_from_ipc, DELTA_SCAN_CONFIG_VERSION};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyCapsule, PyDict, PyFloat, PyInt, PyList, PyString};
@@ -24,8 +24,8 @@ use crate::delta_control_plane::DeltaScanOverrides;
 use crate::delta_maintenance::DeltaMaintenanceReport;
 use crate::delta_mutations::DeltaMutationReport;
 use crate::delta_observability::{
-    maintenance_report_payload, mutation_report_payload, scan_config_payload, scan_config_schema_ipc,
-    snapshot_info_as_values,
+    maintenance_report_payload, mutation_report_payload, scan_config_payload,
+    scan_config_schema_ipc, snapshot_info_as_values,
 };
 use crate::delta_protocol::{gate_from_parts, DeltaSnapshotInfo, TableVersion};
 

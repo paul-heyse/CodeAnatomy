@@ -15,46 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Display, Formatter};
-
 use datafusion::logical_expr::logical_plan::Filter;
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt;
 
 use crate::common::df_schema::PyDFSchema;
 use crate::expr::logical_node::LogicalNode;
 use crate::expr::PyExpr;
 use crate::sql::logical::PyLogicalPlan;
 
-#[pyclass(frozen, name = "Filter", module = "datafusion.expr", subclass)]
-#[derive(Clone)]
-pub struct PyFilter {
-    filter: Filter,
-}
-
-impl From<Filter> for PyFilter {
-    fn from(filter: Filter) -> PyFilter {
-        PyFilter { filter }
-    }
-}
-
-impl From<PyFilter> for Filter {
-    fn from(filter: PyFilter) -> Self {
-        filter.filter
-    }
-}
-
-impl Display for PyFilter {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+logical_plan_wrapper!(
+    wrapper = PyFilter,
+    inner = Filter,
+    field = filter,
+    py_name = "Filter",
+    display = |this, f| {
         write!(
             f,
             "Filter
             Predicate: {:?}
             Input: {:?}",
-            &self.filter.predicate, &self.filter.input
+            &this.filter.predicate, &this.filter.input
         )
-    }
-}
+    },
+    inputs = |this| { vec![PyLogicalPlan::from((*this.filter.input).clone())] }
+);
 
 #[pymethods]
 impl PyFilter {
@@ -75,15 +59,5 @@ impl PyFilter {
 
     fn __repr__(&self) -> String {
         format!("Filter({self})")
-    }
-}
-
-impl LogicalNode for PyFilter {
-    fn inputs(&self) -> Vec<PyLogicalPlan> {
-        vec![PyLogicalPlan::from((*self.filter.input).clone())]
-    }
-
-    fn to_variant<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.clone().into_bound_py_any(py)
     }
 }

@@ -159,7 +159,8 @@ pub async fn ensure_output_table(
             .map_err(|err| DataFusionError::External(Box::new(err)))?;
     }
 
-    let scan_config = DeltaScanConfig::default();
+    let session_state = ctx.state();
+    let scan_config = DeltaScanConfig::new_from_session(&session_state);
     let scan_overrides = DeltaScanOverrides {
         file_column_name: scan_config.file_column_name,
         enable_parquet_pushdown: Some(scan_config.enable_parquet_pushdown),

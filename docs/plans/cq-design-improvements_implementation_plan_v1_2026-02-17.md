@@ -2146,69 +2146,98 @@ high-risk immutability migration.
 
 ---
 
-## 7. Implementation Checklist
+## 7. Implementation Checklist (Status Audit: 2026-02-17)
+
+**Legend:** `[x]` complete, `[ ]` not complete (includes partial completion).
+
+**Status Snapshot**
+
+- Completed items: 34 / 43
+- Not complete (partial): 9 / 43
+- Not started: 0 / 43
 
 **Phase 1: Safe Deletions and Renames**
 
-- [ ] S1: Delete duplicate search pipeline helpers
-- [ ] S2: Rename SummaryEnvelopeV1 collision
-- [ ] S3: Remove query dispatch facades
-- [ ] S4: Add contract constraints
-- [ ] S5: Tighten bare string types to Literal/enum (`enrichment_status`, `resolution_quality`,
+- [x] S1: Delete duplicate search pipeline helpers
+- [x] S2: Rename SummaryEnvelopeV1 collision
+- [x] S3: Remove query dispatch facades
+- [x] S4: Add contract constraints
+- [x] S5: Tighten bare string types to Literal/enum (`enrichment_status`, `resolution_quality`,
       `coverage_level`) and default `CliContext.output_format`
-- [ ] S6: Fix minor inversions and add `__all__` exports
-- [ ] S23: Type `run_search_partition` and delete `enrichment_phase.py`
-- [ ] S24: Remove `_build_launch_context` global mutation
-- [ ] S25: Promote `SearchStep.mode` to `QueryMode | None`
-- [ ] S30: Remove dead null check in `_combined_progress_callback`
-- [ ] D1: Delete duplicate helpers (after S1)
-- [ ] D2: Delete dispatch facade files (after S3)
-- [ ] D6: Delete wrapper/facade modules (after S23, S25)
+- [x] S6: Fix minor inversions and add `__all__` exports
+- [x] S23: Type `run_search_partition` and delete `enrichment_phase.py`
+- [x] S24: Remove `_build_launch_context` global mutation
+- [x] S25: Promote `SearchStep.mode` to `QueryMode | None`
+- [x] S30: Remove dead null check in `_combined_progress_callback`
+- [x] D1: Delete duplicate helpers (after S1)
+- [x] D2: Delete dispatch facade files (after S3)
+- [x] D6: Delete wrapper/facade modules (after S23, S25)
 
 **Phase 2: DRY Consolidation**
 
-- [ ] S7: Unify lane canonicalization
-- [ ] S8: Consolidate enrichment helpers
-- [ ] S9: Consolidate cache policy
-- [ ] S10: Derive payload field sets from struct fields
-- [ ] D3: Delete consolidated duplicates (after S8, S9)
+- [x] S7: Unify lane canonicalization
+- [x] S8: Consolidate enrichment helpers
+- [x] S9: Consolidate cache policy
+- [x] S10: Derive payload field sets from struct fields
+- [x] D3: Delete consolidated duplicates (after S8, S9)
 
 **Phase 3: Structural Extraction**
 
-- [ ] S11: Extract scan/summary/fragment cache from `executor_runtime.py` and cache fragments
-      from `executor_ast_grep.py`
-- [ ] S12: Extract from `assembly.py`
-- [ ] S13: Extract pure analysis from macros
-- [ ] S14: Split `smart_search.py`
-- [ ] S15: Fix core→search reverse dependencies with hard cutover (no re-export shim)
-- [ ] S26: Invert LDMD collapse dependency
-- [ ] S28: Remove AST-grep/query dependency inversion
-- [ ] S29: Split `search/_shared/core.py`
-- [ ] S32: Move render-enrichment session assembly out of `report.py`
-- [ ] D4: Delete extracted functions from source modules (after S11, S14)
-- [ ] D7: Delete reverse-dependency artifacts (after S26, S28, S29, S32)
+- [x] S11: Extract scan/summary/fragment cache from `executor_runtime.py` and cache fragments
+      from `executor_ast_grep.py` (`executor_runtime.py` is now a thin facade at 105 LOC;
+      `executor_ast_grep.py` is now a thin facade at 77 LOC; extracted modules and tests are in
+      place)
+- [x] S12: Extract from `assembly.py`
+- [x] S13: Extract pure analysis from macros
+- [ ] S14: Split `smart_search.py` (partial: relevance/request parsing extracted, but
+      `smart_search.py` remains 317 LOC and still contains compatibility wrapper/orchestration
+      helpers beyond the target thin entrypoint shape)
+- [x] S15: Fix core→search reverse dependencies with hard cutover (no re-export shim)
+- [x] S26: Invert LDMD collapse dependency
+- [ ] S28: Remove AST-grep/query dependency inversion (partial: metavar helpers moved, but
+      `tools/cq/query/metavar.py` still exports AST-grep helper wrapper functions and
+      `tools/cq/query/language.py` still carries language helper/constant logic not fully folded
+      into core typed vocabulary)
+- [x] S29: Split `search/_shared/core.py` (`_shared/core.py` removed; imports cut over to
+      `_shared/helpers.py`, `_shared/requests.py`, `_shared/timeouts.py`)
+- [x] S32: Move render-enrichment session assembly out of `report.py`
+- [ ] D4: Delete extracted functions from source modules (after S11, S14) (partial: query
+      extraction target is met, but search-side thin-module threshold for S14 remains open)
+- [ ] D7: Delete reverse-dependency artifacts (after S26, S28, S29, S32) (partial: LDMD/report
+      cleanup and `_shared/core.py` deletion are complete; S28 hard-cutover remains incomplete)
 
 **Phase 4: Immutability Migration**
 
-- [ ] S27: Freeze query scan context contracts (`ScanContext`, `EntityCandidates`)
-- [ ] S31: Make `build_error_result` CQS-compliant
+- [x] S27: Freeze query scan context contracts (`ScanContext`, `EntityCandidates`)
+- [x] S31: Make `build_error_result` CQS-compliant
 - [ ] S16: Enforce deep immutability for core schema boundaries (`DetailPayload`, `Finding`,
-      `SummaryEnvelopeV1`, `CqResult`) with refreshed mutation baseline
-- [ ] S17: Extend `MacroResultBuilder` and migrate mutation callsites
-- [ ] S18: Refactor executor CQS
+      `SummaryEnvelopeV1`, `CqResult`) with refreshed mutation baseline (partial: boundary structs
+      are now frozen and mutation helpers are copy-on-write, but deep immutability is incomplete
+      because key summary/result containers are still mutable `list`/`dict` fields)
+- [x] S17: Extend `MacroResultBuilder` and migrate mutation callsites (`MacroResultBuilder` API
+      is expanded and macros are migrated off direct `result.key_findings/evidence/sections`
+      mutation patterns)
+- [x] S18: Refactor executor CQS (handler pipeline now returns findings/summary updates and
+      top-level execution functions perform centralized assembly via copy-on-write summary updates)
 - [ ] D5: Delete mutation-supporting methods and direct mutation patterns (after S16, S17, S18,
-      S27, S31)
+      S27, S31) (partial: direct `result.*.append/extend/insert` and summary field-assignment
+      patterns are removed, but deep immutability cleanup tied to S16 remains open)
 
 **Phase 5: Typed Internal Flow**
 
-- [ ] S19: Define enrichment payload view structs
-- [ ] S20: Build typed enrichment facts directly
-- [ ] S21: Add DI seams to enrichment entry points
-- [ ] S22: Add Rust enrichment stage timings
+- [x] S19: Define enrichment payload view structs
+- [ ] S20: Build typed enrichment facts directly (partial: typed `PythonEnrichmentFacts` flow
+      introduced, but enrichment state/stage accumulation still relies on mixed dict-based
+      intermediates before boundary serialization)
+- [x] S21: Add DI seams to enrichment entry points
+- [x] S22: Add Rust enrichment stage timings
 
 **Phase 6: Final Hard-Cutover Cleanup**
 
-- [ ] S33: Collapse CLI Params/Options duplication into a single command schema
-- [ ] D8: Delete CLI duplication artifacts (after S33)
-- [ ] S34: Simplify query registry caching with diskcache built-ins
-- [ ] D9: Delete redundant query-registry memoization layer (after S34)
+- [ ] S33: Collapse CLI Params/Options duplication into a single command schema (partial: command
+      schema and projection layer are in place and wired, but duplicate command-field declarations
+      still exist in `cli_app/params.py`)
+- [ ] D8: Delete CLI duplication artifacts (after S33) (partial: blocked by remaining S33
+      duplication)
+- [x] S34: Simplify query registry caching with diskcache built-ins
+- [x] D9: Delete redundant query-registry memoization layer (after S34)

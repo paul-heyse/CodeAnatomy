@@ -4,17 +4,20 @@ use codeanatomy_engine::providers::pushdown_contract::{FilterPushdownStatus, Pus
 use codeanatomy_engine::providers::scan_config::{
     has_lineage_tracking, standard_scan_config, validate_scan_config,
 };
+use datafusion::prelude::SessionContext;
 
 #[test]
 fn test_standard_scan_config_enables_lineage_when_requested() {
-    let config = standard_scan_config(true);
+    let ctx = SessionContext::new();
+    let config = standard_scan_config(&ctx.state(), None, true).unwrap();
     assert!(has_lineage_tracking(&config));
     assert_eq!(config.file_column_name.as_deref(), Some("__source_file"));
 }
 
 #[test]
 fn test_validate_scan_config_rejects_invalid_lineage_column_name() {
-    let mut config = standard_scan_config(false);
+    let ctx = SessionContext::new();
+    let mut config = standard_scan_config(&ctx.state(), None, false).unwrap();
     config.file_column_name = Some("bad-name".to_string());
     let result = validate_scan_config(&config);
     assert!(result.is_err());
@@ -74,12 +77,13 @@ fn test_capabilities_default_is_all_false() {
 fn test_capabilities_with_lineage_tracking() {
     use codeanatomy_engine::providers::scan_config::{infer_capabilities, standard_scan_config};
 
-    let config = standard_scan_config(true);
+    let ctx = SessionContext::new();
+    let config = standard_scan_config(&ctx.state(), None, true).unwrap();
     let caps = infer_capabilities(&config);
-    // With lineage enabled, pushdown and pruning should still be active
-    assert!(caps.predicate_pushdown);
+    // Capabilities should mirror session-derived scan configuration.
+    assert_eq!(caps.predicate_pushdown, config.enable_parquet_pushdown);
     assert!(caps.projection_pushdown);
-    assert!(caps.partition_pruning);
+    assert_eq!(caps.partition_pruning, config.wrap_partition_values);
 }
 
 #[test]

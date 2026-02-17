@@ -5,10 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import cast
 
-from tools.cq.core.schema import CqResult
+from tools.cq.core.schema import CqResult, update_result_summary
 from tools.cq.core.summary_contract import SemanticTelemetryV1, build_semantic_telemetry
 from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, expand_language_scope
+
+_EMPTY_OVERVIEW: dict[str, object] = {}
+_EMPTY_DIAGNOSTICS: list[dict[str, object]] = []
 
 
 def populate_run_summary_metadata(
@@ -16,7 +19,7 @@ def populate_run_summary_metadata(
     executed_results: list[tuple[str, CqResult]],
     *,
     total_steps: int,
-) -> None:
+) -> CqResult:
     """Populate run summary metadata from executed step results.
 
     Parameters
@@ -27,35 +30,42 @@ def populate_run_summary_metadata(
         List of (step_id, result) tuples.
     total_steps : int
         Total number of steps in the plan.
+
+    Returns:
+    -------
+    CqResult
+        Updated merged result with normalized run summary metadata.
     """
+    updates: dict[str, object] = {}
     if not (isinstance(merged.summary.query, str) and isinstance(merged.summary.mode, str)):
         mode, query = _derive_run_summary_metadata(executed_results, total_steps=total_steps)
         if merged.summary.mode is None:
-            merged.summary.mode = mode
+            updates["mode"] = mode
         if merged.summary.query is None:
-            merged.summary.query = query
+            updates["query"] = query
     lang_scope, language_order = _derive_run_scope_metadata(executed_results)
     if merged.summary.lang_scope is None:
-        merged.summary.lang_scope = lang_scope
+        updates["lang_scope"] = lang_scope
     if not merged.summary.language_order:
-        merged.summary.language_order = list(language_order)
+        updates["language_order"] = list(language_order)
     if not merged.summary.python_semantic_overview:
-        merged.summary.python_semantic_overview = {}
+        updates["python_semantic_overview"] = dict(_EMPTY_OVERVIEW)
     step_summaries = merged.summary.step_summaries
-    merged.summary.python_semantic_telemetry = _aggregate_run_semantic_telemetry(
+    updates["python_semantic_telemetry"] = _aggregate_run_semantic_telemetry(
         step_summaries,
         telemetry_key="python_semantic_telemetry",
     )
-    merged.summary.rust_semantic_telemetry = _aggregate_run_semantic_telemetry(
+    updates["rust_semantic_telemetry"] = _aggregate_run_semantic_telemetry(
         step_summaries,
         telemetry_key="rust_semantic_telemetry",
     )
-    merged.summary.semantic_planes = _select_run_semantic_planes(
+    updates["semantic_planes"] = _select_run_semantic_planes(
         step_summaries,
         step_order=merged.summary.steps,
     )
     if not merged.summary.python_semantic_diagnostics:
-        merged.summary.python_semantic_diagnostics = []
+        updates["python_semantic_diagnostics"] = list(_EMPTY_DIAGNOSTICS)
+    return update_result_summary(merged, updates)
 
 
 def _aggregate_run_semantic_telemetry(

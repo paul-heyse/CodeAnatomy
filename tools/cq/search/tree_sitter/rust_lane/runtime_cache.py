@@ -19,6 +19,7 @@ from tools.cq.search.tree_sitter.query.compiler import compile_query
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Tree
+
     from tools.cq.search.tree_sitter.core.parse import ParseSession
 
 try:

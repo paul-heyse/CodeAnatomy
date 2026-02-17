@@ -64,7 +64,9 @@ def _struct_to_mapping(value: object) -> dict[str, object]:
 
 def _mapping_has_signal(payload: dict[str, object]) -> bool:
     for value in payload.values():
-        if value in ("", None):
+        if value is None:
+            continue
+        if isinstance(value, str) and not value:
             continue
         if isinstance(value, (list, dict, tuple, set)) and not value:
             continue
@@ -187,7 +189,7 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
     python = python_enrichment_payload(match.python_enrichment)
     python_view = _payload_view(python)
     python_facts = parse_python_enrichment(python) if python else None
-    resolution_raw = _struct_to_mapping(python_view.resolution)
+    resolution_raw: dict[str, object] = _struct_to_mapping(python_view.resolution)
     if (
         not _mapping_has_signal(resolution_raw)
         and python_facts is not None
@@ -201,7 +203,7 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
             "enclosing_callable": python_facts.resolution.enclosing_callable,
             "enclosing_class": python_facts.resolution.enclosing_class,
         }
-    structural_raw = _struct_to_mapping(python_view.structural)
+    structural_raw: dict[str, object] = _struct_to_mapping(python_view.structural)
     if (
         not _mapping_has_signal(structural_raw)
         and python_facts is not None
@@ -216,7 +218,7 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
             "class_name": python_facts.structure.class_name,
             "class_kind": python_facts.structure.class_kind,
         }
-    agreement_raw = _struct_to_mapping(python_view.agreement)
+    agreement_raw: dict[str, object] = _struct_to_mapping(python_view.agreement)
     return _PayloadViews(
         semantic=semantic,
         incremental=incremental,

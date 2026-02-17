@@ -27,7 +27,9 @@ use crate::spec::runtime::TracingConfig;
 
 use super::format_policy::{build_table_options, default_file_formats, FormatPolicySpec};
 use super::planning_manifest::{manifest_from_surface_with_context, PlanningSurfaceManifest};
-use super::planning_surface::{apply_to_builder, install_rewrites, PlanningSurfaceSpec, TableFactoryEntry};
+use super::planning_surface::{
+    apply_to_builder, install_rewrites, PlanningSurfaceSpec, TableFactoryEntry,
+};
 use super::profile_coverage::reserved_profile_warnings;
 use super::profiles::EnvironmentProfile;
 use super::runtime_profiles::RuntimeProfileSpec;

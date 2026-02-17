@@ -8,9 +8,7 @@ use datafusion::prelude::{col, lit, SessionContext};
 
 use codeanatomy_engine::compiler::pushdown_probe_extract::verify_pushdown_contracts;
 use codeanatomy_engine::contracts::pushdown_mode::PushdownEnforcementMode;
-use codeanatomy_engine::providers::pushdown_contract::{
-    FilterPushdownStatus, PushdownProbe,
-};
+use codeanatomy_engine::providers::pushdown_contract::{FilterPushdownStatus, PushdownProbe};
 
 async fn context_with_table() -> SessionContext {
     let ctx = SessionContext::new();

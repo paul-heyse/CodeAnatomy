@@ -4,9 +4,9 @@ use datafusion::execution::context::SessionContext;
 use datafusion_common::Result;
 use datafusion_expr::{AggregateUDF, WindowUDF};
 
-pub use crate::macros::{ScalarUdfSpec, TableUdfSpec};
 #[cfg(feature = "async-udf")]
 use crate::async_udf_config::CodeAnatomyAsyncUdfConfig;
+pub use crate::macros::{ScalarUdfSpec, TableUdfSpec};
 #[cfg(feature = "async-udf")]
 use crate::udf_async;
 use crate::{scalar_udfs, table_udfs};

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
+import msgspec
 import polars as pl
 
 from tools.cq.core.findings_table import (
@@ -353,8 +354,10 @@ class TestRehydrateResult:
     @staticmethod
     def test_rehydrate_preserves_metadata() -> None:
         """Preserve run metadata on rehydrate."""
-        original = _make_result()
-        original.summary = summary_from_mapping({"query": "value"})
+        original = msgspec.structs.replace(
+            _make_result(),
+            summary=summary_from_mapping({"query": "value"}),
+        )
         df = build_frame([])
         rehydrated = rehydrate_result(original, df)
 

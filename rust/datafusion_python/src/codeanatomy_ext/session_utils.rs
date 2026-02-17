@@ -15,6 +15,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::optimizer::OptimizerConfig;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::DataFrame;
 use datafusion_common::Result;
 use datafusion_expr::lit;
 use datafusion_expr::Expr;
@@ -542,7 +543,10 @@ pub(crate) fn session_context_contract_probe(
     ctx: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     let runtime_env = Arc::clone(extract_session_ctx(ctx)?.state().runtime_env());
-    let metadata_entries = runtime_env.cache_manager.get_file_metadata_cache().list_entries();
+    let metadata_entries = runtime_env
+        .cache_manager
+        .get_file_metadata_cache()
+        .list_entries();
     let metadata_cache_hits: i64 = metadata_entries
         .values()
         .map(|entry| saturating_i64_from_usize(entry.hits))

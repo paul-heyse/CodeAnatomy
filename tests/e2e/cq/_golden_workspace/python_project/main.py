@@ -1,4 +1,3 @@
-# ruff: noqa: INP001
 """Entrypoint module for fixture workspace."""
 
 from __future__ import annotations

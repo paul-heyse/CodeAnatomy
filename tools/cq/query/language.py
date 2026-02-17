@@ -3,23 +3,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
-from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+from tools.cq.core.types import (
+    DEFAULT_QUERY_LANGUAGE,
+    DEFAULT_QUERY_LANGUAGE_SCOPE,
+    SUPPORTED_QUERY_LANGUAGE_SCOPES,
+    SUPPORTED_QUERY_LANGUAGES,
+    QueryLanguage,
+    QueryLanguageScope,
+    is_python_language,
+    is_rust_language,
+    parse_query_language,
+    parse_query_language_scope,
+)
 
 RipgrepLanguageType = Literal["py", "rust"]
-
-# Concrete-language defaults for internals that operate on one language.
-DEFAULT_QUERY_LANGUAGE: QueryLanguage = "python"
-# Public execution default: unified multi-language scope.
-DEFAULT_QUERY_LANGUAGE_SCOPE: QueryLanguageScope = "auto"
-
-SUPPORTED_QUERY_LANGUAGES: tuple[QueryLanguage, ...] = ("python", "rust")
-SUPPORTED_QUERY_LANGUAGE_SCOPES: tuple[QueryLanguageScope, ...] = (
-    "auto",
-    "python",
-    "rust",
-)
 
 LANGUAGE_FILE_EXTENSIONS: dict[QueryLanguage, tuple[str, ...]] = {
     "python": (".py", ".pyi"),
@@ -46,52 +45,6 @@ def _dedupe_globs(globs: list[str]) -> list[str]:
     return unique
 
 
-def parse_query_language(value: str) -> QueryLanguage:
-    """Parse a concrete language token.
-
-    Args:
-        value: Candidate language token.
-
-    Returns:
-        QueryLanguage: Normalized concrete query language.
-
-    Raises:
-        ValueError: If the language token is not supported.
-    """
-    normalized = value.strip().lower()
-    if normalized not in SUPPORTED_QUERY_LANGUAGES:
-        msg = (
-            f"Invalid query language: {value!r}. "
-            f"Valid languages: {', '.join(SUPPORTED_QUERY_LANGUAGES)}"
-        )
-        raise ValueError(msg)
-    return cast("QueryLanguage", normalized)
-
-
-def parse_query_language_scope(value: str | None) -> QueryLanguageScope:
-    """Parse a language scope token, defaulting to ``auto`` when omitted.
-
-    Args:
-        value: Candidate language scope token, or `None`.
-
-    Returns:
-        QueryLanguageScope: Normalized language scope.
-
-    Raises:
-        ValueError: If the scope token is not supported.
-    """
-    if value is None:
-        return DEFAULT_QUERY_LANGUAGE_SCOPE
-    normalized = value.strip().lower()
-    if normalized not in SUPPORTED_QUERY_LANGUAGE_SCOPES:
-        msg = (
-            f"Invalid query language scope: {value!r}. "
-            f"Valid scopes: {', '.join(SUPPORTED_QUERY_LANGUAGE_SCOPES)}"
-        )
-        raise ValueError(msg)
-    return cast("QueryLanguageScope", normalized)
-
-
 def expand_language_scope(scope: QueryLanguageScope) -> tuple[QueryLanguage, ...]:
     """Expand a scope into ordered concrete languages.
 
@@ -110,16 +63,6 @@ def primary_language(scope: QueryLanguageScope) -> QueryLanguage:
         QueryLanguage: Primary language for the scope.
     """
     return expand_language_scope(scope)[0]
-
-
-def is_python_language(lang: QueryLanguage | str) -> bool:
-    """Return whether a language token resolves to Python."""
-    return str(lang).strip().lower() == "python"
-
-
-def is_rust_language(lang: QueryLanguage | str) -> bool:
-    """Return whether a language token resolves to Rust."""
-    return str(lang).strip().lower() == "rust"
 
 
 def file_extensions_for_language(lang: QueryLanguage) -> tuple[str, ...]:

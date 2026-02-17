@@ -180,15 +180,10 @@ pub async fn execute_maintenance(
 
         // 2) Checkpoint
         if schedule.checkpoint {
-            let checkpoint_report = delta_create_checkpoint(
-                ctx,
-                table_uri,
-                None,
-                TableVersion::Latest,
-                None,
-            )
-            .await
-            .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
+            let checkpoint_report =
+                delta_create_checkpoint(ctx, table_uri, None, TableVersion::Latest, None)
+                    .await
+                    .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
             reports.push(MaintenanceReport {
                 table_name: table_name.clone(),
                 operation: "checkpoint".to_string(),
@@ -223,23 +218,17 @@ pub async fn execute_maintenance(
                 success: true,
                 message: Some(format!(
                     "vacuum completed at version {} (retention_hours={safe_retention}, dry_run={})",
-                    vacuum_report.version,
-                    vacuum.dry_run_first
+                    vacuum_report.version, vacuum.dry_run_first
                 )),
             });
         }
 
         // 4) Metadata cleanup
         if schedule.metadata_cleanup {
-            let cleanup_report = delta_cleanup_metadata(
-                ctx,
-                table_uri,
-                None,
-                TableVersion::Latest,
-                None,
-            )
-            .await
-            .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
+            let cleanup_report =
+                delta_cleanup_metadata(ctx, table_uri, None, TableVersion::Latest, None)
+                    .await
+                    .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
             reports.push(MaintenanceReport {
                 table_name: table_name.clone(),
                 operation: "metadata_cleanup".to_string(),
@@ -399,7 +388,9 @@ mod tests {
             ("table_b".to_string(), "/tmp/table_b".to_string()),
         ];
         let ctx = SessionContext::new();
-        let reports = execute_maintenance(&ctx, &schedule, &locations).await.unwrap();
+        let reports = execute_maintenance(&ctx, &schedule, &locations)
+            .await
+            .unwrap();
         assert!(reports.is_empty());
     }
 

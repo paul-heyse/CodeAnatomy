@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search._shared.core import RustEnrichmentRequest
+from tools.cq.search._shared.requests import RustEnrichmentRequest
 from tools.cq.search.rust import enrichment as enrichment_module
 
 

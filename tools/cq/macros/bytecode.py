@@ -200,13 +200,12 @@ def _aggregate_surfaces(
 
 
 def _append_surface_section(
-    result: CqResult,
     all_surfaces: list[BytecodeSurface],
     show_set: set[str],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> Section | None:
     if not all_surfaces:
-        return
+        return None
     section = Section(title="Bytecode Surfaces")
     for surface in all_surfaces[:_MAX_SURFACES_DISPLAY]:
         parts = _build_surface_parts(surface, show_set)
@@ -231,7 +230,7 @@ def _append_surface_section(
                 details=build_detail_payload(scoring=scoring_details),
             )
         )
-    result.sections.append(section)
+    return section
 
 
 def _build_surface_parts(surface: BytecodeSurface, show_set: set[str]) -> list[str]:
@@ -256,14 +255,13 @@ def _build_surface_parts(surface: BytecodeSurface, show_set: set[str]) -> list[s
 
 
 def _append_global_summary(
-    result: CqResult,
     all_globals: set[str],
     all_surfaces: list[BytecodeSurface],
     show_set: set[str],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> Section | None:
     if "globals" not in show_set or not all_globals:
-        return
+        return None
     glob_section = Section(title="Global References")
     for name in sorted(all_globals)[:_MAX_GLOBAL_SUMMARY]:
         count = sum(1 for surface in all_surfaces if name in surface.globals)
@@ -284,17 +282,16 @@ def _append_global_summary(
                 details=build_detail_payload(scoring=scoring_details),
             )
         )
-    result.sections.append(glob_section)
+    return glob_section
 
 
 def _append_opcode_summary(
-    result: CqResult,
     total_opcodes: dict[str, int],
     show_set: set[str],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> Section | None:
     if "opcodes" not in show_set or not total_opcodes:
-        return
+        return None
     op_section = Section(title="Opcode Summary")
     for op, count in sorted(total_opcodes.items(), key=lambda item: -item[1])[:_MAX_OPCODE_SUMMARY]:
         op_section.findings.append(
@@ -305,21 +302,21 @@ def _append_opcode_summary(
                 details=build_detail_payload(scoring=scoring_details),
             )
         )
-    result.sections.append(op_section)
+    return op_section
 
 
 def _append_evidence(
-    result: CqResult,
     all_surfaces: list[BytecodeSurface],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> list[Finding]:
+    evidence: list[Finding] = []
     for surface in all_surfaces:
         details = {
             "globals": surface.globals,
             "attrs": surface.attrs,
             "constants_count": len(surface.constants),
         }
-        result.evidence.append(
+        evidence.append(
             Finding(
                 category="bytecode",
                 message=f"{surface.file}::{surface.qualname}",
@@ -327,6 +324,7 @@ def _append_evidence(
                 details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
+    return evidence
 
 
 def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
@@ -360,9 +358,8 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
         tc=request.tc,
         started_ms=started,
     )
-    result = builder.result
 
-    result.summary = summary_from_mapping(
+    updated_summary = summary_from_mapping(
         {
             "target": request.target,
             "files_analyzed": len(files),
@@ -371,6 +368,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
             "unique_attrs": len(all_attrs),
         }
     )
+    builder.with_summary(updated_summary)
 
     # Compute scoring signals - bytecode uses "bytecode" evidence kind
     unique_files = len({s.file for s in all_surfaces})
@@ -382,7 +380,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
 
     # Key findings
     if all_globals:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="globals",
                 message=f"{len(all_globals)} unique global references",
@@ -391,7 +389,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
             )
         )
     if all_attrs:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="attrs",
                 message=f"{len(all_attrs)} unique attribute accesses",
@@ -400,7 +398,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
             )
         )
     if not all_surfaces:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="info",
                 message=f"No code objects found for '{request.target}'",
@@ -409,13 +407,17 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
             )
         )
 
-    _append_surface_section(result, all_surfaces, show_set, scoring_details)
-    _append_global_summary(result, all_globals, all_surfaces, show_set, scoring_details)
-    _append_opcode_summary(result, total_opcodes, show_set, scoring_details)
-    _append_evidence(result, all_surfaces, scoring_details)
+    for section in (
+        _append_surface_section(all_surfaces, show_set, scoring_details),
+        _append_global_summary(all_globals, all_surfaces, show_set, scoring_details),
+        _append_opcode_summary(total_opcodes, show_set, scoring_details),
+    ):
+        if section is not None:
+            builder.add_section(section)
+    builder.add_evidences(_append_evidence(all_surfaces, scoring_details))
 
     return apply_rust_fallback_policy(
-        result,
+        builder.build(),
         root=request.root,
         policy=RustFallbackPolicyV1(
             macro_name="bytecode-surface",

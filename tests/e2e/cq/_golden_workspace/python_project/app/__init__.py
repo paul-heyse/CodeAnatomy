@@ -1,10 +1,9 @@
-# ruff: noqa: INP001, TID252
 """Hermetic Python project fixture for CQ golden tests."""
 
-from .api import build_pipeline, resolve
-from .dispatch import DynamicRouter
-from .models import BuildContext, Handler, Service
-from .services import AsyncService, ServiceRegistry
+from app.api import build_pipeline, resolve
+from app.dispatch import DynamicRouter
+from app.models import BuildContext, Handler, Service
+from app.services import AsyncService, ServiceRegistry
 
 __all__ = [
     "AsyncService",

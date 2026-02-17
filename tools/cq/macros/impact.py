@@ -9,11 +9,15 @@ from __future__ import annotations
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import msgspec
 
-from tools.cq.analysis.taint import TaintCallSite, TaintedSite, analyze_function_node, find_function_node
+from tools.cq.analysis.taint import (
+    TaintCallSite,
+    TaintedSite,
+    analyze_function_node,
+    find_function_node,
+)
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
@@ -37,6 +41,7 @@ from tools.cq.search.rg.adapter import find_callers
 _DEFAULT_MAX_DEPTH = 5
 _SECTION_SITE_LIMIT = 50
 _CALLER_LIMIT = 30
+
 
 class TaintState(msgspec.Struct):
     """Taint analysis state.
@@ -234,13 +239,13 @@ def _collect_depth_stats(all_sites: list[TaintedSite]) -> tuple[dict[int, int], 
     return depth_counts, files_affected
 
 
-def _append_depth_findings(result: CqResult, summary: ImpactDepthSummary) -> None:
+def _append_depth_findings(builder: MacroResultBuilder, summary: ImpactDepthSummary) -> None:
     if not summary.site_count:
         return
     request = summary.request
     scoring_details = summary.scoring_details
     scoring_dict = msgspec.structs.asdict(scoring_details)
-    result.key_findings.append(
+    builder.add_finding(
         Finding(
             category="summary",
             message=(
@@ -249,16 +254,16 @@ def _append_depth_findings(result: CqResult, summary: ImpactDepthSummary) -> Non
             ),
             severity="info",
             details=build_detail_payload(scoring=scoring_dict),
-        )
+        ),
     )
     for depth, count in sorted(summary.depth_counts.items()):
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="depth",
                 message=f"Depth {depth}: {count} taint sites",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_dict),
-            )
+            ),
         )
 
 
@@ -270,7 +275,7 @@ def _group_sites_by_kind(all_sites: list[TaintedSite]) -> dict[str, list[Tainted
 
 
 def _append_kind_sections(
-    result: CqResult,
+    builder: MacroResultBuilder,
     by_kind: dict[str, list[TaintedSite]],
     scoring_details: ScoringDetailsV1,
 ) -> None:
@@ -288,11 +293,11 @@ def _append_kind_sections(
                     details=build_detail_payload(scoring=scoring_dict, data=details),
                 )
             )
-        result.sections.append(section)
+        builder.add_section(section)
 
 
 def _append_callers_section(
-    result: CqResult,
+    builder: MacroResultBuilder,
     caller_sites: list[tuple[str, int]],
     scoring_details: ScoringDetailsV1,
 ) -> None:
@@ -310,11 +315,11 @@ def _append_callers_section(
                 details=build_detail_payload(scoring=scoring_dict),
             )
         )
-    result.sections.append(caller_section)
+    builder.add_section(caller_section)
 
 
 def _append_evidence(
-    result: CqResult,
+    builder: MacroResultBuilder,
     all_sites: list[TaintedSite],
     scoring_details: ScoringDetailsV1,
 ) -> None:
@@ -326,13 +331,13 @@ def _append_evidence(
             continue
         seen.add(key)
         details = {"depth": site.depth}
-        result.evidence.append(
+        builder.add_evidence(
             Finding(
                 category=site.kind,
                 message=site.description,
                 anchor=Anchor(file=site.file, line=site.line),
                 details=build_detail_payload(scoring=scoring_dict, data=details),
-            )
+            ),
         )
 
 
@@ -351,23 +356,24 @@ def _build_not_found_result(request: ImpactRequest, *, started_ms: float) -> CqR
         tc=request.tc,
         started_ms=started_ms,
     )
-    result = builder.result
-    result.summary = summary_from_mapping(
-        {
-            "mode": "impact",
-            "query": request.function_name,
-            "status": "not_found",
-            "function": request.function_name,
-        }
+    builder.with_summary(
+        summary_from_mapping(
+            {
+                "mode": "impact",
+                "query": request.function_name,
+                "status": "not_found",
+                "function": request.function_name,
+            }
+        )
     )
-    result.key_findings.append(
+    builder.add_finding(
         Finding(
             category="error",
             message=f"Function '{request.function_name}' not found in index",
             severity="error",
-        )
+        ),
     )
-    return result
+    return builder.build()
 
 
 def _analyze_functions(ctx: ImpactContext) -> list[TaintedSite]:
@@ -391,7 +397,7 @@ def _analyze_functions(ctx: ImpactContext) -> list[TaintedSite]:
 
 
 def _append_missing_param_warnings(
-    result: CqResult,
+    builder: MacroResultBuilder,
     functions: list[FnDecl],
     *,
     request: ImpactRequest,
@@ -399,13 +405,13 @@ def _append_missing_param_warnings(
     for fn in functions:
         param_names = [p.name for p in fn.params]
         if request.param_name not in param_names:
-            result.key_findings.append(
+            builder.add_finding(
                 Finding(
                     category="warning",
                     message=f"Parameter '{request.param_name}' not found in {fn.qualified_name}",
                     anchor=Anchor(file=fn.file, line=fn.line),
                     severity="warning",
-                )
+                ),
             )
 
 
@@ -459,24 +465,24 @@ def _build_impact_result(
         tc=request.tc,
         started_ms=started_ms,
     )
-    result = builder.result
-
-    _append_missing_param_warnings(result, ctx.functions, request=request)
+    _append_missing_param_warnings(builder, ctx.functions, request=request)
     all_sites = _analyze_functions(ctx)
     caller_sites = _find_callers_via_search(request.function_name, request.root)
 
-    result.summary = summary_from_mapping(
-        _build_impact_summary(
-            request,
-            functions=ctx.functions,
-            all_sites=all_sites,
-            caller_sites=caller_sites,
+    builder.with_summary(
+        summary_from_mapping(
+            _build_impact_summary(
+                request,
+                functions=ctx.functions,
+                all_sites=all_sites,
+                caller_sites=caller_sites,
+            )
         )
     )
 
     scoring_details, depth_counts, files_affected = _build_impact_scoring(all_sites)
     _append_depth_findings(
-        result,
+        builder,
         ImpactDepthSummary(
             request=request,
             depth_counts=depth_counts,
@@ -486,10 +492,10 @@ def _build_impact_result(
         ),
     )
     by_kind = _group_sites_by_kind(all_sites)
-    _append_kind_sections(result, by_kind, scoring_details)
-    _append_callers_section(result, caller_sites, scoring_details)
-    _append_evidence(result, all_sites, scoring_details)
-    return result
+    _append_kind_sections(builder, by_kind, scoring_details)
+    _append_callers_section(builder, caller_sites, scoring_details)
+    _append_evidence(builder, all_sites, scoring_details)
+    return builder.build()
 
 
 def cmd_impact(request: ImpactRequest) -> CqResult:

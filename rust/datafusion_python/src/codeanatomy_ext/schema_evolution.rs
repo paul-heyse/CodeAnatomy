@@ -91,7 +91,9 @@ impl TableProvider for CpgTableProvider {
     }
 
     fn constraints(&self) -> Option<&Constraints> {
-        self.constraints.as_ref().or_else(|| self.inner.constraints())
+        self.constraints
+            .as_ref()
+            .or_else(|| self.inner.constraints())
     }
 
     fn table_type(&self) -> TableType {
@@ -260,8 +262,7 @@ fn listing_table_plan(
 
 #[pyfunction]
 pub(crate) fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    let factory: Arc<dyn PhysicalExprAdapterFactory> =
-        Arc::new(SchemaEvolutionAdapterFactory);
+    let factory: Arc<dyn PhysicalExprAdapterFactory> = Arc::new(SchemaEvolutionAdapterFactory);
     let name = CString::new("datafusion_ext.SchemaEvolutionAdapterFactory")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, factory, Some(name))?;
@@ -397,6 +398,9 @@ pub(crate) fn install_schema_evolution_adapter_factory(ctx: &Bound<'_, PyAny>) -
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(schema_evolution_adapter_factory, module)?)?;
     module.add_function(wrap_pyfunction!(parquet_listing_table_provider, module)?)?;
-    module.add_function(wrap_pyfunction!(install_schema_evolution_adapter_factory, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        install_schema_evolution_adapter_factory,
+        module
+    )?)?;
     Ok(())
 }

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from tools.cq.search._shared.core import RgRunRequest
+from tools.cq.search._shared.requests import RgRunRequest
 from tools.cq.search.pipeline.classifier import QueryMode
 from tools.cq.search.pipeline.profiles import SearchLimits
 from tools.cq.search.rg import adapter

@@ -25,7 +25,7 @@ from tools.cq.core.front_door_contracts import (
 )
 from tools.cq.core.front_door_render import to_public_front_door_insight_dict
 from tools.cq.core.front_door_risk import risk_from_counters
-from tools.cq.core.schema import CqResult, Finding
+from tools.cq.core.schema import CqResult, Finding, update_result_summary
 from tools.cq.core.semantic_contracts import (
     SemanticContractStateInputV1,
     SemanticProvider,
@@ -60,6 +60,7 @@ class EntitySemanticTelemetry:
     rust_failed: int = 0
     rust_timed_out: int = 0
     reasons: list[str] = dataclass_field(default_factory=list)
+    semantic_planes: dict[str, object] | None = None
 
 
 @dataclass(slots=True)
@@ -74,11 +75,15 @@ def attach_entity_front_door_insight(
     result: CqResult,
     *,
     relationship_detail_max_matches: int,
-) -> None:
-    """Build and attach front-door insight card to an entity result."""
+) -> CqResult:
+    """Build and attach front-door insight card to an entity result.
+
+    Returns:
+        CqResult: Updated result with front-door insight and semantic telemetry.
+    """
     mode_value = result.summary.mode
     if isinstance(mode_value, str) and mode_value == "pattern":
-        return
+        return result
 
     neighborhood_data = _build_candidate_neighborhood(result)
     risk = risk_from_counters(
@@ -113,19 +118,24 @@ def attach_entity_front_door_insight(
     if missing:
         insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
 
-    result.summary.python_semantic_telemetry = build_semantic_telemetry(
-        attempted=telemetry.py_attempted,
-        applied=telemetry.py_applied,
-        failed=telemetry.py_failed,
-        timed_out=telemetry.py_timed_out,
-    )
-    result.summary.rust_semantic_telemetry = build_semantic_telemetry(
-        attempted=telemetry.rust_attempted,
-        applied=telemetry.rust_applied,
-        failed=telemetry.rust_failed,
-        timed_out=telemetry.rust_timed_out,
-    )
-    result.summary.front_door_insight = to_public_front_door_insight_dict(insight)
+    updates: dict[str, object] = {
+        "python_semantic_telemetry": build_semantic_telemetry(
+            attempted=telemetry.py_attempted,
+            applied=telemetry.py_applied,
+            failed=telemetry.py_failed,
+            timed_out=telemetry.py_timed_out,
+        ),
+        "rust_semantic_telemetry": build_semantic_telemetry(
+            attempted=telemetry.rust_attempted,
+            applied=telemetry.rust_applied,
+            failed=telemetry.rust_failed,
+            timed_out=telemetry.rust_timed_out,
+        ),
+        "front_door_insight": to_public_front_door_insight_dict(insight),
+    }
+    if telemetry.semantic_planes is not None:
+        updates["semantic_planes"] = telemetry.semantic_planes
+    return update_result_summary(result, updates)
 
 
 def _build_candidate_neighborhood(result: CqResult) -> CandidateNeighborhood:
@@ -314,7 +324,7 @@ def _apply_candidate_semantic(
     insight = augment_insight_with_semantic(insight, payload, preview_per_slice=5)
     semantic_planes = payload.get("semantic_planes")
     if isinstance(semantic_planes, dict):
-        result.summary.semantic_planes = dict(semantic_planes)
+        telemetry.semantic_planes = dict(semantic_planes)
     return insight
 
 

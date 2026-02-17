@@ -29,13 +29,13 @@ use serde::Deserialize;
 use tokio::runtime::Runtime;
 
 use datafusion::execution::context::SessionContext;
+#[cfg(feature = "async-udf")]
+use datafusion_ext::async_udf_config::CodeAnatomyAsyncUdfConfig;
 use datafusion_ext::delta_control_plane::{
     add_actions_for_paths, delta_cdf_provider, load_delta_table, DeltaCdfProviderRequest,
     DeltaCdfScanOptions,
 };
 use datafusion_ext::delta_protocol::{gate_from_parts, protocol_gate, TableVersion};
-#[cfg(feature = "async-udf")]
-use datafusion_ext::async_udf_config::CodeAnatomyAsyncUdfConfig;
 use datafusion_ext::udf_config::CodeAnatomyUdfConfig;
 use datafusion_ext::udf_registry;
 use datafusion_ext::udtf_sources;

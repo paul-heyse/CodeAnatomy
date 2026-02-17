@@ -15,7 +15,7 @@ from types import CodeType
 from typing import TYPE_CHECKING, Any
 
 from tools.cq.search._shared.bounded_cache import BoundedCache
-from tools.cq.search._shared.core import source_hash
+from tools.cq.search._shared.helpers import source_hash
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.python.ast_utils import ast_node_priority, node_byte_span
 

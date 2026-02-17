@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use deltalake::errors::DeltaTableError;
-use deltalake::DeltaTableBuilder;
 use deltalake::DeltaTable;
+use deltalake::DeltaTableBuilder;
 use rmp_serde::from_slice;
 use serde::{Deserialize, Serialize};
 

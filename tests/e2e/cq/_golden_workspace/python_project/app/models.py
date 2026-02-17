@@ -1,10 +1,9 @@
-# ruff: noqa: D107, DOC201, UP046
 """Domain models for hermetic CQ fixture."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
 T = TypeVar("T")
 
@@ -25,13 +24,18 @@ class Handler(Protocol):
         """Transform payload and return new value."""
 
 
-class Service(Generic[T]):
+class Service[T]:
     """Generic base service used by implementations."""
 
     def __init__(self, name: str, value: T) -> None:
+        """Initialize service with a name and resolved value."""
         self.name = name
         self.value = value
 
     def resolve(self) -> T:
-        """Resolve the service value."""
+        """Resolve the service value.
+
+        Returns:
+            T: Stored service value.
+        """
         return self.value

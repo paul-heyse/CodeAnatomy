@@ -29,6 +29,7 @@ def test_project_search_params_maps_to_canonical_schema() -> None:
 
 
 def test_project_query_params_maps_to_canonical_schema() -> None:
+    """Query params should project into canonical command schema fields."""
     schema = project_query_params(QueryParams(explain_files=True, include=["src/**"]))
     assert schema.explain_files is True
     assert schema.include == ["src/**"]

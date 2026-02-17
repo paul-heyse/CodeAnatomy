@@ -20,10 +20,8 @@ use std::fmt::{self, Display, Formatter};
 use datafusion::common::NullEquality;
 use datafusion::logical_expr::logical_plan::{Join, JoinConstraint, JoinType};
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt;
 
 use crate::common::df_schema::PyDFSchema;
-use crate::expr::logical_node::LogicalNode;
 use crate::expr::PyExpr;
 use crate::sql::logical::PyLogicalPlan;
 
@@ -90,26 +88,12 @@ impl PyJoinConstraint {
     }
 }
 
-#[pyclass(frozen, name = "Join", module = "datafusion.expr", subclass)]
-#[derive(Clone)]
-pub struct PyJoin {
-    join: Join,
-}
-
-impl From<Join> for PyJoin {
-    fn from(join: Join) -> PyJoin {
-        PyJoin { join }
-    }
-}
-
-impl From<PyJoin> for Join {
-    fn from(join: PyJoin) -> Self {
-        join.join
-    }
-}
-
-impl Display for PyJoin {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+logical_plan_wrapper!(
+    wrapper = PyJoin,
+    inner = Join,
+    field = join,
+    py_name = "Join",
+    display = |this, f| {
         write!(
             f,
             "Join
@@ -121,17 +105,23 @@ impl Display for PyJoin {
             JoinConstraint: {:?}
             Schema: {:?}
             NullEquality: {:?}",
-            &self.join.left,
-            &self.join.right,
-            &self.join.on,
-            &self.join.filter,
-            &self.join.join_type,
-            &self.join.join_constraint,
-            &self.join.schema,
-            &self.join.null_equality,
+            &this.join.left,
+            &this.join.right,
+            &this.join.on,
+            &this.join.filter,
+            &this.join.join_type,
+            &this.join.join_constraint,
+            &this.join.schema,
+            &this.join.null_equality,
         )
+    },
+    inputs = |this| {
+        vec![
+            PyLogicalPlan::from((*this.join.left).clone()),
+            PyLogicalPlan::from((*this.join.right).clone()),
+        ]
     }
-}
+);
 
 #[pymethods]
 impl PyJoin {
@@ -189,18 +179,5 @@ impl PyJoin {
 
     fn __name__(&self) -> PyResult<String> {
         Ok("Join".to_string())
-    }
-}
-
-impl LogicalNode for PyJoin {
-    fn inputs(&self) -> Vec<PyLogicalPlan> {
-        vec![
-            PyLogicalPlan::from((*self.join.left).clone()),
-            PyLogicalPlan::from((*self.join.right).clone()),
-        ]
-    }
-
-    fn to_variant<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.clone().into_bound_py_any(py)
     }
 }

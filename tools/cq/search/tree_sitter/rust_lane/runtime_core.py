@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -90,6 +90,7 @@ from tools.cq.search.tree_sitter.tags import RustTagEventV1, build_tag_events
 
 if TYPE_CHECKING:
     from tree_sitter import Node
+
     from tools.cq.search.tree_sitter.core.parse import ParseSession
 
 try:
@@ -108,6 +109,44 @@ _REQUIRED_PAYLOAD_KEYS: tuple[str, ...] = (
     "enrichment_status",
     "enrichment_sources",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class RustLaneEnrichmentSettingsV1:
+    """Execution settings for Rust tree-sitter enrichment."""
+
+    max_scope_depth: int = _DEFAULT_SCOPE_DEPTH
+    query_budget_ms: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RustLaneRuntimeDepsV1:
+    """Runtime dependency overrides for Rust tree-sitter enrichment."""
+
+    parse_session: ParseSession | None = None
+    cache_backend: object | None = None
+
+
+def _coerce_timings(payload: Mapping[str, object], *, key: str) -> dict[str, float]:
+    value = payload.get(key)
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        stage: float(duration)
+        for stage, duration in value.items()
+        if isinstance(stage, str) and isinstance(duration, (int, float))
+    }
+
+
+def _coerce_status(payload: Mapping[str, object], *, key: str) -> dict[str, str]:
+    value = payload.get(key)
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        stage: stage_status
+        for stage, stage_status in value.items()
+        if isinstance(stage, str) and isinstance(stage_status, str)
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -978,11 +1017,11 @@ def _finalize_enrichment_payload(
     attachment_started = time.perf_counter()
     canonical = canonicalize_rust_lane_payload(payload)
     attachment_ms = max(0.0, (time.perf_counter() - attachment_started) * 1000.0)
-    timings = dict(canonical.get("stage_timings_ms", {}))
+    timings = _coerce_timings(canonical, key="stage_timings_ms")
     timings["attachment"] = attachment_ms
     timings["total"] = max(0.0, (time.perf_counter() - total_started) * 1000.0)
     canonical["stage_timings_ms"] = timings
-    stage_status = dict(canonical.get("stage_status", {}))
+    stage_status = _coerce_status(canonical, key="stage_status")
     stage_status.setdefault("ast_grep", "skipped")
     stage_status.setdefault("query_pack", "applied")
     stage_status.setdefault("payload_build", "applied")
@@ -1021,11 +1060,11 @@ def _run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, 
     except ENRICHMENT_ERRORS as exc:
         logger.warning("%s failed: %s", request.error_prefix, type(exc).__name__)
         return None
-    timings = dict(payload.get("stage_timings_ms", {}))
+    timings = _coerce_timings(payload, key="stage_timings_ms")
     timings.setdefault("ast_grep", 0.0)
     timings["tree_sitter"] = max(0.0, (time.perf_counter() - tree_sitter_started) * 1000.0)
     payload["stage_timings_ms"] = timings
-    status = dict(payload.get("stage_status", {}))
+    status = _coerce_status(payload, key="stage_status")
     status.setdefault("ast_grep", "skipped")
     status["tree_sitter"] = "applied"
     payload["stage_status"] = status
@@ -1043,10 +1082,8 @@ def enrich_rust_context(
     line: int,
     col: int,
     cache_key: str | None = None,
-    max_scope_depth: int = _DEFAULT_SCOPE_DEPTH,
-    query_budget_ms: int | None = None,
-    parse_session: ParseSession | None = None,
-    cache_backend: object | None = None,
+    settings: RustLaneEnrichmentSettingsV1 | None = None,
+    runtime_deps: RustLaneRuntimeDepsV1 | None = None,
 ) -> dict[str, object] | None:
     """Extract optional Rust context details for a match location.
 
@@ -1078,21 +1115,23 @@ def enrich_rust_context(
 
     if _TreeSitterPoint is None:
         return None
+    effective_settings = settings or RustLaneEnrichmentSettingsV1()
+    effective_runtime = runtime_deps or RustLaneRuntimeDepsV1()
     point = _TreeSitterPoint(max(0, line - 1), max(0, col))
     return _run_rust_enrichment_pipeline(
         _RustPipelineRequestV1(
             source=source,
             cache_key=cache_key,
-            max_scope_depth=max_scope_depth,
-            query_budget_ms=query_budget_ms,
+            max_scope_depth=effective_settings.max_scope_depth,
+            query_budget_ms=effective_settings.query_budget_ms,
             resolve_node=lambda root: root.named_descendant_for_point_range(point, point),
             byte_span_for_node=lambda node: (
                 int(getattr(node, "start_byte", 0)),
                 int(getattr(node, "end_byte", 0)),
             ),
             error_prefix="Rust context enrichment",
-            parse_session=parse_session,
-            cache_backend=cache_backend,
+            parse_session=effective_runtime.parse_session,
+            cache_backend=effective_runtime.cache_backend,
         ),
     )
 
@@ -1103,10 +1142,8 @@ def enrich_rust_context_by_byte_range(
     byte_start: int,
     byte_end: int,
     cache_key: str | None = None,
-    max_scope_depth: int = _DEFAULT_SCOPE_DEPTH,
-    query_budget_ms: int | None = None,
-    parse_session: ParseSession | None = None,
-    cache_backend: object | None = None,
+    settings: RustLaneEnrichmentSettingsV1 | None = None,
+    runtime_deps: RustLaneRuntimeDepsV1 | None = None,
 ) -> dict[str, object] | None:
     """Extract optional Rust context using byte offsets instead of line/col.
 
@@ -1143,23 +1180,27 @@ def enrich_rust_context_by_byte_range(
             )
         return None
 
+    effective_settings = settings or RustLaneEnrichmentSettingsV1()
+    effective_runtime = runtime_deps or RustLaneRuntimeDepsV1()
     return _run_rust_enrichment_pipeline(
         _RustPipelineRequestV1(
             source=source,
             cache_key=cache_key,
-            max_scope_depth=max_scope_depth,
-            query_budget_ms=query_budget_ms,
+            max_scope_depth=effective_settings.max_scope_depth,
+            query_budget_ms=effective_settings.query_budget_ms,
             resolve_node=lambda root: root.named_descendant_for_byte_range(byte_start, byte_end),
             byte_span_for_node=lambda _node: (byte_start, byte_end),
             error_prefix="Rust byte-range enrichment",
-            parse_session=parse_session,
-            cache_backend=cache_backend,
+            parse_session=effective_runtime.parse_session,
+            cache_backend=effective_runtime.cache_backend,
         )
     )
 
 
 __all__ = [
     "MAX_SOURCE_BYTES",
+    "RustLaneEnrichmentSettingsV1",
+    "RustLaneRuntimeDepsV1",
     "clear_tree_sitter_rust_cache",
     "enrich_rust_context",
     "enrich_rust_context_by_byte_range",

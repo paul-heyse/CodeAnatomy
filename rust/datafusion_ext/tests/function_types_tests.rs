@@ -7,4 +7,3 @@ fn function_kind_round_trips_with_serde() {
     let decoded: FunctionKind = serde_json::from_str(&encoded).expect("deserialize");
     assert_eq!(decoded, value);
 }
-

@@ -174,12 +174,11 @@ def _collect_scopes(root: Path, files: list[Path]) -> list[ScopeInfo]:
 
 
 def _append_scope_section(
-    result: CqResult,
     all_scopes: list[ScopeInfo],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> Section | None:
     if not all_scopes:
-        return
+        return None
     section = Section(title="Scope Capture Details")
     for scope in all_scopes[:_MAX_SCOPES_DISPLAY]:
         detail_parts: list[str] = []
@@ -210,14 +209,14 @@ def _append_scope_section(
                 details=build_detail_payload(scoring=scoring_details),
             )
         )
-    result.sections.append(section)
+    return section
 
 
 def _append_scope_evidence(
-    result: CqResult,
     all_scopes: list[ScopeInfo],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> list[Finding]:
+    evidence: list[Finding] = []
     for scope in all_scopes:
         evidence_details: dict[str, object] = {}
         if scope.free_vars:
@@ -229,7 +228,7 @@ def _append_scope_evidence(
         if scope.globals_used:
             evidence_details["globals"] = scope.globals_used
 
-        result.evidence.append(
+        evidence.append(
             Finding(
                 category="scope",
                 message=f"{scope.name} ({scope.kind})",
@@ -237,6 +236,7 @@ def _append_scope_evidence(
                 details=build_detail_payload(scoring=scoring_details, data=evidence_details),
             )
         )
+    return evidence
 
 
 def cmd_scopes(request: ScopeRequest) -> CqResult:
@@ -274,7 +274,6 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
         files_analyzed=len(files),
         scopes_with_captures=len(all_scopes),
     )
-    result = builder.result
 
     # Compute scoring signals
     unique_files = len({s.file for s in all_scopes})
@@ -290,7 +289,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
     nonlocal_users = [s for s in all_scopes if s.nonlocals]
 
     if closures:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="closure",
                 message=f"{len(closures)} closures capturing outer variables",
@@ -299,7 +298,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
             )
         )
     if providers:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="provider",
                 message=f"{len(providers)} functions providing variables to nested scopes",
@@ -308,7 +307,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
             )
         )
     if nonlocal_users:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="nonlocal",
                 message=f"{len(nonlocal_users)} functions using nonlocal declarations",
@@ -317,7 +316,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
             )
         )
     if not all_scopes:
-        result.key_findings.append(
+        builder.add_finding(
             Finding(
                 category="info",
                 message="No scope captures or closures detected",
@@ -326,8 +325,10 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
             )
         )
 
-    _append_scope_section(result, all_scopes, scoring_details)
-    _append_scope_evidence(result, all_scopes, scoring_details)
+    section = _append_scope_section(all_scopes, scoring_details)
+    if section is not None:
+        builder.add_section(section)
+    builder.add_evidences(_append_scope_evidence(all_scopes, scoring_details))
 
     return builder.apply_rust_fallback(
         policy=RustFallbackPolicyV1(

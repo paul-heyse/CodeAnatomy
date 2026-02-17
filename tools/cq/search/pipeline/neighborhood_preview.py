@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.core.schema import Finding
-from tools.cq.core.summary_contract import SearchSummaryV1
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
@@ -111,31 +110,29 @@ def build_tree_sitter_neighborhood_preview(
     *,
     ctx: SearchConfig,
     partition_results: list[LanguageSearchResult],
-    summary: SearchSummaryV1,
     sections: list[Section],
     inputs: _NeighborhoodPreviewInputs,
-) -> tuple[InsightNeighborhoodV1 | None, list[str]]:
+) -> tuple[InsightNeighborhoodV1 | None, list[str], dict[str, object]]:
     """Build tree-sitter neighborhood preview and insert findings into sections.
 
     Returns:
-        tuple[InsightNeighborhoodV1 | None, list[str]]: Neighborhood payload and notes.
+        tuple[InsightNeighborhoodV1 | None, list[str], dict[str, object]]:
+            Neighborhood payload, notes, and summary neighborhood payload.
     """
     from tools.cq.search.pipeline.orchestration import insert_neighborhood_preview
 
-    summary.tree_sitter_neighborhood = {
+    neighborhood_summary: dict[str, object] = {
         "enabled": bool(ctx.with_neighborhood),
         "mode": "opt_in",
     }
     if not ctx.with_neighborhood:
-        return None, ["tree_sitter_neighborhood_disabled_by_default"]
+        return None, ["tree_sitter_neighborhood_disabled_by_default"], neighborhood_summary
 
     scope_paths = candidate_scope_paths_for_neighborhood(
         ctx=ctx,
         partition_results=partition_results,
     )
-    neighborhood_summary = dict(summary.tree_sitter_neighborhood)
     neighborhood_summary["candidate_scope_files"] = str(len(scope_paths))
-    summary.tree_sitter_neighborhood = neighborhood_summary
     insight_neighborhood, neighborhood_findings, neighborhood_notes = (
         _build_structural_neighborhood_preview(
             ctx,
@@ -148,4 +145,4 @@ def build_tree_sitter_neighborhood_preview(
         findings=neighborhood_findings,
         has_target_candidates=inputs.has_target_candidates,
     )
-    return insight_neighborhood, neighborhood_notes
+    return insight_neighborhood, neighborhood_notes, neighborhood_summary

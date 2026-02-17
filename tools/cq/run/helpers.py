@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from tools.cq.core.result_factory import build_error_result
-from tools.cq.core.schema import CqResult, Finding, assign_result_finding_ids, ms
+from tools.cq.core.schema import (
+    CqResult,
+    Finding,
+    append_result_key_finding,
+    assign_result_finding_ids,
+    ms,
+)
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -45,8 +51,9 @@ def error_result(step_id: str, macro: str, exc: Exception, ctx: RunContextLike) 
         started_ms=ms(),
         error=exc,
     )
-    result.key_findings.append(
-        Finding(category="error", message=f"{step_id}: {exc}", severity="error")
+    result = append_result_key_finding(
+        result,
+        Finding(category="error", message=f"{step_id}: {exc}", severity="error"),
     )
     return assign_result_finding_ids(result)
 

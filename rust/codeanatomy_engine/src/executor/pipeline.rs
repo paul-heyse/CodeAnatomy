@@ -352,11 +352,8 @@ fn build_task_graph_and_costs(
     };
     let cost_outcome = derive_task_costs(&task_graph, None, &CostModelConfig::default());
     warnings.extend(cost_outcome.warnings.clone());
-    let schedule = schedule_tasks_with_quality(
-        &task_graph,
-        &cost_outcome.costs,
-        cost_outcome.stats_quality,
-    );
+    let schedule =
+        schedule_tasks_with_quality(&task_graph, &cost_outcome.costs, cost_outcome.stats_quality);
     (Some(schedule), Some(cost_outcome.stats_quality))
 }
 

@@ -22,28 +22,31 @@ def _sample_result() -> CqResult:
         toolchain={"python": "3.13"},
     )
     result = mk_result(run)
-    result.summary = summary_from_mapping(
-        {
-            "query": "foo",
-            "mode": "identifier",
-            "front_door_insight": msgspec.to_builtins(
-                FrontDoorInsightV1(
-                    source="search",
-                    target=InsightTargetV1(symbol="foo", kind="function"),
-                    artifact_refs=InsightArtifactRefsV1(
-                        diagnostics=".cq/artifacts/diag.json",
-                        telemetry=".cq/artifacts/diag.json",
-                    ),
-                )
-            ),
-            "python_semantic_diagnostics": [{"message": "diag"}],
-            "cross_language_diagnostics": [{"code": "ML001"}],
-        }
+    result = msgspec.structs.replace(
+        result,
+        summary=summary_from_mapping(
+            {
+                "query": "foo",
+                "mode": "identifier",
+                "front_door_insight": msgspec.to_builtins(
+                    FrontDoorInsightV1(
+                        source="search",
+                        target=InsightTargetV1(symbol="foo", kind="function"),
+                        artifact_refs=InsightArtifactRefsV1(
+                            diagnostics=".cq/artifacts/diag.json",
+                            telemetry=".cq/artifacts/diag.json",
+                        ),
+                    )
+                ),
+                "python_semantic_diagnostics": [{"message": "diag"}],
+                "cross_language_diagnostics": [{"code": "ML001"}],
+            }
+        ),
     )
-    result.key_findings = [
+    result.key_findings[:] = [
         Finding(category="definition", message=f"finding-{index}") for index in range(1, 8)
     ]
-    result.sections = [
+    result.sections[:] = [
         Section(
             title="Definitions",
             findings=[

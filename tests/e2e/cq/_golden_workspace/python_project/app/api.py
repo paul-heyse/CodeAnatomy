@@ -1,22 +1,29 @@
-# ruff: noqa: DOC201, TID252
 """Public API surface for hermetic Python fixture."""
 
 from __future__ import annotations
 
-from .dispatch import DynamicRouter
-from .models import BuildContext
-from .services import AsyncService, ServiceRegistry
-from .services import resolve as service_resolve
+from app.dispatch import DynamicRouter
+from app.models import BuildContext
+from app.services import AsyncService, ServiceRegistry
+from app.services import resolve as service_resolve
 
 
 # Intentional name collision with app.services.resolve.
 def resolve(ctx: BuildContext) -> str:
-    """Top-level resolver used for target ambiguity tests."""
+    """Resolve API symbol identity for target ambiguity tests.
+
+    Returns:
+        str: Resolver output keyed by module/symbol/line.
+    """
     return f"api:{ctx.module_name}:{ctx.symbol_name}:{ctx.line}"
 
 
 def build_pipeline() -> tuple[ServiceRegistry, DynamicRouter, AsyncService]:
-    """Build fixture pipeline components."""
+    """Build fixture pipeline components.
+
+    Returns:
+        tuple[ServiceRegistry, DynamicRouter, AsyncService]: Fixture pipeline parts.
+    """
     events: list[str] = []
 
     def recorder(message: str) -> None:

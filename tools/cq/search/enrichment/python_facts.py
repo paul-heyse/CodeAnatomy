@@ -9,7 +9,9 @@ import msgspec
 from tools.cq.core.structs import CqStruct
 
 ScopeKind = Literal["module", "class", "function", "closure"]
-ItemRole = Literal["dataclass", "pydantic", "protocol", "abc", "enum", "regular"]
+# Item-role values come from classifier dispatch tables and may expand over time;
+# keep this as plain ``str`` so enrichment remains fail-open for new roles.
+ItemRole = str
 ClassKind = Literal["dataclass", "pydantic", "protocol", "abc", "enum", "regular"]
 
 

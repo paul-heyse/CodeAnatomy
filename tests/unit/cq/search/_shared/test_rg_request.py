@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
 from tools.cq.search._shared.rg_request import CandidateCollectionRequest, RgRunRequest
 from tools.cq.search._shared.types import QueryMode, SearchLimits
-from tools.cq.search.rg.contracts import RgRunSettingsV1
 
 
 def test_rg_run_request_to_settings_preserves_mode_and_patterns() -> None:
@@ -22,7 +20,7 @@ def test_rg_run_request_to_settings_preserves_mode_and_patterns() -> None:
         extra_patterns=("alt",),
     )
 
-    settings = cast("RgRunSettingsV1", request.to_settings())
+    settings = request.to_settings()
     assert settings.mode == "identifier"
     assert settings.extra_patterns == ("alt",)
 

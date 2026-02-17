@@ -11,7 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.core.schema import Anchor, CqResult, Finding, ScoreDetails, Section
+from tools.cq.core.schema import (
+    Anchor,
+    CqResult,
+    Finding,
+    ScoreDetails,
+    Section,
+    append_result_section,
+)
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
@@ -160,7 +167,7 @@ def _add_shape_section(
     result: CqResult,
     arg_shapes: Counter[str],
     score: ScoreDetails | None,
-) -> None:
+) -> CqResult:
     shape_section = Section(title="Argument Shape Histogram")
     for shape, count in arg_shapes.most_common(10):
         shape_section.findings.append(
@@ -171,16 +178,16 @@ def _add_shape_section(
                 details=build_detail_payload(score=score),
             )
         )
-    result.sections.append(shape_section)
+    return append_result_section(result, shape_section)
 
 
 def _add_kw_section(
     result: CqResult,
     kwarg_usage: Counter[str],
     score: ScoreDetails | None,
-) -> None:
+) -> CqResult:
     if not kwarg_usage:
-        return
+        return result
     kw_section = Section(title="Keyword Argument Usage")
     for kw, count in kwarg_usage.most_common(15):
         kw_section.findings.append(
@@ -191,14 +198,14 @@ def _add_kw_section(
                 details=build_detail_payload(score=score),
             )
         )
-    result.sections.append(kw_section)
+    return append_result_section(result, kw_section)
 
 
 def _add_context_section(
     result: CqResult,
     contexts: Counter[str],
     score: ScoreDetails | None,
-) -> None:
+) -> CqResult:
     ctx_section = Section(title="Calling Contexts")
     for ctx, count in contexts.most_common(10):
         ctx_section.findings.append(
@@ -209,16 +216,16 @@ def _add_context_section(
                 details=build_detail_payload(score=score),
             )
         )
-    result.sections.append(ctx_section)
+    return append_result_section(result, ctx_section)
 
 
 def _add_hazard_section(
     result: CqResult,
     hazard_counts: Counter[str],
     score: ScoreDetails | None,
-) -> None:
+) -> CqResult:
     if not hazard_counts:
-        return
+        return result
     hazard_section = Section(title="Hazards")
     for label, count in hazard_counts.most_common():
         hazard_section.findings.append(
@@ -229,7 +236,7 @@ def _add_hazard_section(
                 details=build_detail_payload(score=score),
             )
         )
-    result.sections.append(hazard_section)
+    return append_result_section(result, hazard_section)
 
 
 def _add_sites_section(
@@ -237,7 +244,7 @@ def _add_sites_section(
     function_name: str,
     all_sites: list[CallSite],
     score: ScoreDetails | None,
-) -> None:
+) -> CqResult:
     """Add call sites section to result.
 
     Parameters
@@ -250,6 +257,11 @@ def _add_sites_section(
         All call sites.
     score : ScoreDetails | None
         Scoring metadata.
+
+    Returns:
+    -------
+    CqResult
+        Result with call-site section appended.
     """
     sites_section = Section(title="Call Sites")
     for site in all_sites:
@@ -283,7 +295,7 @@ def _add_sites_section(
                 details=build_detail_payload(score=score, data=details),
             )
         )
-    result.sections.append(sites_section)
+    return append_result_section(result, sites_section)
 
 
 def _build_calls_confidence(score: ScoreDetails | None) -> InsightConfidenceV1:

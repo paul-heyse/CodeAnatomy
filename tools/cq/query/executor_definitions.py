@@ -6,13 +6,21 @@ Handles entity queries for definitions, imports, decorators, and calls.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import msgspec
+
 from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.core.entity_kinds import ENTITY_KINDS
-from tools.cq.core.schema import Anchor, CqResult, Finding
+from tools.cq.core.schema import (
+    Anchor,
+    CqResult,
+    Finding,
+    extend_result_key_findings,
+    update_result_summary,
+)
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
@@ -20,7 +28,6 @@ from tools.cq.core.scoring import (
     build_score_details,
 )
 from tools.cq.core.structs import CqStruct
-from tools.cq.core.summary_contract import as_search_summary
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.scan import ScanContext
 from tools.cq.query.shared_utils import extract_def_name
@@ -45,7 +52,7 @@ def process_import_query(
     root: Path,
     *,
     symtable: SymtableEnricher | None = None,
-) -> None:
+) -> CqResult:
     """Process an import entity query.
 
     Parameters
@@ -60,33 +67,42 @@ def process_import_query(
         Repository root
     symtable
         Optional symtable enricher
+
+    Returns:
+    -------
+    CqResult
+        Updated query result including import findings and summary counters.
     """
     matching_imports = dedupe_import_matches(filter_to_matching(import_records, query))
 
-    for import_record in matching_imports:
-        finding = import_to_finding(import_record)
-        result.key_findings.append(finding)
+    import_findings = [import_to_finding(import_record) for import_record in matching_imports]
+    result = extend_result_key_findings(result, import_findings)
 
     # Apply scope filter if present
     if query.scope_filter and matching_imports:
         enricher = symtable if symtable is not None else SymtableEnricher(root)
-        result.key_findings = filter_by_scope(
+        filtered = filter_by_scope(
             result.key_findings,
             query.scope_filter,
             enricher,
             matching_imports,
         )
+        result = msgspec.structs.replace(result, key_findings=filtered)
 
-    summary = as_search_summary(result.summary)
-    summary.total_imports = len(import_records)
-    summary.matches = len(result.key_findings)
+    return update_result_summary(
+        result,
+        {
+            "total_imports": len(import_records),
+            "matches": len(result.key_findings),
+        },
+    )
 
 
 def process_def_query(
     ctx: DefQueryContext,
     query: Query,
     def_candidates: list[SgRecord] | None = None,
-) -> None:
+) -> CqResult:
     """Process a definition entity query.
 
     Parameters
@@ -97,6 +113,11 @@ def process_def_query(
         Query with filters
     def_candidates
         Optional candidate definitions
+
+    Returns:
+    -------
+    CqResult
+        Updated query result including definition findings, sections, and summary counters.
     """
     from tools.cq.query.section_builders import (
         append_def_query_sections,
@@ -113,7 +134,7 @@ def process_def_query(
     )
     matching_defs = filter_to_matching(candidate_records, query)
     relationship_policy = build_def_relationship_policy(query, matching_defs)
-    append_definition_findings(
+    result = append_definition_findings(
         result,
         matching_defs=matching_defs,
         scan_ctx=scan_ctx,
@@ -123,22 +144,23 @@ def process_def_query(
     # Apply scope filter if present
     if query.scope_filter:
         enricher = ctx.symtable if ctx.symtable is not None else SymtableEnricher(root)
-        result.key_findings = filter_by_scope(
+        filtered = filter_by_scope(
             result.key_findings,
             query.scope_filter,
             enricher,
             matching_defs,
         )
+        result = msgspec.structs.replace(result, key_findings=filtered)
 
-    append_def_query_sections(
+    result = append_def_query_sections(
         result=result,
         query=query,
         matching_defs=matching_defs,
         scan_ctx=scan_ctx,
         root=root,
     )
-    append_expander_sections(result, matching_defs, scan_ctx, root, query)
-    finalize_def_query_summary(result, scan_ctx)
+    result = append_expander_sections(result, matching_defs, scan_ctx, root, query)
+    return finalize_def_query_summary(result, scan_ctx)
 
 
 def build_def_relationship_policy(
@@ -176,7 +198,7 @@ def append_definition_findings(
     matching_defs: list[SgRecord],
     scan_ctx: ScanContext,
     policy: DefQueryRelationshipPolicyV1,
-) -> None:
+) -> CqResult:
     """Append definition findings to result.
 
     Parameters
@@ -189,21 +211,29 @@ def append_definition_findings(
         Scan context with indexed records
     policy
         Relationship policy
+
+    Returns:
+    -------
+    CqResult
+        Updated result with definition findings appended.
     """
+    findings: list[Finding] = []
     for def_record in matching_defs:
         calls_within, caller_count, enclosing_scope = definition_relationship_detail(
             def_record,
             scan_ctx=scan_ctx,
             policy=policy,
         )
-        finding = def_to_finding(
-            def_record,
-            calls_within,
-            caller_count=caller_count,
-            callee_count=len(calls_within),
-            enclosing_scope=enclosing_scope,
+        findings.append(
+            def_to_finding(
+                def_record,
+                calls_within,
+                caller_count=caller_count,
+                callee_count=len(calls_within),
+                enclosing_scope=enclosing_scope,
+            )
         )
-        result.key_findings.append(finding)
+    return extend_result_key_findings(result, findings)
 
 
 def definition_relationship_detail(
@@ -245,7 +275,7 @@ def definition_relationship_detail(
     return calls_within, caller_count, enclosing_scope
 
 
-def finalize_def_query_summary(result: CqResult, scan_ctx: ScanContext) -> None:
+def finalize_def_query_summary(result: CqResult, scan_ctx: ScanContext) -> CqResult:
     """Finalize definition query summary.
 
     Parameters
@@ -254,11 +284,20 @@ def finalize_def_query_summary(result: CqResult, scan_ctx: ScanContext) -> None:
         Result to finalize
     scan_ctx
         Scan context
+
+    Returns:
+    -------
+    CqResult
+        Result with definition summary totals applied.
     """
-    summary = as_search_summary(result.summary)
-    summary.total_defs = len(scan_ctx.def_records)
-    summary.total_calls = len(scan_ctx.call_records)
-    summary.matches = len(result.key_findings)
+    return update_result_summary(
+        result,
+        {
+            "total_defs": len(scan_ctx.def_records),
+            "total_calls": len(scan_ctx.call_records),
+            "matches": len(result.key_findings),
+        },
+    )
 
 
 def filter_to_matching(
@@ -535,7 +574,7 @@ def extract_rust_use_name(text: str) -> str | None:
 
 def def_to_finding(
     def_record: SgRecord,
-    calls_within: list[SgRecord],
+    calls_within: Sequence[SgRecord],
     *,
     caller_count: int = 0,
     callee_count: int | None = None,

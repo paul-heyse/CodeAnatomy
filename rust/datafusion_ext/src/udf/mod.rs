@@ -24,7 +24,9 @@ pub use span::{
     interval_align_score_udf, span_contains_udf, span_id_udf, span_len_udf, span_make_udf,
     span_overlaps_udf,
 };
-pub use string::{qname_normalize_udf, semantic_tag_udf, utf8_normalize_udf, utf8_null_if_blank_udf};
+pub use string::{
+    qname_normalize_udf, semantic_tag_udf, utf8_normalize_udf, utf8_null_if_blank_udf,
+};
 pub use struct_ops::struct_pick_udf;
 
 use std::collections::BTreeMap;

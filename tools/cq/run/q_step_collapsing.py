@@ -6,7 +6,7 @@ from typing import cast
 
 from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.run_context import RunExecutionContext
-from tools.cq.core.schema import CqResult, Finding
+from tools.cq.core.schema import CqResult, Finding, update_result_summary
 from tools.cq.core.summary_contract import extract_match_count
 from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 from tools.cq.orchestration.multilang_orchestrator import (
@@ -124,11 +124,12 @@ def _group_results_by_step(
 
 def _normalize_single_group_result(result: CqResult) -> CqResult:
     query_text = result.summary.query_text
+    updates: dict[str, object] = {}
     if isinstance(query_text, str) and query_text and result.summary.query is None:
-        result.summary.query = query_text
+        updates["query"] = query_text
     mode = _result_query_mode(result)
     if mode is not None and result.summary.mode is None:
-        result.summary.mode = mode
+        updates["mode"] = mode
     lang_scope = _result_lang_scope(result)
     if lang_scope is None:
         lang = _result_language(result)
@@ -136,12 +137,12 @@ def _normalize_single_group_result(result: CqResult) -> CqResult:
             lang_scope = lang
     if lang_scope is not None:
         if result.summary.lang_scope is None:
-            result.summary.lang_scope = lang_scope
+            updates["lang_scope"] = lang_scope
         if not result.summary.language_order:
-            result.summary.language_order = list(expand_language_scope(lang_scope))
-    result.summary.lang = None
-    result.summary.query_text = None
-    return result
+            updates["language_order"] = list(expand_language_scope(lang_scope))
+    updates["lang"] = None
+    updates["query_text"] = None
+    return update_result_summary(result, updates)
 
 
 def _collect_collapse_group_metadata(

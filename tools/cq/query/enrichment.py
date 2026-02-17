@@ -9,6 +9,7 @@ import ast
 import dis
 import logging
 import symtable
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -297,7 +298,7 @@ def _enrich_record(
 
 
 def enrich_records(
-    records: list[SgRecord],
+    records: Sequence[SgRecord],
     root: Path,
     python_path: str | None = None,
 ) -> dict[str, dict[str, object]]:

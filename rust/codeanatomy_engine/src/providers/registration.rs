@@ -115,7 +115,10 @@ pub async fn register_extraction_inputs(
     sorted.sort_by(|a, b| a.logical_name.cmp(&b.logical_name));
 
     for input in &sorted {
-        let requested_scan_config = standard_scan_config(input.requires_lineage);
+        let session_state = ctx.state();
+        let requested_scan_config =
+            standard_scan_config(&session_state, None, input.requires_lineage)
+                .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
         validate_scan_config(&requested_scan_config)
             .map_err(datafusion_common::DataFusionError::Plan)?;
         let overrides = DeltaScanOverrides {

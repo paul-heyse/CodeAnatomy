@@ -358,7 +358,10 @@ fn registry_snapshot_reports_short_circuits() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
     let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
-    assert_eq!(snapshot.short_circuits().get("map_get_default"), Some(&true));
+    assert_eq!(
+        snapshot.short_circuits().get("map_get_default"),
+        Some(&true)
+    );
     Ok(())
 }
 

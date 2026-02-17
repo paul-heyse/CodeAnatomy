@@ -6,7 +6,7 @@ import msgspec
 
 from tools.cq.core.contract_codec import to_contract_builtins
 from tools.cq.core.structs import CqOutputStruct, CqSettingsStruct
-from tools.cq.search._shared.core import RgRunRequest
+from tools.cq.search._shared.requests import RgRunRequest
 from tools.cq.search.rg.runner import RgProcessResult
 
 

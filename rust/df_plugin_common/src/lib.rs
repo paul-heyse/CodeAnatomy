@@ -20,4 +20,3 @@ pub fn schema_from_ipc(payload: &[u8]) -> Result<SchemaRef, ArrowError> {
 }
 
 pub const DELTA_SCAN_CONFIG_VERSION: u32 = 1;
-

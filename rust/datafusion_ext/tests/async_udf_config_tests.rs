@@ -19,4 +19,3 @@ fn async_udf_config_from_config_extensions() {
     assert_eq!(config.ideal_batch_size, Some(128));
     assert_eq!(config.timeout_ms, Some(1_000));
 }
-

@@ -38,6 +38,7 @@ use futures::{stream, TryStreamExt};
 /// This actually performs the projection, filtering and scanning of a Dataset
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyIterator, PyList};
+use tracing::instrument;
 
 use crate::errors::PyDataFusionResult;
 use crate::pyarrow_filter_expression::PyArrowFilterExpression;
@@ -178,6 +179,7 @@ impl ExecutionPlan for DatasetExec {
         Ok(self)
     }
 
+    #[instrument(skip(self, context))]
     fn execute(
         &self,
         partition: usize,

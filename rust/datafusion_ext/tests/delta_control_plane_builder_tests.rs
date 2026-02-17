@@ -17,4 +17,3 @@ fn scan_config_from_session_applies_overrides_without_snapshot() {
     assert!(!config.wrap_partition_values);
     assert!(config.schema_force_view_types);
 }
-

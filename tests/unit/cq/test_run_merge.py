@@ -36,7 +36,7 @@ def test_merge_step_results_adds_provenance() -> None:
     )
 
     merged = CqResult(run=run)
-    merge_step_results(merged, "step_0", step_result)
+    merged = merge_step_results(merged, "step_0", step_result)
 
     assert merged.key_findings[0].details.data["source_step"] == "step_0"
     assert merged.key_findings[0].details.data["source_macro"] == "calls"

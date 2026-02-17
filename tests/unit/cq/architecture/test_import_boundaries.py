@@ -21,12 +21,6 @@ def test_no_private_cross_module_imports() -> None:
     # Allowlist for legitimate private cross-module imports
     # These are imports that use underscore for aliasing, not for privacy
     allowlist = {
-        # Aliasing shared utilities to avoid name collisions
-        "tools/cq/search/python/extractors.py:37:from tools.cq.search._shared.core import source_hash as _shared_source_hash",
-        "tools/cq/search/python/extractors.py:38:from tools.cq.search._shared.core import truncate as _shared_truncate",
-        "tools/cq/search/rust/enrichment.py:16:from tools.cq.search._shared.core import sg_node_text as _shared_sg_node_text",
-        "tools/cq/search/rust/enrichment.py:17:from tools.cq.search._shared.core import source_hash as _shared_source_hash",
-        "tools/cq/search/tree_sitter/rust_lane/runtime.py:25:from tools.cq.search._shared.core import truncate as _shared_truncate",
         # Internal type imports within same subsystem (TYPE_CHECKING blocks)
         "tools/cq/search/python/resolution_index.py:194:    from tools.cq.search.python.analysis_session import PythonAnalysisSession as _Session",
         # Runtime query execution delegation (same subsystem)
@@ -77,7 +71,6 @@ def test_no_private_cross_module_imports() -> None:
         "tools/cq/search/tree_sitter/rust_lane/runtime.py:75:from tools.cq.search.tree_sitter.rust_lane.query_cache import _pack_sources",
         "tools/cq/search/tree_sitter/rust_lane/runtime.py:76:from tools.cq.search.tree_sitter.rust_lane.role_classification import _classify_item_role",
         "tools/cq/search/tree_sitter/rust_lane/runtime_core.py:79:from tools.cq.search.tree_sitter.rust_lane.query_cache import _pack_sources",
-        "tools/cq/search/tree_sitter/rust_lane/enrichment_extractors.py:11:from tools.cq.search._shared.core import truncate as _shared_truncate",
         "tools/cq/search/tree_sitter/rust_lane/enrichment_extractors.py:14:from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _rust_field_ids",
         "tools/cq/search/tree_sitter/rust_lane/query_orchestration.py:37:    from tools.cq.search.tree_sitter.rust_lane import runtime_core as _runtime_core",
         "tools/cq/search/tree_sitter/rust_lane/payload_assembly.py:25:    from tools.cq.search.tree_sitter.rust_lane import runtime_core as _runtime_core",
@@ -94,7 +87,6 @@ def test_no_private_cross_module_imports() -> None:
         # Cache backend lifecycle loader
         "tools/cq/core/cache/backend_lifecycle.py:42:    from tools.cq.core.cache.diskcache_backend import _build_diskcache_backend",
         # Shared/enrichment adapters
-        "tools/cq/search/_shared/core.py:122:    from tools.cq.search.tree_sitter.core.node_utils import node_text as _node_text",
         "tools/cq/search/rust/extensions.py:11:from tools.cq.search.enrichment.core import string_or_none as _string",
         "tools/cq/search/semantic/models.py:17:from tools.cq.search.enrichment.core import string_or_none as _string",
     }

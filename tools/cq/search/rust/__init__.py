@@ -12,7 +12,7 @@ from tools.cq.search.rust.evidence import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.search._shared.core import RustEnrichmentRequest
+    from tools.cq.search._shared.requests import RustEnrichmentRequest
 
 
 def enrich_context_by_byte_range(

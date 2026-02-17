@@ -18,4 +18,3 @@ fn parse_rfc3339_rejects_invalid_timestamp() {
 fn eager_snapshot_signature_is_stable() {
     let _fn_ptr: fn(&DeltaTable) -> Result<EagerSnapshot, DeltaTableError> = eager_snapshot;
 }
-

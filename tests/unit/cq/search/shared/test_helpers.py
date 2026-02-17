@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from tools.cq.search._shared.helpers import (
     assert_no_runtime_only_keys,
     line_col_to_byte_offset,
@@ -11,12 +10,15 @@ from tools.cq.search._shared.helpers import (
     truncate,
 )
 
+LINE2_START = 4
+LINE2_FIRST_CHAR = 6
+
 
 def test_line_col_to_byte_offset_handles_utf8_columns() -> None:
     """Byte offsets should account for UTF-8 character width."""
-    source = "a=1\néx\n".encode("utf-8")
-    assert line_col_to_byte_offset(source, 2, 0) == 4
-    assert line_col_to_byte_offset(source, 2, 1) == 6
+    source = "a=1\néx\n".encode()
+    assert line_col_to_byte_offset(source, 2, 0) == LINE2_START
+    assert line_col_to_byte_offset(source, 2, 1) == LINE2_FIRST_CHAR
 
 
 def test_assert_no_runtime_only_keys_raises_for_runtime_payload() -> None:

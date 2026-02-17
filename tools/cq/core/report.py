@@ -119,7 +119,7 @@ def _format_finding(
         Markdown-formatted line(s), including context snippet if available.
     """
     if context.root is not None:
-        _maybe_attach_render_enrichment_orchestrator(
+        f = _maybe_attach_render_enrichment_orchestrator(
             f,
             root=context.root,
             cache=context.enrich_cache,

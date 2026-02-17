@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.cli_app.options import CommonFilters
+from tools.cq.cli_app.command_schema import CommonFilterCommandSchema
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.structs import CqStruct
 from tools.cq.index.repo import resolve_repo_context
@@ -163,7 +163,7 @@ class CliContext(CqStruct, frozen=True):
         )
 
 
-FilterConfig = CommonFilters
+FilterConfig = CommonFilterCommandSchema
 
 
 class CliTextResult(CqStruct, frozen=True):

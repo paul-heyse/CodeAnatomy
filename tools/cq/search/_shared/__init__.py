@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from tools.cq.search._shared.core import (
-    PythonByteRangeEnrichmentSettingsV1,
-    PythonByteRangeRuntimeV1,
-    PythonNodeEnrichmentSettingsV1,
-    PythonNodeRuntimeV1,
+from tools.cq.search._shared.helpers import (
     line_col_to_byte_offset,
     node_text,
     sg_node_text,
     source_hash,
     truncate,
+)
+from tools.cq.search._shared.requests import (
+    PythonByteRangeEnrichmentSettingsV1,
+    PythonByteRangeRuntimeV1,
+    PythonNodeEnrichmentSettingsV1,
+    PythonNodeRuntimeV1,
 )
 
 __all__ = [

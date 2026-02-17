@@ -17,8 +17,8 @@ use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use tokio::time;
 
-use crate::async_udf_config::CodeAnatomyAsyncUdfConfig;
 use crate::async_runtime;
+use crate::async_udf_config::CodeAnatomyAsyncUdfConfig;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct AsyncUdfPolicy {

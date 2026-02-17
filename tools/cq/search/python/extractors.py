@@ -30,22 +30,25 @@ import msgspec
 
 from tools.cq.core.locations import byte_offset_to_line_col
 from tools.cq.search._shared.bounded_cache import BoundedCache
-from tools.cq.search._shared.core import (
+from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
+from tools.cq.search._shared.helpers import (
+    line_col_to_byte_offset as _shared_line_col_to_byte_offset,
+)
+from tools.cq.search._shared.helpers import source_hash as shared_source_hash
+from tools.cq.search._shared.helpers import truncate as shared_truncate
+from tools.cq.search._shared.requests import (
     PythonByteRangeEnrichmentRequest,
     PythonNodeEnrichmentRequest,
 )
-from tools.cq.search._shared.core import (
-    line_col_to_byte_offset as _shared_line_col_to_byte_offset,
-)
-from tools.cq.search._shared.core import source_hash as _shared_source_hash
-from tools.cq.search._shared.core import truncate as _shared_truncate
-from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.enrichment.core import (
     append_source as _append_enrichment_source,
 )
 from tools.cq.search.enrichment.core import (
     enforce_payload_budget as _enforce_shared_payload_budget,
+)
+from tools.cq.search.enrichment.core import (
+    has_value as _has_enrichment_value,
 )
 from tools.cq.search.enrichment.core import (
     payload_size_hint as _shared_payload_size_hint,
@@ -227,7 +230,7 @@ def _truncate(
     str
         The original or truncated string.
     """
-    truncated = _shared_truncate(text, max_len)
+    truncated = shared_truncate(text, max_len)
     if truncated == text:
         return text
     if field_name and context is not None:
@@ -290,7 +293,7 @@ def _get_ast(source_bytes: bytes, *, cache_key: str) -> ast.Module | None:
     ast.Module | None
         Parsed AST, or None on syntax error.
     """
-    content_hash = _shared_source_hash(source_bytes)
+    content_hash = shared_source_hash(source_bytes)
     cached = _AST_CACHE.get(cache_key)
     if cached is not None:
         cached_tree, cached_hash = cached
@@ -1050,7 +1053,7 @@ def _build_agreement_section(
 
 @dataclass(slots=True)
 class _PythonEnrichmentState:
-    payload: dict[str, object]
+    metadata: dict[str, object]
     context: EnrichmentContext = field(default_factory=EnrichmentContext)
     facts: PythonEnrichmentFacts = field(default_factory=PythonEnrichmentFacts)
     stage_status: dict[str, str] = field(default_factory=dict)
@@ -1068,6 +1071,19 @@ _PY_SIGNATURE_FIELDS: frozenset[str] = frozenset(PythonSignatureFacts.__struct_f
 _PY_CALL_FIELDS: frozenset[str] = frozenset(PythonCallFacts.__struct_fields__)
 _PY_IMPORT_FIELDS: frozenset[str] = frozenset(PythonImportFacts.__struct_fields__)
 _PY_CLASS_SHAPE_FIELDS: frozenset[str] = frozenset(PythonClassShapeFacts.__struct_fields__)
+_PY_METADATA_FIELDS: frozenset[str] = frozenset(
+    {
+        "language",
+        "enrichment_status",
+        "enrichment_sources",
+        "degrade_reason",
+        "tree_sitter_query_telemetry",
+        "cst_query_hits",
+        "cst_diagnostics",
+        "imports",
+        "resolution",
+    }
+)
 
 
 def _parse_struct_or_none[StructT](data: dict[str, object], type_: type[StructT]) -> StructT | None:
@@ -1086,6 +1102,88 @@ def _facts_dict(section: object | None) -> dict[str, object]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _merge_string_key_mapping(target: dict[str, object], payload: object) -> None:
+    if not isinstance(payload, dict):
+        return
+    target.update({k: v for k, v in payload.items() if isinstance(k, str)})
+
+
+def _merge_import_payload(import_fields: dict[str, object], payload: object) -> None:
+    if not isinstance(payload, dict):
+        return
+    modules = payload.get("modules")
+    aliases = payload.get("aliases")
+    if isinstance(modules, list) and modules:
+        import_fields["import_module"] = next(
+            (item for item in modules if isinstance(item, str)),
+            import_fields.get("import_module"),
+        )
+    if isinstance(aliases, list):
+        import_fields["import_names"] = [item for item in aliases if isinstance(item, str)]
+
+
+def _assign_fact_field(
+    key: str,
+    value: object,
+    *,
+    buckets: dict[str, dict[str, object]],
+) -> None:
+    if not _has_enrichment_value(value):
+        return
+    bucket_name = _fact_bucket_name_for_field(key)
+    if bucket_name is not None:
+        buckets[bucket_name][key] = value
+
+
+def _fact_bucket_name_for_field(key: str) -> str | None:
+    fact_buckets: tuple[tuple[str, frozenset[str]], ...] = (
+        ("resolution", _PY_RESOLUTION_FIELDS),
+        ("behavior", _PY_BEHAVIOR_FIELDS),
+        ("structure", _PY_STRUCTURE_FIELDS),
+        ("signature", _PY_SIGNATURE_FIELDS),
+        ("call", _PY_CALL_FIELDS),
+        ("import", _PY_IMPORT_FIELDS),
+        ("class_shape", _PY_CLASS_SHAPE_FIELDS),
+    )
+    for bucket_name, field_names in fact_buckets:
+        if key in field_names:
+            return bucket_name
+    return None
+
+
+def _merge_stage_enrichment_sources(metadata: dict[str, object], value: object) -> None:
+    if not isinstance(value, list):
+        return
+    for source_name in value:
+        if isinstance(source_name, str):
+            _append_source(metadata, source_name)
+
+
+def _merge_stage_degrade_reason(metadata: dict[str, object], value: object) -> None:
+    if not isinstance(value, str) or not value:
+        return
+    existing = metadata.get("degrade_reason")
+    if isinstance(existing, str) and existing:
+        metadata["degrade_reason"] = f"{existing}; {value}"
+    else:
+        metadata["degrade_reason"] = value
+
+
+def _merge_stage_metadata_field(
+    *,
+    metadata: dict[str, object],
+    key: str,
+    value: object,
+) -> None:
+    if key == "enrichment_sources":
+        _merge_stage_enrichment_sources(metadata, value)
+        return
+    if key == "degrade_reason":
+        _merge_stage_degrade_reason(metadata, value)
+        return
+    metadata[key] = value
+
+
 def _merge_python_enrichment_facts(
     current: PythonEnrichmentFacts,
     fields: dict[str, object],
@@ -1099,46 +1197,27 @@ def _merge_python_enrichment_facts(
     class_shape = _facts_dict(current.class_shape)
     locals_dict = _facts_dict(current.locals)
     parse_quality = _facts_dict(current.parse_quality)
+    fact_buckets = {
+        "resolution": resolution,
+        "behavior": behavior,
+        "structure": structure,
+        "signature": signature,
+        "call": call,
+        "import": import_,
+        "class_shape": class_shape,
+    }
 
-    nested_resolution = fields.get("resolution")
-    if isinstance(nested_resolution, dict):
-        resolution.update({k: v for k, v in nested_resolution.items() if isinstance(k, str)})
-
-    nested_locals = fields.get("locals")
-    if isinstance(nested_locals, dict):
-        locals_dict.update({k: v for k, v in nested_locals.items() if isinstance(k, str)})
-
-    nested_parse_quality = fields.get("parse_quality")
-    if isinstance(nested_parse_quality, dict):
-        parse_quality.update({k: v for k, v in nested_parse_quality.items() if isinstance(k, str)})
-
-    imports_payload = fields.get("imports")
-    if isinstance(imports_payload, dict):
-        modules = imports_payload.get("modules")
-        aliases = imports_payload.get("aliases")
-        if isinstance(modules, list) and modules:
-            import_["import_module"] = next(
-                (item for item in modules if isinstance(item, str)),
-                import_.get("import_module"),
-            )
-        if isinstance(aliases, list):
-            import_["import_names"] = [item for item in aliases if isinstance(item, str)]
+    _merge_string_key_mapping(resolution, fields.get("resolution"))
+    _merge_string_key_mapping(locals_dict, fields.get("locals"))
+    _merge_string_key_mapping(parse_quality, fields.get("parse_quality"))
+    _merge_import_payload(import_, fields.get("imports"))
 
     for key, value in fields.items():
-        if key in _PY_RESOLUTION_FIELDS:
-            resolution[key] = value
-        elif key in _PY_BEHAVIOR_FIELDS:
-            behavior[key] = value
-        elif key in _PY_STRUCTURE_FIELDS:
-            structure[key] = value
-        elif key in _PY_SIGNATURE_FIELDS:
-            signature[key] = value
-        elif key in _PY_CALL_FIELDS:
-            call[key] = value
-        elif key in _PY_IMPORT_FIELDS:
-            import_[key] = value
-        elif key in _PY_CLASS_SHAPE_FIELDS:
-            class_shape[key] = value
+        _assign_fact_field(
+            key,
+            value,
+            buckets=fact_buckets,
+        )
 
     if "error_nodes" in parse_quality and "error_count" not in parse_quality:
         nodes = parse_quality.get("error_nodes")
@@ -1186,6 +1265,24 @@ def _flatten_python_enrichment_facts(facts: PythonEnrichmentFacts) -> dict[str, 
     return payload
 
 
+def _ingest_stage_fields(
+    state: _PythonEnrichmentState,
+    fields: dict[str, object],
+    *,
+    source: str | None = None,
+) -> None:
+    """Merge stage output into typed facts and metadata-only passthrough keys."""
+    if not fields:
+        return
+    state.facts = _merge_python_enrichment_facts(state.facts, fields)
+    for key, value in fields.items():
+        if key not in _PY_METADATA_FIELDS:
+            continue
+        _merge_stage_metadata_field(metadata=state.metadata, key=key, value=value)
+    if source is not None:
+        _append_source(state.metadata, source)
+
+
 def _resolve_python_enrichment_range(
     *,
     node: SgNode,
@@ -1220,8 +1317,7 @@ def _run_ast_grep_stage(
     )
     state.stage_timings_ms["ast_grep"] = (perf_counter() - ast_started) * 1000.0
     state.stage_status["ast_grep"] = "degraded" if degrade_reasons else "applied"
-    state.payload.update(sg_fields)
-    state.facts = _merge_python_enrichment_facts(state.facts, sg_fields)
+    _ingest_stage_fields(state, sg_fields)
     state.ast_fields = _extract_ast_grep_stage_fields(sg_fields)
     state.degrade_reasons.extend(degrade_reasons)
 
@@ -1241,11 +1337,9 @@ def _run_python_ast_stage(
     py_ast_started = perf_counter()
     ast_extra_fields, ast_extra_reasons = _enrich_python_ast_tier(node, source_bytes, cache_key)
     state.stage_timings_ms["python_ast"] = (perf_counter() - py_ast_started) * 1000.0
-    state.payload.update(ast_extra_fields)
-    state.facts = _merge_python_enrichment_facts(state.facts, ast_extra_fields)
+    _ingest_stage_fields(state, ast_extra_fields, source="python_ast")
     state.degrade_reasons.extend(ast_extra_reasons)
     state.stage_status["python_ast"] = "degraded" if ast_extra_reasons else "applied"
-    _append_source(state.payload, "python_ast")
 
 
 def _run_import_stage(
@@ -1265,11 +1359,9 @@ def _run_import_stage(
     import_started = perf_counter()
     imp_fields, imp_reasons = _enrich_import_tier(node, source_bytes, cache_key, line)
     state.stage_timings_ms["import_detail"] = (perf_counter() - import_started) * 1000.0
-    state.payload.update(imp_fields)
-    state.facts = _merge_python_enrichment_facts(state.facts, imp_fields)
+    _ingest_stage_fields(state, imp_fields, source="python_ast")
     state.degrade_reasons.extend(imp_reasons)
     state.stage_status["import_detail"] = "degraded" if imp_reasons else "applied"
-    _append_source(state.payload, "python_ast")
 
 
 def _decode_python_source_text(
@@ -1313,9 +1405,11 @@ def _run_python_resolution_stage(
     state.stage_timings_ms["python_resolution"] = (perf_counter() - resolution_started) * 1000.0
     state.degrade_reasons.extend(resolution_reasons)
     if state.python_resolution_fields:
-        state.payload.update(state.python_resolution_fields)
-        state.facts = _merge_python_enrichment_facts(state.facts, state.python_resolution_fields)
-        _append_source(state.payload, "python_resolution")
+        _ingest_stage_fields(
+            state,
+            state.python_resolution_fields,
+            source="python_resolution",
+        )
         state.stage_status["python_resolution"] = "applied"
         return
     state.stage_status["python_resolution"] = "degraded" if resolution_reasons else "skipped"
@@ -1349,13 +1443,7 @@ def _run_tree_sitter_stage(
         )
         if ts_payload:
             state.tree_sitter_fields.update(ts_payload)
-            # Tree-sitter is the primary structural plane in this cutover.
-            for key, value in ts_payload.items():
-                if key == "enrichment_sources":
-                    continue
-                state.payload[key] = value
-            state.facts = _merge_python_enrichment_facts(state.facts, ts_payload)
-            _append_source(state.payload, "tree_sitter")
+            _ingest_stage_fields(state, ts_payload, source="tree_sitter")
             ts_status = ts_payload.get("enrichment_status")
             state.stage_status["tree_sitter"] = (
                 ts_status if isinstance(ts_status, str) else "applied"
@@ -1373,22 +1461,10 @@ def _run_tree_sitter_stage(
     state.degrade_reasons.extend(tree_sitter_reasons)
 
 
-def _finalize_python_enrichment_payload(state: _PythonEnrichmentState) -> None:
-    passthrough_keys = {
-        "language",
-        "enrichment_status",
-        "enrichment_sources",
-        "degrade_reason",
-        "tree_sitter_query_telemetry",
-        "cst_query_hits",
-        "cst_diagnostics",
-        "imports",
-        "resolution",
-    }
-    metadata_payload = {key: value for key, value in state.payload.items() if key in passthrough_keys}
-    state.payload = {
+def _finalize_python_enrichment_payload(state: _PythonEnrichmentState) -> dict[str, object]:
+    payload = {
         **_flatten_python_enrichment_facts(state.facts),
-        **metadata_payload,
+        **state.metadata,
     }
 
     agreement = _build_agreement_section(
@@ -1396,30 +1472,31 @@ def _finalize_python_enrichment_payload(state: _PythonEnrichmentState) -> None:
         python_resolution_fields=state.python_resolution_fields,
         tree_sitter_fields=state.tree_sitter_fields,
     )
-    state.payload["agreement"] = agreement
+    payload["agreement"] = agreement
     if (
         os.getenv(_PYTHON_ENRICHMENT_CROSSCHECK_ENV) == "1"
         and agreement.get("status") == "conflict"
     ):
         conflicts = agreement.get("conflicts")
         if isinstance(conflicts, list):
-            state.payload["crosscheck_mismatches"] = conflicts
+            payload["crosscheck_mismatches"] = conflicts
         state.degrade_reasons.append("crosscheck mismatch")
 
     if state.degrade_reasons:
-        state.payload["enrichment_status"] = "degraded"
-        state.payload["degrade_reason"] = "; ".join(state.degrade_reasons)
+        payload["enrichment_status"] = "degraded"
+        payload["degrade_reason"] = "; ".join(state.degrade_reasons)
 
-    state.payload["stage_status"] = state.stage_status
-    state.payload["stage_timings_ms"] = state.stage_timings_ms
+    payload["stage_status"] = state.stage_status
+    payload["stage_timings_ms"] = state.stage_timings_ms
 
     if state.context.truncations:
-        state.payload["truncated_fields"] = list(state.context.truncations)
+        payload["truncated_fields"] = list(state.context.truncations)
 
-    dropped_fields, size_hint = _enforce_payload_budget(state.payload)
-    state.payload["payload_size_hint"] = size_hint
+    dropped_fields, size_hint = _enforce_payload_budget(payload)
+    payload["payload_size_hint"] = size_hint
     if dropped_fields:
-        state.payload["dropped_fields"] = dropped_fields
+        payload["dropped_fields"] = dropped_fields
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -1446,7 +1523,7 @@ def enrich_python_context(request: PythonNodeEnrichmentRequest) -> dict[str, obj
         return None
 
     state = _PythonEnrichmentState(
-        payload={
+        metadata={
             "enrichment_status": "applied",
             "enrichment_sources": ["ast_grep"],
         }
@@ -1492,8 +1569,7 @@ def enrich_python_context(request: PythonNodeEnrichmentRequest) -> dict[str, obj
         query_budget_ms=request.query_budget_ms,
         session=cast("PythonAnalysisSession | None", request.session),
     )
-    _finalize_python_enrichment_payload(state)
-    return state.payload
+    return _finalize_python_enrichment_payload(state)
 
 
 def enrich_python_context_by_byte_range(

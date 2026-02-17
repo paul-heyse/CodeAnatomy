@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from tools.cq.search._shared.core import PythonByteRangeEnrichmentRequest
+from tools.cq.search._shared.requests import PythonByteRangeEnrichmentRequest
 from tools.cq.search.python import pipeline_support as support_module
 from tools.cq.search.python.pipeline_support import (
     PythonResolutionPayloadV1,

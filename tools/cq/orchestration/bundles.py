@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import msgspec
+
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.run_context import RunContext
-from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms
+from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms, update_result_summary
 from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.core.target_specs import BundleTargetKind, TargetSpecV1
 from tools.cq.macros.bytecode import cmd_bytecode_surface
@@ -222,21 +224,25 @@ def merge_bundle_results(preset: str, ctx: BundleContext, results: list[CqResult
     run = run_ctx.to_runmeta(f"report:{preset}")
     merged = mk_result(run)
 
-    merged.summary = summary_from_mapping(
-        {
-            "bundle": {"name": preset},
-            "target": f"{_bundle_target_kind(ctx.target)}:{_bundle_target_value(ctx.target)}",
-            "in_dir": ctx.in_dir,
-        }
+    merged = msgspec.structs.replace(
+        merged,
+        summary=summary_from_mapping(
+            {
+                "bundle": {"name": preset},
+                "target": f"{_bundle_target_kind(ctx.target)}:{_bundle_target_value(ctx.target)}",
+                "in_dir": ctx.in_dir,
+            }
+        ),
     )
 
     for result in results:
         macro = result.run.macro
-        merge_step_results(merged, macro, result)
+        merged = merge_step_results(merged, macro, result)
 
-    merged.summary.macro_summaries = dict(merged.summary.step_summaries)
-
-    return merged
+    return update_result_summary(
+        merged,
+        {"macro_summaries": dict(merged.summary.step_summaries)},
+    )
 
 
 def _bundle_steps(preset: str, ctx: BundleContext) -> list[BundleStepResult]:
@@ -424,5 +430,4 @@ def _skip_result(ctx: BundleContext, macro: str, reason: str) -> CqResult:
     )
     run = run_ctx.to_runmeta(macro)
     result = mk_result(run)
-    result.summary.skipped = reason
-    return result
+    return update_result_summary(result, {"skipped": reason})

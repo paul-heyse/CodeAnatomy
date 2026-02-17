@@ -43,7 +43,7 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
     result = apply_result_filters(result, resolved_filters)
 
     result = assign_result_finding_ids(result)
-    persist_result_artifacts(
+    result = persist_result_artifacts(
         result=result,
         artifact_dir=artifact_dir,
         no_save=no_save,

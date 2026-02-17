@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search._shared.core import decode_mapping, encode_mapping
+from tools.cq.search._shared.helpers import decode_mapping, encode_mapping
 
 
 def test_encode_decode_mapping_roundtrip() -> None:

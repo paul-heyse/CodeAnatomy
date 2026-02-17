@@ -64,8 +64,7 @@ impl RulepackFactory {
             // Compile to analyzer rules
             if let Some(rule) = compile_intent_to_analyzer(intent) {
                 // Safety analyzer rules are strict-profile only.
-                if matches!(intent.class, RuleClass::Safety)
-                    && *profile != RulepackProfile::Strict
+                if matches!(intent.class, RuleClass::Safety) && *profile != RulepackProfile::Strict
                 {
                     continue;
                 }
@@ -152,7 +151,10 @@ mod tests {
         let env_profile = EnvironmentProfile::from_class(EnvironmentClass::Small);
         let ruleset = RulepackFactory::build_ruleset(&profile, &[], &env_profile);
         assert_eq!(ruleset.total_count(), 1);
-        assert_eq!(ruleset.analyzer_rules()[0].name(), "codeanatomy_policy_rule");
+        assert_eq!(
+            ruleset.analyzer_rules()[0].name(),
+            "codeanatomy_policy_rule"
+        );
     }
 
     #[test]
@@ -234,10 +236,7 @@ mod tests {
         let strict_ruleset =
             RulepackFactory::build_ruleset(&RulepackProfile::Strict, &intents, &env_profile);
 
-        assert_ne!(
-            default_ruleset.fingerprint(),
-            strict_ruleset.fingerprint()
-        );
+        assert_ne!(default_ruleset.fingerprint(), strict_ruleset.fingerprint());
     }
 
     #[test]

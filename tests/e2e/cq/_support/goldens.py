@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201, DOC501, RET504
 """Golden snapshot utilities for CQ E2E tests."""
 
 from __future__ import annotations
@@ -94,14 +93,22 @@ def _sort_result_findings(result_dict: dict[str, Any]) -> None:
 
 
 def _normalize_json_value(value: object) -> object:
-    """Normalize arbitrary JSON-compatible values for stable snapshots."""
+    """Normalize arbitrary JSON-compatible values for stable snapshots.
+
+    Returns:
+        object: Normalized snapshot-safe value.
+    """
     from tools.cq.core.serialization import to_builtins
 
     return _scrub_unstable(to_builtins(value))
 
 
 def _normalize_text_value(value: str) -> str:
-    """Normalize text snapshots for machine/path stability."""
+    """Normalize text snapshots for machine/path stability.
+
+    Returns:
+        str: Normalized text value.
+    """
     return _scrub_text_paths(value)
 
 
@@ -119,8 +126,7 @@ def _scrub_text_paths(text: str) -> str:
     for pattern in _ABS_PATH_PATTERNS:
         normalized = pattern.sub("<repo_root>", normalized)
     normalized = _DURATION_PATTERN.sub(r"\1 <duration_ms>", normalized)
-    normalized = _BUNDLE_ID_PATTERN.sub(r"\1 <bundle_id>", normalized)
-    return normalized
+    return _BUNDLE_ID_PATTERN.sub(r"\1 <bundle_id>", normalized)
 
 
 def _scrub_unstable(value: object) -> object:
@@ -246,7 +252,11 @@ def assert_json_snapshot_data(
     *,
     update: bool = False,
 ) -> None:
-    """Assert arbitrary JSON payload against a golden snapshot."""
+    """Assert arbitrary JSON payload against a golden snapshot.
+
+    Raises:
+        AssertionError: If snapshot is missing or payload mismatches.
+    """
     fixture_path = GOLDENS_DIR / fixture_name
     normalized = _normalize_json_value(actual)
     if update:
@@ -282,7 +292,11 @@ def assert_text_snapshot(
     *,
     update: bool = False,
 ) -> None:
-    """Assert text payload against a golden text snapshot."""
+    """Assert text payload against a golden text snapshot.
+
+    Raises:
+        AssertionError: If snapshot is missing or text mismatches.
+    """
     fixture_path = GOLDENS_DIR / fixture_name
     normalized = _normalize_text_value(actual)
     if update:
@@ -329,7 +343,11 @@ def load_golden_query_spec(fixture_name: str) -> dict[str, Any]:
 
 
 def load_golden_spec(fixture_name: str) -> dict[str, Any]:
-    """Load any golden spec fixture by file name."""
+    """Load any golden spec fixture by file name.
+
+    Returns:
+        dict[str, Any]: Loaded JSON fixture payload.
+    """
     return load_golden_query_spec(fixture_name)
 
 

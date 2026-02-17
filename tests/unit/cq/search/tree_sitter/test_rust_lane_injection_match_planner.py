@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Tests for Rust match-centric injection planning."""
 
 from __future__ import annotations
@@ -18,7 +17,8 @@ class _FakeNode:
     start_point: tuple[int, int]
     end_point: tuple[int, int]
 
-    def child_by_field_name(self, name: str, /) -> _FakeNode | None:
+    @staticmethod
+    def child_by_field_name(name: str, /) -> _FakeNode | None:
         _ = name
         return None
 

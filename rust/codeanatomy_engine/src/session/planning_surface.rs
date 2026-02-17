@@ -134,7 +134,10 @@ mod tests {
         assert!(spec.query_planner.is_none());
         assert!(!spec.delta_codec_enabled);
         assert!(spec.planning_config_keys.is_empty());
-        assert!(matches!(spec.extension_policy, GovernancePolicy::Permissive));
+        assert!(matches!(
+            spec.extension_policy,
+            GovernancePolicy::Permissive
+        ));
         assert!(spec.function_rewrites.is_empty());
     }
 }

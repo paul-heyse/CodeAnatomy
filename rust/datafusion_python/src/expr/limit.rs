@@ -15,46 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Display, Formatter};
-
 use datafusion::logical_expr::logical_plan::Limit;
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt;
 
 use crate::common::df_schema::PyDFSchema;
 use crate::expr::logical_node::LogicalNode;
 use crate::sql::logical::PyLogicalPlan;
 
-#[pyclass(frozen, name = "Limit", module = "datafusion.expr", subclass)]
-#[derive(Clone)]
-pub struct PyLimit {
-    limit: Limit,
-}
-
-impl From<Limit> for PyLimit {
-    fn from(limit: Limit) -> PyLimit {
-        PyLimit { limit }
-    }
-}
-
-impl From<PyLimit> for Limit {
-    fn from(limit: PyLimit) -> Self {
-        limit.limit
-    }
-}
-
-impl Display for PyLimit {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+logical_plan_wrapper!(
+    wrapper = PyLimit,
+    inner = Limit,
+    field = limit,
+    py_name = "Limit",
+    display = |this, f| {
         write!(
             f,
             "Limit
             Skip: {:?}
             Fetch: {:?}
             Input: {:?}",
-            &self.limit.skip, &self.limit.fetch, &self.limit.input
+            &this.limit.skip, &this.limit.fetch, &this.limit.input
         )
-    }
-}
+    },
+    inputs = |this| { vec![PyLogicalPlan::from((*this.limit.input).clone())] }
+);
 
 #[pymethods]
 impl PyLimit {
@@ -84,15 +68,5 @@ impl PyLimit {
 
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!("Limit({self})"))
-    }
-}
-
-impl LogicalNode for PyLimit {
-    fn inputs(&self) -> Vec<PyLogicalPlan> {
-        vec![PyLogicalPlan::from((*self.limit.input).clone())]
-    }
-
-    fn to_variant<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.clone().into_bound_py_any(py)
     }
 }

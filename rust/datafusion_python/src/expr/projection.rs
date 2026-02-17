@@ -15,52 +15,36 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Display, Formatter};
-
 use datafusion::logical_expr::logical_plan::Projection;
 use datafusion::logical_expr::Expr;
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt;
 
 use crate::common::df_schema::PyDFSchema;
 use crate::expr::logical_node::LogicalNode;
 use crate::expr::PyExpr;
 use crate::sql::logical::PyLogicalPlan;
 
-#[pyclass(frozen, name = "Projection", module = "datafusion.expr", subclass)]
-#[derive(Clone)]
-pub struct PyProjection {
-    pub projection: Projection,
-}
-
-impl PyProjection {
-    pub fn new(projection: Projection) -> Self {
-        Self { projection }
-    }
-}
-
-impl From<Projection> for PyProjection {
-    fn from(projection: Projection) -> PyProjection {
-        PyProjection { projection }
-    }
-}
-
-impl From<PyProjection> for Projection {
-    fn from(proj: PyProjection) -> Self {
-        proj.projection
-    }
-}
-
-impl Display for PyProjection {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+logical_plan_wrapper!(
+    wrapper = PyProjection,
+    inner = Projection,
+    field = projection,
+    py_name = "Projection",
+    display = |this, f| {
         write!(
             f,
             "Projection
             \nExpr(s): {:?}
             \nInput: {:?}
             \nProjected Schema: {:?}",
-            &self.projection.expr, &self.projection.input, &self.projection.schema,
+            &this.projection.expr, &this.projection.input, &this.projection.schema,
         )
+    },
+    inputs = |this| { vec![PyLogicalPlan::from((*this.projection.input).clone())] }
+);
+
+impl PyProjection {
+    pub fn new(projection: Projection) -> Self {
+        Self { projection }
     }
 }
 
@@ -107,15 +91,5 @@ impl PyProjection {
             _ => projs.push(local_expr.clone()),
         }
         projs
-    }
-}
-
-impl LogicalNode for PyProjection {
-    fn inputs(&self) -> Vec<PyLogicalPlan> {
-        vec![PyLogicalPlan::from((*self.projection.input).clone())]
-    }
-
-    fn to_variant<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.clone().into_bound_py_any(py)
     }
 }

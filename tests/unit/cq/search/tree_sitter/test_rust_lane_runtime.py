@@ -22,7 +22,8 @@ def test_rust_lane_required_payload_keys_guard() -> None:
     except ImportError as exc:
         pytest.skip(f"rust runtime import unavailable in isolated scope: {exc}")
 
-    runtime_module._assert_required_payload_keys(  # noqa: SLF001
+    assert_required_payload_keys = runtime_module.__dict__["_assert_required_payload_keys"]
+    assert_required_payload_keys(
         {
             "language": "rust",
             "enrichment_status": "applied",
@@ -30,4 +31,4 @@ def test_rust_lane_required_payload_keys_guard() -> None:
         }
     )
     with pytest.raises(ValueError, match="missing required keys"):
-        runtime_module._assert_required_payload_keys({"language": "rust"})  # noqa: SLF001
+        assert_required_payload_keys({"language": "rust"})

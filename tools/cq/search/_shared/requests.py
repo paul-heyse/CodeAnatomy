@@ -14,6 +14,7 @@ from tools.cq.core.types import QueryLanguage
 if TYPE_CHECKING:
     from tools.cq.search._shared.types import QueryMode, SearchLimits
     from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
+    from tools.cq.search.rg.contracts import RgRunSettingsV1
 
 
 class PythonClassifierSessionLike(Protocol):
@@ -78,7 +79,7 @@ class RgRunRequest(CqStruct, frozen=True):
     paths: tuple[str, ...] = (".",)
     extra_patterns: tuple[str, ...] = ()
 
-    def to_settings(self) -> object:
+    def to_settings(self) -> RgRunSettingsV1:
         """Return serializable rg execution settings contract."""
         from tools.cq.search.rg.contracts import RgRunSettingsV1
 

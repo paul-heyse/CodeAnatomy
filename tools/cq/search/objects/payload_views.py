@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import msgspec
 
 from tools.cq.core.structs import CqStruct
@@ -60,6 +62,10 @@ class EnrichmentPayloadView(CqStruct, frozen=True):
     stage_errors: list[dict[str, object]] = msgspec.field(default_factory=list)
 
     @classmethod
-    def from_raw(cls, payload: dict[str, object]) -> EnrichmentPayloadView:
-        """Parse raw enrichment payload dict into typed view."""
+    def from_raw(cls, payload: Mapping[str, object]) -> EnrichmentPayloadView:
+        """Parse raw enrichment payload dict into typed view.
+
+        Returns:
+            EnrichmentPayloadView: Normalized typed payload view.
+        """
         return msgspec.convert(payload, type=cls, strict=False)

@@ -10,13 +10,57 @@ import re
 from typing import TYPE_CHECKING
 
 from tools.cq.astgrep.metavar import (
-    extract_metavar_names,
-    extract_variadic_metavar_names,
+    extract_metavar_names as _extract_metavar_names,
+)
+from tools.cq.astgrep.metavar import (
+    extract_rule_metavars as _extract_rule_metavars,
+)
+from tools.cq.astgrep.metavar import (
+    extract_rule_variadic_metavars as _extract_rule_variadic_metavars,
+)
+from tools.cq.astgrep.metavar import (
+    extract_variadic_metavar_names as _extract_variadic_metavar_names,
 )
 
 if TYPE_CHECKING:
     from tools.cq.query.ir import MetaVarCapture, MetaVarFilter, MetaVarKind
     from tools.cq.query.planner import AstGrepRule
+
+
+def extract_metavar_names(text: str) -> tuple[str, ...]:
+    """Extract metavariable names from a single ast-grep pattern string.
+
+    Returns:
+        tuple[str, ...]: Ordered metavariable names.
+    """
+    return _extract_metavar_names(text)
+
+
+def extract_variadic_metavar_names(text: str) -> tuple[str, ...]:
+    """Extract variadic metavariable names from a pattern string.
+
+    Returns:
+        tuple[str, ...]: Ordered variadic metavariable names.
+    """
+    return _extract_variadic_metavar_names(text)
+
+
+def extract_rule_metavars(rule: AstGrepRule) -> tuple[str, ...]:
+    """Extract all metavariable names from a compiled ast-grep rule.
+
+    Returns:
+        tuple[str, ...]: Ordered metavariable names referenced by the rule.
+    """
+    return _extract_rule_metavars(rule)
+
+
+def extract_rule_variadic_metavars(rule: AstGrepRule) -> frozenset[str]:
+    """Extract all variadic metavariable names from a compiled ast-grep rule.
+
+    Returns:
+        frozenset[str]: Variadic metavariable names referenced by the rule.
+    """
+    return _extract_rule_variadic_metavars(rule)
 
 
 def parse_metavariables(match_result: dict[str, object]) -> dict[str, MetaVarCapture]:
@@ -167,50 +211,6 @@ def get_metavar_kind(metavar: str) -> MetaVarKind:
     return "single"
 
 
-def extract_rule_metavars(rule: AstGrepRule) -> tuple[str, ...]:
-    """Extract all metavariable names referenced by a compiled ast-grep rule.
-
-    Returns:
-    -------
-    tuple[str, ...]
-        Sorted unique metavariable names referenced across rule sections.
-    """
-    parts: list[str] = [rule.pattern]
-    parts.extend(
-        value
-        for value in (rule.context, rule.inside, rule.has, rule.precedes, rule.follows)
-        if value
-    )
-    if rule.composite is not None:
-        parts.extend(rule.composite.patterns)
-    if rule.nth_child is not None and isinstance(rule.nth_child.of_rule, str):
-        parts.append(rule.nth_child.of_rule)
-    names = {name for part in parts for name in extract_metavar_names(part)}
-    return tuple(sorted(names))
-
-
-def extract_rule_variadic_metavars(rule: AstGrepRule) -> frozenset[str]:
-    """Extract all variadic metavariable names referenced by a compiled ast-grep rule.
-
-    Returns:
-    -------
-    frozenset[str]
-        Set of variadic metavariable names referenced across rule sections.
-    """
-    parts: list[str] = [rule.pattern]
-    parts.extend(
-        value
-        for value in (rule.context, rule.inside, rule.has, rule.precedes, rule.follows)
-        if value
-    )
-    if rule.composite is not None:
-        parts.extend(rule.composite.patterns)
-    if rule.nth_child is not None and isinstance(rule.nth_child.of_rule, str):
-        parts.append(rule.nth_child.of_rule)
-    names = {name for part in parts for name in extract_variadic_metavar_names(part)}
-    return frozenset(names)
-
-
 def partition_metavar_filters(
     filters: tuple[MetaVarFilter, ...],
 ) -> tuple[dict[str, dict[str, str]], tuple[MetaVarFilter, ...]]:
@@ -234,3 +234,16 @@ def partition_metavar_filters(
             continue
         constraints[item.name] = {"regex": item.pattern}
     return constraints, tuple(residual)
+
+
+__all__ = [
+    "apply_metavar_filters",
+    "extract_metavar_names",
+    "extract_rule_metavars",
+    "extract_rule_variadic_metavars",
+    "extract_variadic_metavar_names",
+    "get_metavar_kind",
+    "parse_metavariables",
+    "partition_metavar_filters",
+    "validate_pattern_metavars",
+]

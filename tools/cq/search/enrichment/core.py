@@ -7,7 +7,7 @@ from typing import cast
 
 import msgspec
 
-from tools.cq.search._shared.core import encode_mapping
+from tools.cq.search._shared.helpers import encode_mapping
 from tools.cq.search.enrichment.contracts import (
     EnrichmentMeta,
     EnrichmentStatus,

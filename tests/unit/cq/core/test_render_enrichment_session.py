@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from tools.cq.core.run_context import RunContext
-from tools.cq.core.schema import mk_result
-from tools.cq.core.toolchain import Toolchain
+import pytest
 from tools.cq.core.render_enrichment_orchestrator import (
     RenderEnrichmentTask,
     prepare_render_enrichment_session,
 )
+from tools.cq.core.run_context import RunContext
+from tools.cq.core.schema import mk_result
+from tools.cq.core.toolchain import Toolchain
 
 
-def _result(root: Path):
+def _result(root: Path) -> Any:
     run_ctx = RunContext.from_parts(
         root=root,
         argv=["cq", "search"],
@@ -24,7 +26,9 @@ def _result(root: Path):
     return mk_result(run_ctx.to_runmeta("search"))
 
 
-def test_prepare_render_enrichment_session_builds_metrics_payload(monkeypatch, tmp_path: Path) -> None:
+def test_prepare_render_enrichment_session_builds_metrics_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Session preparation should compute attempted/applied/failed/skipped metrics."""
     result = _result(tmp_path)
     task_ok = RenderEnrichmentTask(
@@ -50,12 +54,12 @@ def test_prepare_render_enrichment_session_builds_metrics_payload(monkeypatch, t
     )
     monkeypatch.setattr(
         "tools.cq.core.render_enrichment_orchestrator.count_render_enrichment_tasks",
-        lambda **kwargs: 5,
+        lambda **_kwargs: 5,
     )
 
-    def _fake_precompute_render_enrichment_cache(**kwargs):
+    def _fake_precompute_render_enrichment_cache(**kwargs: Any) -> list[RenderEnrichmentTask]:
         cache = kwargs["cache"]
-        cache[(task_ok.file, task_ok.line, task_ok.col, task_ok.language)] = {"ok": True}
+        cache[task_ok.file, task_ok.line, task_ok.col, task_ok.language] = {"ok": True}
         return [task_ok, task_missing]
 
     monkeypatch.setattr(

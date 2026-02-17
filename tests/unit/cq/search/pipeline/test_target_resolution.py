@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 from tools.cq.core.locations import SourceSpan
 from tools.cq.search._shared.types import QueryMode, SearchLimits
@@ -12,6 +11,7 @@ from tools.cq.search.objects.render import (
     SearchObjectResolvedViewV1,
     SearchObjectSummaryV1,
 )
+from tools.cq.search.objects.resolve import ObjectResolutionRuntime
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 from tools.cq.search.pipeline.target_resolution import (
@@ -57,9 +57,10 @@ def test_collect_definition_candidates_builds_target_candidate_findings(tmp_path
         resolution_quality="strong",
     )
     summary = SearchObjectSummaryV1(object_ref=object_ref, occurrence_count=1, files=["a.py"])
-    object_runtime = SimpleNamespace(
+    object_runtime = ObjectResolutionRuntime(
         view=SearchObjectResolvedViewV1(summaries=[summary], occurrences=[], snippets={}),
         representative_matches={"obj-1": representative},
+        grouped_matches={"obj-1": [representative]},
     )
 
     definition_matches, candidate_findings = collect_definition_candidates(
@@ -82,9 +83,10 @@ def test_resolve_primary_target_match_prefers_candidate_object_id(tmp_path: Path
         kind="function",
     )
     summary = SearchObjectSummaryV1(object_ref=object_ref, occurrence_count=1, files=["a.py"])
-    object_runtime = SimpleNamespace(
+    object_runtime = ObjectResolutionRuntime(
         view=SearchObjectResolvedViewV1(summaries=[summary], occurrences=[], snippets={}),
         representative_matches={"obj-1": representative},
+        grouped_matches={"obj-1": [representative]},
     )
     candidate_findings = collect_definition_candidates(_config(tmp_path), object_runtime)[1]
 

@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
-from tools.cq.core.schema import Anchor, Finding, Section
+from tools.cq.core.schema import (
+    Anchor,
+    CqResult,
+    Finding,
+    Section,
+    append_result_section,
+    insert_result_section,
+)
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.query.finding_builders import (
     apply_call_evidence,
@@ -24,7 +31,6 @@ from tools.cq.query.scan import ScanContext
 from tools.cq.query.shared_utils import extract_def_name
 
 if TYPE_CHECKING:
-    from tools.cq.core.schema import CqResult
     from tools.cq.query.ir import Query
     from tools.cq.utils.interval_index import FileIntervalIndex
 
@@ -46,7 +52,7 @@ def append_def_query_sections(
     matching_defs: list[SgRecord],
     scan_ctx: ScanContext,
     root: Path,
-) -> None:
+) -> CqResult:
     """Append sections to definition query result.
 
     Parameters
@@ -61,6 +67,11 @@ def append_def_query_sections(
         Scan context
     root
         Repository root
+
+    Returns:
+    -------
+    CqResult
+        Updated result with requested definition sections.
     """
     if "callers" in query.fields:
         callers_section = build_callers_section(
@@ -70,18 +81,19 @@ def append_def_query_sections(
             root,
         )
         if callers_section.findings:
-            result.sections.append(callers_section)
+            result = append_result_section(result, callers_section)
     if "callees" in query.fields:
         callees_section = build_callees_section(matching_defs, scan_ctx.calls_by_def, root)
         if callees_section.findings:
-            result.sections.append(callees_section)
+            result = append_result_section(result, callees_section)
     if "imports" in query.fields:
         imports_section = build_imports_section(matching_defs, scan_ctx.all_records)
         if imports_section.findings:
-            result.sections.append(imports_section)
+            result = append_result_section(result, imports_section)
     preview_section = build_entity_neighborhood_preview_section(result.key_findings)
     if preview_section.findings:
-        result.sections.insert(0, preview_section)
+        result = insert_result_section(result, 0, preview_section)
+    return result
 
 
 def append_expander_sections(
@@ -90,7 +102,7 @@ def append_expander_sections(
     ctx: ScanContext,
     root: Path,
     query: Query,
-) -> None:
+) -> CqResult:
     """Append sections for requested expanders.
 
     Parameters
@@ -105,9 +117,14 @@ def append_expander_sections(
         Repository root
     query
         Query with expand requests
+
+    Returns:
+    -------
+    CqResult
+        Updated result with requested expansion sections.
     """
     if not query.expand:
-        return
+        return result
 
     expand_kinds = {expander.kind for expander in query.expand}
     field_kinds = set(query.fields)
@@ -144,7 +161,8 @@ def append_expander_sections(
             continue
         section = builder()
         if section.findings:
-            result.sections.append(section)
+            result = append_result_section(result, section)
+    return result
 
 
 def build_entity_neighborhood_preview_section(

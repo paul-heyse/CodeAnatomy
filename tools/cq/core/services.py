@@ -57,11 +57,15 @@ class EntityService:
     """Application-layer service for CQ entity flow."""
 
     @staticmethod
-    def attach_front_door(request: EntityFrontDoorRequest) -> None:
-        """Attach entity front-door insight to a CQ result."""
+    def attach_front_door(request: EntityFrontDoorRequest) -> CqResult:
+        """Attach entity front-door insight to a CQ result.
+
+        Returns:
+            CqResult: Updated result including front-door insight payload.
+        """
         from tools.cq.query.entity_front_door import attach_entity_front_door_insight
 
-        attach_entity_front_door_insight(
+        return attach_entity_front_door_insight(
             request.result,
             relationship_detail_max_matches=request.relationship_detail_max_matches,
         )

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
-from tools.cq.search._shared.core import (
+from tools.cq.search._shared.requests import (
     PythonByteRangeEnrichmentRequest,
     PythonNodeEnrichmentRequest,
 )

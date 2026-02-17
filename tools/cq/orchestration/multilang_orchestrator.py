@@ -6,10 +6,20 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar, cast
 
+import msgspec
+
 from tools.cq.core.contracts import MergeResultsRequest, SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
-from tools.cq.core.schema import CqResult, DetailPayload, Finding, Section, mk_result
+from tools.cq.core.schema import (
+    CqResult,
+    DetailPayload,
+    Finding,
+    Section,
+    extend_result_key_findings,
+    mk_result,
+    update_result_summary,
+)
 from tools.cq.core.summary_contract import (
     coerce_semantic_telemetry as coerce_summary_semantic_telemetry,
 )
@@ -331,6 +341,10 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
         Unified result with deterministic ordering and multilang summary.
     """
     merged = mk_result(request.run)
+    merged_key_findings: list[Finding] = []
+    merged_evidence: list[Finding] = []
+    merged_sections: list[Section] = []
+    merged_artifacts = list(merged.artifacts)
     order = list(expand_language_scope(request.scope))
     priority = language_priority(request.scope)
     partitions: dict[QueryLanguage, dict[str, object]] = {}
@@ -344,10 +358,10 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
             result.summary,
             fallback_matches=extract_match_count(result),
         )
-        merged.key_findings.extend(
+        merged_key_findings.extend(
             _clone_finding_with_language(finding, lang=lang) for finding in result.key_findings
         )
-        merged.evidence.extend(
+        merged_evidence.extend(
             _clone_finding_with_language(finding, lang=lang) for finding in result.evidence
         )
         for section in result.sections:
@@ -356,7 +370,7 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
                 if request.include_section_language_prefix
                 else section.title
             )
-            merged.sections.append(
+            merged_sections.append(
                 Section(
                     title=title,
                     findings=[
@@ -366,7 +380,7 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
                     collapsed=section.collapsed,
                 )
             )
-        merged.artifacts.extend(result.artifacts)
+        merged_artifacts.extend(result.artifacts)
 
     for lang, result in request.results.items():
         if lang in partitions:
@@ -376,7 +390,7 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
             fallback_matches=extract_match_count(result),
         )
 
-    merged.key_findings.sort(
+    merged_key_findings.sort(
         key=lambda finding: (
             priority.get(cast("QueryLanguage", finding.details.data.get("language", "python")), 99),
             -_finding_score(finding),
@@ -384,7 +398,7 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
             finding.message,
         )
     )
-    merged.evidence.sort(
+    merged_evidence.sort(
         key=lambda finding: (
             priority.get(cast("QueryLanguage", finding.details.data.get("language", "python")), 99),
             -_finding_score(finding),
@@ -397,7 +411,14 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
         list(request.diagnostics) if request.diagnostics is not None else []
     )
     if diag_findings:
-        merged.sections.append(Section(title="Cross-Language Diagnostics", findings=diag_findings))
+        merged_sections.append(Section(title="Cross-Language Diagnostics", findings=diag_findings))
+    merged = msgspec.structs.replace(
+        merged,
+        key_findings=merged_key_findings,
+        evidence=merged_evidence,
+        sections=merged_sections,
+        artifacts=merged_artifacts,
+    )
     summary_diagnostics = request.diagnostic_payloads
     if summary_diagnostics is None:
         summary_diagnostics = [
@@ -437,25 +458,31 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
         results=request.results,
     )
 
-    merged.summary = summary_from_mapping(
-        build_multilang_summary(
-            SummaryBuildRequest(
-                common=summary_common,
-                lang_scope=request.scope,
-                language_order=tuple(order),
-                languages=partitions,
-                cross_language_diagnostics=summary_diagnostics,
-                language_capabilities=request.language_capabilities,
+    merged = msgspec.structs.replace(
+        merged,
+        summary=summary_from_mapping(
+            build_multilang_summary(
+                SummaryBuildRequest(
+                    common=summary_common,
+                    lang_scope=request.scope,
+                    language_order=tuple(order),
+                    languages=partitions,
+                    cross_language_diagnostics=summary_diagnostics,
+                    language_capabilities=request.language_capabilities,
+                )
             )
-        )
+        ),
     )
     merged_insight = _select_front_door_insight(request.scope, request.results)
     if merged_insight is not None:
         from tools.cq.core.front_door_render import to_public_front_door_insight_dict
 
-        merged.summary.front_door_insight = to_public_front_door_insight_dict(merged_insight)
+        merged = update_result_summary(
+            merged,
+            {"front_door_insight": to_public_front_door_insight_dict(merged_insight)},
+        )
     if diag_findings:
-        merged.key_findings.extend(diag_findings)
+        merged = extend_result_key_findings(merged, diag_findings)
     return merged
 
 

@@ -40,4 +40,3 @@ crate::impl_extension_options!(
 impl ConfigExtension for CodeAnatomyAsyncUdfConfig {
     const PREFIX: &'static str = PREFIX;
 }
-

@@ -1,4 +1,3 @@
-# ruff: noqa: FBT001
 """Command-level e2e tests for `cq chain` over hermetic workspaces."""
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ EXPECTED_CHAIN_STEPS = 2
 @pytest.mark.e2e
 def test_chain_search_and_q_steps_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test chain search and q steps golden."""

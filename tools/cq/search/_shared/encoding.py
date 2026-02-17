@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search._shared.core import (
+from tools.cq.search._shared.helpers import (
     decode_mapping,
     encode_mapping,
     line_col_to_byte_offset,

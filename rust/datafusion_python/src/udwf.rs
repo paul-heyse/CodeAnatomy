@@ -34,6 +34,7 @@ use datafusion_ffi::udwf::{FFI_WindowUDF, ForeignWindowUDF};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyList, PyTuple};
+use tracing::instrument;
 
 use crate::common::data_type::PyScalarValue;
 use crate::errors::{py_datafusion_err, pyerr_to_dferr, to_datafusion_err, PyDataFusionResult};
@@ -197,6 +198,7 @@ impl PartitionEvaluator for RustPartitionEvaluator {
     }
 }
 
+#[instrument(skip(evaluator))]
 pub fn to_rust_partition_evaluator(evaluator: Py<PyAny>) -> PartitionEvaluatorFactory {
     Arc::new(move || -> Result<Box<dyn PartitionEvaluator>> {
         let evaluator = Python::attach(|py| {

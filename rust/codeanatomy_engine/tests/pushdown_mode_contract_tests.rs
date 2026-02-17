@@ -23,8 +23,5 @@ fn runtime_and_report_share_canonical_mode_type() {
         ..PushdownContractReport::default()
     };
 
-    assert_eq!(
-        report.enforcement_mode,
-        PushdownEnforcementMode::Disabled
-    );
+    assert_eq!(report.enforcement_mode, PushdownEnforcementMode::Disabled);
 }

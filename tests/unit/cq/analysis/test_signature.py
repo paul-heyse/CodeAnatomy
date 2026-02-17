@@ -1,9 +1,12 @@
+"""Tests for signature parsing helpers."""
+
 from __future__ import annotations
 
 from tools.cq.analysis.signature import parse_signature
 
 
 def test_parse_signature_basic() -> None:
+    """Parse positional, keyword-only, and kwargs parameters."""
     params = parse_signature("foo(a, b=1, *, c=None, **kwargs)")
     assert [p.name for p in params] == ["a", "b", "c", "kwargs"]
     assert params[0].has_default is False
@@ -13,4 +16,5 @@ def test_parse_signature_basic() -> None:
 
 
 def test_parse_signature_invalid_returns_empty() -> None:
+    """Return empty list for invalid signature text."""
     assert parse_signature("foo(a,,)") == []

@@ -10,6 +10,43 @@ The scope now covers 17 implementation items across engine compilation/execution
 - Immediate replacement of stubbed functionality where production-capable library primitives already exist.
 - Decompose/relocate ownership physically (not thin re-export facades).
 
+## Implementation Progress Audit (2026-02-17)
+
+Legend:
+- `Complete`: Scope and decommission targets are implemented in-tree.
+- `Partial`: Core implementation landed, but at least one planned outcome is not fully realized.
+- `Remaining`: Not yet implemented.
+
+| Scope | Status | Audit Notes |
+| --- | --- | --- |
+| S1 | Complete | All listed correctness defects are fixed (`Union` label, `todo!()` removal, duplicate `PyLiteral` registration removal, physical-plan decode message, `stable_hash128` argument validation string). |
+| S2 | Complete | `plan_utils.rs` is authoritative and consumed across listed compiler modules; duplicated helper definitions were removed. |
+| S3 | Complete | Canonical `PushdownEnforcementMode` lives in `contracts/pushdown_mode.rs`; duplicate enums and conversion shims were removed. |
+| S4 | Complete | `WriteOutcome` is the typed enum contract and `MaterializationResult` now carries nested `write_outcome`; legacy nullable write metadata fields were removed. |
+| S5 | Complete | `span_struct_type` duplication removed and snapshot payload naming disambiguated to `snapshot_info_as_strings` / `snapshot_info_as_values`. |
+| S6 | Complete | `RegistrySnapshot` is encapsulated, metadata sentinel `name: \"\"` is removed (`name: None`), and `datafusion_ext` visibility matches external-consumer reality. |
+| S7 | Complete | Shared `codeanatomy_ext` helpers are centralized and consumed by decomposed modules; legacy helper forwarding paths are removed. |
+| S8 | Complete | `legacy.rs` is deleted; decomposed ownership modules and associated tests are present. |
+| S9 | Complete | Error helper authority is consolidated in `errors.rs` including `py_value_err`; `sql/exceptions.rs` is removed. |
+| S10 | Complete | Logical wrappers are cut over to `logical_plan_wrapper!` across `filter/projection/limit/create_view/drop_view/join/union/sort`, removing duplicated manual wrapper boilerplate. |
+| S11 | Complete | Robustness cleanup landed: non-panicking dataset schema fallback, `to_variant()` coverage for scalar/window function variants, dead `signature.rs` removal, and `RexType::Other` removal. |
+| S12 | Complete | Tracing spans were expanded across compiler phases and adapter hot paths (`dataset_exec`, `udaf`, `udwf`, decomposed `codeanatomy_ext` delta modules), with new tracing-focused test files added. |
+| S13 | Complete | Correctness classification is typed (`RuleClass`-based), and duplicated overlay priority sort logic is consolidated. |
+| S14 | Complete | Upstream contract coverage is executed via `rust/codeanatomy_engine/tests/datafusion_python_contract_regressions_tests.rs` (source-level guardrails for type mapping, expr variant conversion, signature module removal, dataset schema fallback, and wrapper macro cutover), avoiding `datafusion-python` PyO3 test-link constraints. |
+| S15 | Complete | Compile pipeline decomposition landed (`compile_phases.rs`) and manual plan traversal loops were replaced with TreeNode traversal. |
+| S16 | Complete | Maintenance stubs were replaced with real `datafusion_ext::delta_maintenance::*` execution in strict order, with coverage added. |
+| S17 | Complete | Session-aware scan config construction is adopted and aligned with shared delta control-plane behavior, with dedicated builder tests added. |
+| D1 | Complete | `legacy.rs` and `super::legacy::*` forwarding were removed. |
+| D2 | Complete | Duplicate pushdown contracts and legacy write-metadata boundary fields were removed. |
+| D3 | Complete | `sql/exceptions.rs` and wiring were removed. |
+| D4 | Complete | Dead signature module and manual unary bool wrapper boilerplate were removed. |
+| D5 | Complete | Manual plan traversal and monolithic compile-phase blocks were removed in favor of extracted phase modules and TreeNode traversal. |
+| D6 | Complete | Maintenance stub messaging/TODO posture is removed in favor of real maintenance execution. |
+
+## Remaining Scope (Post-Audit)
+
+None. All scoped items in this plan (`S1`-`S17`, `D1`-`D6`) are implemented in-tree.
+
 ## Design Principles
 
 1. **Single authority for shared knowledge.** No duplicated algorithms, schema builders, enum contracts, or error-helper implementations.
@@ -24,6 +61,8 @@ The scope now covers 17 implementation items across engine compilation/execution
 10. **Delete superseded code promptly.** Decommission in explicit batches after prerequisites land.
 
 ## Current Baseline
+
+Historical snapshot at plan-authoring time. See `Implementation Progress Audit (2026-02-17)` above for current status against this baseline.
 
 - `rust/datafusion_python/src/codeanatomy_ext/legacy.rs` is still a 2,368 LOC monolith with 39 `#[pyfunction]` entries; facade modules still forward to it via `super::legacy::*`.
 - S1 correctness bugs are still present:
@@ -1132,26 +1171,26 @@ pub fn standard_scan_config(
 
 ## Implementation Checklist
 
-- [ ] S1 — Correctness Bug Fixes
-- [ ] S2 — Compiler Helper Consolidation
-- [ ] S3 — PushdownEnforcementMode Canonical Contract
-- [ ] S4 — WriteOutcome Boundary Contract Redesign
-- [ ] S5 — DataFusion Extensions DRY and Naming Disambiguation
-- [ ] S6 — Registry Contract Hardening and API Surface Correction
-- [ ] S7 — codeanatomy_ext Helper Consolidation
-- [ ] S8 — legacy.rs Full Decomposition and Ownership Migration
-- [ ] S9 — Error Helper Consolidation (Including `py_value_err`)
-- [ ] S10 — Expression Boilerplate Reduction Across Bool and Logical Wrappers
-- [ ] S11 — Upstream Robustness and Completeness Cleanup
-- [ ] S12 — Tracing and Observability Expansion
-- [ ] S13 — Rule Overlay and Rulepack DRY Cleanup Using Existing `RuleClass`
-- [ ] S14 — Upstream Test Coverage Expansion
-- [ ] S15 — Compilation Pipeline Decomposition and TreeNode Traversal Adoption
-- [ ] S16 — Engine Delta Maintenance Stub Replacement
-- [ ] S17 — Delta Scan Config Builder Unification
-- [ ] D1 — Delete `legacy.rs` and all `super::legacy::*` forwarding
-- [ ] D2 — Delete duplicated pushdown contracts and legacy write-metadata fields
-- [ ] D3 — Delete `sql/exceptions.rs`
-- [ ] D4 — Delete dead signature module and manual bool wrapper boilerplate
-- [ ] D5 — Delete manual plan traversal and monolithic compile blocks
-- [ ] D6 — Delete maintenance stubs
+- [x] S1 — Correctness Bug Fixes
+- [x] S2 — Compiler Helper Consolidation
+- [x] S3 — PushdownEnforcementMode Canonical Contract
+- [x] S4 — WriteOutcome Boundary Contract Redesign
+- [x] S5 — DataFusion Extensions DRY and Naming Disambiguation
+- [x] S6 — Registry Contract Hardening and API Surface Correction
+- [x] S7 — codeanatomy_ext Helper Consolidation
+- [x] S8 — legacy.rs Full Decomposition and Ownership Migration
+- [x] S9 — Error Helper Consolidation (Including `py_value_err`)
+- [x] S10 — Expression Boilerplate Reduction Across Bool and Logical Wrappers
+- [x] S11 — Upstream Robustness and Completeness Cleanup
+- [x] S12 — Tracing and Observability Expansion
+- [x] S13 — Rule Overlay and Rulepack DRY Cleanup Using Existing `RuleClass`
+- [x] S14 — Upstream Test Coverage Expansion
+- [x] S15 — Compilation Pipeline Decomposition and TreeNode Traversal Adoption
+- [x] S16 — Engine Delta Maintenance Stub Replacement
+- [x] S17 — Delta Scan Config Builder Unification
+- [x] D1 — Delete `legacy.rs` and all `super::legacy::*` forwarding
+- [x] D2 — Delete duplicated pushdown contracts and legacy write-metadata fields
+- [x] D3 — Delete `sql/exceptions.rs`
+- [x] D4 — Delete dead signature module and manual bool wrapper boilerplate
+- [x] D5 — Delete manual plan traversal and monolithic compile blocks
+- [x] D6 — Delete maintenance stubs

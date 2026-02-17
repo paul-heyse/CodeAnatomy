@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.core.summary_contract import as_search_summary, summary_from_mapping
 from tools.cq.search._shared.types import QueryMode, SearchLimits
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.neighborhood_preview import (
@@ -27,11 +26,9 @@ def _config(root: Path) -> SearchConfig:
 
 def test_neighborhood_preview_returns_disabled_note_when_not_opted_in(tmp_path: Path) -> None:
     """Neighborhood preview should short-circuit with explicit disabled note."""
-    summary = as_search_summary(summary_from_mapping({"mode": "identifier", "query": "target"}))
-    neighborhood, notes = build_tree_sitter_neighborhood_preview(
+    neighborhood, notes, summary_payload = build_tree_sitter_neighborhood_preview(
         ctx=_config(tmp_path),
         partition_results=[],
-        summary=summary,
         sections=[],
         inputs=_NeighborhoodPreviewInputs(
             primary_target_finding=None,
@@ -42,4 +39,4 @@ def test_neighborhood_preview_returns_disabled_note_when_not_opted_in(tmp_path: 
 
     assert neighborhood is None
     assert notes == ["tree_sitter_neighborhood_disabled_by_default"]
-    assert summary.tree_sitter_neighborhood == {"enabled": False, "mode": "opt_in"}
+    assert summary_payload == {"enabled": False, "mode": "opt_in"}

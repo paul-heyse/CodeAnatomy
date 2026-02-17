@@ -89,7 +89,7 @@ def test_maybe_attach_render_enrichment_uses_cache(tmp_path: Path) -> None:
         ("src/a.py", 1, 0, "python"): {"python": {"item_role": "free_function"}},
     }
 
-    maybe_attach_render_enrichment(
+    finding = maybe_attach_render_enrichment(
         finding,
         root=tmp_path,
         cache=cache,

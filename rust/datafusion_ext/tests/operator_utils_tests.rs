@@ -25,4 +25,3 @@ fn can_use_get_field_for_struct_inputs() {
     let expr = col("payload");
     assert!(can_use_get_field(&expr, &df_schema).expect("type check"));
 }
-

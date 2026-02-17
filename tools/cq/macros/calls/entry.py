@@ -18,8 +18,11 @@ from tools.cq.core.schema import (
     Finding,
     ScoreDetails,
     Section,
+    append_result_key_finding,
     assign_result_finding_ids,
+    insert_result_section,
     ms,
+    update_result_summary,
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.summary_contract import build_semantic_telemetry, summary_from_mapping
@@ -215,11 +218,12 @@ def _append_calls_findings(
     scan_result: CallScanResult,
     analysis: CallAnalysisSummary,
     score: ScoreDetails | None,
-) -> None:
+) -> CqResult:
     function_name = ctx.function_name
     all_sites = scan_result.all_sites
 
-    result.key_findings.append(
+    result = append_result_key_finding(
+        result,
         Finding(
             category="summary",
             message=(
@@ -228,24 +232,25 @@ def _append_calls_findings(
             ),
             severity="info",
             details=build_detail_payload(score=score),
-        )
+        ),
     )
 
     if analysis.forwarding_count > 0:
-        result.key_findings.append(
+        result = append_result_key_finding(
+            result,
             Finding(
                 category="forwarding",
                 message=f"{analysis.forwarding_count} calls use *args/**kwargs forwarding",
                 severity="warning",
                 details=build_detail_payload(score=score),
-            )
+            ),
         )
 
-    _add_shape_section(result, analysis.arg_shapes, score)
-    _add_kw_section(result, analysis.kwarg_usage, score)
-    _add_context_section(result, analysis.contexts, score)
-    _add_hazard_section(result, analysis.hazard_counts, score)
-    _add_sites_section(result, function_name, all_sites, score)
+    result = _add_shape_section(result, analysis.arg_shapes, score)
+    result = _add_kw_section(result, analysis.kwarg_usage, score)
+    result = _add_context_section(result, analysis.contexts, score)
+    result = _add_hazard_section(result, analysis.hazard_counts, score)
+    return _add_sites_section(result, function_name, all_sites, score)
 
 
 def _init_calls_result(
@@ -261,9 +266,8 @@ def _init_calls_result(
         tc=ctx.tc,
         started_ms=started_ms,
     )
-    result = builder.result
-    result.summary = summary_from_mapping(_build_calls_summary(ctx.function_name, scan_result))
-    return result
+    updated_summary = summary_from_mapping(_build_calls_summary(ctx.function_name, scan_result))
+    return update_result_summary(builder.result, updated_summary.to_dict())
 
 
 def _analyze_calls_sites(
@@ -271,7 +275,7 @@ def _analyze_calls_sites(
     *,
     ctx: CallsContext,
     scan_result: CallScanResult,
-) -> tuple[CallAnalysisSummary, ScoreDetails | None]:
+) -> tuple[CqResult, CallAnalysisSummary, ScoreDetails | None]:
     analysis = CallAnalysisSummary(
         arg_shapes=Counter(),
         kwarg_usage=Counter(),
@@ -281,14 +285,15 @@ def _analyze_calls_sites(
     )
     score: ScoreDetails | None = None
     if not scan_result.all_sites:
-        result.key_findings.append(
+        result = append_result_key_finding(
+            result,
             Finding(
                 category="info",
                 message=f"No call sites found for '{ctx.function_name}'",
                 severity="info",
-            )
+            ),
         )
-        return analysis, score
+        return result, analysis, score
     analysis = _summarize_sites(scan_result.all_sites)
     score = _build_call_scoring(
         scan_result.all_sites,
@@ -297,8 +302,8 @@ def _analyze_calls_sites(
         analysis.hazard_counts,
         used_fallback=scan_result.used_fallback,
     )
-    _append_calls_findings(result, ctx, scan_result, analysis, score)
-    return analysis, score
+    result = _append_calls_findings(result, ctx, scan_result, analysis, score)
+    return result, analysis, score
 
 
 def _build_calls_front_door_state(
@@ -307,7 +312,7 @@ def _build_calls_front_door_state(
     ctx: CallsContext,
     analysis: CallAnalysisSummary,
     score: ScoreDetails | None,
-) -> CallsFrontDoorState:
+) -> tuple[CqResult, CallsFrontDoorState]:
     from tools.cq.core.front_door_schema import InsightNeighborhoodV1
     from tools.cq.search.semantic.models import infer_language_for_path
 
@@ -322,7 +327,7 @@ def _build_calls_front_door_state(
             run_id=result.run.run_id,
         ),
     )
-    apply_target_metadata(
+    result = apply_target_metadata(
         result,
         metadata,
         score=score,
@@ -343,14 +348,14 @@ def _build_calls_front_door_state(
             preview_per_slice=FRONT_DOOR_PREVIEW_PER_SLICE,
         )
     )
-    _attach_calls_neighborhood_section(result, neighborhood_findings)
+    result = _attach_calls_neighborhood_section(result, neighborhood_findings)
     target_file_path, target_line = _target_file_path_and_line(ctx.root, target_location)
     target_language = (
         infer_language_for_path(target_file_path)
         if target_file_path is not None
         else target_language_hint
     )
-    return CallsFrontDoorState(
+    return result, CallsFrontDoorState(
         target_location=target_location,
         target_callees=target_callees,
         neighborhood=neighborhood
@@ -365,11 +370,14 @@ def _build_calls_front_door_state(
 
 def _attach_calls_neighborhood_section(
     result: CqResult, neighborhood_findings: list[Finding]
-) -> None:
+) -> CqResult:
     if neighborhood_findings:
-        result.sections.insert(
-            0, Section(title="Neighborhood Preview", findings=neighborhood_findings)
+        return insert_result_section(
+            result,
+            0,
+            Section(title="Neighborhood Preview", findings=neighborhood_findings),
         )
+    return result
 
 
 def _target_file_path_and_line(
@@ -408,19 +416,24 @@ def _attach_calls_semantic_summary(
     result: CqResult,
     target_language: QueryLanguage | None,
     semantic_telemetry: tuple[int, int, int, int],
-) -> None:
+) -> CqResult:
     semantic_attempted, semantic_applied, semantic_failed, semantic_timed_out = semantic_telemetry
-    result.summary.python_semantic_telemetry = build_semantic_telemetry(
-        attempted=semantic_attempted if target_language == "python" else 0,
-        applied=semantic_applied if target_language == "python" else 0,
-        failed=semantic_failed if target_language == "python" else 0,
-        timed_out=semantic_timed_out if target_language == "python" else 0,
-    )
-    result.summary.rust_semantic_telemetry = build_semantic_telemetry(
-        attempted=semantic_attempted if target_language == "rust" else 0,
-        applied=semantic_applied if target_language == "rust" else 0,
-        failed=semantic_failed if target_language == "rust" else 0,
-        timed_out=semantic_timed_out if target_language == "rust" else 0,
+    return update_result_summary(
+        result,
+        {
+            "python_semantic_telemetry": build_semantic_telemetry(
+                attempted=semantic_attempted if target_language == "python" else 0,
+                applied=semantic_applied if target_language == "python" else 0,
+                failed=semantic_failed if target_language == "python" else 0,
+                timed_out=semantic_timed_out if target_language == "python" else 0,
+            ),
+            "rust_semantic_telemetry": build_semantic_telemetry(
+                attempted=semantic_attempted if target_language == "rust" else 0,
+                applied=semantic_applied if target_language == "rust" else 0,
+                failed=semantic_failed if target_language == "rust" else 0,
+                timed_out=semantic_timed_out if target_language == "rust" else 0,
+            ),
+        },
     )
 
 
@@ -433,8 +446,8 @@ def _build_calls_result(
     from tools.cq.core.front_door_render import to_public_front_door_insight_dict
 
     result = _init_calls_result(ctx, scan_result, started_ms=started_ms)
-    analysis, score = _analyze_calls_sites(result, ctx=ctx, scan_result=scan_result)
-    state = _build_calls_front_door_state(result, ctx=ctx, analysis=analysis, score=score)
+    result, analysis, score = _analyze_calls_sites(result, ctx=ctx, scan_result=scan_result)
+    result, state = _build_calls_front_door_state(result, ctx=ctx, analysis=analysis, score=score)
     confidence = _build_calls_confidence(score)
     summary_input = CallsInsightSummary(
         function_name=ctx.function_name,
@@ -456,7 +469,7 @@ def _build_calls_result(
         state=state,
         symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
     )
-    _attach_calls_semantic_summary(result, state.target_language, semantic_telemetry)
+    result = _attach_calls_semantic_summary(result, state.target_language, semantic_telemetry)
     insight = _finalize_calls_semantic_state(
         insight=insight,
         summary=result.summary,
@@ -465,8 +478,10 @@ def _build_calls_result(
         top_level_applied=semantic_telemetry[1],
         reasons=semantic_reasons,
     )
-    result.summary.front_door_insight = to_public_front_door_insight_dict(insight)
-    return result
+    return update_result_summary(
+        result,
+        {"front_door_insight": to_public_front_door_insight_dict(insight)},
+    )
 
 
 def cmd_calls(request: CallsRequest) -> CqResult:

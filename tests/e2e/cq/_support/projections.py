@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201
 """Stable projection helpers for CQ E2E snapshots."""
 
 from __future__ import annotations
@@ -166,6 +165,9 @@ def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
 
     This intentionally excludes volatile detail payloads and timing-heavy
     enrichment telemetry while preserving top-level behavioral contracts.
+
+    Returns:
+        dict[str, Any]: Stable projection for snapshot assertions.
     """
     summary = result.summary
     summary_map = _summary_mapping(summary)

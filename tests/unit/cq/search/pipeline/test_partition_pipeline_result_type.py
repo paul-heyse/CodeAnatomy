@@ -14,7 +14,11 @@ from tools.cq.search.pipeline.smart_search_types import LanguageSearchResult, Se
 
 def test_run_search_partition_declares_language_result_type() -> None:
     """Partition pipeline must expose precise LanguageSearchResult return annotation."""
-    assert run_search_partition.__annotations__["return"] is LanguageSearchResult
+    return_annotation = run_search_partition.__annotations__["return"]
+    if isinstance(return_annotation, str):
+        assert return_annotation == "LanguageSearchResult"
+    else:
+        assert return_annotation is LanguageSearchResult
 
 
 def test_run_single_partition_delegates_to_partition_pipeline(

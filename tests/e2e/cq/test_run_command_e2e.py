@@ -1,4 +1,3 @@
-# ruff: noqa: FBT001
 """Command-level e2e tests for `cq run` over hermetic workspaces."""
 
 from __future__ import annotations
@@ -40,6 +39,7 @@ def _telemetry_to_dict(value: object) -> dict[str, int] | None:
 @pytest.mark.e2e
 def test_run_inline_q_and_search_steps_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test run inline q and search steps golden."""
@@ -78,6 +78,7 @@ def test_run_inline_q_and_search_steps_golden(
 @pytest.mark.e2e
 def test_run_inline_neighborhood_step_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test run inline neighborhood step golden."""

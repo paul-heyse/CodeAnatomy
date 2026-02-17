@@ -108,7 +108,10 @@ impl CpgMaterializer {
     ///
     /// Raises:
     ///     RuntimeError: If execution or materialization fails
-    #[cfg_attr(feature = "tracing", instrument(skip(self, session_factory, compiled_plan)))]
+    #[cfg_attr(
+        feature = "tracing",
+        instrument(skip(self, session_factory, compiled_plan))
+    )]
     fn execute(
         &self,
         session_factory: &PySessionFactory,

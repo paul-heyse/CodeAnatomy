@@ -15,52 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Display, Formatter};
-
-use datafusion::common::DataFusionError;
 use datafusion::logical_expr::logical_plan::Sort;
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt;
 
 use crate::common::df_schema::PyDFSchema;
 use crate::expr::logical_node::LogicalNode;
 use crate::expr::sort_expr::PySortExpr;
 use crate::sql::logical::PyLogicalPlan;
 
-#[pyclass(frozen, name = "Sort", module = "datafusion.expr", subclass)]
-#[derive(Clone)]
-pub struct PySort {
-    sort: Sort,
-}
-
-impl From<Sort> for PySort {
-    fn from(sort: Sort) -> PySort {
-        PySort { sort }
-    }
-}
-
-impl TryFrom<PySort> for Sort {
-    type Error = DataFusionError;
-
-    fn try_from(agg: PySort) -> Result<Self, Self::Error> {
-        Ok(agg.sort)
-    }
-}
-
-impl Display for PySort {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+logical_plan_wrapper!(
+    wrapper = PySort,
+    inner = Sort,
+    field = sort,
+    py_name = "Sort",
+    display = |this, f| {
         write!(
             f,
             "Sort
             \nExpr(s): {:?}
             \nInput: {:?}
             \nSchema: {:?}",
-            &self.sort.expr,
-            self.sort.input,
-            self.sort.input.schema()
+            &this.sort.expr,
+            this.sort.input,
+            this.sort.input.schema()
         )
-    }
-}
+    },
+    inputs = |this| { vec![PyLogicalPlan::from((*this.sort.input).clone())] }
+);
 
 #[pymethods]
 impl PySort {
@@ -90,15 +71,5 @@ impl PySort {
 
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!("Sort({self})"))
-    }
-}
-
-impl LogicalNode for PySort {
-    fn inputs(&self) -> Vec<PyLogicalPlan> {
-        vec![PyLogicalPlan::from((*self.sort.input).clone())]
-    }
-
-    fn to_variant<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.clone().into_bound_py_any(py)
     }
 }

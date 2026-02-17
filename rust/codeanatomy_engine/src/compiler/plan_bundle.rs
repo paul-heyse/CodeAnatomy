@@ -15,6 +15,8 @@ use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
+#[cfg(feature = "tracing")]
+use tracing::instrument;
 
 use crate::compiler::optimizer_pipeline::OptimizerPassTrace;
 use crate::compiler::plan_utils::{blake3_hash_bytes, normalize_logical, normalize_physical};
@@ -301,6 +303,7 @@ pub struct CodecDigestSummary {
 /// - P0: the unoptimized logical plan
 /// - P1: the optimized logical plan (after SessionContext optimizer rules)
 /// - P2: the physical execution plan
+#[cfg_attr(feature = "tracing", instrument(skip(ctx, df)))]
 pub async fn capture_plan_bundle_runtime(
     ctx: &SessionContext,
     df: &DataFrame,
@@ -339,6 +342,7 @@ pub async fn capture_plan_bundle_runtime(
 ///     When true, encode logical/physical plans with Delta extension codecs.
 /// planning_surface_hash
 ///     BLAKE3 hash of the planning surface manifest.
+#[cfg_attr(feature = "tracing", instrument(skip(request)))]
 pub async fn build_plan_bundle_artifact(
     request: PlanBundleArtifactBuildRequest<'_>,
 ) -> Result<PlanBundleArtifact> {
@@ -347,6 +351,7 @@ pub async fn build_plan_bundle_artifact(
 }
 
 /// Build a persisted artifact and return non-fatal capture warnings.
+#[cfg_attr(feature = "tracing", instrument(skip(request)))]
 pub async fn build_plan_bundle_artifact_with_warnings(
     request: PlanBundleArtifactBuildRequest<'_>,
 ) -> Result<(PlanBundleArtifact, Vec<RunWarning>)> {

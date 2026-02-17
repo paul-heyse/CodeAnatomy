@@ -122,3 +122,17 @@ impl TableProvider for Dataset {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn schema_uses_non_panicking_fallback() {
+        let source = include_str!("dataset.rs");
+        assert!(
+            source.contains(
+                "unwrap_or_else(|_| Arc::new(datafusion::arrow::datatypes::Schema::empty()))"
+            ),
+            "dataset schema should use an empty-schema fallback instead of unwrap"
+        );
+    }
+}

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
-from tools.cq.search._shared.core import search_async_with_timeout, search_sync_with_timeout
+from tools.cq.search._shared.timeouts import (
+    search_async_with_timeout,
+    search_sync_with_timeout,
+)
 
 __all__ = ["search_async_with_timeout", "search_sync_with_timeout"]

@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+import msgspec
+
 from tools.cq.core.artifacts import (
     save_artifact_json,
     save_diagnostics_artifact,
@@ -24,7 +26,7 @@ def _attach_insight_artifact_refs(
     diagnostics_ref: str | None = None,
     telemetry_ref: str | None = None,
     neighborhood_overflow_ref: str | None = None,
-) -> None:
+) -> CqResult:
     from tools.cq.core.front_door_assembly import (
         attach_artifact_refs,
         attach_neighborhood_overflow_ref,
@@ -36,7 +38,7 @@ def _attach_insight_artifact_refs(
 
     insight = coerce_front_door_insight(result.summary.front_door_insight)
     if insight is None:
-        return
+        return result
     updated = attach_artifact_refs(
         insight,
         diagnostics=diagnostics_ref,
@@ -45,7 +47,13 @@ def _attach_insight_artifact_refs(
     )
     if neighborhood_overflow_ref:
         updated = attach_neighborhood_overflow_ref(updated, overflow_ref=neighborhood_overflow_ref)
-    result.summary.front_door_insight = to_public_front_door_insight_dict(updated)
+    return msgspec.structs.replace(
+        result,
+        summary=msgspec.structs.replace(
+            result.summary,
+            front_door_insight=to_public_front_door_insight_dict(updated),
+        ),
+    )
 
 
 def persist_result_artifacts(
@@ -54,41 +62,44 @@ def persist_result_artifacts(
     artifact_dir: str | None,
     no_save: bool,
     pop_search_object_view_for_run: Callable[[str], object | None],
-) -> None:
-    """Persist result artifacts and annotate insight refs."""
+) -> CqResult:
+    """Persist result artifacts and annotate insight refs.
+
+    Returns:
+        CqResult: Result payload with persisted artifact references attached.
+    """
     if no_save:
         run_id = result.run.run_id
         if result.run.macro == "search" and run_id is not None:
             _ = pop_search_object_view_for_run(run_id)
-        return
+        return result
     if result.run.macro == "search":
-        _save_search_artifacts(
+        return _save_search_artifacts(
             result,
             pop_search_object_view_for_run=pop_search_object_view_for_run,
         )
-        return
-    _save_general_artifacts(result, artifact_dir)
+    return _save_general_artifacts(result, artifact_dir)
 
 
 def _save_search_artifacts(
     result: CqResult,
     *,
     pop_search_object_view_for_run: Callable[[str], object | None],
-) -> None:
+) -> CqResult:
     run_id = result.run.run_id
     if run_id is None:
-        return
+        return result
     object_view = pop_search_object_view_for_run(run_id)
     if object_view is None:
-        return
+        return result
     search_artifact = save_search_artifact_bundle_cache(
         result,
         _build_search_artifact_bundle(result, object_view),
     )
     if search_artifact is None:
-        return
-    result.artifacts.append(search_artifact)
-    _attach_insight_artifact_refs(
+        return result
+    result = msgspec.structs.replace(result, artifacts=[*result.artifacts, search_artifact])
+    return _attach_insight_artifact_refs(
         result,
         diagnostics_ref=search_artifact.path,
         telemetry_ref=search_artifact.path,
@@ -96,16 +107,17 @@ def _save_search_artifacts(
     )
 
 
-def _save_general_artifacts(result: CqResult, artifact_dir: str | None) -> None:
+def _save_general_artifacts(result: CqResult, artifact_dir: str | None) -> CqResult:
     artifact = save_artifact_json(result, artifact_dir)
-    result.artifacts.append(artifact)
+    artifacts = [*result.artifacts, artifact]
     diagnostics_artifact = save_diagnostics_artifact(result, artifact_dir)
     if diagnostics_artifact is not None:
-        result.artifacts.append(diagnostics_artifact)
+        artifacts.append(diagnostics_artifact)
     overflow_artifact = save_neighborhood_overflow_artifact(result, artifact_dir)
     if overflow_artifact is not None:
-        result.artifacts.append(overflow_artifact)
-    _attach_insight_artifact_refs(
+        artifacts.append(overflow_artifact)
+    result = msgspec.structs.replace(result, artifacts=artifacts)
+    return _attach_insight_artifact_refs(
         result,
         diagnostics_ref=diagnostics_artifact.path if diagnostics_artifact is not None else None,
         telemetry_ref=diagnostics_artifact.path if diagnostics_artifact is not None else None,

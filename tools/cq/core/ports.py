@@ -25,8 +25,8 @@ class SearchServicePort(Protocol):
 class EntityServicePort(Protocol):
     """Port for entity query execution."""
 
-    def attach_front_door(self, request: EntityFrontDoorRequest) -> None:
-        """Attach entity front-door insight to result."""
+    def attach_front_door(self, request: EntityFrontDoorRequest) -> CqResult:
+        """Attach entity front-door insight and return updated result."""
         ...
 
 

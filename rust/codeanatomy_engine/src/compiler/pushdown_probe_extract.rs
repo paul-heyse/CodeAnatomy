@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{Expr, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+#[cfg(feature = "tracing")]
+use tracing::instrument;
 
 use crate::compiler::plan_utils::view_index;
 use crate::contracts::pushdown_mode::PushdownEnforcementMode;
@@ -136,6 +138,7 @@ async fn schema_columns(ctx: &SessionContext, source: &str) -> Option<BTreeSet<S
 }
 
 /// Derive per-input filter probe expressions for provider pushdown validation.
+#[cfg_attr(feature = "tracing", instrument(skip(ctx, spec)))]
 pub async fn extract_input_filter_predicates(
     ctx: &SessionContext,
     spec: &SemanticExecutionSpec,
@@ -280,6 +283,7 @@ pub async fn extract_input_filter_predicates(
 /// - table-scan pushed filters are collected from `TableScan.filters`
 /// - residual filters are collected from all `Filter` nodes
 /// - each probe predicate is validated against declared provider status
+#[cfg_attr(feature = "tracing", instrument(skip(optimized_plan, pushdown_probes)))]
 pub fn verify_pushdown_contracts(
     optimized_plan: &LogicalPlan,
     pushdown_probes: &BTreeMap<String, PushdownProbe>,

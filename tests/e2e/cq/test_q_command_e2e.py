@@ -1,4 +1,3 @@
-# ruff: noqa: FBT001, ISC004
 """Command-level e2e tests for `cq q` on hermetic golden workspaces."""
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ from tests.e2e.cq._support.specs import assert_result_matches_spec
 @pytest.mark.e2e
 def test_q_python_resolve_entities_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test q python resolve entities golden."""
@@ -50,14 +50,17 @@ def test_q_python_resolve_entities_golden(
 @pytest.mark.e2e
 def test_q_rust_compile_target_golden(
     run_cq_result: Callable[..., CqResult],
+    *,
     update_golden: bool,
 ) -> None:
     """Test q rust compile target golden."""
     result = run_cq_result(
         [
             "q",
-            "entity=function name=compile_target lang=rust "
-            "in=tests/e2e/cq/_golden_workspace/rust_workspace",
+            (
+                "entity=function name=compile_target lang=rust "
+                "in=tests/e2e/cq/_golden_workspace/rust_workspace"
+            ),
             "--format",
             "json",
             "--no-save-artifact",

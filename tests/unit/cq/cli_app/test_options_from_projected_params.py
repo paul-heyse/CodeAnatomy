@@ -22,10 +22,12 @@ def test_search_options_from_projected_params_preserves_flags() -> None:
 
 
 def test_query_options_from_projected_params_preserves_explain_flag() -> None:
+    """Projected query options should preserve explain-files behavior."""
     options = query_options_from_projected_params(QueryParams(explain_files=True))
     assert options.explain_files is True
 
 
 def test_run_options_from_projected_params_preserves_stop_on_error() -> None:
+    """Projected run options should preserve stop-on-error behavior."""
     options = run_options_from_projected_params(RunParams(stop_on_error=True))
     assert options.stop_on_error is True

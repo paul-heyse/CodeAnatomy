@@ -6,7 +6,7 @@ import ast
 
 import pytest
 from ast_grep_py import SgNode, SgRoot
-from tools.cq.search._shared.core import (
+from tools.cq.search._shared.requests import (
     PythonByteRangeEnrichmentRequest,
     PythonNodeEnrichmentRequest,
 )

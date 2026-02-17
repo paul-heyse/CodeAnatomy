@@ -7,4 +7,3 @@ pub enum FunctionKind {
     Window,
     Table,
 }
-

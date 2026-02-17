@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import msgspec
 from tools.cq.core.render_summary import render_summary, summary_string
 from tools.cq.core.schema import CqResult, mk_result, mk_runmeta
 from tools.cq.core.summary_contract import (
@@ -53,7 +54,7 @@ def test_render_summary_includes_non_search_variants() -> None:
 def test_summary_string_keeps_query_and_mode_fallbacks() -> None:
     """Summary string fallback behavior remains intact with variant summaries."""
     result = _result("run")
-    result.summary = RunSummaryV1(steps=["q_0", "search_1"])
+    result = msgspec.structs.replace(result, summary=RunSummaryV1(steps=["q_0", "search_1"]))
 
     query_value = summary_string(result, key="query", missing_reason="missing")
     mode_value = summary_string(result, key="mode", missing_reason="missing")

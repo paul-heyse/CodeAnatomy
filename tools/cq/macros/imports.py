@@ -18,7 +18,11 @@ from tools.cq.core.schema import (
     CqResult,
     Finding,
     Section,
+    append_result_key_finding,
+    append_result_section,
+    extend_result_evidence,
     ms,
+    update_result_summary,
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.summary_contract import summary_from_mapping
@@ -295,24 +299,25 @@ def _append_cycle_section(
     result: CqResult,
     cycles: list[list[str]],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> CqResult:
     if not cycles:
-        result.key_findings.append(
+        return append_result_key_finding(
+            result,
             Finding(
                 category="info",
                 message="No import cycles detected",
                 severity="info",
                 details=build_detail_payload(scoring=scoring_details),
-            )
+            ),
         )
-        return
-    result.key_findings.append(
+    result = append_result_key_finding(
+        result,
         Finding(
             category="cycle",
             message=f"Found {len(cycles)} import cycle(s)",
             severity="warning",
             details=build_detail_payload(scoring=scoring_details),
-        )
+        ),
     )
     cycle_section = Section(title="Import Cycles")
     for index, cycle in enumerate(cycles[:_CYCLE_LIMIT], 1):
@@ -326,7 +331,7 @@ def _append_cycle_section(
                 details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
-    result.sections.append(cycle_section)
+    return append_result_section(result, cycle_section)
 
 
 def _append_external_section(
@@ -334,9 +339,9 @@ def _append_external_section(
     all_imports: list[ImportInfo],
     external_deps: set[str],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> CqResult:
     if not external_deps:
-        return
+        return result
     ext_section = Section(title="External Dependencies")
     for dep in sorted(external_deps)[:_EXTERNAL_LIMIT]:
         count = sum(1 for imp_info in all_imports if imp_info.module.split(".")[0] == dep)
@@ -348,16 +353,16 @@ def _append_external_section(
                 details=build_detail_payload(scoring=scoring_details),
             )
         )
-    result.sections.append(ext_section)
+    return append_result_section(result, ext_section)
 
 
 def _append_relative_section(
     result: CqResult,
     relative_imports: list[ImportInfo],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> CqResult:
     if not relative_imports:
-        return
+        return result
     rel_section = Section(title="Relative Imports")
     for imp_info in relative_imports[:_REL_IMPORT_LIMIT]:
         dots = "." * imp_info.level
@@ -370,7 +375,7 @@ def _append_relative_section(
                 details=build_detail_payload(scoring=scoring_details),
             )
         )
-    result.sections.append(rel_section)
+    return append_result_section(result, rel_section)
 
 
 def _append_module_focus(
@@ -378,7 +383,7 @@ def _append_module_focus(
     deps: dict[str, ModuleDeps],
     module: str,
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> CqResult:
     focus_section = Section(title=f"Imports in {module}")
     for file, mod_deps in deps.items():
         if module in file or _file_to_module(file).startswith(module):
@@ -392,21 +397,22 @@ def _append_module_focus(
                         details=build_detail_payload(scoring=scoring_details),
                     )
                 )
-    result.sections.append(focus_section)
+    return append_result_section(result, focus_section)
 
 
 def _append_import_evidence(
     result: CqResult,
     all_imports: list[ImportInfo],
     scoring_details: ScoringDetailsV1,
-) -> None:
+) -> CqResult:
+    evidence: list[Finding] = []
     for imp_info in all_imports:
         what = (
             f"from {imp_info.module} import {', '.join(imp_info.names)}"
             if imp_info.is_from
             else f"import {imp_info.module}"
         )
-        result.evidence.append(
+        evidence.append(
             Finding(
                 category="import",
                 message=what,
@@ -414,6 +420,7 @@ def _append_import_evidence(
                 details=build_detail_payload(scoring=scoring_details),
             )
         )
+    return extend_result_evidence(result, evidence)
 
 
 def _filter_to_module(
@@ -499,7 +506,7 @@ def _build_imports_result(
         found_cycles = _find_import_cycles(ctx.deps, internal_prefix)
         max_cycle_len = max((len(cycle) for cycle in found_cycles), default=0)
 
-    result.summary = summary_from_mapping(
+    updated_summary = summary_from_mapping(
         _build_imports_summary(
             ctx,
             external_deps=external_deps,
@@ -507,6 +514,7 @@ def _build_imports_result(
             cycles_found=len(found_cycles),
         )
     )
+    result = update_result_summary(result, updated_summary.to_dict())
 
     scoring_details = macro_scoring_details(
         sites=len(ctx.all_imports),
@@ -516,16 +524,14 @@ def _build_imports_result(
     )
 
     if ctx.request.cycles:
-        _append_cycle_section(result, found_cycles, scoring_details)
+        result = _append_cycle_section(result, found_cycles, scoring_details)
 
-    _append_external_section(result, ctx.all_imports, external_deps, scoring_details)
+    result = _append_external_section(result, ctx.all_imports, external_deps, scoring_details)
     relative_imports = [imp for imp in ctx.all_imports if imp.is_relative]
-    _append_relative_section(result, relative_imports, scoring_details)
+    result = _append_relative_section(result, relative_imports, scoring_details)
     if ctx.request.module:
-        _append_module_focus(result, ctx.deps, ctx.request.module, scoring_details)
-    _append_import_evidence(result, ctx.all_imports, scoring_details)
-
-    return result
+        result = _append_module_focus(result, ctx.deps, ctx.request.module, scoring_details)
+    return _append_import_evidence(result, ctx.all_imports, scoring_details)
 
 
 def cmd_imports(request: ImportRequest) -> CqResult:

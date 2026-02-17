@@ -129,7 +129,12 @@ impl ArgBestAccumulator {
         }
     }
 
-    fn update_from_arrays(&mut self, values: &ArrayRef, keys: &ArrayRef, context: &str) -> Result<()> {
+    fn update_from_arrays(
+        &mut self,
+        values: &ArrayRef,
+        keys: &ArrayRef,
+        context: &str,
+    ) -> Result<()> {
         if values.len() != keys.len() {
             return Err(DataFusionError::Plan(format!(
                 "{context}: value and order_key lengths must match"

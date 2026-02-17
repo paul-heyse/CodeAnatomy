@@ -127,13 +127,8 @@ pub async fn delta_optimize_compact_request(
         gate,
         commit_options,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let mut builder = table.optimize();
     if let Some(target_size) = target_size {
@@ -168,13 +163,8 @@ pub async fn delta_vacuum_request(
         gate,
         commit_options,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     if require_vacuum_protocol_check
         && !snapshot
@@ -219,13 +209,8 @@ pub async fn delta_restore_request(
         gate,
         commit_options,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let mut builder = table
         .restore()
@@ -269,13 +254,8 @@ pub async fn delta_set_properties_request(
         gate,
         commit_options,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let builder = table
         .set_tbl_properties()
@@ -307,13 +287,8 @@ pub async fn delta_add_features_request(
         gate,
         commit_options,
     } = request;
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let mut parsed_features: Vec<TableFeatures> = Vec::new();
     for feature in features {
@@ -347,13 +322,8 @@ pub async fn delta_create_checkpoint(
     table_version: TableVersion,
     gate: Option<DeltaFeatureGate>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     create_checkpoint(&table, None).await?;
     let snapshot = delta_snapshot_info(table_uri, &table).await?;
@@ -374,13 +344,8 @@ pub async fn delta_cleanup_metadata(
     table_version: TableVersion,
     gate: Option<DeltaFeatureGate>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let deleted = cleanup_metadata(&table, None).await?;
     let snapshot = delta_snapshot_info(table_uri, &table).await?;
@@ -411,13 +376,8 @@ pub async fn delta_add_constraints_request(
             "Delta add-constraints requires at least one constraint.".to_owned(),
         ));
     }
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let mut constraint_map: HashMap<String, String> = HashMap::new();
     for (name, expr) in constraints {
@@ -461,13 +421,8 @@ pub async fn delta_drop_constraints_request(
             "Delta drop-constraints requires at least one constraint name.".to_owned(),
         ));
     }
-    let table = load_delta_table(
-        table_uri,
-        storage_options,
-        table_version,
-        Some(session_ctx),
-    )
-    .await?;
+    let table =
+        load_delta_table(table_uri, storage_options, table_version, Some(session_ctx)).await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let mut updated_table = table;
     for name in constraints {

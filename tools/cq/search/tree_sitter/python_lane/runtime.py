@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, cast
 
@@ -54,6 +55,7 @@ from tools.cq.search.tree_sitter.query.registry import load_query_pack_sources
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Query, Tree
+
     from tools.cq.search.tree_sitter.core.parse import ParseSession
 
 try:
@@ -78,6 +80,22 @@ from tools.cq.search.tree_sitter.python_lane.fallback_support import (
     _default_parse_quality,
     _fallback_resolution_fields,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PythonLaneEnrichmentSettingsV1:
+    """Execution settings for Python tree-sitter byte-range enrichment."""
+
+    match_limit: int = _DEFAULT_MATCH_LIMIT
+    query_budget_ms: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PythonLaneRuntimeDepsV1:
+    """Runtime dependency overrides for Python tree-sitter enrichment."""
+
+    parse_session: ParseSession | None = None
+    cache_backend: object | None = None
 
 
 def is_tree_sitter_python_available() -> bool:
@@ -558,10 +576,8 @@ def enrich_python_context_by_byte_range(
     byte_start: int,
     byte_end: int,
     cache_key: str | None = None,
-    match_limit: int = _DEFAULT_MATCH_LIMIT,
-    query_budget_ms: int | None = None,
-    parse_session: ParseSession | None = None,
-    cache_backend: object | None = None,
+    settings: PythonLaneEnrichmentSettingsV1 | None = None,
+    runtime_deps: PythonLaneRuntimeDepsV1 | None = None,
 ) -> dict[str, object] | None:
     """Best-effort tree-sitter Python enrichment for a byte-anchored match.
 
@@ -572,7 +588,9 @@ def enrich_python_context_by_byte_range(
     """
     if byte_start < 0 or byte_end <= byte_start or not is_tree_sitter_python_available():
         return None
-    _ = cache_backend
+    effective_settings = settings or PythonLaneEnrichmentSettingsV1()
+    effective_runtime = runtime_deps or PythonLaneRuntimeDepsV1()
+    _ = effective_runtime.cache_backend
 
     source_bytes = source.encode("utf-8", errors="replace")
     if byte_end > len(source_bytes):
@@ -594,20 +612,22 @@ def enrich_python_context_by_byte_range(
         payload,
         source=source,
         cache_key=cache_key,
-        parse_session=parse_session,
+        parse_session=effective_runtime.parse_session,
     )
     if parsed is None:
         return canonicalize_python_lane_payload(payload)
 
     root, source_bytes, changed_ranges = parsed
-    window_start, window_end = _effective_capture_window(
+    capture_window = _effective_capture_window(
         root,
         byte_start=byte_start,
         byte_end=byte_end,
     )
-    anchor_window = QueryWindowV1(start_byte=window_start, end_byte=window_end)
     query_windows = build_query_windows(
-        anchor_window=anchor_window,
+        anchor_window=QueryWindowV1(
+            start_byte=capture_window[0],
+            end_byte=capture_window[1],
+        ),
         source_byte_len=len(source_bytes),
         changed_ranges=changed_ranges,
     )
@@ -616,40 +636,45 @@ def enrich_python_context_by_byte_range(
         file_key=cache_key or "<memory>",
         windows=query_windows,
     )
-    parse_quality = _extract_parse_quality(
+    payload["parse_quality"] = _extract_parse_quality(
         root,
         source_bytes,
         windows=query_windows,
-        query_budget_ms=query_budget_ms,
+        query_budget_ms=effective_settings.query_budget_ms,
     )
-    payload["parse_quality"] = parse_quality
-    diagnostics = collect_tree_sitter_diagnostics(
-        language="python",
-        root=root,
-        windows=query_windows,
-        match_limit=1024,
-    )
-    payload["cst_diagnostics"] = [msgspec.to_builtins(row) for row in diagnostics]
+    payload["cst_diagnostics"] = [
+        msgspec.to_builtins(row)
+        for row in collect_tree_sitter_diagnostics(
+            language="python",
+            root=root,
+            windows=query_windows,
+            match_limit=1024,
+        )
+    ]
 
     _apply_capture_fields(
         payload,
         root=root,
         source_bytes=source_bytes,
         windows=query_windows,
-        match_limit=match_limit,
-        query_budget_ms=query_budget_ms,
+        match_limit=effective_settings.match_limit,
+        query_budget_ms=effective_settings.query_budget_ms,
     )
-    fallback = _fallback_resolution_fields(
-        source=source,
-        source_bytes=source_bytes,
-        byte_start=byte_start,
-        byte_end=byte_end,
+    _merge_fallback_resolution(
+        payload,
+        _fallback_resolution_fields(
+            source=source,
+            source_bytes=source_bytes,
+            byte_start=byte_start,
+            byte_end=byte_end,
+        ),
     )
-    _merge_fallback_resolution(payload, fallback)
     return canonicalize_python_lane_payload(payload)
 
 
 __all__ = [
+    "PythonLaneEnrichmentSettingsV1",
+    "PythonLaneRuntimeDepsV1",
     "clear_tree_sitter_python_cache",
     "enrich_python_context_by_byte_range",
     "get_python_field_ids",

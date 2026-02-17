@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tools.cq.search._shared.core import PythonNodeEnrichmentSettingsV1, convert_from_attributes
+from tools.cq.search._shared.helpers import convert_from_attributes
+from tools.cq.search._shared.requests import PythonNodeEnrichmentSettingsV1
 
 QUERY_BUDGET_MS = 10
 

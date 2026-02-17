@@ -64,7 +64,7 @@ class TaintVisitor(ast.NodeVisitor):
         self.depth = depth
         self.calls: list[tuple[TaintCallSite, set[int | str]]] = []
 
-    def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
+    def visit_Assign(self, node: ast.Assign) -> None:
         rhs_tainted = self.expr_tainted(node.value)
 
         if rhs_tainted:
@@ -88,7 +88,7 @@ class TaintVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         tainted_arg_indices: set[int] = set()
         tainted_arg_values: set[str] = set()
 
@@ -131,7 +131,7 @@ class TaintVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
-    def visit_Return(self, node: ast.Return) -> None:  # noqa: N802
+    def visit_Return(self, node: ast.Return) -> None:
         if node.value and self.expr_tainted(node.value):
             self.sites.append(
                 TaintedSite(
@@ -145,7 +145,11 @@ class TaintVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def expr_tainted(self, expr: ast.expr) -> bool:
-        """Check whether an expression references tainted values."""
+        """Check whether an expression references tainted values.
+
+        Returns:
+            bool: True when expression flow includes tainted values.
+        """
         if isinstance(expr, ast.Name):
             return expr.id in self.tainted
         handler = _EXPR_TAINT_HANDLERS.get(type(expr))
@@ -160,6 +164,7 @@ class TaintVisitor(ast.NodeVisitor):
 
 
 # Expression handlers
+
 
 def _tainted_attribute(visitor: TaintVisitor, expr: ast.Attribute) -> bool:
     return visitor.expr_tainted(expr.value)
@@ -298,7 +303,11 @@ def find_function_node(
     function_line: int,
     class_name: str | None,
 ) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    """Locate a function or method node by declared identity."""
+    """Locate a function or method node by declared identity.
+
+    Returns:
+        ast.FunctionDef | ast.AsyncFunctionDef | None: Matching function node when found.
+    """
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -332,7 +341,11 @@ def analyze_function_node(
     tainted_params: set[str],
     depth: int,
 ) -> TaintAnalysisResult:
-    """Analyze taint flow within one parsed function node."""
+    """Analyze taint flow within one parsed function node.
+
+    Returns:
+        TaintAnalysisResult: Taint findings and derived propagation metadata.
+    """
     visitor = TaintVisitor(file=file, tainted_params=tainted_params, depth=depth)
     visitor.visit(function_node)
     return TaintAnalysisResult(

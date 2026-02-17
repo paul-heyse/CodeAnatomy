@@ -169,8 +169,11 @@ def _prepare_search_assembly_inputs(
     )
     summary = as_search_summary(summary_from_mapping(summary_raw))
     object_runtime = build_object_resolved_view(enriched_matches, query=ctx.query)
-    summary.resolved_objects = len(object_runtime.view.summaries)
-    summary.resolved_occurrences = len(object_runtime.view.occurrences)
+    summary = msgspec.structs.replace(
+        summary,
+        resolved_objects=len(object_runtime.view.summaries),
+        resolved_occurrences=len(object_runtime.view.occurrences),
+    )
     sections = build_sections(
         enriched_matches,
         ctx.root,
@@ -192,17 +195,19 @@ def _prepare_search_assembly_inputs(
         definition_matches=definition_matches,
         enriched_matches=enriched_matches,
     )
-    insight_neighborhood, neighborhood_notes = _build_tree_sitter_neighborhood_preview(
-        ctx=ctx,
-        partition_results=partition_results,
-        summary=summary,
-        sections=sections,
-        inputs=_NeighborhoodPreviewInputs(
-            primary_target_finding=primary_target_finding,
-            definition_matches=definition_matches,
-            has_target_candidates=bool(candidate_findings),
-        ),
+    insight_neighborhood, neighborhood_notes, neighborhood_summary = (
+        _build_tree_sitter_neighborhood_preview(
+            ctx=ctx,
+            partition_results=partition_results,
+            sections=sections,
+            inputs=_NeighborhoodPreviewInputs(
+                primary_target_finding=primary_target_finding,
+                definition_matches=definition_matches,
+                has_target_candidates=bool(candidate_findings),
+            ),
+        )
     )
+    summary = msgspec.structs.replace(summary, tree_sitter_neighborhood=neighborhood_summary)
     return _SearchAssemblyInputs(
         enriched_matches=enriched_matches,
         object_runtime=object_runtime,
@@ -241,7 +246,10 @@ def _assemble_smart_search_result(
 
     inputs = _prepare_search_assembly_inputs(ctx, partition_results)
     insight = _assemble_search_insight(ctx, inputs)
-    inputs.summary.front_door_insight = to_public_front_door_insight_dict(insight)
+    inputs.summary = msgspec.structs.replace(
+        inputs.summary,
+        front_door_insight=to_public_front_door_insight_dict(insight),
+    )
 
     run_ctx = RunContext.from_parts(
         root=ctx.root,
@@ -259,12 +267,24 @@ def _assemble_smart_search_result(
         evidence=[build_finding(m, ctx.root) for m in inputs.enriched_matches[:MAX_EVIDENCE]],
     )
     register_search_object_view(run_id=run.run_id, view=inputs.object_runtime.view)
-    result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
+    result = msgspec.structs.replace(
+        result,
+        summary=msgspec.structs.replace(
+            result.summary,
+            cache_backend=snapshot_backend_metrics(root=ctx.root),
+        ),
+    )
     cache_maintenance_payload = contract_to_builtins(
         maintenance_tick(get_cq_cache_backend(root=ctx.root))
     )
-    as_search_summary(result.summary).cache_maintenance = (
-        cache_maintenance_payload if isinstance(cache_maintenance_payload, dict) else {}
+    result = msgspec.structs.replace(
+        result,
+        summary=msgspec.structs.replace(
+            result.summary,
+            cache_maintenance=(
+                cache_maintenance_payload if isinstance(cache_maintenance_payload, dict) else {}
+            ),
+        ),
     )
     return assign_result_finding_ids(result)
 

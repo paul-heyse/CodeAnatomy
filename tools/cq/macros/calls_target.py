@@ -10,7 +10,14 @@ from pathlib import Path
 from tools.cq.core.definition_parser import extract_definition_name, extract_symbol_name
 from tools.cq.core.python_ast_utils import get_call_name
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
-from tools.cq.core.schema import CqResult, Finding, ScoreDetails, Section
+from tools.cq.core.schema import (
+    CqResult,
+    Finding,
+    ScoreDetails,
+    Section,
+    append_result_section,
+    update_result_summary,
+)
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.types import QueryLanguage
@@ -424,10 +431,14 @@ def add_target_callees_section(
     score: ScoreDetails | None,
     *,
     preview_limit: int = CALLS_TARGET_CALLEE_PREVIEW,
-) -> None:
-    """Append bounded target-callee preview section."""
+) -> CqResult:
+    """Append bounded target-callee preview section.
+
+    Returns:
+        CqResult: Updated result with target-callee section appended when available.
+    """
     if not target_callees:
-        return
+        return result
     findings = [
         Finding(
             category="target_callee",
@@ -443,7 +454,7 @@ def add_target_callees_section(
         )
         for name, count in target_callees.most_common(preview_limit)
     ]
-    result.sections.append(Section(title="Target Callees", findings=findings))
+    return append_result_section(result, Section(title="Target Callees", findings=findings))
 
 
 class AttachTargetMetadataRequestV1(CqStruct, frozen=True):
@@ -530,13 +541,23 @@ def apply_target_metadata(
     *,
     score: ScoreDetails | None,
     preview_limit: int = CALLS_TARGET_CALLEE_PREVIEW,
-) -> None:
-    """Apply resolved target metadata onto a result payload."""
+) -> CqResult:
+    """Apply resolved target metadata onto a result payload.
+
+    Returns:
+        CqResult: Updated result with target metadata and callee preview section.
+    """
+    updated = result
     if metadata.target_location is not None:
-        result.summary.target_file = metadata.target_location[0]
-        result.summary.target_line = metadata.target_location[1]
-    add_target_callees_section(
-        result,
+        updated = update_result_summary(
+            updated,
+            {
+                "target_file": metadata.target_location[0],
+                "target_line": metadata.target_location[1],
+            },
+        )
+    return add_target_callees_section(
+        updated,
         metadata.target_callees,
         score,
         preview_limit=preview_limit,

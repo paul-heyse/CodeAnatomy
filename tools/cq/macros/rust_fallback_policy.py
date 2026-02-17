@@ -53,7 +53,7 @@ def apply_rust_fallback_policy(
         raw = getattr(result.summary, policy.fallback_matches_summary_key, 0)
         fallback_matches = int(raw) if isinstance(raw, int) else 0
 
-    apply_rust_macro_fallback(
+    return apply_rust_macro_fallback(
         result=result,
         root=root,
         pattern=policy.pattern,
@@ -61,7 +61,6 @@ def apply_rust_fallback_policy(
         fallback_matches=fallback_matches,
         query=policy.query,
     )
-    return result
 
 
 __all__ = ["RustFallbackPolicyV1", "apply_rust_fallback_policy"]

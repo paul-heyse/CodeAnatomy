@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+import msgspec
+
 from tools.cq.core.schema import (
     Artifact,
     CqResult,
@@ -11,11 +13,13 @@ from tools.cq.core.schema import (
     Finding,
     RunMeta,
     Section,
+    append_result_evidence,
+    extend_result_key_findings,
     mk_result,
+    update_result_summary,
 )
 from tools.cq.core.snb_schema import DegradeEventV1, SemanticNeighborhoodBundleV1
 from tools.cq.core.structs import CqStruct
-from tools.cq.core.summary_contract import as_neighborhood_summary
 from tools.cq.neighborhood.section_layout import materialize_section_layout
 
 
@@ -42,42 +46,43 @@ def render_snb_result(
     result = mk_result(request.run)
     view = materialize_section_layout(request.bundle)
 
-    _populate_summary(
+    result = _populate_summary(
         result=result,
         request=request,
     )
-    _populate_findings(
+    result = _populate_findings(
         result=result, bundle=request.bundle, view=view, semantic_env=request.semantic_env
     )
-    _populate_artifacts(result=result, bundle=request.bundle)
-    return result
+    return _populate_artifacts(result=result, bundle=request.bundle)
 
 
 def _populate_summary(
     *,
     result: CqResult,
     request: RenderSnbRequest,
-) -> None:
+) -> CqResult:
     bundle = request.bundle
-    summary = as_neighborhood_summary(result.summary)
-    summary.target = request.target
-    summary.language = request.language
-    summary.top_k = request.top_k
-    summary.enable_semantic_enrichment = request.enable_semantic_enrichment
-    summary.bundle_id = bundle.bundle_id
-    summary.total_slices = len(bundle.slices)
-    summary.total_diagnostics = len(bundle.diagnostics)
+    updates: dict[str, object] = {
+        "target": request.target,
+        "language": request.language,
+        "top_k": request.top_k,
+        "enable_semantic_enrichment": request.enable_semantic_enrichment,
+        "bundle_id": bundle.bundle_id,
+        "total_slices": len(bundle.slices),
+        "total_diagnostics": len(bundle.diagnostics),
+    }
     if bundle.subject is not None:
-        summary.target_file = bundle.subject.file_path
-        summary.target_name = bundle.subject.name
+        updates["target_file"] = bundle.subject.file_path
+        updates["target_name"] = bundle.subject.name
     if bundle.graph is not None:
-        summary.total_nodes = bundle.graph.node_count
-        summary.total_edges = bundle.graph.edge_count
+        updates["total_nodes"] = bundle.graph.node_count
+        updates["total_edges"] = bundle.graph.edge_count
     if request.semantic_env:
         for key in ("semantic_health", "semantic_quiescent", "semantic_position_encoding"):
             value = request.semantic_env.get(key)
             if value is not None:
-                setattr(summary, key, value)
+                updates[key] = value
+    return update_result_summary(result, updates)
 
 
 def _populate_findings(
@@ -86,32 +91,39 @@ def _populate_findings(
     bundle: SemanticNeighborhoodBundleV1,
     view: object,
     semantic_env: Mapping[str, object] | None,
-) -> None:
+) -> CqResult:
     from tools.cq.neighborhood.section_layout import BundleViewV1
 
     if isinstance(view, BundleViewV1):
-        for finding_v1 in view.key_findings:
-            result.key_findings.append(
+        result = extend_result_key_findings(
+            result,
+            [
                 Finding(
                     category=finding_v1.category,
                     message=f"{finding_v1.label}: {finding_v1.value}",
                 )
-            )
+                for finding_v1 in view.key_findings
+            ],
+        )
 
-        for section_v1 in view.sections:
-            result.sections.append(
-                Section(
-                    title=section_v1.title,
-                    collapsed=section_v1.collapsed,
-                    findings=[
-                        Finding(
-                            category="neighborhood",
-                            message=item,
-                        )
-                        for item in section_v1.items
-                    ],
-                )
+        rendered_sections = [
+            Section(
+                title=section_v1.title,
+                collapsed=section_v1.collapsed,
+                findings=[
+                    Finding(
+                        category="neighborhood",
+                        message=item,
+                    )
+                    for item in section_v1.items
+                ],
             )
+            for section_v1 in view.sections
+        ]
+        result = msgspec.structs.replace(
+            result,
+            sections=[*result.sections, *rendered_sections],
+        )
 
     enrichment_payload: dict[str, object] = {
         "neighborhood_bundle": {
@@ -129,24 +141,24 @@ def _populate_findings(
             if value is not None:
                 enrichment_payload[key] = value
 
-    result.evidence.append(
+    return append_result_evidence(
+        result,
         Finding(
             category="neighborhood_bundle",
             message=f"Bundle `{bundle.bundle_id}` assembled with {len(bundle.slices)} slices",
             details=DetailPayload.from_legacy({"enrichment": enrichment_payload}),
-        )
+        ),
     )
 
 
-def _populate_artifacts(*, result: CqResult, bundle: SemanticNeighborhoodBundleV1) -> None:
-    for pointer in bundle.artifacts:
-        if pointer.storage_path:
-            result.artifacts.append(
-                Artifact(
-                    path=pointer.storage_path,
-                    format="json",
-                )
-            )
+def _populate_artifacts(*, result: CqResult, bundle: SemanticNeighborhoodBundleV1) -> CqResult:
+    artifacts = list(result.artifacts)
+    artifacts.extend(
+        Artifact(path=pointer.storage_path, format="json")
+        for pointer in bundle.artifacts
+        if pointer.storage_path
+    )
+    return msgspec.structs.replace(result, artifacts=artifacts)
 
 
 def _degrade_event_dict(event: DegradeEventV1) -> dict[str, object]:

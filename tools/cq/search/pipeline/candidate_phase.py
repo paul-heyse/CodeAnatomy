@@ -14,7 +14,7 @@ from tools.cq.query.language import (
     language_extension_exclude_globs,
     ripgrep_type_for_language,
 )
-from tools.cq.search._shared.core import CandidateCollectionRequest, RgRunRequest
+from tools.cq.search._shared.requests import CandidateCollectionRequest, RgRunRequest
 from tools.cq.search._shared.types import SearchLimits
 from tools.cq.search.pipeline.classifier import QueryMode
 from tools.cq.search.pipeline.contracts import SearchConfig

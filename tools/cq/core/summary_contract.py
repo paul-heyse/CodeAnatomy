@@ -20,7 +20,7 @@ class SemanticTelemetryV1(msgspec.Struct, frozen=True, omit_defaults=True):
     timed_out: int = 0
 
 
-class SummaryEnvelopeV1(msgspec.Struct, omit_defaults=True):
+class SummaryEnvelopeV1(msgspec.Struct, omit_defaults=True, frozen=True):
     """Mode-tagged summary envelope for :class:`tools.cq.core.schema.CqResult`."""
 
     schema_version: int = 1
@@ -125,7 +125,7 @@ class SummaryEnvelopeV1(msgspec.Struct, omit_defaults=True):
         return payload
 
 
-class SearchSummaryV1(SummaryEnvelopeV1):
+class SearchSummaryV1(SummaryEnvelopeV1, frozen=True):
     """Search/query-focused summary payload."""
 
     summary_variant: SummaryVariantName = "search"
@@ -190,7 +190,7 @@ class SearchSummaryV1(SummaryEnvelopeV1):
     scopes_with_captures: int = 0
 
 
-class CallsSummaryV1(SummaryEnvelopeV1):
+class CallsSummaryV1(SummaryEnvelopeV1, frozen=True):
     """Calls-focused summary payload."""
 
     summary_variant: SummaryVariantName = "calls"
@@ -206,7 +206,7 @@ class CallsSummaryV1(SummaryEnvelopeV1):
     scan_method: str | None = None
 
 
-class ImpactSummaryV1(SummaryEnvelopeV1):
+class ImpactSummaryV1(SummaryEnvelopeV1, frozen=True):
     """Impact/sig-impact summary payload."""
 
     summary_variant: SummaryVariantName = "impact"
@@ -225,7 +225,7 @@ class ImpactSummaryV1(SummaryEnvelopeV1):
     call_sites: int = 0
 
 
-class RunSummaryV1(SummaryEnvelopeV1):
+class RunSummaryV1(SummaryEnvelopeV1, frozen=True):
     """Run/chain summary payload."""
 
     summary_variant: SummaryVariantName = "run"
@@ -234,7 +234,7 @@ class RunSummaryV1(SummaryEnvelopeV1):
     cache_maintenance: dict[str, object] = msgspec.field(default_factory=dict)
 
 
-class NeighborhoodSummaryV1(SummaryEnvelopeV1):
+class NeighborhoodSummaryV1(SummaryEnvelopeV1, frozen=True):
     """Neighborhood summary payload."""
 
     summary_variant: SummaryVariantName = "neighborhood"
@@ -534,7 +534,7 @@ def apply_summary_mapping[SummaryEnvelopeT: SummaryEnvelopeV1](
             msg = f"Unknown summary key: {key_obj}"
             raise KeyError(msg)
         updates[key_obj] = value
-    return cast("SummaryEnvelopeT", msgspec.structs.replace(summary, **updates))
+    return msgspec.structs.replace(summary, **updates)
 
 
 def extract_match_count(result: object | None) -> int:

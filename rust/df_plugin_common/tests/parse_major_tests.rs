@@ -9,4 +9,3 @@ fn parse_major_accepts_semver() {
 fn parse_major_rejects_invalid() {
     assert!(parse_major("v51").is_err());
 }
-

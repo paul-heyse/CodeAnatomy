@@ -6,6 +6,7 @@ Structs defining the structured output format for all cq macros.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable, Mapping
 from typing import Annotated, Literal
 
 import msgspec
@@ -14,7 +15,12 @@ from tools.cq import SCHEMA_VERSION
 from tools.cq.core.contracts_constraints import NonEmptyStr, NonNegativeFloat
 from tools.cq.core.id import stable_digest24
 from tools.cq.core.locations import SourceSpan
-from tools.cq.core.summary_contract import SearchSummaryV1, SummaryV1, summary_for_macro
+from tools.cq.core.summary_contract import (
+    SearchSummaryV1,
+    SummaryV1,
+    apply_summary_mapping,
+    summary_for_macro,
+)
 from tools.cq.core.type_coercion import coerce_float_optional
 
 # Schema evolution notes:
@@ -241,7 +247,7 @@ class Anchor(msgspec.Struct, frozen=True, omit_defaults=True):
         )
 
 
-class Finding(msgspec.Struct):
+class Finding(msgspec.Struct, frozen=True):
     """A discrete analysis finding.
 
     Parameters
@@ -272,11 +278,6 @@ class Finding(msgspec.Struct):
     stable_id: str | None = None
     execution_id: str | None = None
     id_taxonomy: str | None = None
-
-    def __post_init__(self) -> None:
-        """Normalize legacy detail dicts into structured payloads."""
-        if isinstance(self.details, dict):
-            self.details = DetailPayload.from_legacy(self.details)
 
 
 class Section(msgspec.Struct):
@@ -351,7 +352,7 @@ class RunMeta(msgspec.Struct):
     run_created_ms: NonNegativeFloat | None = None
 
 
-class CqResult(msgspec.Struct):
+class CqResult(msgspec.Struct, frozen=True):
     """Complete result of a cq macro invocation.
 
     Parameters
@@ -441,6 +442,62 @@ def mk_result(run: RunMeta) -> CqResult:
     return CqResult(run=run, summary=summary_for_macro(run.macro))
 
 
+def update_result_summary(
+    result: CqResult,
+    mapping: Mapping[str, object] | Iterable[tuple[str, object]],
+) -> CqResult:
+    """Return a result with summary fields updated via copy-on-write."""
+    summary = apply_summary_mapping(result.summary, mapping)
+    return msgspec.structs.replace(result, summary=summary)
+
+
+def append_result_key_finding(result: CqResult, finding: Finding) -> CqResult:
+    """Return a result with one key finding appended."""
+    return msgspec.structs.replace(
+        result,
+        key_findings=[*result.key_findings, finding],
+    )
+
+
+def extend_result_key_findings(result: CqResult, findings: Iterable[Finding]) -> CqResult:
+    """Return a result with multiple key findings appended."""
+    return msgspec.structs.replace(
+        result,
+        key_findings=[*result.key_findings, *findings],
+    )
+
+
+def append_result_evidence(result: CqResult, finding: Finding) -> CqResult:
+    """Return a result with one evidence finding appended."""
+    return msgspec.structs.replace(
+        result,
+        evidence=[*result.evidence, finding],
+    )
+
+
+def extend_result_evidence(result: CqResult, findings: Iterable[Finding]) -> CqResult:
+    """Return a result with multiple evidence findings appended."""
+    return msgspec.structs.replace(
+        result,
+        evidence=[*result.evidence, *findings],
+    )
+
+
+def append_result_section(result: CqResult, section: Section) -> CqResult:
+    """Return a result with one section appended."""
+    return msgspec.structs.replace(
+        result,
+        sections=[*result.sections, section],
+    )
+
+
+def insert_result_section(result: CqResult, index: int, section: Section) -> CqResult:
+    """Return a result with one section inserted at index."""
+    sections = [*result.sections]
+    sections.insert(index, section)
+    return msgspec.structs.replace(result, sections=sections)
+
+
 def _stable_finding_id(finding: Finding) -> str:
     payload = {
         "category": finding.category,
@@ -516,9 +573,16 @@ __all__ = [
     "RunMeta",
     "ScoreDetails",
     "Section",
+    "append_result_evidence",
+    "append_result_key_finding",
+    "append_result_section",
     "assign_result_finding_ids",
     "coerce_str",
+    "extend_result_evidence",
+    "extend_result_key_findings",
+    "insert_result_section",
     "mk_result",
     "mk_runmeta",
     "ms",
+    "update_result_summary",
 ]

@@ -12,8 +12,8 @@ from tools.cq.core.enrichment_mode import (
 from tools.cq.core.locations import line_relative_byte_range_to_absolute
 from tools.cq.core.types import QueryLanguage
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, is_python_language, is_rust_language
-from tools.cq.search._shared.core import PythonByteRangeEnrichmentRequest
 from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
+from tools.cq.search._shared.requests import PythonByteRangeEnrichmentRequest
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
 from tools.cq.search.enrichment.incremental_provider import (
     IncrementalAnchorRequestV1,

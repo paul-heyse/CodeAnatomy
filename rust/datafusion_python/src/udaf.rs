@@ -28,6 +28,7 @@ use datafusion::logical_expr::{
 use datafusion_ffi::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyTuple};
+use tracing::instrument;
 
 use crate::common::data_type::PyScalarValue;
 use crate::errors::{py_datafusion_err, pyerr_to_dferr, to_datafusion_err, PyDataFusionResult};
@@ -138,6 +139,7 @@ impl Accumulator for RustAccumulator {
     }
 }
 
+#[instrument(skip(accum))]
 pub fn to_rust_accumulator(accum: Py<PyAny>) -> AccumulatorFactoryFunction {
     Arc::new(move |_| -> Result<Box<dyn Accumulator>> {
         let accum = Python::attach(|py| {
@@ -149,6 +151,7 @@ pub fn to_rust_accumulator(accum: Py<PyAny>) -> AccumulatorFactoryFunction {
     })
 }
 
+#[instrument(skip(capsule))]
 fn aggregate_udf_from_capsule(capsule: &Bound<'_, PyCapsule>) -> PyDataFusionResult<AggregateUDF> {
     validate_pycapsule(capsule, "datafusion_aggregate_udf")?;
 

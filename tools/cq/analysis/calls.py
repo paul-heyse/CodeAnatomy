@@ -13,17 +13,36 @@ CallClassification = Literal["would_break", "ambiguous", "ok"]
 class CallSiteLike(Protocol):
     """Protocol for callsite inputs consumed by classifiers."""
 
-    num_args: int
-    kwargs: list[str]
-    has_star_args: bool
-    has_star_kwargs: bool
+    @property
+    def num_args(self) -> int:
+        """Count of positional arguments at the callsite."""
+        ...
+
+    @property
+    def kwargs(self) -> Sequence[str]:
+        """Keyword argument names present at the callsite."""
+        ...
+
+    @property
+    def has_star_args(self) -> bool:
+        """Whether the call uses ``*args`` expansion."""
+        ...
+
+    @property
+    def has_star_kwargs(self) -> bool:
+        """Whether the call uses ``**kwargs`` expansion."""
+        ...
 
 
 def classify_call_against_signature(
     site: CallSiteLike,
     new_params: Sequence[SigParam],
 ) -> tuple[CallClassification, str]:
-    """Classify one callsite against a proposed signature."""
+    """Classify one callsite against a proposed signature.
+
+    Returns:
+        tuple[CallClassification, str]: Classification bucket and reason.
+    """
     if site.has_star_args or site.has_star_kwargs:
         return ("ambiguous", "call uses *args/**kwargs - cannot verify")
 
@@ -63,7 +82,11 @@ def classify_calls_against_signature[
     sites: Sequence[CallSiteT],
     new_params: Sequence[SigParam],
 ) -> dict[CallClassification, list[tuple[CallSiteT, str]]]:
-    """Classify all callsites against a proposed signature."""
+    """Classify all callsites against a proposed signature.
+
+    Returns:
+        dict[CallClassification, list[tuple[CallSiteT, str]]]: Calls grouped by compatibility.
+    """
     buckets: dict[CallClassification, list[tuple[CallSiteT, str]]] = {
         "would_break": [],
         "ambiguous": [],

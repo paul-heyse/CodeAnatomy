@@ -58,8 +58,11 @@ pub(crate) fn install_function_factory(
     ctx: &Bound<'_, PyAny>,
     policy_ipc: &Bound<'_, pyo3::types::PyBytes>,
 ) -> PyResult<()> {
-    datafusion_ext::udf::install_function_factory_native(&extract_session_ctx(ctx)?, policy_ipc.as_bytes())
-        .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))
+    datafusion_ext::udf::install_function_factory_native(
+        &extract_session_ctx(ctx)?,
+        policy_ipc.as_bytes(),
+    )
+    .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))
 }
 
 fn json_string_list(value: Option<&JsonValue>) -> Vec<String> {
@@ -375,11 +378,13 @@ pub(crate) fn install_codeanatomy_runtime(
     .map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to install CodeAnatomy runtime UDFs: {err}"))
     })?;
-    datafusion_ext::install_sql_macro_factory_native(&extract_session_ctx(ctx)?).map_err(|err| {
-        PyRuntimeError::new_err(format!(
-            "Failed to install CodeAnatomy FunctionFactory runtime: {err}"
-        ))
-    })?;
+    datafusion_ext::install_sql_macro_factory_native(&extract_session_ctx(ctx)?).map_err(
+        |err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to install CodeAnatomy FunctionFactory runtime: {err}"
+            ))
+        },
+    )?;
     let planner_names = ["codeanatomy_domain"];
     datafusion_ext::install_expr_planners_native(&extract_session_ctx(ctx)?, &planner_names)
         .map_err(|err| {
@@ -508,7 +513,10 @@ pub(crate) fn install_physical_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
 }
 
 #[pyfunction]
-pub(crate) fn install_expr_planners(ctx: &Bound<'_, PyAny>, planner_names: Vec<String>) -> PyResult<()> {
+pub(crate) fn install_expr_planners(
+    ctx: &Bound<'_, PyAny>,
+    planner_names: Vec<String>,
+) -> PyResult<()> {
     let names: Vec<&str> = planner_names.iter().map(String::as_str).collect();
     datafusion_ext::install_expr_planners_native(&extract_session_ctx(ctx)?, &names)
         .map_err(|err| PyRuntimeError::new_err(format!("ExprPlanner install failed: {err}")))
@@ -524,7 +532,10 @@ pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(capabilities_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(install_codeanatomy_runtime, module)?)?;
     module.add_function(wrap_pyfunction!(install_codeanatomy_policy_config, module)?)?;
-    module.add_function(wrap_pyfunction!(install_codeanatomy_physical_config, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        install_codeanatomy_physical_config,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(install_planner_rules, module)?)?;
     module.add_function(wrap_pyfunction!(install_physical_rules, module)?)?;
     module.add_function(wrap_pyfunction!(install_expr_planners, module)?)?;

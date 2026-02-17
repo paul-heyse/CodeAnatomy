@@ -9,8 +9,13 @@ from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.run_context import RunContext, RunExecutionContext
-from tools.cq.core.schema import CqResult, assign_result_finding_ids, mk_result, ms
-from tools.cq.core.summary_contract import as_run_summary
+from tools.cq.core.schema import (
+    CqResult,
+    assign_result_finding_ids,
+    mk_result,
+    ms,
+    update_result_summary,
+)
 from tools.cq.core.types import QueryLanguage
 from tools.cq.run.q_execution import (
     ParsedQStep,
@@ -65,7 +70,7 @@ def execute_run_plan(
         ctx.root,
     )
     merged = mk_result(run_ctx.to_runmeta("run"))
-    as_run_summary(merged.summary).plan_version = plan.version
+    merged = update_result_summary(merged, {"plan_version": plan.version})
 
     steps = normalize_step_ids(plan.steps)
     executed_results: list[tuple[str, CqResult]] = []
@@ -84,7 +89,7 @@ def execute_run_plan(
         stop_on_error=stop_on_error,
         run_id=run_id,
     ):
-        merge_step_results(merged, step_id, result)
+        merged = merge_step_results(merged, step_id, result)
         executed_results.append((step_id, result))
 
     non_q_results = (
@@ -99,11 +104,14 @@ def execute_run_plan(
         else execute_non_q_steps_parallel(other_steps, plan, ctx, run_id=run_id)
     )
     for step_id, result in non_q_results:
-        merge_step_results(merged, step_id, result)
+        merged = merge_step_results(merged, step_id, result)
         executed_results.append((step_id, result))
 
-    populate_run_summary_metadata(merged, executed_results, total_steps=len(steps))
-    merged.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
+    merged = populate_run_summary_metadata(merged, executed_results, total_steps=len(steps))
+    merged = update_result_summary(
+        merged,
+        {"cache_backend": snapshot_backend_metrics(root=ctx.root)},
+    )
     merged = assign_result_finding_ids(merged)
     maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=run_id)
     maybe_evict_run_cache_tag(root=ctx.root, language="rust", run_id=run_id)

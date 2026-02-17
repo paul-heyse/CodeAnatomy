@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tools.cq.search._shared.core import RgRunRequest
+from tools.cq.search._shared.requests import RgRunRequest
 from tools.cq.search.pipeline.classifier import QueryMode
 from tools.cq.search.pipeline.profiles import SearchLimits
 from tools.cq.search.rg.codec import RgEvent

@@ -1,4 +1,3 @@
-# ruff: noqa: FBT001
 """Command-level e2e tests for `cq ldmd` protocol commands."""
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ def _normalize_ldmd_line(line: str) -> str:
 @pytest.mark.e2e
 def test_ldmd_index_search_get_neighbors(
     run_cq_text: Callable[..., str],
+    *,
     update_golden: bool,
     tmp_path: Path,
 ) -> None:

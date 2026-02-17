@@ -5,8 +5,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+import msgspec
+
 from tools.cq.core.contracts import SummaryBuildRequest
-from tools.cq.core.schema import CqResult
+from tools.cq.core.schema import (
+    CqResult,
+    extend_result_evidence,
+    extend_result_key_findings,
+)
 from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.macros._rust_fallback import rust_fallback_search
 from tools.cq.orchestration.multilang_summary import (
@@ -40,15 +46,19 @@ def apply_rust_macro_fallback(
     macro_name: str,
     fallback_matches: int = 0,
     query: str | None = None,
-) -> None:
-    """Apply shared Rust fallback behavior to a macro result."""
+) -> CqResult:
+    """Apply shared Rust fallback behavior to a macro result.
+
+    Returns:
+        CqResult: Updated result with Rust fallback findings and summary metadata.
+    """
     rust_findings, capability_diags, rust_stats = rust_fallback_search(
         root,
         pattern,
         macro_name=macro_name,
     )
-    result.evidence.extend(rust_findings)
-    result.key_findings.extend(capability_diags)
+    result = extend_result_evidence(result, rust_findings)
+    result = extend_result_key_findings(result, capability_diags)
 
     existing_summary = result.summary.to_dict()
     existing_summary.setdefault("mode", f"macro:{macro_name}")
@@ -60,7 +70,7 @@ def apply_rust_macro_fallback(
         existing_summary,
         fallback_matches=fallback_matches,
     )
-    result.summary = summary_from_mapping(
+    updated_summary = summary_from_mapping(
         build_multilang_summary(
             SummaryBuildRequest(
                 common=existing_summary,
@@ -70,6 +80,7 @@ def apply_rust_macro_fallback(
             )
         )
     )
+    return msgspec.structs.replace(result, summary=updated_summary)
 
 
 __all__ = [

@@ -19,7 +19,11 @@ class SigParam(msgspec.Struct, frozen=True):
 
 
 def parse_signature(sig: str) -> list[SigParam]:
-    """Parse a signature string like ``foo(a, b, *, c=None)`` into params."""
+    """Parse a signature string like ``foo(a, b, *, c=None)`` into params.
+
+    Returns:
+        list[SigParam]: Parsed signature parameters in declaration order.
+    """
     match = re.match(r"^\s*\w+\s*\((.*)\)\s*$", sig.strip())
     inside = match.group(1) if match else sig.strip().strip("()")
 

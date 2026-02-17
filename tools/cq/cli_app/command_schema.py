@@ -21,6 +21,18 @@ class CommonFilterCommandSchema(CqStruct, frozen=True, kw_only=True):
     severity: list[str] = msgspec.field(default_factory=list)
     limit: int | None = None
 
+    @property
+    def has_filters(self) -> bool:
+        """Return whether any filter option is enabled."""
+        return bool(
+            self.include
+            or self.exclude
+            or self.impact
+            or self.confidence
+            or self.severity
+            or self.limit is not None
+        )
+
 
 class SearchCommandSchema(CommonFilterCommandSchema, frozen=True, kw_only=True):
     """Canonical search command schema."""

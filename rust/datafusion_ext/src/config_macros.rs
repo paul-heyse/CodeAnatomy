@@ -47,9 +47,10 @@ impl ConfigParseable for usize {
 
 impl ConfigParseable for u64 {
     fn parse_config(value: &str, key: &str) -> Result<Self> {
-        value.trim().parse::<u64>().map_err(|err| {
-            DataFusionError::Plan(format!("Invalid u64 for {key}: {value} ({err})"))
-        })
+        value
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| DataFusionError::Plan(format!("Invalid u64 for {key}: {value} ({err})")))
     }
 }
 

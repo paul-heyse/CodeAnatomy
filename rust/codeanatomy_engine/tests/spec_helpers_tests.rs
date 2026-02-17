@@ -11,7 +11,10 @@ use serde_json::Value;
 fn canonical_profile_normalizes_expected_inputs() {
     assert_eq!(canonical_rulepack_profile(None), "Default");
     assert_eq!(canonical_rulepack_profile(Some("default")), "Default");
-    assert_eq!(canonical_rulepack_profile(Some("low_latency")), "LowLatency");
+    assert_eq!(
+        canonical_rulepack_profile(Some("low_latency")),
+        "LowLatency"
+    );
     assert_eq!(canonical_rulepack_profile(Some("replay")), "Replay");
     assert_eq!(canonical_rulepack_profile(Some("strict")), "Strict");
     assert_eq!(canonical_rulepack_profile(Some("unknown")), "Default");

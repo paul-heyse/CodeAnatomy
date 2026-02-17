@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from tools.cq.cli_app.options import has_filters as has_cli_filters
 from tools.cq.core.findings_table import (
     FindingsTableOptions,
     apply_filters,
@@ -23,7 +24,7 @@ def apply_result_filters(result: CqResult, filters: FilterConfig) -> CqResult:
     Returns:
         CqResult: Filtered result payload.
     """
-    if not filters.has_filters:
+    if not has_cli_filters(filters):
         return result
 
     records = flatten_result(result)

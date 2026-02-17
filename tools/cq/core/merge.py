@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from tools.cq.core.schema import CqResult, DetailPayload, Finding, Section
+import msgspec
+
+from tools.cq.core.schema import (
+    CqResult,
+    DetailPayload,
+    Finding,
+    Section,
+    extend_result_evidence,
+    extend_result_key_findings,
+    update_result_summary,
+)
 
 
 def _clone_with_provenance(
@@ -24,32 +34,60 @@ def _clone_with_provenance(
     )
 
 
-def merge_step_results(merged: CqResult, step_id: str, step_result: CqResult) -> None:
-    """Merge a step result into the aggregated run result."""
-    source_macro = step_result.run.macro
-    merged.summary.steps.append(step_id)
-    merged.summary.step_summaries[step_id] = step_result.summary.to_dict()
+def merge_step_results(merged: CqResult, step_id: str, step_result: CqResult) -> CqResult:
+    """Merge a step result into the aggregated run result.
 
-    merged.key_findings.extend(
-        _clone_with_provenance(finding, step_id=step_id, source_macro=source_macro)
-        for finding in step_result.key_findings
+    Returns:
+        CqResult: Updated merged run result.
+    """
+    source_macro = step_result.run.macro
+    merged = update_result_summary(
+        merged,
+        {
+            "steps": [*merged.summary.steps, step_id],
+            "step_summaries": {
+                **merged.summary.step_summaries,
+                step_id: step_result.summary.to_dict(),
+            },
+        },
     )
-    merged.evidence.extend(
-        _clone_with_provenance(finding, step_id=step_id, source_macro=source_macro)
-        for finding in step_result.evidence
+
+    merged = extend_result_key_findings(
+        merged,
+        (
+            _clone_with_provenance(finding, step_id=step_id, source_macro=source_macro)
+            for finding in step_result.key_findings
+        ),
     )
-    merged.sections.extend(
-        Section(
-            title=f"{step_id}: {section.title}",
-            findings=[
-                _clone_with_provenance(finding, step_id=step_id, source_macro=source_macro)
-                for finding in section.findings
+    merged = extend_result_evidence(
+        merged,
+        (
+            _clone_with_provenance(finding, step_id=step_id, source_macro=source_macro)
+            for finding in step_result.evidence
+        ),
+    )
+    return msgspec.structs.replace(
+        merged,
+        sections=[
+            *merged.sections,
+            *[
+                Section(
+                    title=f"{step_id}: {section.title}",
+                    findings=[
+                        _clone_with_provenance(
+                            finding,
+                            step_id=step_id,
+                            source_macro=source_macro,
+                        )
+                        for finding in section.findings
+                    ],
+                    collapsed=section.collapsed,
+                )
+                for section in step_result.sections
             ],
-            collapsed=section.collapsed,
-        )
-        for section in step_result.sections
+        ],
+        artifacts=[*merged.artifacts, *step_result.artifacts],
     )
-    merged.artifacts.extend(step_result.artifacts)
 
 
 __all__ = [

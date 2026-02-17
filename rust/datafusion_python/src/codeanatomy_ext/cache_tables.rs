@@ -228,10 +228,9 @@ fn runtime_execution_metrics_payload(ctx: &SessionContext) -> serde_json::Value 
     let metadata_cache_entries = saturating_i64_from_usize(metadata_entries.len());
     let memory_reserved = saturating_i64_from_usize(runtime_env.memory_pool.reserved());
     let (memory_limit_kind, memory_limit_bytes) = match runtime_env.memory_pool.memory_limit() {
-        datafusion::execution::memory_pool::MemoryLimit::Finite(value) => (
-            "finite",
-            Some(saturating_i64_from_usize(value)),
-        ),
+        datafusion::execution::memory_pool::MemoryLimit::Finite(value) => {
+            ("finite", Some(saturating_i64_from_usize(value)))
+        }
         datafusion::execution::memory_pool::MemoryLimit::Infinite => ("infinite", None),
         datafusion::execution::memory_pool::MemoryLimit::Unknown => ("unknown", None),
     };
@@ -307,7 +306,10 @@ pub(crate) fn runtime_execution_metrics_snapshot(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    json_to_py(py, &runtime_execution_metrics_payload(&extract_session_ctx(ctx)?))
+    json_to_py(
+        py,
+        &runtime_execution_metrics_payload(&extract_session_ctx(ctx)?),
+    )
 }
 
 #[pyfunction]
@@ -324,6 +326,9 @@ pub(crate) fn register_cache_tables(
 
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(register_cache_tables, module)?)?;
-    module.add_function(wrap_pyfunction!(runtime_execution_metrics_snapshot, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        runtime_execution_metrics_snapshot,
+        module
+    )?)?;
     Ok(())
 }

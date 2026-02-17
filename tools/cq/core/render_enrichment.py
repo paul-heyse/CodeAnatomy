@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import msgspec
+
 from tools.cq.core.enrichment_facts import (
     additional_language_payload,
     resolve_fact_clusters,
@@ -110,7 +112,7 @@ def extract_compact_details_payload(finding: Finding) -> dict[str, object] | Non
     return compact or None
 
 
-def merge_enrichment_details(finding: Finding, payload: dict[str, object]) -> None:
+def merge_enrichment_details(finding: Finding, payload: dict[str, object]) -> Finding:
     """Merge enrichment payload into finding details.
 
     Parameters
@@ -119,11 +121,18 @@ def merge_enrichment_details(finding: Finding, payload: dict[str, object]) -> No
         Finding to update.
     payload : dict[str, object]
         Enrichment payload to merge.
+
+    Returns:
+    -------
+    Finding
+        Updated finding with merged details.
     """
+    details = finding.details
     for key, value in payload.items():
-        if key in finding.details:
+        if key in details:
             continue
-        finding.details[key] = value
+        details = details.with_entry(key, value)
+    return msgspec.structs.replace(finding, details=details)
 
 
 def _show_unresolved_facts() -> bool:

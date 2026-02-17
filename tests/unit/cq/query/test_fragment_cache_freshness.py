@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
 from tools.cq.core.cache.telemetry import reset_cache_telemetry, snapshot_cache_telemetry
-from tools.cq.query.executor import _execute_ast_grep_rules
+from tools.cq.query.executor_runtime import _execute_ast_grep_rules
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 

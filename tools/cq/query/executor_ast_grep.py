@@ -5,46 +5,34 @@ This module contains ast-grep match execution logic using ast-grep-py.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-import msgspec
 from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import (
     SgRecord,
-    group_records_by_file,
     is_variadic_separator,
     node_payload,
 )
-from tools.cq.core.cache.fragment_codecs import decode_fragment_payload
-from tools.cq.core.cache.fragment_contracts import (
-    FragmentEntryV1,
-    FragmentHitV1,
-    FragmentMissV1,
-    FragmentWriteV1,
-)
-from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.schema import Anchor, Finding
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.types import QueryLanguage
-from tools.cq.query.cache_converters import (
-    cache_record_to_record,
-    record_to_cache_record,
+from tools.cq.query.fragment_cache import (
+    PatternFragmentContext,
+    assemble_pattern_output,
+    build_pattern_fragment_context,
+    decode_pattern_fragment_payload,
+    pattern_data_from_hits,
+    pattern_fragment_entries,
+    scan_pattern_fragment_misses,
 )
-from tools.cq.query.cache_converters import (
-    finding_sort_key_lightweight as finding_sort_key,
-)
-from tools.cq.query.cache_converters import (
-    record_sort_key_lightweight as record_sort_key,
-)
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, is_rust_language
+from tools.cq.query.language import is_rust_language
 from tools.cq.query.match_contracts import MatchData, MatchRange, MatchRangePoint
 from tools.cq.query.metavar import (
     apply_metavar_filters,
@@ -54,13 +42,8 @@ from tools.cq.query.metavar import (
 )
 from tools.cq.query.planner import AstGrepRule
 from tools.cq.query.query_cache import (
-    QueryFragmentCacheContext,
-    QueryFragmentContextBuildRequest,
-    build_query_fragment_cache_context,
-    build_query_fragment_entries,
     run_query_fragment_scan,
 )
-from tools.cq.search.cache.contracts import PatternFragmentCacheV1
 from tools.cq.search.rg.prefilter import extract_literal_fragments, rg_prefilter_files
 
 if TYPE_CHECKING:
@@ -72,18 +55,8 @@ from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.language import file_extensions_for_scope
 
-_ENTITY_FRAGMENT_PAYLOAD_LEN = 3
 _MIN_PREFILTER_LITERAL_LEN = 3
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class PatternFragmentContext:
-    """Context for pattern fragment caching."""
-
-    cache_ctx: QueryFragmentCacheContext
-    rules_digest: str
-    query_filters_digest: str
 
 
 @dataclass(frozen=True)
@@ -187,7 +160,7 @@ def execute_ast_grep_rules(
         entries=entries,
         run_id=run_id,
         decode=decode_pattern_fragment_payload,
-        scan_misses=lambda misses: _scan_pattern_fragment_misses(
+        scan_misses=lambda misses: scan_pattern_fragment_misses(
             rules=rules,
             query=query,
             fragment_ctx=fragment_ctx,
@@ -206,214 +179,6 @@ def execute_ast_grep_rules(
         records_by_rel=records_by_rel,
         raw_by_rel=raw_by_rel,
     )
-
-
-def _scan_pattern_fragment_misses(
-    *,
-    rules: tuple[AstGrepRule, ...],
-    query: Query | None,
-    fragment_ctx: PatternFragmentContext,
-    misses: list[FragmentMissV1],
-) -> tuple[
-    tuple[
-        dict[str, list[Finding]],
-        dict[str, list[SgRecord]],
-        dict[str, list[MatchData]],
-    ],
-    list[FragmentWriteV1],
-]:
-    miss_data = compute_pattern_miss_data(
-        rules=rules,
-        query=query,
-        fragment_ctx=fragment_ctx,
-        misses=tuple(misses),
-    )
-    writes: list[FragmentWriteV1] = []
-    normalized_findings: dict[str, list[Finding]] = {}
-    normalized_records: dict[str, list[SgRecord]] = {}
-    normalized_raw: dict[str, list[MatchData]] = {}
-    for miss in misses:
-        rel_path = miss.entry.file
-        findings = sorted(miss_data[0].get(rel_path, []), key=finding_sort_key)
-        records = sorted(miss_data[1].get(rel_path, []), key=record_sort_key)
-        raw_matches = sorted(miss_data[2].get(rel_path, []), key=raw_match_sort_key)
-        normalized_findings[rel_path] = findings
-        normalized_records[rel_path] = records
-        normalized_raw[rel_path] = raw_matches
-        writes.append(
-            FragmentWriteV1(
-                entry=miss.entry,
-                payload=PatternFragmentCacheV1(
-                    findings=cast("list[dict[str, object]]", contract_to_builtins(findings)),
-                    records=[record_to_cache_record(item) for item in records],
-                    raw_matches=cast("list[dict[str, object]]", contract_to_builtins(raw_matches)),
-                ),
-            )
-        )
-    return (normalized_findings, normalized_records, normalized_raw), writes
-
-
-def build_pattern_fragment_context(
-    *,
-    root: Path,
-    paths: list[Path],
-    query: Query | None,
-    rules: tuple[AstGrepRule, ...],
-    globs: list[str] | None,
-    run_id: str | None,
-) -> PatternFragmentContext:
-    """Build context for pattern fragment caching.
-
-    Returns:
-        PatternFragmentContext: Cache/runtime context for pattern fragment operations.
-    """
-    lang = query.primary_language if query is not None else DEFAULT_QUERY_LANGUAGE
-    rules_digest = hashlib.sha256(
-        msgspec.json.encode(contract_to_builtins(list(rules)))
-    ).hexdigest()
-    query_filters_digest = hashlib.sha256(
-        msgspec.json.encode(
-            contract_to_builtins(list(query.metavar_filters if query is not None else []))
-        )
-    ).hexdigest()
-    return PatternFragmentContext(
-        cache_ctx=build_query_fragment_cache_context(
-            QueryFragmentContextBuildRequest(
-                root=root,
-                files=paths,
-                scope_roots=paths,
-                scope_globs=globs,
-                namespace="pattern_fragment",
-                language=lang,
-                scope_hash_extras={"rules_digest": rules_digest},
-                run_id=run_id,
-            )
-        ),
-        rules_digest=rules_digest,
-        query_filters_digest=query_filters_digest,
-    )
-
-
-def pattern_fragment_entries(fragment_ctx: PatternFragmentContext) -> list[FragmentEntryV1]:
-    """Build fragment entries for pattern caching.
-
-    Returns:
-        list[FragmentEntryV1]: Cache entry descriptors for every scoped file path.
-    """
-    return build_query_fragment_entries(
-        fragment_ctx.cache_ctx,
-        extras_builder=lambda _path, _rel: {
-            "rules_digest": fragment_ctx.rules_digest,
-            "query_filters_digest": fragment_ctx.query_filters_digest,
-        },
-    )
-
-
-def decode_pattern_fragment_payload(payload: object) -> object | None:
-    """Decode pattern fragment cache payload.
-
-    Returns:
-        object | None: Decoded ``(findings, records, raw_matches)`` tuple, or ``None``.
-    """
-    decoded = decode_fragment_payload(payload, type_=PatternFragmentCacheV1)
-    if decoded is None:
-        return None
-    findings = [msgspec.convert(item, type=Finding) for item in decoded.findings]
-    records = [cache_record_to_record(item) for item in decoded.records]
-    raw_matches = [msgspec.convert(item, type=MatchData) for item in decoded.raw_matches]
-    return (findings, records, raw_matches)
-
-
-def pattern_data_from_hits(
-    hits: tuple[FragmentHitV1, ...],
-) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[MatchData]]]:
-    """Extract pattern data from cache hits.
-
-    Returns:
-        tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[MatchData]]]:
-            File-bucketed findings, records, and raw-match payloads.
-    """
-    findings_by_rel: dict[str, list[Finding]] = {}
-    records_by_rel: dict[str, list[SgRecord]] = {}
-    raw_by_rel: dict[str, list[MatchData]] = {}
-    for hit in hits:
-        payload = hit.payload
-        if not (
-            isinstance(payload, tuple)
-            and len(payload) == _ENTITY_FRAGMENT_PAYLOAD_LEN
-            and isinstance(payload[0], list)
-            and isinstance(payload[1], list)
-            and isinstance(payload[2], list)
-        ):
-            continue
-        findings_by_rel[hit.entry.file] = cast("list[Finding]", payload[0])
-        records_by_rel[hit.entry.file] = cast("list[SgRecord]", payload[1])
-        raw_by_rel[hit.entry.file] = cast("list[MatchData]", payload[2])
-    return findings_by_rel, records_by_rel, raw_by_rel
-
-
-def compute_pattern_miss_data(
-    *,
-    rules: tuple[AstGrepRule, ...],
-    query: Query | None,
-    fragment_ctx: PatternFragmentContext,
-    misses: tuple[FragmentMissV1, ...],
-) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[MatchData]]]:
-    """Compute pattern data for cache misses.
-
-    Returns:
-        tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[MatchData]]]:
-            File-bucketed findings, records, and raw-match payloads for missed entries.
-    """
-    miss_paths = [fragment_ctx.cache_ctx.root / miss.entry.file for miss in misses]
-    state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
-    run_ast_grep(
-        AstGrepExecutionContext(
-            rules=rules,
-            paths=miss_paths,
-            root=fragment_ctx.cache_ctx.root,
-            query=query,
-            lang=fragment_ctx.cache_ctx.language,
-        ),
-        state,
-    )
-    miss_records = group_records_by_file(state.records)
-    miss_findings: dict[str, list[Finding]] = {}
-    for finding in state.findings:
-        rel_path = finding.anchor.file if finding.anchor is not None else ""
-        miss_findings.setdefault(rel_path, []).append(finding)
-    miss_raw: dict[str, list[MatchData]] = {}
-    for row in state.raw_matches:
-        miss_raw.setdefault(row.file, []).append(row)
-    return miss_findings, miss_records, miss_raw
-
-
-def assemble_pattern_output(
-    *,
-    paths: list[Path],
-    root: Path,
-    findings_by_rel: dict[str, list[Finding]],
-    records_by_rel: dict[str, list[SgRecord]],
-    raw_by_rel: dict[str, list[MatchData]],
-) -> tuple[list[Finding], list[SgRecord], list[MatchData]]:
-    """Assemble pattern output from file-bucketed data.
-
-    Returns:
-        tuple[list[Finding], list[SgRecord], list[MatchData]]:
-            Deterministically ordered findings, records, and raw matches.
-    """
-    findings: list[Finding] = []
-    records: list[SgRecord] = []
-    raw_matches: list[MatchData] = []
-    for file_path in paths:
-        rel_path = normalize_repo_relative_path(str(file_path), root=root)
-        findings.extend(findings_by_rel.get(rel_path, []))
-        records.extend(records_by_rel.get(rel_path, []))
-        raw_matches.extend(raw_by_rel.get(rel_path, []))
-    findings.sort(key=finding_sort_key)
-    records.sort(key=record_sort_key)
-    raw_matches.sort(key=raw_match_sort_key)
-    return findings, records, raw_matches
 
 
 def collect_rule_prefilter_literals(rules: tuple[AstGrepRule, ...]) -> tuple[str, ...]:
@@ -543,7 +308,7 @@ def process_ast_grep_rule(
             continue
         finding, record = match_to_finding(match_data)
         if finding:
-            apply_metavar_details(
+            finding = apply_metavar_details(
                 match,
                 finding,
                 metavar_names=metavar_names,
@@ -712,7 +477,7 @@ def apply_metavar_details(
     *,
     metavar_names: tuple[str, ...],
     variadic_names: frozenset[str],
-) -> None:
+) -> Finding:
     """Apply metavar capture details to finding."""
     captures = extract_match_metavars(
         match,
@@ -721,7 +486,9 @@ def apply_metavar_details(
         include_multi=True,
     )
     if captures:
-        finding.details["metavar_captures"] = captures
+        details = finding.details.with_entry("metavar_captures", captures)
+        return msgspec.structs.replace(finding, details=details)
+    return finding
 
 
 def extract_match_metavars(
@@ -942,11 +709,6 @@ def collect_ast_grep_match_spans(
     return matches
 
 
-def raw_match_sort_key(match: MatchData) -> tuple[str, int, int]:
-    """Return sort key for raw match data."""
-    return (match.file, match.range.start.line, match.range.start.column)
-
-
 def collect_match_spans(
     rules: tuple[AstGrepRule, ...],
     paths: list[Path],
@@ -1033,18 +795,15 @@ __all__ = [
     "assemble_pattern_output",
     "build_match_data",
     "build_pattern_fragment_context",
-    "cache_record_to_record",
     "coerce_int",
     "collect_ast_grep_match_spans",
     "collect_match_spans",
     "collect_rule_prefilter_literals",
-    "compute_pattern_miss_data",
     "decode_pattern_fragment_payload",
     "execute_ast_grep_rules",
     "execute_rule_matches",
     "extract_match_metavars",
     "filter_records_by_spans",
-    "finding_sort_key",
     "group_match_spans",
     "is_variadic_separator",
     "match_passes_filters",
@@ -1057,9 +816,6 @@ __all__ = [
     "pattern_fragment_entries",
     "process_ast_grep_file",
     "process_ast_grep_rule",
-    "raw_match_sort_key",
-    "record_sort_key",
-    "record_to_cache_record",
     "resolve_rule_metavar_names",
     "resolve_rule_variadic_metavars",
     "run_ast_grep",

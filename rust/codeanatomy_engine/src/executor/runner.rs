@@ -147,9 +147,7 @@ pub async fn execute_and_materialize_with_plans(
             delta_location: Some(delta_location.to_string()),
             rows_written,
             partition_count: partition_count as u32,
-            delta_version: outcome.delta_version,
-            files_added: outcome.files_added,
-            bytes_written: outcome.bytes_written,
+            write_outcome: outcome,
         });
     }
 

@@ -193,24 +193,23 @@ fn apply_priority_ordering(ruleset: &mut CpgRuleSet, overrides: &[RulePriority])
         .map(|rp| (rp.rule_name.as_str(), rp.priority))
         .collect();
 
-    // The default priority for rules not in the override map is i32::MAX,
-    // so they sort to the end and preserve their relative order.
-    let sort_fn = |rules: &mut Vec<Arc<dyn AnalyzerRule + Send + Sync>>| {
-        rules.sort_by_key(|r| *priority_map.get(r.name()).unwrap_or(&i32::MAX));
-    };
-    sort_fn(&mut ruleset.analyzer_rules);
+    macro_rules! sort_rules {
+        ($rules:expr) => {
+            $rules.sort_by(|left, right| {
+                let left_name = left.name();
+                let right_name = right.name();
+                let left_priority = priority_map.get(left_name).copied().unwrap_or(i32::MAX);
+                let right_priority = priority_map.get(right_name).copied().unwrap_or(i32::MAX);
+                left_priority
+                    .cmp(&right_priority)
+                    .then_with(|| left_name.cmp(right_name))
+            });
+        };
+    }
 
-    // Sort optimizer rules
-    let sort_opt_fn = |rules: &mut Vec<Arc<dyn OptimizerRule + Send + Sync>>| {
-        rules.sort_by_key(|r| *priority_map.get(r.name()).unwrap_or(&i32::MAX));
-    };
-    sort_opt_fn(&mut ruleset.optimizer_rules);
-
-    // Sort physical optimizer rules
-    let sort_phys_fn = |rules: &mut Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>| {
-        rules.sort_by_key(|r| *priority_map.get(r.name()).unwrap_or(&i32::MAX));
-    };
-    sort_phys_fn(&mut ruleset.physical_rules);
+    sort_rules!(ruleset.analyzer_rules);
+    sort_rules!(ruleset.optimizer_rules);
+    sort_rules!(ruleset.physical_rules);
 }
 
 /// Compute a BLAKE3 fingerprint from rule names in deterministic order.

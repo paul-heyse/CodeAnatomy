@@ -30,6 +30,7 @@ from tools.cq.core.cache.telemetry import (
     record_cache_set,
 )
 from tools.cq.core.contracts import contract_to_builtins, require_mapping
+from tools.cq.core.enrichment_mode import IncrementalEnrichmentModeV1
 from tools.cq.core.types import QueryLanguage
 from tools.cq.query.language import constrain_include_globs_for_language
 from tools.cq.search._shared.types import QueryMode
@@ -38,7 +39,6 @@ from tools.cq.search.pipeline.candidate_phase import run_candidate_phase
 from tools.cq.search.pipeline.classification import classify_match
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.contracts import SearchPartitionPlanV1
-from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
     LanguageSearchResult,
@@ -99,11 +99,11 @@ def run_search_partition(
     *,
     ctx: SearchConfig,
     mode: QueryMode,
-) -> object:
+) -> LanguageSearchResult:
     """Run one language partition search flow with phased cache orchestration.
 
     Returns:
-        object: Language-search result payload for this partition.
+        LanguageSearchResult: Language-search result payload for this partition.
     """
     lang = plan.language
     scope = _scope_context(ctx, lang, mode)

@@ -12,10 +12,12 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{Expr, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 
+use crate::compiler::plan_utils::view_index;
+use crate::contracts::pushdown_mode::PushdownEnforcementMode;
 use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use crate::providers::pushdown_contract::{
     FilterPushdownStatus, PushdownContractAssertion, PushdownContractReport,
-    PushdownContractResult, PushdownEnforcementMode, PushdownProbe,
+    PushdownContractResult, PushdownProbe,
 };
 use crate::spec::execution_spec::SemanticExecutionSpec;
 use crate::spec::relations::{ViewDefinition, ViewTransform};
@@ -29,13 +31,6 @@ enum ResolvedFilterSource {
         right_source: String,
     },
     Unsupported(String),
-}
-
-fn view_index(spec: &SemanticExecutionSpec) -> HashMap<&str, &ViewDefinition> {
-    spec.view_definitions
-        .iter()
-        .map(|view| (view.name.as_str(), view))
-        .collect()
 }
 
 fn resolve_single_input(
@@ -358,10 +353,8 @@ fn collect_filter_observations(
 ) -> (BTreeMap<String, HashSet<String>>, HashSet<String>) {
     let mut scan_filters_by_table: BTreeMap<String, HashSet<String>> = BTreeMap::new();
     let mut residual_filters: HashSet<String> = HashSet::new();
-    let mut stack = vec![plan.clone()];
-
-    while let Some(node) = stack.pop() {
-        match &node {
+    let _ = plan.apply(|node| {
+        match node {
             LogicalPlan::TableScan(scan) => {
                 let table_name = scan.table_name.to_string();
                 let entry = scan_filters_by_table.entry(table_name).or_default();
@@ -374,10 +367,8 @@ fn collect_filter_observations(
             }
             _ => {}
         }
-        for input in node.inputs() {
-            stack.push((*input).clone());
-        }
-    }
+        Ok(TreeNodeRecursion::Continue)
+    });
 
     (scan_filters_by_table, residual_filters)
 }

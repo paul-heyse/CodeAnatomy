@@ -22,7 +22,7 @@ def test_execute_entity_query_delegates_to_executor(
         assert ctx is sentinel_ctx
         return sentinel_result
 
-    monkeypatch.setattr("tools.cq.query.executor._execute_entity_query", _fake_execute)
+    monkeypatch.setattr("tools.cq.query.executor_runtime.execute_entity_query", _fake_execute)
 
     assert executor_entity.execute_entity_query(sentinel_ctx) is sentinel_result
 
@@ -39,7 +39,7 @@ def test_execute_entity_query_from_records_delegates(
         return sentinel_result
 
     monkeypatch.setattr(
-        "tools.cq.query.executor.execute_entity_query_from_records",
+        "tools.cq.query.executor_runtime.execute_entity_query_from_records",
         _fake_execute,
     )
 

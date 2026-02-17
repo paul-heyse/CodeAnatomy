@@ -49,7 +49,7 @@ fn schema_to_ipc(schema: &SchemaRef) -> Result<Vec<u8>, DeltaTableError> {
     Ok(buffer.into_inner())
 }
 
-pub fn snapshot_payload(snapshot: &DeltaSnapshotInfo) -> HashMap<String, serde_json::Value> {
+pub fn snapshot_info_as_values(snapshot: &DeltaSnapshotInfo) -> HashMap<String, serde_json::Value> {
     let mut payload: HashMap<String, serde_json::Value> = HashMap::new();
     payload.insert(
         "table_uri".to_owned(),
@@ -194,7 +194,7 @@ fn add_payload_row(add: &DeltaAddActionPayload) -> HashMap<String, serde_json::V
 }
 
 pub fn mutation_report_payload(report: &DeltaMutationReport) -> HashMap<String, serde_json::Value> {
-    let mut payload = snapshot_payload(&report.snapshot);
+    let mut payload = snapshot_info_as_values(&report.snapshot);
     payload.insert(
         "operation".to_owned(),
         serde_json::Value::String(report.operation.clone()),
@@ -210,7 +210,7 @@ pub fn mutation_report_payload(report: &DeltaMutationReport) -> HashMap<String, 
 pub fn maintenance_report_payload(
     report: &DeltaMaintenanceReport,
 ) -> HashMap<String, serde_json::Value> {
-    let mut payload = snapshot_payload(&report.snapshot);
+    let mut payload = snapshot_info_as_values(&report.snapshot);
     payload.insert(
         "operation".to_owned(),
         serde_json::Value::String(report.operation.clone()),

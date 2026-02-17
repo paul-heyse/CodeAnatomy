@@ -9,7 +9,6 @@
 
 use arrow::datatypes::Schema as ArrowSchema;
 use datafusion::logical_expr::{Expr, LogicalPlan};
-use datafusion::physical_plan::displayable;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion_common::Result;
@@ -18,6 +17,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::compiler::optimizer_pipeline::OptimizerPassTrace;
+use crate::compiler::plan_utils::{blake3_hash_bytes, normalize_logical, normalize_physical};
 use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use crate::providers::pushdown_contract::PushdownContractReport;
 use crate::schema::introspection::hash_arrow_schema;
@@ -603,29 +603,6 @@ pub fn try_sql_unparse(plan: &LogicalPlan) -> Result<String> {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Produce a deterministic normalized text representation of a logical plan.
-///
-/// Uses DataFusion's `display_indent()` which provides a stable, indented
-/// representation suitable for digest computation.
-fn normalize_logical(plan: &LogicalPlan) -> String {
-    format!("{}", plan.display_indent())
-}
-
-/// Produce a deterministic normalized text representation of a physical plan.
-///
-/// Uses DataFusion's `displayable()` with indentation for a stable
-/// representation suitable for digest computation.
-fn normalize_physical(plan: &dyn ExecutionPlan) -> String {
-    format!("{}", displayable(plan).indent(true))
-}
-
-/// Compute a blake3 hash over raw bytes.
-fn blake3_hash_bytes(bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(bytes);
-    *hasher.finalize().as_bytes()
-}
-
 /// Compute a blake3 hash over an Arrow schema.
 ///
 /// Delegates to the authoritative schema hashing implementation.
@@ -644,11 +621,12 @@ fn extract_provider_lineage(
     optimized_plan: &LogicalPlan,
     provider_identities: &[ProviderIdentity],
 ) -> Vec<ProviderLineageEntry> {
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+
     let mut entries = Vec::new();
-    let mut stack = vec![optimized_plan.clone()];
     let mut scan_index = 0usize;
-    while let Some(plan) = stack.pop() {
-        if let LogicalPlan::TableScan(scan) = &plan {
+    let _ = optimized_plan.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node {
             let table_name = scan.table_name.to_string();
             if let Some(identity) = provider_identities
                 .iter()
@@ -664,10 +642,8 @@ fn extract_provider_lineage(
                 scan_index += 1;
             }
         }
-        for input in plan.inputs() {
-            stack.push((*input).clone());
-        }
-    }
+        Ok(TreeNodeRecursion::Continue)
+    });
     entries.sort_by(|a, b| a.provider_name.cmp(&b.provider_name));
     entries
 }
@@ -686,8 +662,7 @@ fn extract_required_udfs(optimized_plan: &LogicalPlan) -> Vec<String> {
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 
     let mut names: BTreeSet<String> = BTreeSet::new();
-    let mut stack = vec![optimized_plan.clone()];
-    while let Some(plan) = stack.pop() {
+    let _ = optimized_plan.apply(|plan| {
         for expr in plan.expressions() {
             let _ = expr.apply(|child_expr| {
                 if let Expr::ScalarFunction(func) = child_expr {
@@ -696,10 +671,8 @@ fn extract_required_udfs(optimized_plan: &LogicalPlan) -> Vec<String> {
                 Ok(TreeNodeRecursion::Continue)
             });
         }
-        for input in plan.inputs() {
-            stack.push((*input).clone());
-        }
-    }
+        Ok(TreeNodeRecursion::Continue)
+    });
     names.into_iter().collect()
 }
 

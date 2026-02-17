@@ -61,7 +61,9 @@ impl PyGetIndexedField {
     fn key(&self) -> PyResult<PyLiteral> {
         match &self.indexed_field.field {
             GetFieldAccess::NamedStructField { name, .. } => Ok(name.clone().into()),
-            _ => todo!(),
+            other => Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
+                "GetFieldAccess::{other:?} is not yet supported"
+            ))),
         }
     }
 

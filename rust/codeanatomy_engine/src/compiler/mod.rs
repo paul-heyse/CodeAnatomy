@@ -6,6 +6,7 @@
 pub mod cache_boundaries;
 pub mod cache_policy;
 pub mod compile_contract;
+pub mod compile_phases;
 pub mod cost_model;
 pub mod cpg_builder;
 pub mod graph_validator;
@@ -15,6 +16,7 @@ pub mod lineage;
 pub mod optimizer_pipeline;
 pub mod param_compiler;
 pub mod plan_bundle;
+pub mod plan_utils;
 pub mod plan_codec;
 pub mod plan_compiler;
 pub mod pushdown_probe_extract;

@@ -19,6 +19,7 @@ from tools.cq.search.tree_sitter.query.compiler import compile_query
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Tree
+    from tools.cq.search.tree_sitter.core.parse import ParseSession
 
 try:
     from tree_sitter import Parser as _TreeSitterParser
@@ -88,6 +89,7 @@ def _parse_with_session(
     source: str,
     *,
     cache_key: str | None,
+    parse_session: ParseSession | None = None,
 ) -> tuple[Tree | None, bytes, tuple[object, ...]]:
     """Parse Rust source using cached session and parser.
 
@@ -106,7 +108,7 @@ def _parse_with_session(
     source_bytes = source.encode("utf-8", errors="replace")
     if _TreeSitterParser is None:
         return None, source_bytes, ()
-    session = get_parse_session(
+    session = parse_session or get_parse_session(
         language="rust", parser_factory=lambda: make_parser_from_language(_rust_language())
     )
     _touch_tree_cache(_session=session, cache_key=cache_key)

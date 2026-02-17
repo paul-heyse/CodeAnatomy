@@ -5,7 +5,7 @@ Constructs section objects for callers, callees, imports, raises, scope, and byt
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -199,8 +199,8 @@ def build_entity_neighborhood_preview_section(
 
 
 def build_callers_section(
-    target_defs: list[SgRecord],
-    all_calls: list[SgRecord],
+    target_defs: Sequence[SgRecord],
+    all_calls: Sequence[SgRecord],
     index: FileIntervalIndex,
     root: Path,
 ) -> Section:
@@ -233,7 +233,7 @@ def build_callers_section(
 
 
 def build_call_target_context(
-    target_defs: list[SgRecord],
+    target_defs: Sequence[SgRecord],
     index: FileIntervalIndex,
 ) -> CallTargetContext:
     """Build call target context from definitions.
@@ -276,7 +276,7 @@ def build_call_target_context(
 
 
 def collect_call_contexts(
-    all_calls: list[SgRecord],
+    all_calls: Sequence[SgRecord],
     index: FileIntervalIndex,
     target_ctx: CallTargetContext,
 ) -> list[tuple[SgRecord, str, SgRecord | None]]:
@@ -394,8 +394,8 @@ def build_caller_findings(
 
 
 def build_callees_section(
-    target_defs: list[SgRecord],
-    calls_by_def: dict[SgRecord, list[SgRecord]],
+    target_defs: Sequence[SgRecord],
+    calls_by_def: Mapping[SgRecord, Sequence[SgRecord]],
     root: Path,
 ) -> Section:
     """Build section showing callees for target definitions.
@@ -415,7 +415,7 @@ def build_callees_section(
         Callees section for the report
     """
     findings: list[Finding] = []
-    evidence_map = build_def_evidence_map(target_defs, root)
+    evidence_map = build_def_evidence_map(list(target_defs), root)
 
     for def_record in target_defs:
         def_name = extract_def_name(def_record) or "<unknown>"
@@ -451,8 +451,8 @@ def build_callees_section(
 
 
 def build_imports_section(
-    target_defs: list[SgRecord],
-    all_records: list[SgRecord],
+    target_defs: Sequence[SgRecord],
+    all_records: Sequence[SgRecord],
 ) -> Section:
     """Build section showing imports within target files.
 
@@ -487,8 +487,8 @@ def build_imports_section(
 
 
 def build_raises_section(
-    target_defs: list[SgRecord],
-    all_records: list[SgRecord],
+    target_defs: Sequence[SgRecord],
+    all_records: Sequence[SgRecord],
     index: FileIntervalIndex,
 ) -> Section:
     """Build section showing raises/excepts within target definitions.
@@ -543,9 +543,9 @@ def build_raises_section(
 
 
 def build_scope_section(
-    target_defs: list[SgRecord],
+    target_defs: Sequence[SgRecord],
     root: Path,
-    calls_by_def: dict[SgRecord, list[SgRecord]],
+    calls_by_def: Mapping[SgRecord, Sequence[SgRecord]],
 ) -> Section:
     """Build section showing scope details for target definitions.
 
@@ -600,7 +600,7 @@ def build_scope_section(
 
 
 def build_bytecode_surface_section(
-    target_defs: list[SgRecord],
+    target_defs: Sequence[SgRecord],
     root: Path,
 ) -> Section:
     """Build section showing bytecode surface info for target definitions.

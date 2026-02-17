@@ -3,14 +3,14 @@
 pub mod async_runtime;
 pub mod async_udf_config;
 pub mod compat;
-pub mod config_macros;
+pub(crate) mod config_macros;
 pub mod delta_common;
 pub mod delta_control_plane;
 pub mod delta_maintenance;
 pub mod delta_mutations;
 pub mod delta_observability;
 pub mod delta_protocol;
-pub mod error_conversion;
+pub(crate) mod error_conversion;
 pub mod errors;
 pub mod expr_planner;
 pub mod function_types;

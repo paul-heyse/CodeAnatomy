@@ -11,6 +11,7 @@ use datafusion_common::Result;
 use std::collections::HashMap;
 
 use crate::compiler::cache_policy::{compute_cache_boundaries, CachePlacementPolicy};
+use crate::compiler::plan_utils::compute_view_fanout;
 use crate::compiler::table_registration::register_or_replace_table;
 use crate::spec::execution_spec::SemanticExecutionSpec;
 use crate::spec::relations::ViewTransform;
@@ -18,26 +19,7 @@ use crate::tuner::metrics_store::MetricsStore;
 
 /// Compute fanout (downstream reference count) for each view.
 pub(crate) fn compute_fanout(spec: &SemanticExecutionSpec) -> HashMap<String, usize> {
-    let mut fanout: HashMap<String, usize> = HashMap::new();
-
-    // Initialize all views with zero fanout
-    for view in &spec.view_definitions {
-        fanout.insert(view.name.clone(), 0);
-    }
-
-    // Count references from view dependencies
-    for view in &spec.view_definitions {
-        for dep in &view.view_dependencies {
-            *fanout.entry(dep.clone()).or_insert(0) += 1;
-        }
-    }
-
-    // Count references from output targets
-    for target in &spec.output_targets {
-        *fanout.entry(target.source_view.clone()).or_insert(0) += 1;
-    }
-
-    fanout
+    compute_view_fanout(spec)
 }
 
 /// Check if a transform is expensive (join or aggregate).

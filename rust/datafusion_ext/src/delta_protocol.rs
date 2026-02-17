@@ -220,7 +220,7 @@ pub fn gate_from_parts(
     }
 }
 
-pub fn snapshot_payload(snapshot: &DeltaSnapshotInfo) -> HashMap<String, String> {
+pub fn snapshot_info_as_strings(snapshot: &DeltaSnapshotInfo) -> HashMap<String, String> {
     let mut payload: HashMap<String, String> = HashMap::new();
     payload.insert("table_uri".to_owned(), snapshot.table_uri.clone());
     payload.insert("version".to_owned(), snapshot.version.to_string());

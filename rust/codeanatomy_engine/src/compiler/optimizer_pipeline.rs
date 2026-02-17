@@ -9,12 +9,12 @@ use std::time::Instant;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::optimizer::optimizer::{Optimizer, OptimizerContext};
 use datafusion::optimizer::OptimizerRule;
-use datafusion::physical_plan::displayable;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::compiler::plan_utils::{blake3_hash_bytes, normalize_logical, normalize_physical};
 use crate::executor::warnings::RunWarning;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,8 +123,8 @@ pub async fn run_optimizer_pipeline(
             pass_id: "physical:pass0".to_string(),
             phase: OptimizerPhase::PhysicalOptimizer,
             rule_name: "datafusion_physical_create".to_string(),
-            before_digest: hash_bytes(before.as_bytes()),
-            after_digest: hash_bytes(before.as_bytes()),
+            before_digest: blake3_hash_bytes(before.as_bytes()),
+            after_digest: blake3_hash_bytes(before.as_bytes()),
             plan_changed: false,
             plan_diff: if config.capture_plan_diffs {
                 Some(String::new())
@@ -159,7 +159,7 @@ pub async fn run_optimizer_compile_only(
     )?;
     let optimized_logical_text = format!("{}", optimized_logical.display_indent());
     Ok(OptimizerCompileReport {
-        optimized_logical_digest: hash_bytes(optimized_logical_text.as_bytes()),
+        optimized_logical_digest: blake3_hash_bytes(optimized_logical_text.as_bytes()),
         optimized_logical_text,
         pass_traces: if config.capture_pass_traces {
             pass_traces
@@ -190,7 +190,7 @@ pub fn run_optimizer_compile_only_with_rules(
     )?;
     let optimized_logical_text = format!("{}", optimized.display_indent());
     Ok(OptimizerCompileReport {
-        optimized_logical_digest: hash_bytes(optimized_logical_text.as_bytes()),
+        optimized_logical_digest: blake3_hash_bytes(optimized_logical_text.as_bytes()),
         optimized_logical_text,
         pass_traces: traces,
         warnings: Vec::new(),
@@ -213,10 +213,10 @@ pub fn optimize_with_rules(
 
     let mut traces = Vec::new();
     let initial_text = format!("{}", unoptimized_plan.display_indent());
-    let mut prev_digest: Option<[u8; 32]> = Some(hash_bytes(initial_text.as_bytes()));
+    let mut prev_digest: Option<[u8; 32]> = Some(blake3_hash_bytes(initial_text.as_bytes()));
     let optimized = optimizer.optimize(unoptimized_plan, &context, |plan, rule| {
         let after_text = format!("{}", plan.display_indent());
-        let after_digest = hash_bytes(after_text.as_bytes());
+        let after_digest = blake3_hash_bytes(after_text.as_bytes());
         let before_digest = prev_digest.unwrap_or(after_digest);
         prev_digest = Some(after_digest);
         traces.push(OptimizerPassTrace {
@@ -246,15 +246,15 @@ fn trace_logical_pass(
     with_diff: bool,
     duration_us: u64,
 ) -> OptimizerPassTrace {
-    let before_text = format!("{}", before.display_indent());
-    let after_text = format!("{}", after.display_indent());
+    let before_text = normalize_logical(before);
+    let after_text = normalize_logical(after);
     let plan_changed = before_text != after_text;
     OptimizerPassTrace {
         pass_id: pass_id.to_string(),
         phase,
         rule_name: rule_name.to_string(),
-        before_digest: hash_bytes(before_text.as_bytes()),
-        after_digest: hash_bytes(after_text.as_bytes()),
+        before_digest: blake3_hash_bytes(before_text.as_bytes()),
+        after_digest: blake3_hash_bytes(after_text.as_bytes()),
         plan_changed,
         plan_diff: if with_diff && plan_changed {
             Some(format!(
@@ -267,12 +267,4 @@ fn trace_logical_pass(
         },
         duration_us,
     }
-}
-
-fn normalize_physical(plan: &dyn ExecutionPlan) -> String {
-    format!("{}", displayable(plan).indent(true))
-}
-
-fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
-    *blake3::hash(bytes).as_bytes()
 }

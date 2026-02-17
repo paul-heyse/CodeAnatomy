@@ -6,10 +6,16 @@ import multiprocessing
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+import msgspec
+
+from tools.cq.core.render_diagnostics import (
+    summary_with_render_enrichment_metrics as _summary_with_render_enrichment_metrics,
+)
 from tools.cq.core.render_enrichment import extract_enrichment_payload, merge_enrichment_details
 from tools.cq.core.render_utils import iter_result_findings
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding
+from tools.cq.core.summary_contract import SummaryV1
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.type_coercion import coerce_float_optional
 from tools.cq.core.types import QueryLanguage
@@ -40,6 +46,14 @@ class RenderEnrichmentResult(CqStruct, frozen=True):
     col: int
     language: QueryLanguage
     payload: dict[str, object]
+
+
+class RenderEnrichmentSessionV1(CqStruct, frozen=True):
+    """Prepared render-enrichment session payload for one render pass."""
+
+    cache: dict[tuple[str, int, int, str], dict[str, object]] = msgspec.field(default_factory=dict)
+    allowed_files: set[str] = msgspec.field(default_factory=set)
+    summary_with_metrics: SummaryV1 | dict[str, object] = msgspec.field(default_factory=dict)
 
 
 def infer_language(finding: Finding) -> QueryLanguage:
@@ -351,14 +365,60 @@ def maybe_attach_render_enrichment(
         payload = result.payload
         if cache is not None:
             cache[cache_key] = payload
-    merge_enrichment_details(finding, payload)
+    enriched = merge_enrichment_details(finding, payload)
+    finding.details = enriched.details
+
+
+def prepare_render_enrichment_session(
+    *,
+    result: CqResult,
+    root: Path,
+    port: RenderEnrichmentPort | None,
+) -> RenderEnrichmentSessionV1:
+    """Prepare enrichment cache/session payload for one report render."""
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
+    allowed_files = set(select_enrichment_target_files(result))
+    all_task_count = count_render_enrichment_tasks(
+        result=result,
+        root=root,
+        allowed_files=None,
+    )
+    rendered_tasks = precompute_render_enrichment_cache(
+        result=result,
+        root=root,
+        cache=enrich_cache,
+        allowed_files=allowed_files,
+        port=port,
+    )
+    applied = sum(
+        1
+        for task in rendered_tasks
+        if enrich_cache.get((task.file, task.line, task.col, task.language))
+    )
+    attempted = len(rendered_tasks)
+    failed = max(0, attempted - applied)
+    skipped = max(0, all_task_count - attempted)
+    summary_with_metrics = _summary_with_render_enrichment_metrics(
+        result.summary,
+        attempted=attempted,
+        applied=applied,
+        failed=failed,
+        skipped=skipped,
+    )
+    return RenderEnrichmentSessionV1(
+        cache=enrich_cache,
+        allowed_files=allowed_files,
+        summary_with_metrics=summary_with_metrics,
+    )
 
 
 __all__ = [
+    "RenderEnrichmentSessionV1",
     "RenderEnrichmentResult",
     "RenderEnrichmentTask",
     "count_render_enrichment_tasks",
     "maybe_attach_render_enrichment",
+    "prepare_render_enrichment_session",
     "precompute_render_enrichment_cache",
     "select_enrichment_target_files",
 ]

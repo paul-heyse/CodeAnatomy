@@ -175,13 +175,8 @@ app.meta.group_parameters = global_group
 
 def _build_launch_context(
     argv: list[str],
-    config_opts: ConfigOptionArgs,
     global_opts: GlobalOptionArgs,
 ) -> LaunchContext:
-    app.config = build_config_chain(
-        config_file=config_opts.config,
-        use_config=config_opts.use_config,
-    )
     return LaunchContext(
         argv=argv,
         root=global_opts.root,
@@ -189,6 +184,13 @@ def _build_launch_context(
         output_format=global_opts.output_format,
         artifact_dir=global_opts.artifact_dir,
         save_artifact=global_opts.save_artifact,
+    )
+
+
+def _configure_app(config_opts: ConfigOptionArgs) -> None:
+    app.config = build_config_chain(
+        config_file=config_opts.config,
+        use_config=config_opts.use_config,
     )
 
 
@@ -216,9 +218,9 @@ def launcher(
     """
     resolved_global_opts = global_opts if global_opts is not None else GlobalOptionArgs()
     resolved_config_opts = config_opts if config_opts is not None else ConfigOptionArgs()
+    _configure_app(resolved_config_opts)
     launch = _build_launch_context(
         argv=sys.argv[1:],
-        config_opts=resolved_config_opts,
         global_opts=resolved_global_opts,
     )
     ctx = _build_cli_context(launch)

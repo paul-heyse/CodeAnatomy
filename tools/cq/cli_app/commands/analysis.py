@@ -13,16 +13,6 @@ from cyclopts import Parameter
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
-from tools.cq.cli_app.options import (
-    BytecodeSurfaceOptions,
-    CommonFilters,
-    ExceptionsOptions,
-    ImpactOptions,
-    ImportsOptions,
-    SideEffectsOptions,
-    SigImpactOptions,
-    options_from_params,
-)
 from tools.cq.cli_app.params import (
     BytecodeSurfaceParams,
     ExceptionsParams,
@@ -31,6 +21,15 @@ from tools.cq.cli_app.params import (
     ImportsParams,
     SideEffectsParams,
     SigImpactParams,
+)
+from tools.cq.cli_app.schema_projection import (
+    bytecode_surface_options_from_projected_params,
+    exceptions_options_from_projected_params,
+    filter_options_from_projected_params,
+    impact_options_from_projected_params,
+    imports_options_from_projected_params,
+    side_effects_options_from_projected_params,
+    sig_impact_options_from_projected_params,
 )
 from tools.cq.orchestration.request_factory import RequestContextV1, RequestFactory
 
@@ -55,7 +54,7 @@ def impact(
     from tools.cq.macros.impact import cmd_impact
 
     ctx = require_context(ctx)
-    options = options_from_params(opts, type_=ImpactOptions)
+    options = impact_options_from_projected_params(opts)
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.impact(
@@ -90,7 +89,7 @@ def calls(
     ctx = require_context(ctx)
     if opts is None:
         opts = FilterParams()
-    options = options_from_params(opts, type_=CommonFilters)
+    options = filter_options_from_projected_params(opts)
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.calls(request_ctx, function_name=function)
@@ -120,7 +119,7 @@ def imports(
     ctx = require_context(ctx)
     if opts is None:
         opts = ImportsParams()
-    options = options_from_params(opts, type_=ImportsOptions)
+    options = imports_options_from_projected_params(opts)
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.imports_cmd(
@@ -155,7 +154,7 @@ def exceptions(
     ctx = require_context(ctx)
     if opts is None:
         opts = ExceptionsParams()
-    options = options_from_params(opts, type_=ExceptionsOptions)
+    options = exceptions_options_from_projected_params(opts)
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.exceptions(
@@ -189,7 +188,7 @@ def sig_impact(
     from tools.cq.macros.sig_impact import cmd_sig_impact
 
     ctx = require_context(ctx)
-    options = options_from_params(opts, type_=SigImpactOptions)
+    options = sig_impact_options_from_projected_params(opts)
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.sig_impact(request_ctx, symbol=symbol, to=options.to)
@@ -218,7 +217,7 @@ def side_effects(
     ctx = require_context(ctx)
     if opts is None:
         opts = SideEffectsParams()
-    options = options_from_params(opts, type_=SideEffectsOptions)
+    options = side_effects_options_from_projected_params(opts)
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.side_effects(
@@ -254,7 +253,7 @@ def scopes(
     ctx = require_context(ctx)
     if opts is None:
         opts = FilterParams()
-    options = options_from_params(opts, type_=CommonFilters)
+    options = filter_options_from_projected_params(opts)
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.scopes(request_ctx, target=target)
@@ -285,7 +284,7 @@ def bytecode_surface(
     ctx = require_context(ctx)
     if opts is None:
         opts = BytecodeSurfaceParams()
-    options = options_from_params(opts, type_=BytecodeSurfaceOptions)
+    options = bytecode_surface_options_from_projected_params(opts)
 
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
     request = RequestFactory.bytecode_surface(request_ctx, target=target, show=options.show)

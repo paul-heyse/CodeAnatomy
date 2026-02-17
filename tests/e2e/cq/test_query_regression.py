@@ -8,7 +8,7 @@ import pytest
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.search.pipeline.smart_search import smart_search
@@ -80,7 +80,7 @@ def test_regression_known_callers(toolchain: Toolchain, repo_root: Path) -> None
     repo_root : Path
         Repository root path.
     """
-    # Query for execute_plan function which we know exists in query/executor.py
+    # Query for execute_plan function which we know exists in query/executor_runtime.py
     result = _execute_query("entity=function name=execute_plan", toolchain, repo_root)
 
     assert result is not None
@@ -297,7 +297,9 @@ def test_q_explicit_lang_summary_preserves_scope_and_query_text(
     repo_root: Path,
 ) -> None:
     """Explicit language q queries should retain full query text and lang scope."""
-    query_text = "entity=function name=execute_plan lang=python in=tools/cq/query/executor.py"
+    query_text = (
+        "entity=function name=execute_plan lang=python in=tools/cq/query/executor_runtime.py"
+    )
     query = parse_query(query_text)
     plan = compile_query(query)
     result = execute_plan(

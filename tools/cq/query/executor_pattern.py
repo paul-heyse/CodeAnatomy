@@ -5,6 +5,12 @@ from __future__ import annotations
 from tools.cq.core.schema import CqResult
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import PatternQueryRequest
+from tools.cq.query.executor_runtime import (
+    execute_pattern_query as runtime_execute_pattern_query,
+)
+from tools.cq.query.executor_runtime import (
+    execute_pattern_query_with_files as runtime_execute_pattern_query_with_files,
+)
 
 
 def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
@@ -13,9 +19,7 @@ def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     Returns:
         CqResult: Query result payload.
     """
-    from tools.cq.query.executor import _execute_pattern_query
-
-    return _execute_pattern_query(ctx)
+    return runtime_execute_pattern_query(ctx)
 
 
 def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
@@ -24,9 +28,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     Returns:
         CqResult: Query result payload.
     """
-    from tools.cq.query.executor import execute_pattern_query_with_files
-
-    return execute_pattern_query_with_files(request)
+    return runtime_execute_pattern_query_with_files(request)
 
 
 __all__ = ["execute_pattern_query", "execute_pattern_query_with_files"]

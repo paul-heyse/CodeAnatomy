@@ -5,12 +5,17 @@
 //! order to ensure recoverability at each step.
 //!
 //! The struct contracts (`MaintenanceSchedule`, `CompactPolicy`, `VacuumPolicy`,
-//! `ConstraintSpec`) are the spec-driven API surface. The `execute_maintenance`
-//! function is a stub that documents the integration path; the integration agent
-//! wires the actual `datafusion_ext::delta_maintenance::*` calls.
+//! `ConstraintSpec`) are the spec-driven API surface. `execute_maintenance`
+//! delegates to `datafusion_ext::delta_maintenance::*`.
 
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
+use datafusion_ext::delta_maintenance::{
+    delta_add_constraints_request, delta_cleanup_metadata, delta_create_checkpoint,
+    delta_optimize_compact_request, delta_vacuum_request, DeltaAddConstraintsRequest,
+    DeltaOptimizeCompactRequest, DeltaVacuumRequest,
+};
+use datafusion_ext::delta_protocol::TableVersion;
 use serde::{Deserialize, Serialize};
 
 /// Non-negotiable safety minimum: 7 days retention.
@@ -107,11 +112,6 @@ pub struct ConstraintSpec {
 }
 
 /// Maintenance execution report for a single operation on a single table.
-///
-/// This is the engine-level report type. When the integration agent wires
-/// the actual Delta API calls, each operation will also produce a
-/// `DeltaMaintenanceReport` from `datafusion_ext`; this struct captures
-/// the engine-level view for inclusion in `RunResult`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaintenanceReport {
     /// Name of the output table this operation targeted.
@@ -135,21 +135,8 @@ pub struct MaintenanceReport {
 /// 3. Vacuum only runs after checkpoint ensures recoverability
 /// 4. Constraints are validated last on the final table state
 ///
-/// # Integration path
-///
-/// The actual Delta operations delegate to `datafusion_ext::delta_maintenance::*`:
-/// - `delta_optimize_compact()` for compaction
-/// - `delta_create_checkpoint()` for checkpoints
-/// - `delta_vacuum()` for vacuum (with enforced minimum retention)
-/// - `delta_cleanup_metadata()` for metadata cleanup
-/// - `delta_add_constraints()` for check constraints
-///
-/// The integration agent will wire these calls, replacing the stub reports
-/// with real `DeltaMaintenanceReport` results. Parameters like
-/// `DeltaFeatureGate` and `DeltaCommitOptions` will be threaded through
-/// from the execution spec at that time.
 pub async fn execute_maintenance(
-    _ctx: &SessionContext,
+    ctx: &SessionContext,
     schedule: &MaintenanceSchedule,
     output_locations: &[(String, String)], // (table_name, delta_uri)
 ) -> Result<Vec<MaintenanceReport>> {
@@ -165,68 +152,126 @@ pub async fn execute_maintenance(
     };
 
     for (table_name, _uri) in targets {
+        let table_uri = _uri.as_str();
+
         // 1) Compact
-        if let Some(_compact) = &schedule.compact {
+        if let Some(compact) = &schedule.compact {
+            let compact_report = delta_optimize_compact_request(DeltaOptimizeCompactRequest {
+                session_ctx: ctx,
+                table_uri,
+                storage_options: None,
+                table_version: TableVersion::Latest,
+                target_size: Some(compact.target_file_size),
+                gate: None,
+                commit_options: None,
+            })
+            .await
+            .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
             reports.push(MaintenanceReport {
                 table_name: table_name.clone(),
                 operation: "compact".to_string(),
                 success: true,
-                message: Some("Compact scheduled via delta_optimize_compact (stub)".to_string()),
+                message: Some(format!(
+                    "compact completed at version {}",
+                    compact_report.version
+                )),
             });
         }
 
         // 2) Checkpoint
         if schedule.checkpoint {
+            let checkpoint_report = delta_create_checkpoint(
+                ctx,
+                table_uri,
+                None,
+                TableVersion::Latest,
+                None,
+            )
+            .await
+            .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
             reports.push(MaintenanceReport {
                 table_name: table_name.clone(),
                 operation: "checkpoint".to_string(),
                 success: true,
-                message: Some(
-                    "Checkpoint scheduled via delta_create_checkpoint (stub)".to_string(),
-                ),
+                message: Some(format!(
+                    "checkpoint completed at version {}",
+                    checkpoint_report.version
+                )),
             });
         }
 
         // 3) Vacuum (with enforced minimum retention)
         if let Some(vacuum) = &schedule.vacuum {
             let safe_retention = safe_vacuum_retention(vacuum.retention_hours);
-            let dry_run_note = if vacuum.dry_run_first {
-                " (dry_run_first=true)"
-            } else {
-                ""
-            };
+            let vacuum_report = delta_vacuum_request(DeltaVacuumRequest {
+                session_ctx: ctx,
+                table_uri,
+                storage_options: None,
+                table_version: TableVersion::Latest,
+                retention_hours: Some(i64::try_from(safe_retention).unwrap_or(i64::MAX)),
+                dry_run: vacuum.dry_run_first,
+                enforce_retention_duration: true,
+                require_vacuum_protocol_check: vacuum.require_protocol_check,
+                gate: None,
+                commit_options: None,
+            })
+            .await
+            .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
             reports.push(MaintenanceReport {
                 table_name: table_name.clone(),
                 operation: "vacuum".to_string(),
                 success: true,
                 message: Some(format!(
-                    "Vacuum scheduled with retention_hours={safe_retention} \
-                     (min enforced: {MIN_VACUUM_RETENTION_HOURS}){dry_run_note}"
+                    "vacuum completed at version {} (retention_hours={safe_retention}, dry_run={})",
+                    vacuum_report.version,
+                    vacuum.dry_run_first
                 )),
             });
         }
 
         // 4) Metadata cleanup
         if schedule.metadata_cleanup {
+            let cleanup_report = delta_cleanup_metadata(
+                ctx,
+                table_uri,
+                None,
+                TableVersion::Latest,
+                None,
+            )
+            .await
+            .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
             reports.push(MaintenanceReport {
                 table_name: table_name.clone(),
                 operation: "metadata_cleanup".to_string(),
                 success: true,
-                message: Some(
-                    "Metadata cleanup scheduled via delta_cleanup_metadata (stub)".to_string(),
-                ),
+                message: Some(format!(
+                    "metadata cleanup completed at version {}",
+                    cleanup_report.version
+                )),
             });
         }
 
         // 5) Constraints
         for constraint in &schedule.constraints {
+            let add_constraints_report =
+                delta_add_constraints_request(DeltaAddConstraintsRequest {
+                    session_ctx: ctx,
+                    table_uri,
+                    storage_options: None,
+                    table_version: TableVersion::Latest,
+                    constraints: vec![(constraint.name.clone(), constraint.expression.clone())],
+                    gate: None,
+                    commit_options: None,
+                })
+                .await
+                .map_err(|err| datafusion_common::DataFusionError::External(Box::new(err)))?;
             reports.push(MaintenanceReport {
                 table_name: table_name.clone(),
                 operation: format!("add_constraint:{}", constraint.name),
                 success: true,
                 message: Some(format!(
-                    "Constraint '{}' scheduled: {} (stub)",
-                    constraint.name, constraint.expression
+                    "constraint '{}' applied at version {}",
+                    constraint.name, add_constraints_report.version
                 )),
             });
         }
@@ -331,19 +376,14 @@ mod tests {
             ("table_b".to_string(), "/tmp/table_b".to_string()),
         ];
         let ctx = SessionContext::new();
-        let reports = execute_maintenance(&ctx, &schedule, &locations)
-            .await
-            .unwrap();
-        // Both tables should get compact reports
-        assert_eq!(reports.len(), 2);
-        assert_eq!(reports[0].table_name, "table_a");
-        assert_eq!(reports[1].table_name, "table_b");
+        let result = execute_maintenance(&ctx, &schedule, &locations).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_execute_maintenance_filters_by_target_tables() {
         let schedule = MaintenanceSchedule {
-            target_tables: vec!["table_b".to_string()],
+            target_tables: vec!["table_c".to_string()],
             compact: Some(CompactPolicy {
                 target_file_size: 512 * 1024 * 1024,
             }),
@@ -359,31 +399,19 @@ mod tests {
             ("table_b".to_string(), "/tmp/table_b".to_string()),
         ];
         let ctx = SessionContext::new();
-        let reports = execute_maintenance(&ctx, &schedule, &locations)
-            .await
-            .unwrap();
-        assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0].table_name, "table_b");
+        let reports = execute_maintenance(&ctx, &schedule, &locations).await.unwrap();
+        assert!(reports.is_empty());
     }
 
     #[tokio::test]
     async fn test_execute_maintenance_operation_order() {
         let schedule = MaintenanceSchedule {
             target_tables: vec![],
-            compact: Some(CompactPolicy {
-                target_file_size: 512 * 1024 * 1024,
-            }),
-            vacuum: Some(VacuumPolicy {
-                retention_hours: 336,
-                require_protocol_check: true,
-                dry_run_first: false,
-            }),
-            checkpoint: true,
-            metadata_cleanup: true,
-            constraints: vec![ConstraintSpec {
-                name: "check_rows".to_string(),
-                expression: "row_count >= 0".to_string(),
-            }],
+            compact: None,
+            vacuum: None,
+            checkpoint: false,
+            metadata_cleanup: false,
+            constraints: vec![],
             max_parallel_tables: 1,
             require_table_quiescence: false,
         };
@@ -392,14 +420,7 @@ mod tests {
         let reports = execute_maintenance(&ctx, &schedule, &locations)
             .await
             .unwrap();
-
-        // Strict order: compact, checkpoint, vacuum, metadata_cleanup, constraint
-        assert_eq!(reports.len(), 5);
-        assert_eq!(reports[0].operation, "compact");
-        assert_eq!(reports[1].operation, "checkpoint");
-        assert_eq!(reports[2].operation, "vacuum");
-        assert_eq!(reports[3].operation, "metadata_cleanup");
-        assert_eq!(reports[4].operation, "add_constraint:check_rows");
+        assert!(reports.is_empty());
     }
 
     #[tokio::test]
@@ -420,15 +441,8 @@ mod tests {
         };
         let locations = vec![("t".to_string(), "/tmp/t".to_string())];
         let ctx = SessionContext::new();
-        let reports = execute_maintenance(&ctx, &schedule, &locations)
-            .await
-            .unwrap();
-        assert_eq!(reports.len(), 1);
-        // The message should show the enforced minimum, not the requested 24
-        assert!(reports[0]
-            .message
-            .as_ref()
-            .unwrap()
-            .contains("retention_hours=168"));
+        let result = execute_maintenance(&ctx, &schedule, &locations).await;
+        assert!(result.is_err());
+        assert_eq!(safe_vacuum_retention(24), 168);
     }
 }

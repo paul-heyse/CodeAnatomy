@@ -70,18 +70,12 @@ impl TableProvider for Dataset {
 
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef {
-        Python::attach(|py| {
+        Python::attach(|py| -> PyResult<SchemaRef> {
             let dataset = self.dataset.bind(py);
-            // This can panic but since we checked that self.dataset is a pyarrow.dataset.Dataset it should never
-            Arc::new(
-                dataset
-                    .getattr("schema")
-                    .unwrap()
-                    .extract::<PyArrowType<_>>()
-                    .unwrap()
-                    .0,
-            )
+            let schema = dataset.getattr("schema")?.extract::<PyArrowType<_>>()?.0;
+            Ok(Arc::new(schema))
         })
+        .unwrap_or_else(|_| Arc::new(datafusion::arrow::datatypes::Schema::empty()))
     }
 
     /// Get the type of this table for metadata/catalog purposes.

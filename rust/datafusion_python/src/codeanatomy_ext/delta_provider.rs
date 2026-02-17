@@ -1,5 +1,7 @@
 //! Delta provider and scan-config bridge surface.
 
+use std::sync::Arc;
+
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -18,7 +20,40 @@ use crate::delta_mutations::{
     delta_data_check_request as delta_data_check_native, DeltaDataCheckRequest,
 };
 
-use super::helpers::extract_session_ctx;
+use super::helpers::{
+    delta_gate_from_params, extract_session_ctx, json_to_py, provider_capsule, runtime,
+    scan_config_to_pydict, scan_overrides_from_params, snapshot_to_pydict, storage_options_map,
+    table_version_from_options,
+};
+
+#[pyclass]
+#[derive(Clone)]
+pub(crate) struct DeltaCdfOptions {
+    #[pyo3(get, set)]
+    pub(crate) starting_version: Option<i64>,
+    #[pyo3(get, set)]
+    pub(crate) ending_version: Option<i64>,
+    #[pyo3(get, set)]
+    pub(crate) starting_timestamp: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) ending_timestamp: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) allow_out_of_range: bool,
+}
+
+#[pymethods]
+impl DeltaCdfOptions {
+    #[new]
+    fn new() -> Self {
+        Self {
+            starting_version: None,
+            ending_version: None,
+            starting_timestamp: None,
+            ending_timestamp: None,
+            allow_out_of_range: false,
+        }
+    }
+}
 
 #[pyfunction]
 #[instrument(skip(py, table_uri, storage_options, options))]
@@ -28,14 +63,14 @@ pub(crate) fn delta_cdf_table_provider(
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
     timestamp: Option<String>,
-    options: super::legacy::DeltaCdfOptions,
+    options: DeltaCdfOptions,
     min_reader_version: Option<i32>,
     min_writer_version: Option<i32>,
     required_reader_features: Option<Vec<String>>,
     required_writer_features: Option<Vec<String>>,
 ) -> PyResult<Py<PyAny>> {
-    let storage = super::legacy::storage_options_map(storage_options);
-    let gate = super::legacy::delta_gate_from_params(
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
         min_reader_version,
         min_writer_version,
         required_reader_features,
@@ -48,8 +83,8 @@ pub(crate) fn delta_cdf_table_provider(
         ending_timestamp: options.ending_timestamp,
         allow_out_of_range: options.allow_out_of_range,
     };
-    let runtime = super::legacy::runtime()?;
-    let table_version = super::legacy::table_version_from_options(version, timestamp)?;
+    let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let (provider, snapshot) = runtime
         .block_on(delta_cdf_provider_native(DeltaCdfProviderRequest {
             table_uri: &table_uri,
@@ -60,8 +95,8 @@ pub(crate) fn delta_cdf_table_provider(
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta CDF provider failed: {err}")))?;
     let payload = PyDict::new(py);
-    payload.set_item("provider", super::legacy::provider_capsule(py, Arc::new(provider))?)?;
-    payload.set_item("snapshot", super::legacy::snapshot_to_pydict(py, &snapshot)?)?;
+    payload.set_item("provider", provider_capsule(py, Arc::new(provider))?)?;
+    payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     Ok(payload.into())
 }
 
@@ -85,22 +120,22 @@ pub(crate) fn delta_table_provider_from_session(
     required_reader_features: Option<Vec<String>>,
     required_writer_features: Option<Vec<String>>,
 ) -> PyResult<Py<PyAny>> {
-    let storage = super::legacy::storage_options_map(storage_options);
-    let gate = super::legacy::delta_gate_from_params(
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
         min_reader_version,
         min_writer_version,
         required_reader_features,
         required_writer_features,
     );
-    let overrides = super::legacy::scan_overrides_from_params(
+    let overrides = scan_overrides_from_params(
         file_column_name,
         enable_parquet_pushdown,
         schema_force_view_types,
         wrap_partition_values,
         schema_ipc,
     )?;
-    let runtime = super::legacy::runtime()?;
-    let table_version = super::legacy::table_version_from_options(version, timestamp)?;
+    let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
         .block_on(delta_provider_from_session_native(
             DeltaProviderFromSessionRequest {
@@ -115,15 +150,12 @@ pub(crate) fn delta_table_provider_from_session(
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to build Delta provider: {err}")))?;
     let payload = PyDict::new(py);
-    payload.set_item("provider", super::legacy::provider_capsule(py, provider)?)?;
-    payload.set_item("snapshot", super::legacy::snapshot_to_pydict(py, &snapshot)?)?;
-    payload.set_item(
-        "scan_config",
-        super::legacy::scan_config_to_pydict(py, &scan_config)?,
-    )?;
+    payload.set_item("provider", provider_capsule(py, provider)?)?;
+    payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
+    payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
     if let Some(add_actions) = add_actions {
         let add_payload = crate::delta_observability::add_action_payloads(&add_actions);
-        payload.set_item("add_actions", super::legacy::json_to_py(py, &add_payload)?)?;
+        payload.set_item("add_actions", json_to_py(py, &add_payload)?)?;
     }
     if let Some(error) = predicate_error {
         payload.set_item("predicate_error", error)?;
@@ -151,22 +183,22 @@ pub(crate) fn delta_table_provider_with_files(
     required_reader_features: Option<Vec<String>>,
     required_writer_features: Option<Vec<String>>,
 ) -> PyResult<Py<PyAny>> {
-    let storage = super::legacy::storage_options_map(storage_options);
-    let gate = super::legacy::delta_gate_from_params(
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
         min_reader_version,
         min_writer_version,
         required_reader_features,
         required_writer_features,
     );
-    let overrides = super::legacy::scan_overrides_from_params(
+    let overrides = scan_overrides_from_params(
         file_column_name,
         enable_parquet_pushdown,
         schema_force_view_types,
         wrap_partition_values,
         schema_ipc,
     )?;
-    let runtime = super::legacy::runtime()?;
-    let table_version = super::legacy::table_version_from_options(version, timestamp)?;
+    let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let (provider, snapshot, scan_config, add_actions) = runtime
         .block_on(delta_provider_with_files_native(
             DeltaProviderWithFilesRequest {
@@ -185,14 +217,11 @@ pub(crate) fn delta_table_provider_with_files(
             ))
         })?;
     let payload = PyDict::new(py);
-    payload.set_item("provider", super::legacy::provider_capsule(py, provider)?)?;
-    payload.set_item("snapshot", super::legacy::snapshot_to_pydict(py, &snapshot)?)?;
-    payload.set_item(
-        "scan_config",
-        super::legacy::scan_config_to_pydict(py, &scan_config)?,
-    )?;
+    payload.set_item("provider", provider_capsule(py, provider)?)?;
+    payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
+    payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
     let add_payload = crate::delta_observability::add_action_payloads(&add_actions);
-    payload.set_item("add_actions", super::legacy::json_to_py(py, &add_payload)?)?;
+    payload.set_item("add_actions", json_to_py(py, &add_payload)?)?;
     Ok(payload.into())
 }
 
@@ -207,7 +236,7 @@ pub(crate) fn delta_scan_config_from_session(
     wrap_partition_values: Option<bool>,
     schema_ipc: Option<Vec<u8>>,
 ) -> PyResult<Py<PyAny>> {
-    let overrides = super::legacy::scan_overrides_from_params(
+    let overrides = scan_overrides_from_params(
         file_column_name,
         enable_parquet_pushdown,
         schema_force_view_types,
@@ -221,7 +250,7 @@ pub(crate) fn delta_scan_config_from_session(
                 "Failed to resolve Delta scan config from session: {err}"
             ))
         })?;
-    super::legacy::scan_config_to_pydict(py, &scan_config)
+    scan_config_to_pydict(py, &scan_config)
 }
 
 #[pyfunction]
@@ -237,19 +266,19 @@ pub(crate) fn delta_snapshot_info(
     required_reader_features: Option<Vec<String>>,
     required_writer_features: Option<Vec<String>>,
 ) -> PyResult<Py<PyAny>> {
-    let storage = super::legacy::storage_options_map(storage_options);
-    let gate = super::legacy::delta_gate_from_params(
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
         min_reader_version,
         min_writer_version,
         required_reader_features,
         required_writer_features,
     );
-    let runtime = super::legacy::runtime()?;
-    let table_version = super::legacy::table_version_from_options(version, timestamp)?;
+    let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let snapshot = runtime
         .block_on(delta_snapshot_info_native(&table_uri, storage, table_version, gate))
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to load Delta snapshot: {err}")))?;
-    super::legacy::snapshot_to_pydict(py, &snapshot)
+    snapshot_to_pydict(py, &snapshot)
 }
 
 #[pyfunction]
@@ -273,15 +302,15 @@ pub(crate) fn delta_add_actions(
     required_reader_features: Option<Vec<String>>,
     required_writer_features: Option<Vec<String>>,
 ) -> PyResult<Py<PyAny>> {
-    let storage = super::legacy::storage_options_map(storage_options);
-    let gate = super::legacy::delta_gate_from_params(
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
         min_reader_version,
         min_writer_version,
         required_reader_features,
         required_writer_features,
     );
-    let runtime = super::legacy::runtime()?;
-    let table_version = super::legacy::table_version_from_options(version, timestamp)?;
+    let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let (snapshot, add_actions) = runtime
         .block_on(delta_add_actions_native(DeltaAddActionsRequest {
             table_uri: &table_uri,
@@ -293,9 +322,9 @@ pub(crate) fn delta_add_actions(
             PyRuntimeError::new_err(format!("Failed to list Delta add actions: {err}"))
         })?;
     let payload = PyDict::new(py);
-    payload.set_item("snapshot", super::legacy::snapshot_to_pydict(py, &snapshot)?)?;
+    payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     let add_payload = crate::delta_observability::add_action_payloads(&add_actions);
-    payload.set_item("add_actions", super::legacy::json_to_py(py, &add_payload)?)?;
+    payload.set_item("add_actions", json_to_py(py, &add_payload)?)?;
     Ok(payload.into())
 }
 
@@ -314,15 +343,15 @@ pub(crate) fn delta_data_checker(
     required_reader_features: Option<Vec<String>>,
     required_writer_features: Option<Vec<String>>,
 ) -> PyResult<Vec<String>> {
-    let storage = super::legacy::storage_options_map(storage_options);
-    let gate = super::legacy::delta_gate_from_params(
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
         min_reader_version,
         min_writer_version,
         required_reader_features,
         required_writer_features,
     );
-    let runtime = super::legacy::runtime()?;
-    let table_version = super::legacy::table_version_from_options(version, timestamp)?;
+    let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     runtime
         .block_on(delta_data_check_native(DeltaDataCheckRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -348,4 +377,7 @@ pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-use std::sync::Arc;
+pub(crate) fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<DeltaCdfOptions>()?;
+    Ok(())
+}

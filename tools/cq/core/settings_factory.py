@@ -8,6 +8,7 @@ logic that was previously scattered across multiple modules.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tools.cq.core.cache.base_contracts import CacheRuntimeTuningV1
 from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
@@ -15,10 +16,9 @@ from tools.cq.core.runtime.execution_policy import (
     RuntimeExecutionPolicy,
     default_runtime_execution_policy,
 )
-from tools.cq.search.tree_sitter.core.infrastructure import (
-    ParserControlSettingsV1,
-    parser_controls_from_env,
-)
+
+if TYPE_CHECKING:
+    from tools.cq.search.tree_sitter.core.infrastructure import ParserControlSettingsV1
 
 
 class SettingsFactory:
@@ -63,6 +63,10 @@ class SettingsFactory:
             ParserControlSettingsV1: Resolved parser control settings with
                 environment overrides applied.
         """
+        from tools.cq.search.tree_sitter.core.infrastructure import (
+            parser_controls_from_env,
+        )
+
         return parser_controls_from_env()
 
     @staticmethod

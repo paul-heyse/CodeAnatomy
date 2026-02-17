@@ -90,6 +90,7 @@ from tools.cq.search.tree_sitter.tags import RustTagEventV1, build_tag_events
 
 if TYPE_CHECKING:
     from tree_sitter import Node
+    from tools.cq.search.tree_sitter.core.parse import ParseSession
 
 try:
     from tree_sitter import Point as _TreeSitterPoint
@@ -220,6 +221,8 @@ class _RustPipelineRequestV1:
     resolve_node: Callable[[Node], Node | None]
     byte_span_for_node: Callable[[Node], tuple[int, int]]
     error_prefix: str
+    parse_session: ParseSession | None = None
+    cache_backend: object | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -959,6 +962,10 @@ def _collect_payload_with_timings(request: _RustPayloadBuildRequestV1) -> dict[s
         "query_pack": query_pack_ms,
         "payload_build": payload_build_ms,
     }
+    payload["stage_status"] = {
+        "query_pack": "applied",
+        "payload_build": "applied",
+    }
     _assert_required_payload_keys(payload)
     return payload
 
@@ -975,15 +982,24 @@ def _finalize_enrichment_payload(
     timings["attachment"] = attachment_ms
     timings["total"] = max(0.0, (time.perf_counter() - total_started) * 1000.0)
     canonical["stage_timings_ms"] = timings
+    stage_status = dict(canonical.get("stage_status", {}))
+    stage_status.setdefault("ast_grep", "skipped")
+    stage_status.setdefault("query_pack", "applied")
+    stage_status.setdefault("payload_build", "applied")
+    stage_status["attachment"] = "applied"
+    canonical["stage_status"] = stage_status
     return canonical
 
 
 def _run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, object] | None:
     total_started = time.perf_counter()
+    tree_sitter_started = time.perf_counter()
     try:
+        _ = request.cache_backend
         tree, source_bytes, changed_ranges = _parse_with_session(
             request.source,
             cache_key=request.cache_key,
+            parse_session=request.parse_session,
         )
         if tree is None:
             return None
@@ -1005,6 +1021,14 @@ def _run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, 
     except ENRICHMENT_ERRORS as exc:
         logger.warning("%s failed: %s", request.error_prefix, type(exc).__name__)
         return None
+    timings = dict(payload.get("stage_timings_ms", {}))
+    timings.setdefault("ast_grep", 0.0)
+    timings["tree_sitter"] = max(0.0, (time.perf_counter() - tree_sitter_started) * 1000.0)
+    payload["stage_timings_ms"] = timings
+    status = dict(payload.get("stage_status", {}))
+    status.setdefault("ast_grep", "skipped")
+    status["tree_sitter"] = "applied"
+    payload["stage_status"] = status
     return _finalize_enrichment_payload(payload=payload, total_started=total_started)
 
 
@@ -1021,6 +1045,8 @@ def enrich_rust_context(
     cache_key: str | None = None,
     max_scope_depth: int = _DEFAULT_SCOPE_DEPTH,
     query_budget_ms: int | None = None,
+    parse_session: ParseSession | None = None,
+    cache_backend: object | None = None,
 ) -> dict[str, object] | None:
     """Extract optional Rust context details for a match location.
 
@@ -1065,6 +1091,8 @@ def enrich_rust_context(
                 int(getattr(node, "end_byte", 0)),
             ),
             error_prefix="Rust context enrichment",
+            parse_session=parse_session,
+            cache_backend=cache_backend,
         ),
     )
 
@@ -1077,6 +1105,8 @@ def enrich_rust_context_by_byte_range(
     cache_key: str | None = None,
     max_scope_depth: int = _DEFAULT_SCOPE_DEPTH,
     query_budget_ms: int | None = None,
+    parse_session: ParseSession | None = None,
+    cache_backend: object | None = None,
 ) -> dict[str, object] | None:
     """Extract optional Rust context using byte offsets instead of line/col.
 
@@ -1122,6 +1152,8 @@ def enrich_rust_context_by_byte_range(
             resolve_node=lambda root: root.named_descendant_for_byte_range(byte_start, byte_end),
             byte_span_for_node=lambda _node: (byte_start, byte_end),
             error_prefix="Rust byte-range enrichment",
+            parse_session=parse_session,
+            cache_backend=cache_backend,
         )
     )
 

@@ -9,7 +9,7 @@ from tools.cq.astgrep.sgpy_scanner import RuleSpec, SgRecord
 from tools.cq.cli_app.context import CliContext
 from tools.cq.core.schema import CqResult
 from tools.cq.query import batch as batch_queries
-from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.language import QueryLanguage
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query

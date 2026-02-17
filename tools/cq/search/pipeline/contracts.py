@@ -6,12 +6,12 @@ from pathlib import Path
 
 import msgspec
 
+from tools.cq.core.enrichment_mode import IncrementalEnrichmentModeV1
 from tools.cq.core.structs import CqSettingsStruct, CqStruct
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
 from tools.cq.search._shared.types import QueryMode, SearchLimits
-from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
 
 # --- From partition_contracts.py ---
 

@@ -14,7 +14,16 @@ from tools.cq.search.enrichment.contracts import (
     PythonEnrichmentPayload,
     RustEnrichmentPayload,
 )
-from tools.cq.search.enrichment.python_facts import PythonEnrichmentFacts
+from tools.cq.search.enrichment.python_facts import (
+    PythonBehaviorFacts,
+    PythonCallFacts,
+    PythonClassShapeFacts,
+    PythonEnrichmentFacts,
+    PythonImportFacts,
+    PythonResolutionFacts,
+    PythonSignatureFacts,
+    PythonStructureFacts,
+)
 from tools.cq.search.enrichment.rust_facts import RustEnrichmentFacts
 
 _DEFAULT_METADATA_KEYS: frozenset[str] = frozenset(
@@ -52,6 +61,47 @@ def string_or_none(value: object) -> str | None:
         text = value.strip()
         return text if text else None
     return None
+
+
+def accumulate_runtime_flags(
+    *,
+    lang_bucket: dict[str, object],
+    runtime_payload: object,
+) -> None:
+    """Accumulate query-runtime flags into one language telemetry bucket."""
+    runtime_bucket = lang_bucket.get("query_runtime")
+    if not isinstance(runtime_payload, dict) or not isinstance(runtime_bucket, dict):
+        return
+    if bool(runtime_payload.get("did_exceed_match_limit")):
+        runtime_bucket["did_exceed_match_limit"] = (
+            int(runtime_bucket.get("did_exceed_match_limit", 0)) + 1
+        )
+    if bool(runtime_payload.get("cancelled")):
+        runtime_bucket["cancelled"] = int(runtime_bucket.get("cancelled", 0)) + 1
+
+
+def build_tree_sitter_diagnostic_rows(
+    rows: object,
+    *,
+    max_rows: int = 8,
+) -> list[dict[str, object]]:
+    """Build normalized tree-sitter diagnostic rows.
+
+    Returns:
+        list[dict[str, object]]: Normalized diagnostic rows.
+    """
+    if not isinstance(rows, list):
+        return []
+    return [
+        {
+            "kind": string_or_none(item.get("kind")) or "tree_sitter",
+            "message": string_or_none(item.get("message")) or "tree-sitter diagnostic",
+            "line": item.get("start_line"),
+            "col": item.get("start_col"),
+        }
+        for item in rows[:max_rows]
+        if isinstance(item, Mapping)
+    ]
 
 
 def parse_python_enrichment(raw: dict[str, object] | None) -> PythonEnrichmentFacts | None:
@@ -180,61 +230,19 @@ def _meta_from_flat(payload: Mapping[str, object], *, language: str) -> Enrichme
 
 
 _PY_RESOLUTION_KEYS: frozenset[str] = frozenset(
-    {
-        "symbol_role",
-        "qualified_name_candidates",
-        "binding_candidates",
-        "enclosing_callable",
-        "enclosing_class",
-        "import_alias_chain",
-        "call_target",
-        "call_receiver",
-        "call_method",
-        "call_args_count",
-        "import_module",
-        "import_alias",
-        "import_names",
-        "import_level",
-        "is_type_import",
-        "item_role",
-    }
+    (
+        *PythonResolutionFacts.__struct_fields__,
+        *PythonCallFacts.__struct_fields__,
+        *PythonImportFacts.__struct_fields__,
+    )
 )
-_PY_BEHAVIOR_KEYS: frozenset[str] = frozenset(
-    {
-        "is_async",
-        "is_generator",
-        "returns_value",
-        "raises_exception",
-        "yields",
-        "awaits",
-        "has_context_manager",
-        "has_await",
-        "has_yield",
-        "has_raise",
-        "in_try",
-        "in_except",
-        "in_with",
-        "in_loop",
-    }
-)
+_PY_BEHAVIOR_KEYS: frozenset[str] = frozenset(PythonBehaviorFacts.__struct_fields__)
 _PY_STRUCTURAL_KEYS: frozenset[str] = frozenset(
-    {
-        "node_kind",
-        "signature",
-        "params",
-        "return_type",
-        "decorators",
-        "class_name",
-        "class_kind",
-        "base_classes",
-        "scope_chain",
-        "structural_context",
-        "method_count",
-        "property_names",
-        "abstract_member_count",
-        "class_markers",
-        "is_dataclass",
-    }
+    (
+        *PythonStructureFacts.__struct_fields__,
+        *PythonSignatureFacts.__struct_fields__,
+        *PythonClassShapeFacts.__struct_fields__,
+    )
 )
 _PY_FLAT_EXCLUDED_KEYS: frozenset[str] = frozenset(
     {

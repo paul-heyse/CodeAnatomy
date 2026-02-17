@@ -14,6 +14,7 @@ from tools.cq.core.snb_schema import (
     SemanticNodeRefV1,
 )
 from tools.cq.core.structs import CqStruct
+from tools.cq.ldmd.collapse_policy import LdmdCollapsePolicyV1
 
 SECTION_ORDER: tuple[str, ...] = (
     "target_tldr",  # 01 - collapsed: False
@@ -35,18 +36,9 @@ SECTION_ORDER: tuple[str, ...] = (
     "provenance",  # 17 - collapsed: True
 )
 
-_UNCOLLAPSED_SECTIONS = frozenset(
-    {
-        "target_tldr",
-        "neighborhood_summary",
-        "suggested_followups",
-    }
-)
-
-_DYNAMIC_COLLAPSE_SECTIONS: dict[str, int] = {
-    "parents": 3,
-    "enclosing_context": 1,
-}
+_LDMD_COLLAPSE_POLICY = LdmdCollapsePolicyV1.default()
+_UNCOLLAPSED_SECTIONS = frozenset(_LDMD_COLLAPSE_POLICY.uncollapsed_sections)
+_DYNAMIC_COLLAPSE_SECTIONS: dict[str, int] = dict(_LDMD_COLLAPSE_POLICY.dynamic_collapse_thresholds)
 
 
 def is_section_collapsed(kind: str, total: int) -> bool:
@@ -64,12 +56,7 @@ def is_section_collapsed(kind: str, total: int) -> bool:
     bool
         True if section should be collapsed by default.
     """
-    if kind in _UNCOLLAPSED_SECTIONS:
-        return False
-    threshold = _DYNAMIC_COLLAPSE_SECTIONS.get(kind)
-    if threshold is None:
-        return True
-    return total > threshold
+    return _LDMD_COLLAPSE_POLICY.is_collapsed(kind, total=total)
 
 
 class SectionV1(CqStruct, frozen=True):

@@ -7,7 +7,7 @@ use crate::rules::intent_compiler::{
 };
 use crate::rules::registry::CpgRuleSet;
 use crate::session::profiles::EnvironmentProfile;
-use crate::spec::rule_intents::{RuleIntent, RulepackProfile};
+use crate::spec::rule_intents::{RuleClass, RuleIntent, RulepackProfile};
 use std::collections::HashSet;
 
 /// Factory for building CpgRuleSet from rulepack profile and rule intents.
@@ -56,10 +56,17 @@ impl RulepackFactory {
 
         // Process each intent using the intent compiler
         for intent in intents {
+            // LowLatency is typed correctness-only policy.
+            if *profile == RulepackProfile::LowLatency && !is_correctness_class(&intent.class) {
+                continue;
+            }
+
             // Compile to analyzer rules
             if let Some(rule) = compile_intent_to_analyzer(intent) {
-                // Only include safety rules in Strict profile
-                if rule.name().contains("safety") && *profile != RulepackProfile::Strict {
+                // Safety analyzer rules are strict-profile only.
+                if matches!(intent.class, RuleClass::Safety)
+                    && *profile != RulepackProfile::Strict
+                {
                     continue;
                 }
                 analyzer_rules.push(rule);
@@ -78,13 +85,7 @@ impl RulepackFactory {
 
         // Apply profile-specific filtering
         match profile {
-            RulepackProfile::LowLatency => {
-                // Low latency: Keep only essential correctness rules
-                // Filter out expensive validation and optimization
-                analyzer_rules.retain(|rule| is_correctness_rule(rule.name()));
-                optimizer_rules.retain(|rule| is_correctness_rule(rule.name()));
-                physical_rules.retain(|rule| is_correctness_rule(rule.name()));
-            }
+            RulepackProfile::LowLatency => {}
             RulepackProfile::Strict => {
                 // Strict: Add extra validation (safety rules already added above)
                 // All safety rules are included
@@ -136,24 +137,8 @@ impl RulepackFactory {
     }
 }
 
-/// Checks if a rule is considered a correctness rule (essential for LowLatency).
-///
-/// Correctness rules are minimal set needed for semantically valid execution.
-/// Non-correctness rules are optimizations and validations that can be skipped.
-///
-/// # Arguments
-///
-/// * `rule_name` - Name of the rule to check
-///
-/// # Returns
-///
-/// true if the rule is essential for correctness
-fn is_correctness_rule(rule_name: &str) -> bool {
-    rule_name == "codeanatomy_policy_rule"
-        || rule_name.contains("integrity")
-        || rule_name.contains("validation")
-        || rule_name.contains("type_check")
-        || rule_name.contains("safety")
+fn is_correctness_class(class: &RuleClass) -> bool {
+    matches!(class, RuleClass::SemanticIntegrity | RuleClass::Safety)
 }
 
 #[cfg(test)]
@@ -256,11 +241,11 @@ mod tests {
     }
 
     #[test]
-    fn test_is_correctness_rule() {
-        assert!(is_correctness_rule("semantic_integrity_check"));
-        assert!(is_correctness_rule("type_check_validation"));
-        assert!(!is_correctness_rule("cost_based_optimization"));
-        assert!(!is_correctness_rule("join_reorder"));
+    fn test_is_correctness_class() {
+        assert!(is_correctness_class(&RuleClass::SemanticIntegrity));
+        assert!(is_correctness_class(&RuleClass::Safety));
+        assert!(!is_correctness_class(&RuleClass::DeltaScanAware));
+        assert!(!is_correctness_class(&RuleClass::CostShape));
     }
 
     #[test]

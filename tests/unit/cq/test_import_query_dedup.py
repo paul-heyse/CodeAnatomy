@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 

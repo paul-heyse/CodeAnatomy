@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::contracts::pushdown_mode::PushdownEnforcementMode;
 use crate::session::capture::GovernancePolicy;
 
 /// Runtime tuner operating mode.
@@ -12,16 +13,6 @@ pub enum RuntimeTunerMode {
     Off,
     Observe,
     Apply,
-}
-
-/// Pushdown contract enforcement policy.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PushdownEnforcementMode {
-    #[default]
-    Warn,
-    Strict,
-    Disabled,
 }
 
 /// Rule tracing verbosity mode for planner/rule instrumentation.

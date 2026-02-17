@@ -56,7 +56,7 @@ class MacroResultBuilder:
         MacroResultBuilder
             Current builder for fluent chaining.
         """
-        apply_summary_mapping(self.result.summary, kwargs)
+        self.result.summary = apply_summary_mapping(self.result.summary, kwargs)
         return self
 
     def set_scoring(self, details: ScoringDetailsV1 | None) -> MacroResultBuilder:

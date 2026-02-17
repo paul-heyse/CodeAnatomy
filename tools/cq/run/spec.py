@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, TypeGuard
+from typing import TypeGuard
 
 import msgspec
 
 from tools.cq.core.typed_boundary import convert_strict
 from tools.cq.core.types import QueryLanguageScope
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
-
-SearchMode = Literal["regex", "literal"]
+from tools.cq.search._shared.types import QueryMode
 
 
 class RunPlan(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True):
@@ -46,7 +45,7 @@ class SearchStep(RunStepBase, tag="search", frozen=True):
     """Run step describing a search query."""
 
     query: str
-    mode: SearchMode | None = None
+    mode: QueryMode | None = None
     include_strings: bool = False
     in_dir: str | None = None
     lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
@@ -243,7 +242,6 @@ __all__ = [
     "RunStep",
     "RunStepBase",
     "ScopesStep",
-    "SearchMode",
     "SearchStep",
     "SideEffectsStep",
     "SigImpactStep",

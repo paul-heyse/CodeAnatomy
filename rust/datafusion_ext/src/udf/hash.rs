@@ -143,7 +143,7 @@ impl ScalarUDFImpl for StableHash128Udf {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.is_empty() || arg_types.len() > 3 {
             return Err(DataFusionError::Plan(
-                "stable_hash_any expects between one and three arguments".into(),
+                "stable_hash128 expects between one and three arguments".into(),
             ));
         }
         let mut coerced = Vec::with_capacity(arg_types.len());

@@ -203,16 +203,6 @@ def _execute_search_step(
     *,
     run_id: str,
 ) -> CqResult:
-    mode = None
-    if step.mode == "regex":
-        from tools.cq.search._shared.types import QueryMode
-
-        mode = QueryMode.REGEX
-    elif step.mode == "literal":
-        from tools.cq.search._shared.types import QueryMode
-
-        mode = QueryMode.LITERAL
-
     include_globs = _build_search_includes(plan.in_dir, step.in_dir)
     exclude_globs = list(plan.exclude) if plan.exclude else None
 
@@ -221,7 +211,7 @@ def _execute_search_step(
         request_ctx,
         query=step.query,
         options=SearchRequestOptionsV1(
-            mode=mode,
+            mode=step.mode,
             include_globs=include_globs,
             exclude_globs=exclude_globs,
             include_strings=step.include_strings,

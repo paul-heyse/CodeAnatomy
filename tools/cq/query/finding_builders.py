@@ -6,6 +6,7 @@ Builds findings from ast-grep records with evidence enrichment.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
@@ -18,7 +19,7 @@ from tools.cq.utils.interval_index import FileIntervalIndex
 
 def count_callers_for_definition(
     def_record: SgRecord,
-    all_calls: list[SgRecord],
+    all_calls: Sequence[SgRecord],
     index: FileIntervalIndex,
 ) -> int:
     """Count callsites that target the given definition.

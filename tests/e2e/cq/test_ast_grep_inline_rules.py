@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tools.cq.query.executor import _execute_ast_grep_rules
+from tools.cq.query.executor_runtime import _execute_ast_grep_rules
 from tools.cq.query.planner import AstGrepRule
 
 MIN_RULE_RECORDS = 2

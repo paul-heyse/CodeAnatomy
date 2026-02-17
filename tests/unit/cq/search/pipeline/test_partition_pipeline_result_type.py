@@ -1,4 +1,4 @@
-"""Tests for search enrichment phase orchestration."""
+"""Tests for partition-pipeline result typing."""
 
 from __future__ import annotations
 
@@ -7,14 +7,20 @@ from pathlib import Path
 import pytest
 from tools.cq.search._shared.types import QueryMode, SearchLimits
 from tools.cq.search.pipeline.contracts import SearchConfig, SearchPartitionPlanV1
-from tools.cq.search.pipeline.enrichment_phase import run_enrichment_phase
+from tools.cq.search.pipeline.partition_pipeline import run_search_partition
+from tools.cq.search.pipeline.smart_search import _run_single_partition
 from tools.cq.search.pipeline.smart_search_types import LanguageSearchResult, SearchStats
 
 
-def test_run_enrichment_phase_delegates_to_partition_pipeline(
+def test_run_search_partition_declares_language_result_type() -> None:
+    """Partition pipeline must expose precise LanguageSearchResult return annotation."""
+    assert run_search_partition.__annotations__["return"] is LanguageSearchResult
+
+
+def test_run_single_partition_delegates_to_partition_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Enrichment phase delegates plan execution to partition pipeline."""
+    """Smart-search partition helper should call run_search_partition directly."""
     expected = LanguageSearchResult(
         lang="python",
         raw_matches=[],
@@ -26,30 +32,26 @@ def test_run_enrichment_phase_delegates_to_partition_pipeline(
     captured: dict[str, object] = {}
 
     def _fake_run(
-        plan: SearchPartitionPlanV1, *, ctx: SearchConfig, mode: QueryMode
+        plan: SearchPartitionPlanV1,
+        *,
+        ctx: SearchConfig,
+        mode: QueryMode,
     ) -> LanguageSearchResult:
         captured["plan"] = plan
         captured["ctx"] = ctx
         captured["mode"] = mode
         return expected
 
-    monkeypatch.setattr("tools.cq.search.pipeline.enrichment_phase.run_search_partition", _fake_run)
+    monkeypatch.setattr("tools.cq.search.pipeline.smart_search.run_search_partition", _fake_run)
     config = SearchConfig(
         root=Path(),
         query="target",
         mode=QueryMode.IDENTIFIER,
         limits=SearchLimits(),
     )
-    plan = SearchPartitionPlanV1(
-        root=str(Path().resolve()),
-        language="python",
-        query="target",
-        mode="identifier",
-    )
-
-    result = run_enrichment_phase(plan, config=config, mode=QueryMode.IDENTIFIER)
+    result = _run_single_partition(config, "python", mode=QueryMode.IDENTIFIER)
 
     assert result is expected
-    assert captured["plan"] == plan
+    assert isinstance(captured["plan"], SearchPartitionPlanV1)
     assert captured["ctx"] == config
     assert captured["mode"] == QueryMode.IDENTIFIER

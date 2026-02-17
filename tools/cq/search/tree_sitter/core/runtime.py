@@ -126,8 +126,7 @@ def _combined_progress_callback(
     def _budget_callback(state: object) -> bool:
         if monotonic() >= deadline:
             return False
-        if callback is None:
-            return True
+        assert callback is not None
         return bool(callback(state))
 
     return _budget_callback

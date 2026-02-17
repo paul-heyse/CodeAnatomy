@@ -15,7 +15,7 @@ from tools.cq.core.contract_codec import encode_json
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
 from tools.cq.macros.contracts import CallsRequest
-from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.search.pipeline.smart_search import smart_search

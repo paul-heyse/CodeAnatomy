@@ -8,9 +8,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.core.render_context import RenderContext
-from tools.cq.core.render_diagnostics import (
-    summary_with_render_enrichment_metrics as _summary_with_render_enrichment_metrics,
-)
 from tools.cq.core.render_enrichment import (
     extract_enrichment_payload as _extract_enrichment_payload,
 )
@@ -18,16 +15,10 @@ from tools.cq.core.render_enrichment import (
     format_enrichment_facts as _format_enrichment_facts,
 )
 from tools.cq.core.render_enrichment_orchestrator import (
-    count_render_enrichment_tasks as _count_render_enrichment_tasks_orchestrator,
-)
-from tools.cq.core.render_enrichment_orchestrator import (
     maybe_attach_render_enrichment as _maybe_attach_render_enrichment_orchestrator,
 )
 from tools.cq.core.render_enrichment_orchestrator import (
-    precompute_render_enrichment_cache as _precompute_render_enrichment_cache_orchestrator,
-)
-from tools.cq.core.render_enrichment_orchestrator import (
-    select_enrichment_target_files as _select_enrichment_target_files_orchestrator,
+    prepare_render_enrichment_session as _prepare_render_enrichment_session_orchestrator,
 )
 from tools.cq.core.render_overview import render_code_overview as _render_code_overview
 from tools.cq.core.render_summary import (
@@ -90,15 +81,6 @@ class _RenderPassContext:
     allowed_enrichment_files: set[str] | None = None
     port: RenderEnrichmentPort | None = None
     seen_keys: set[tuple[object, ...]] | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class _RenderEnrichmentSession:
-    """Prepared enrichment session payload for one report render."""
-
-    cache: dict[tuple[str, int, int, str], dict[str, object]]
-    allowed_files: set[str]
-    summary_with_metrics: SummaryV1 | dict[str, object]
 
 
 def _severity_icon(severity: str) -> str:
@@ -463,48 +445,6 @@ def _reorder_sections(sections: list[Section], macro: str) -> list[Section]:
     return known + unknown
 
 
-def _prepare_render_enrichment_session(
-    *,
-    result: CqResult,
-    root: Path,
-    port: RenderEnrichmentPort | None,
-) -> _RenderEnrichmentSession:
-    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
-    allowed_files = set(_select_enrichment_target_files_orchestrator(result))
-    all_task_count = _count_render_enrichment_tasks_orchestrator(
-        result=result,
-        root=root,
-        allowed_files=None,
-    )
-    rendered_tasks = _precompute_render_enrichment_cache_orchestrator(
-        result=result,
-        root=root,
-        cache=enrich_cache,
-        allowed_files=allowed_files,
-        port=port,
-    )
-    applied = sum(
-        1
-        for task in rendered_tasks
-        if enrich_cache.get((task.file, task.line, task.col, task.language))
-    )
-    attempted = len(rendered_tasks)
-    failed = max(0, attempted - applied)
-    skipped = max(0, all_task_count - attempted)
-    summary_with_metrics = _summary_with_render_enrichment_metrics(
-        result.summary,
-        attempted=attempted,
-        applied=applied,
-        failed=failed,
-        skipped=skipped,
-    )
-    return _RenderEnrichmentSession(
-        cache=enrich_cache,
-        allowed_files=allowed_files,
-        summary_with_metrics=summary_with_metrics,
-    )
-
-
 def _assemble_report_body(
     *,
     result: CqResult,
@@ -544,7 +484,7 @@ def render_markdown(
     """
     resolved_context = render_context or RenderContext.minimal()
     root = Path(result.run.root)
-    session = _prepare_render_enrichment_session(
+    session = _prepare_render_enrichment_session_orchestrator(
         result=result,
         root=root,
         port=resolved_context.enrichment_port,

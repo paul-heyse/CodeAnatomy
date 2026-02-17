@@ -8,8 +8,8 @@ from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
-from tools.cq.cli_app.options import RunOptions, options_from_params
 from tools.cq.cli_app.params import RunParams
+from tools.cq.cli_app.schema_projection import run_options_from_projected_params
 from tools.cq.core.result_factory import build_error_result
 
 
@@ -35,7 +35,7 @@ def run(
     ctx = require_context(ctx)
     if opts is None:
         opts = RunParams()
-    options = options_from_params(opts, type_=RunOptions)
+    options = run_options_from_projected_params(opts)
     load_input = RunLoadInput(
         plan=options.plan,
         step=tuple(options.step),

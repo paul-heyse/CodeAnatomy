@@ -11,7 +11,7 @@ pub mod snapshot;
 // Re-export key types for convenience
 pub use pushdown_contract::{
     probe_pushdown, FilterPushdownStatus, PushdownContractAssertion, PushdownContractReport,
-    PushdownContractResult, PushdownEnforcementMode, PushdownProbe,
+    PushdownContractResult, PushdownProbe,
 };
 pub use registration::{register_extraction_inputs, TableRegistration};
 pub use scan_config::{

@@ -32,7 +32,7 @@ def test_build_diagnostics_artifact_payload_none_when_empty() -> None:
 def test_build_diagnostics_artifact_payload_contains_rust_telemetry() -> None:
     """Test build diagnostics artifact payload contains rust telemetry."""
     result = _mk_result()
-    apply_summary_mapping(
+    result.summary = apply_summary_mapping(
         result.summary,
         {
             "enrichment_telemetry": {"python": {"applied": 1}},

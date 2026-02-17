@@ -12,8 +12,8 @@ from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
-from tools.cq.cli_app.options import SearchOptions, options_from_params
 from tools.cq.cli_app.params import SearchParams
+from tools.cq.cli_app.schema_projection import search_options_from_projected_params
 from tools.cq.orchestration.request_factory import (
     RequestContextV1,
     RequestFactory,
@@ -46,7 +46,7 @@ def search(
     # Determine mode
     if opts is None:
         opts = SearchParams()
-    options = options_from_params(opts, type_=SearchOptions)
+    options = search_options_from_projected_params(opts)
 
     mode: QueryMode | None = None
     if options.regex:

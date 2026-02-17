@@ -6,6 +6,7 @@ import pytest
 from tools.cq.core.typed_boundary import BoundaryDecodeError
 from tools.cq.run.spec import CallsStep, QStep, SearchStep
 from tools.cq.run.step_decode import parse_run_step_json, parse_run_steps_json
+from tools.cq.search._shared.types import QueryMode
 
 MULTI_STEP_COUNT = 3
 
@@ -25,7 +26,7 @@ def test_parse_run_step_json_search_step() -> None:
     step = parse_run_step_json(raw)
     assert isinstance(step, SearchStep)
     assert step.query == "build_graph"
-    assert step.mode == "regex"
+    assert step.mode is QueryMode.REGEX
 
 
 def test_parse_run_step_json_calls_step() -> None:

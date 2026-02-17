@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 
 from tools.cq.core.types import LdmdSliceMode
+from tools.cq.ldmd.collapse_policy import LdmdCollapsePolicyV1
 
 
 class LdmdParseError(Exception):
@@ -53,7 +54,11 @@ class _OpenSectionMeta:
     tags: str
 
 
-def _is_collapsed(section_id: str) -> bool:
+def _is_collapsed(
+    section_id: str,
+    *,
+    collapse_policy: LdmdCollapsePolicyV1,
+) -> bool:
     """Determine if section should be collapsed by default.
 
     Uses lazy import to avoid dependency on R5 section_layout module.
@@ -62,22 +67,14 @@ def _is_collapsed(section_id: str) -> bool:
     Returns:
         `True` when section should be collapsed by default.
     """
-    try:
-        from tools.cq.neighborhood.section_layout import (
-            _DYNAMIC_COLLAPSE_SECTIONS,
-            _UNCOLLAPSED_SECTIONS,
-        )
-
-        if section_id in _UNCOLLAPSED_SECTIONS:
-            return False
-        if section_id in _DYNAMIC_COLLAPSE_SECTIONS:
-            return True
-    except ImportError:
-        pass
-    return True
+    return collapse_policy.is_collapsed(section_id)
 
 
-def build_index(content: bytes) -> LdmdIndex:
+def build_index(
+    content: bytes,
+    *,
+    collapse_policy: LdmdCollapsePolicyV1 | None = None,
+) -> LdmdIndex:
     """Build section index in single forward pass over raw bytes.
 
     Validates:
@@ -97,6 +94,7 @@ def build_index(content: bytes) -> LdmdIndex:
             unclosed sections).
     """
     open_stack: list[str] = []
+    policy = collapse_policy or LdmdCollapsePolicyV1.default()
     seen_ids: set[str] = set()
     sections: list[SectionMeta] = []
     open_sections: dict[str, _OpenSectionMeta] = {}
@@ -141,7 +139,7 @@ def build_index(content: bytes) -> LdmdIndex:
                     start_offset=section_meta.byte_start,
                     end_offset=byte_offset + line_byte_len,
                     depth=len(open_stack),
-                    collapsed=_is_collapsed(sid),
+                    collapsed=_is_collapsed(sid, collapse_policy=policy),
                 )
             )
 

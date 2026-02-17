@@ -12,25 +12,16 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
-from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
+from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
-from tools.cq.core.cache.fragment_codecs import decode_fragment_payload
-from tools.cq.core.cache.fragment_contracts import (
-    FragmentHitV1,
-    FragmentMissV1,
-    FragmentWriteV1,
-)
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
-from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.entity_kinds import ENTITY_KINDS
-from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.result_factory import build_error_result
-from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
     Finding,
-    RunMeta,
+    Section,
     assign_result_finding_ids,
     mk_result,
     ms,
@@ -39,25 +30,10 @@ from tools.cq.core.structs import CqStruct
 from tools.cq.core.summary_contract import (
     apply_summary_mapping,
     as_search_summary,
-    build_semantic_telemetry,
-    summary_from_mapping,
 )
 from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 from tools.cq.orchestration.multilang_orchestrator import (
     execute_by_language_scope,
-)
-from tools.cq.orchestration.multilang_summary import (
-    build_multilang_summary,
-    partition_stats_from_result_summary,
-)
-from tools.cq.query.cache_converters import (
-    cache_record_to_record as _cache_record_to_record,
-)
-from tools.cq.query.cache_converters import (
-    record_sort_key_detailed as _record_sort_key,
-)
-from tools.cq.query.cache_converters import (
-    record_to_cache_record as _record_to_cache_record,
 )
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
@@ -107,12 +83,20 @@ from tools.cq.query.finding_builders import (
 )
 from tools.cq.query.language import expand_language_scope, file_extensions_for_language
 from tools.cq.query.planner import ToolPlan, scope_to_globs, scope_to_paths
-from tools.cq.query.query_cache import (
-    QueryFragmentCacheContext,
-    QueryFragmentContextBuildRequest,
-    build_query_fragment_cache_context,
-    build_query_fragment_entries,
-    run_query_fragment_scan,
+from tools.cq.query.query_scan import (
+    scan_entity_records as _scan_entity_records,
+)
+from tools.cq.query.query_summary import (
+    build_runmeta as _build_runmeta,
+)
+from tools.cq.query.query_summary import (
+    finalize_single_scope_summary as _finalize_single_scope_summary,
+)
+from tools.cq.query.query_summary import (
+    summary_common_for_context as _summary_common_for_context,
+)
+from tools.cq.query.query_summary import (
+    summary_common_for_query as _summary_common_for_query,
 )
 from tools.cq.query.scan import (
     EntityCandidates,
@@ -124,14 +108,10 @@ from tools.cq.query.scan import (
 from tools.cq.query.scan import (
     build_scan_context as _build_scan_context,
 )
-from tools.cq.query.sg_parser import list_scan_files, sg_scan
-from tools.cq.query.shared_utils import count_result_matches, extract_def_name
+from tools.cq.query.sg_parser import list_scan_files
+from tools.cq.query.shared_utils import extract_def_name
 from tools.cq.search._shared.types import SearchLimits
-from tools.cq.search.cache.contracts import QueryEntityScanCacheV1
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
-from tools.cq.search.semantic.diagnostics import (
-    build_language_capabilities,
-)
 from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
@@ -151,8 +131,6 @@ from tools.cq.query.merge import (
 )
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
-_ENTITY_FRAGMENT_PAYLOAD_LEN = 3
-_MIN_PREFILTER_LITERAL_LEN = 3
 logger = logging.getLogger(__name__)
 
 
@@ -175,12 +153,6 @@ class PatternExecutionState:
     ctx: QueryExecutionContext
     scope_globs: list[str] | None
     file_result: FileTabulationResult
-
-
-@dataclass(frozen=True)
-class _EntityFragmentContext:
-    cache_ctx: QueryFragmentCacheContext
-    record_types: tuple[str, ...]
 
 
 class ExecutePlanRequestV1(CqStruct, frozen=True):
@@ -206,91 +178,6 @@ class _AutoScopePlanRequest:
     services: CqRuntimeServices
 
 
-def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
-    run_ctx = RunContext.from_parts(
-        root=ctx.root,
-        argv=ctx.argv,
-        tc=ctx.tc,
-        started_ms=ctx.started_ms,
-        run_id=ctx.run_id,
-    )
-    return run_ctx.to_runmeta("q")
-
-
-def _query_mode(query: Query) -> str:
-    return "pattern" if query.is_pattern_query else "entity"
-
-
-def _query_text(query: Query) -> str:
-    if query.pattern_spec is not None:
-        return query.pattern_spec.pattern
-    parts: list[str] = []
-    if query.entity is not None:
-        parts.append(f"entity={query.entity}")
-    if query.name:
-        parts.append(f"name={query.name}")
-    return " ".join(parts) if parts else "q"
-
-
-def _summary_common_for_query(
-    query: Query,
-    *,
-    query_text: str | None = None,
-) -> dict[str, object]:
-    text = (
-        query_text.strip()
-        if isinstance(query_text, str) and query_text.strip()
-        else _query_text(query)
-    )
-    common: dict[str, object] = {
-        "query": text,
-        "mode": _query_mode(query),
-        "python_semantic_overview": dict[str, object](),
-        "python_semantic_telemetry": build_semantic_telemetry(
-            attempted=0, applied=0, failed=0, skipped=0, timed_out=0
-        ),
-        "rust_semantic_telemetry": build_semantic_telemetry(
-            attempted=0, applied=0, failed=0, skipped=0, timed_out=0
-        ),
-        "semantic_planes": dict[str, object](),
-        "python_semantic_diagnostics": list[dict[str, object]](),
-    }
-    if query.pattern_spec is not None:
-        common["pattern"] = query.pattern_spec.pattern
-        if query.pattern_spec.context is not None:
-            common["pattern_context"] = query.pattern_spec.context
-        if query.pattern_spec.selector is not None:
-            common["pattern_selector"] = query.pattern_spec.selector
-    return common
-
-
-def _summary_common_for_context(ctx: QueryExecutionContext) -> dict[str, object]:
-    return _summary_common_for_query(ctx.query, query_text=ctx.query_text)
-
-
-def _finalize_single_scope_summary(ctx: QueryExecutionContext, result: CqResult) -> None:
-    if ctx.query.lang_scope == "auto":
-        return
-    lang = ctx.query.primary_language
-    common = result.summary.to_dict()
-    partition = partition_stats_from_result_summary(
-        result.summary,
-        fallback_matches=count_result_matches(result),
-    )
-    result.summary = summary_from_mapping(
-        build_multilang_summary(
-            SummaryBuildRequest(
-                common=common,
-                lang_scope=ctx.query.lang_scope,
-                language_order=(lang,),
-                languages={lang: partition},
-                cross_language_diagnostics=[],
-                language_capabilities=build_language_capabilities(lang_scope=ctx.query.lang_scope),
-            )
-        )
-    )
-
-
 def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
     result = build_error_result(
         macro="q",
@@ -300,9 +187,8 @@ def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
         started_ms=ctx.started_ms,
         error=message,
     )
-    apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    _finalize_single_scope_summary(ctx, result)
-    return assign_result_finding_ids(result)
+    result.summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
+    return assign_result_finding_ids(_finalize_single_scope_summary(ctx, result))
 
 
 def _resolve_entity_paths(
@@ -313,146 +199,6 @@ def _resolve_entity_paths(
     if not paths:
         return [], None, _empty_result(ctx, "No files match scope")
     return paths, scope_to_globs(plan.scope), None
-
-
-def _scan_entity_records(
-    ctx: QueryExecutionContext,
-    paths: list[Path],
-    scope_globs: list[str] | None,
-) -> list[SgRecord]:
-    fragment_ctx = _build_entity_fragment_context(ctx, paths=paths, scope_globs=scope_globs)
-    if not fragment_ctx.cache_ctx.files:
-        return []
-
-    entries = build_query_fragment_entries(
-        fragment_ctx.cache_ctx,
-        extras_builder=lambda _path, _rel: {"record_types": fragment_ctx.record_types},
-    )
-    scan_result = run_query_fragment_scan(
-        context=fragment_ctx.cache_ctx,
-        entries=entries,
-        run_id=ctx.run_id,
-        decode=_decode_entity_fragment_payload,
-        scan_misses=lambda misses: _scan_entity_fragment_misses(
-            ctx=ctx,
-            fragment_ctx=fragment_ctx,
-            misses=misses,
-        ),
-    )
-
-    records_by_rel = _entity_records_from_hits(scan_result.hits)
-    if scan_result.miss_payload:
-        records_by_rel.update(scan_result.miss_payload)
-
-    return _assemble_entity_records(
-        fragment_ctx.cache_ctx.files,
-        fragment_ctx.cache_ctx.root,
-        records_by_rel,
-    )
-
-
-def _scan_entity_fragment_misses(
-    *,
-    ctx: QueryExecutionContext,
-    fragment_ctx: _EntityFragmentContext,
-    misses: list[FragmentMissV1],
-) -> tuple[dict[str, list[SgRecord]], list[FragmentWriteV1]]:
-    miss_paths = [fragment_ctx.cache_ctx.root / miss.entry.file for miss in misses]
-    scanned = sg_scan(
-        paths=miss_paths,
-        record_types=ctx.plan.sg_record_types,
-        root=fragment_ctx.cache_ctx.root,
-        globs=None,
-        lang=ctx.plan.lang,
-    )
-    grouped = group_records_by_file(scanned)
-    records_by_rel: dict[str, list[SgRecord]] = {}
-    writes: list[FragmentWriteV1] = []
-    for miss in misses:
-        rel_path = miss.entry.file
-        fragment_records = sorted(grouped.get(rel_path, []), key=_record_sort_key)
-        records_by_rel[rel_path] = fragment_records
-        writes.append(
-            FragmentWriteV1(
-                entry=miss.entry,
-                payload=QueryEntityScanCacheV1(
-                    records=[_record_to_cache_record(item) for item in fragment_records]
-                ),
-            )
-        )
-    return records_by_rel, writes
-
-
-def _build_entity_fragment_context(
-    ctx: QueryExecutionContext,
-    *,
-    paths: list[Path],
-    scope_globs: list[str] | None,
-) -> _EntityFragmentContext:
-    files = list_scan_files(
-        paths=paths,
-        root=ctx.root.resolve(),
-        globs=scope_globs,
-        lang=ctx.plan.lang,
-    )
-    record_types = tuple(sorted(ctx.plan.sg_record_types))
-    return _EntityFragmentContext(
-        cache_ctx=build_query_fragment_cache_context(
-            QueryFragmentContextBuildRequest(
-                root=ctx.root,
-                files=files,
-                scope_roots=paths,
-                scope_globs=scope_globs,
-                namespace="query_entity_fragment",
-                language=ctx.plan.lang,
-                scope_hash_extras={"record_types": record_types},
-                run_id=ctx.run_id,
-            )
-        ),
-        record_types=record_types,
-    )
-
-
-def _decode_entity_fragment_payload(payload: object) -> list[SgRecord] | None:
-    decoded = decode_fragment_payload(payload, type_=QueryEntityScanCacheV1)
-    if decoded is None:
-        return None
-    return [_cache_record_to_record(item) for item in decoded.records]
-
-
-def _entity_records_from_hits(hits: tuple[FragmentHitV1, ...]) -> dict[str, list[SgRecord]]:
-    records_by_rel: dict[str, list[SgRecord]] = {}
-    for hit in hits:
-        if not isinstance(hit.payload, list):
-            continue
-        records_by_rel[hit.entry.file] = cast("list[SgRecord]", hit.payload)
-    return records_by_rel
-
-
-def _assemble_entity_records(
-    files: list[Path],
-    root: Path,
-    records_by_rel: dict[str, list[SgRecord]],
-) -> list[SgRecord]:
-    ordered_records: list[SgRecord] = []
-    for file_path in files:
-        rel_path = normalize_repo_relative_path(str(file_path), root=root)
-        ordered_records.extend(records_by_rel.get(rel_path, []))
-    ordered_records.sort(key=_record_sort_key)
-    return ordered_records
-
-
-def _raw_match_sort_key(row: dict[str, object]) -> tuple[str, int, int, str]:
-    file = row.get("file")
-    line = row.get("line")
-    col = row.get("col")
-    rule_id = row.get("ruleId")
-    return (
-        str(file) if isinstance(file, str) else "",
-        int(line) if isinstance(line, int) else 0,
-        int(col) if isinstance(col, int) else 0,
-        str(rule_id) if isinstance(rule_id, str) else "",
-    )
 
 
 def _apply_rule_spans(
@@ -473,9 +219,9 @@ def _apply_rule_spans(
     if not match_spans:
         return candidates
 
-    def_records = candidates.def_records
-    import_records = candidates.import_records
-    call_records = candidates.call_records
+    def_records = list(candidates.def_records)
+    import_records = list(candidates.import_records)
+    call_records = list(candidates.call_records)
 
     if query.entity in {"function", "class", "method", "decorator"}:
         def_records = _filter_records_by_spans(def_records, match_spans)
@@ -485,9 +231,9 @@ def _apply_rule_spans(
         call_records = _filter_records_by_spans(call_records, match_spans)
 
     return EntityCandidates(
-        def_records=def_records,
-        import_records=import_records,
-        call_records=call_records,
+        def_records=tuple(def_records),
+        import_records=tuple(import_records),
+        call_records=tuple(call_records),
     )
 
 
@@ -583,29 +329,57 @@ def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState 
 
 def _apply_entity_handlers(
     state: EntityExecutionState,
-    result: CqResult,
     *,
     symtable: SymtableEnricher | None = None,
-) -> None:
+) -> tuple[list[Finding], list[Section], dict[str, object]]:
     query = state.ctx.query
     root = state.ctx.root
     candidates = state.candidates
-    def_ctx = DefQueryContext(state=state, result=result, symtable=symtable)
 
     if query.entity == "import":
+        temp_result = mk_result(_build_runmeta(state.ctx))
         _process_import_query(
-            candidates.import_records,
+            list(candidates.import_records),
             query,
-            result,
+            temp_result,
             root,
             symtable=symtable,
         )
-    elif query.entity == "decorator":
-        _process_decorator_query(state.scan, query, result, root, candidates.def_records)
-    elif query.entity == "callsite":
-        _process_call_query(state.scan, query, result, root)
-    else:
-        _process_def_query(def_ctx, query, candidates.def_records)
+        return (
+            list(temp_result.key_findings),
+            list(temp_result.sections),
+            _entity_summary_updates(temp_result),
+        )
+    if query.entity == "decorator":
+        findings, summary_updates = _process_decorator_query(
+            state.scan,
+            query,
+            root,
+            list(candidates.def_records),
+        )
+        return findings, [], summary_updates
+    if query.entity == "callsite":
+        findings, summary_updates = _process_call_query(state.scan, query, root)
+        return findings, [], summary_updates
+
+    temp_result = mk_result(_build_runmeta(state.ctx))
+    def_ctx = DefQueryContext(state=state, result=temp_result, symtable=symtable)
+    _process_def_query(def_ctx, query, list(candidates.def_records))
+    return (
+        list(temp_result.key_findings),
+        list(temp_result.sections),
+        _entity_summary_updates(temp_result),
+    )
+
+
+def _entity_summary_updates(result: CqResult) -> dict[str, object]:
+    summary = as_search_summary(result.summary)
+    return {
+        "matches": summary.matches,
+        "total_defs": summary.total_defs,
+        "total_calls": summary.total_calls,
+        "total_imports": summary.total_imports,
+    }
 
 
 def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> None:
@@ -712,7 +486,8 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
 
 
 def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
-    from tools.cq.query.executor_dispatch import execute_entity_query, execute_pattern_query
+    from tools.cq.query.executor_entity import execute_entity_query
+    from tools.cq.query.executor_pattern import execute_pattern_query
 
     if ctx.plan.is_pattern_query:
         logger.debug("Dispatching pattern query execution for lang=%s", ctx.plan.lang)
@@ -737,7 +512,10 @@ def _execute_auto_scope_plan(request: _AutoScopePlanRequest) -> CqResult:
             root=request.root,
             argv=request.argv,
             tc=request.tc,
-            summary_common=_summary_common_for_query(query, query_text=request.query_text),
+            summary_common=_summary_common_for_query(
+                query,
+                query_text_override=request.query_text,
+            ),
             services=request.services,
         )
     )
@@ -780,7 +558,7 @@ def _attach_entity_insight(result: CqResult, *, services: CqRuntimeServices) -> 
     )
 
 
-def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
+def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     """Execute an entity-based query.
 
     Returns:
@@ -788,16 +566,31 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     CqResult
         Query result with findings and summary metadata.
     """
+    assert not ctx.plan.is_pattern_query, (
+        "execute_entity_query called with a pattern query plan; use execute_pattern_query instead"
+    )
     state = _prepare_entity_state(ctx)
     if isinstance(state, CqResult):
         return state
 
     result = mk_result(_build_runmeta(ctx))
-    apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    _apply_entity_handlers(state, result)
-    result.summary.files_scanned = len({r.file for r in state.records})
+    summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
+    findings, sections, summary_updates = _apply_entity_handlers(state)
+    summary = apply_summary_mapping(
+        summary,
+        {
+            **summary_updates,
+            "files_scanned": len({r.file for r in state.records}),
+        },
+    )
+    result = msgspec.structs.replace(
+        result,
+        summary=summary,
+        key_findings=findings,
+        sections=sections,
+    )
     _maybe_add_entity_explain(state, result)
-    _finalize_single_scope_summary(ctx, result)
+    result = _finalize_single_scope_summary(ctx, result)
     _attach_entity_insight(result, services=ctx.services)
     result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
     return assign_result_finding_ids(result)
@@ -840,17 +633,29 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         candidates=candidates,
     )
     result = mk_result(_build_runmeta(ctx))
-    apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    _apply_entity_handlers(state, result, symtable=request.symtable)
-    result.summary.files_scanned = len({r.file for r in state.records})
+    summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
+    findings, sections, summary_updates = _apply_entity_handlers(state, symtable=request.symtable)
+    summary = apply_summary_mapping(
+        summary,
+        {
+            **summary_updates,
+            "files_scanned": len({r.file for r in state.records}),
+        },
+    )
+    result = msgspec.structs.replace(
+        result,
+        summary=summary,
+        key_findings=findings,
+        sections=sections,
+    )
     _maybe_add_entity_explain(state, result)
-    _finalize_single_scope_summary(ctx, result)
+    result = _finalize_single_scope_summary(ctx, result)
     _attach_entity_insight(result, services=ctx.services)
     result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
     return assign_result_finding_ids(result)
 
 
-def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
+def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     """Execute a pattern-based query using inline ast-grep rules.
 
     Returns:
@@ -858,6 +663,9 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     CqResult
         Query result with findings and summary metadata.
     """
+    assert ctx.plan.is_pattern_query, (
+        "execute_pattern_query called with an entity query plan; use execute_entity_query instead"
+    )
     state = _prepare_pattern_state(ctx)
     if isinstance(state, CqResult):
         return state
@@ -872,7 +680,7 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     )
 
     result = mk_result(_build_runmeta(ctx))
-    apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
+    result.summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
     result.key_findings.extend(findings)
 
     if state.ctx.query.scope_filter and findings:
@@ -890,7 +698,7 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     result.summary.matches = len(result.key_findings)
     result.summary.files_scanned = len({r.file for r in records})
     _maybe_add_pattern_explain(state, result)
-    _finalize_single_scope_summary(ctx, result)
+    result = _finalize_single_scope_summary(ctx, result)
     result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
     return assign_result_finding_ids(result)
 
@@ -938,7 +746,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     )
 
     result = mk_result(_build_runmeta(ctx))
-    apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
+    result.summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
     result.key_findings.extend(findings)
 
     if state.ctx.query.scope_filter and findings:
@@ -956,7 +764,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     result.summary.matches = len(result.key_findings)
     result.summary.files_scanned = len({r.file for r in records})
     _maybe_add_pattern_explain(state, result)
-    _finalize_single_scope_summary(ctx, result)
+    result = _finalize_single_scope_summary(ctx, result)
     result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
     return assign_result_finding_ids(result)
 
@@ -964,15 +772,18 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
 def _process_decorator_query(
     ctx: ScanContext,
     query: Query,
-    result: CqResult,
     root: Path,
-    def_candidates: list[SgRecord] | None = None,
-) -> None:
-    """Process a decorator entity query."""
+    def_candidates: list[SgRecord] | tuple[SgRecord, ...] | None = None,
+) -> tuple[list[Finding], dict[str, object]]:
+    """Process a decorator entity query.
+
+    Returns:
+        tuple[list[Finding], dict[str, object]]: Decorator findings and summary metrics.
+    """
     from tools.cq.query.enrichment import enrich_with_decorators
 
     # Look for decorated definitions
-    matching_defs: list[SgRecord] = []
+    findings: list[Finding] = []
 
     candidate_records = def_candidates if def_candidates is not None else ctx.def_records
     for def_record in candidate_records:
@@ -1030,26 +841,29 @@ def _process_decorator_query(
 
         # Only include if has decorators (for entity=decorator queries)
         if count > 0:
-            matching_defs.append(def_record)
+            finding = _def_to_finding(def_record, list(ctx.calls_by_def.get(def_record, ())))
+            details = finding.details.with_entry("decorators", decorators)
+            details = details.with_entry("decorator_count", count)
+            finding = msgspec.structs.replace(finding, details=details)
+            findings.append(finding)
 
-            finding = _def_to_finding(def_record, ctx.calls_by_def.get(def_record, []))
-            finding.details["decorators"] = decorators
-            finding.details["decorator_count"] = count
-            result.key_findings.append(finding)
-
-    summary = as_search_summary(result.summary)
-    summary.total_defs = len(ctx.def_records)
-    summary.matches = len(result.key_findings)
+    return findings, {
+        "total_defs": len(ctx.def_records),
+        "matches": len(findings),
+    }
 
 
 def _process_call_query(
     ctx: ScanContext,
     query: Query,
-    result: CqResult,
     root: Path,
-) -> None:
-    """Process a callsite entity query."""
-    matching_calls = _filter_to_matching(ctx.call_records, query)
+) -> tuple[list[Finding], dict[str, object]]:
+    """Process a callsite entity query.
+
+    Returns:
+        tuple[list[Finding], dict[str, object]]: Callsite findings and summary metrics.
+    """
+    matching_calls = _filter_to_matching(list(ctx.call_records), query)
     call_contexts: list[tuple[SgRecord, SgRecord | None]] = []
     for call_record in matching_calls:
         containing = ctx.file_index.find_containing(call_record)
@@ -1058,6 +872,7 @@ def _process_call_query(
     containing_defs = [containing for _, containing in call_contexts if containing is not None]
     evidence_map = _build_def_evidence_map(containing_defs, root)
 
+    findings: list[Finding] = []
     for call_record, containing in call_contexts:
         details: dict[str, object] = {}
         call_target = _extract_call_target(call_record)
@@ -1067,11 +882,12 @@ def _process_call_query(
             evidence = evidence_map.get(_record_key(containing))
             _apply_call_evidence(details, evidence, call_target)
         finding = _call_to_finding(call_record, extra_details=details)
-        result.key_findings.append(finding)
+        findings.append(finding)
 
-    summary = as_search_summary(result.summary)
-    summary.total_calls = len(ctx.call_records)
-    summary.matches = len(result.key_findings)
+    return findings, {
+        "total_calls": len(ctx.call_records),
+        "matches": len(findings),
+    }
 
 
 def rg_files_with_matches(

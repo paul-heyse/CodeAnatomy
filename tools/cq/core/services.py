@@ -5,18 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.core.schema import CqResult
-from tools.cq.core.structs import CqStruct
-from tools.cq.macros.contracts import CallsRequest
-from tools.cq.search.pipeline.enrichment_contracts import (
+from tools.cq.core.enrichment_mode import (
     IncrementalEnrichmentModeV1,
     parse_incremental_enrichment_mode,
 )
+from tools.cq.core.schema import CqResult
+from tools.cq.core.structs import CqStruct
+from tools.cq.macros.contracts import CallsRequest
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.core.types import QueryLanguageScope
-    from tools.cq.search._shared.types import QueryMode, SearchLimits
+    from tools.cq.search._shared.types import SearchLimits
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
 
@@ -39,7 +39,7 @@ class SearchServiceRequest(CqStruct, frozen=True):
 
     root: Path
     query: str
-    mode: QueryMode | None = None
+    mode: str | None = None
     lang_scope: QueryLanguageScope = "auto"
     include_globs: list[str] | None = None
     exclude_globs: list[str] | None = None
@@ -92,12 +92,21 @@ class SearchService:
         Returns:
             Search result payload.
         """
+        from tools.cq.search._shared.types import QueryMode
         from tools.cq.search.pipeline.smart_search import smart_search
+
+        parsed_mode: QueryMode | None = None
+        if isinstance(request.mode, QueryMode):
+            parsed_mode = request.mode
+        elif isinstance(request.mode, str):
+            normalized_mode = request.mode.strip().lower()
+            if normalized_mode in {"identifier", "regex", "literal"}:
+                parsed_mode = QueryMode(normalized_mode)
 
         return smart_search(
             root=request.root,
             query=request.query,
-            mode=request.mode,
+            mode=parsed_mode,
             lang_scope=request.lang_scope,
             include_globs=request.include_globs,
             exclude_globs=request.exclude_globs,

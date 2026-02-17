@@ -71,10 +71,15 @@ class _ResolvedCacheScalarSettings(CqSettingsStruct, frozen=True):
     transaction_batch_size: int
 
 
-def _resolve_namespace_ttl_from_env(
+def resolve_namespace_ttl_from_env(
     *,
     defaults: dict[str, int],
 ) -> dict[str, int]:
+    """Resolve namespace TTL values using defaults plus cache env overrides.
+
+    Returns:
+        dict[str, int]: Resolved namespace TTL mapping.
+    """
     resolved = dict(defaults)
     parsed = parse_namespace_int_overrides(
         env=os.environ,
@@ -238,7 +243,7 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
             os.getenv("CQ_CACHE_EVICT_RUN_TAG_ON_EXIT"),
             default=runtime.evict_run_tag_on_exit,
         ),
-        namespace_ttl_seconds=_resolve_namespace_ttl_from_env(
+        namespace_ttl_seconds=resolve_namespace_ttl_from_env(
             defaults=runtime.namespace_ttl_seconds
         ),
         namespace_enabled=_resolve_namespace_enabled_from_env(defaults=runtime.namespace_enabled),
@@ -257,4 +262,4 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
     )
 
 
-__all__ = ["CqCachePolicyV1", "default_cache_policy"]
+__all__ = ["CqCachePolicyV1", "default_cache_policy", "resolve_namespace_ttl_from_env"]

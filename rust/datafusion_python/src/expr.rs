@@ -59,6 +59,8 @@ pub mod alias;
 pub mod analyze;
 pub mod between;
 pub mod binary_expr;
+#[macro_use]
+pub mod wrapper_macros;
 pub mod bool_expr;
 pub mod case;
 pub mod cast;
@@ -98,7 +100,6 @@ pub mod recursive_query;
 pub mod repartition;
 pub mod scalar_subquery;
 pub mod scalar_variable;
-pub mod signature;
 pub mod sort;
 pub mod sort_expr;
 pub mod statement;
@@ -169,12 +170,12 @@ impl PyExpr {
             Expr::Case(value) => Ok(case::PyCase::from(value.clone()).into_bound_py_any(py)?),
             Expr::Cast(value) => Ok(cast::PyCast::from(value.clone()).into_bound_py_any(py)?),
             Expr::TryCast(value) => Ok(cast::PyTryCast::from(value.clone()).into_bound_py_any(py)?),
-            Expr::ScalarFunction(value) => Err(py_unsupported_variant_err(format!(
-                "Converting Expr::ScalarFunction to a Python object is not implemented: {value:?}"
-            ))),
-            Expr::WindowFunction(value) => Err(py_unsupported_variant_err(format!(
-                "Converting Expr::WindowFunction to a Python object is not implemented: {value:?}"
-            ))),
+            Expr::ScalarFunction(value) => Ok(
+                PyExpr::from(Expr::ScalarFunction(value.clone())).into_bound_py_any(py)?
+            ),
+            Expr::WindowFunction(value) => Ok(
+                PyExpr::from(Expr::WindowFunction(value.clone())).into_bound_py_any(py)?
+            ),
             Expr::InList(value) => Ok(in_list::PyInList::from(value.clone()).into_bound_py_any(py)?),
             Expr::Exists(value) => Ok(exists::PyExists::from(value.clone()).into_bound_py_any(py)?),
             Expr::InSubquery(value) => {
@@ -764,7 +765,6 @@ pub(crate) fn init_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyColumn>()?;
     m.add_class::<PyLiteral>()?;
     m.add_class::<PyBinaryExpr>()?;
-    m.add_class::<PyLiteral>()?;
     m.add_class::<PyAggregateFunction>()?;
     m.add_class::<PyNot>()?;
     m.add_class::<PyIsNotNull>()?;

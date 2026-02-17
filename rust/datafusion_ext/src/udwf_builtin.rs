@@ -77,7 +77,7 @@ pub(crate) fn function_metadata(name: &str) -> Option<FunctionMetadata> {
         };
 
     Some(FunctionMetadata {
-        name: "",
+        name: None,
         kind: FunctionKind::Window,
         rewrite_tags,
         has_simplify: false,

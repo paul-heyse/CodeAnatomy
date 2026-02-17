@@ -13,6 +13,7 @@ use codeanatomy_engine::compiler::pushdown_probe_extract::{
 use codeanatomy_engine::compliance::capture::{
     capture_explain_verbose, ComplianceCapture, RetentionPolicy, RulepackSnapshot,
 };
+use codeanatomy_engine::contracts::pushdown_mode::PushdownEnforcementMode;
 use codeanatomy_engine::executor::orchestration::prepare_execution_context;
 use codeanatomy_engine::executor::pipeline;
 use codeanatomy_engine::executor::result::TuningHint;
@@ -21,10 +22,8 @@ use codeanatomy_engine::executor::tracing as engine_tracing;
 #[cfg(feature = "tracing")]
 use codeanatomy_engine::executor::warnings::warning_counts_by_code;
 use codeanatomy_engine::executor::warnings::{RunWarning, WarningCode, WarningStage};
-use codeanatomy_engine::providers::pushdown_contract::PushdownEnforcementMode as ContractEnforcementMode;
 use codeanatomy_engine::providers::registration::probe_provider_pushdown;
 use codeanatomy_engine::rules::rulepack::RulepackFactory;
-use codeanatomy_engine::spec::runtime::PushdownEnforcementMode;
 use codeanatomy_engine::spec::runtime::RuntimeTunerMode;
 use codeanatomy_engine::stability::optimizer_lab::run_lab_from_ruleset;
 use codeanatomy_engine::tuner::adaptive::{AdaptiveTuner, ExecutionMetrics, TunerConfig};
@@ -350,11 +349,7 @@ impl CpgMaterializer {
                     }
                 }
                 if !pushdown_probes_by_table.is_empty() {
-                    let enforcement_mode = match runtime_config.pushdown_enforcement_mode {
-                        PushdownEnforcementMode::Warn => ContractEnforcementMode::Warn,
-                        PushdownEnforcementMode::Strict => ContractEnforcementMode::Strict,
-                        PushdownEnforcementMode::Disabled => ContractEnforcementMode::Disabled,
-                    };
+                    let enforcement_mode = runtime_config.pushdown_enforcement_mode;
                     for (target, df) in &compliance_plans {
                         let optimized_plan = match prepared.ctx.state().optimize(df.logical_plan())
                         {
@@ -380,7 +375,7 @@ impl CpgMaterializer {
                             enforcement_mode.clone(),
                         );
                         capture.record_pushdown_contract_report(&target.table_name, report.clone());
-                        if enforcement_mode == ContractEnforcementMode::Strict
+                        if enforcement_mode == PushdownEnforcementMode::Strict
                             && !report.violations.is_empty()
                         {
                             return Err(engine_execution_error(
@@ -396,7 +391,7 @@ impl CpgMaterializer {
                                 })),
                             ));
                         }
-                        if enforcement_mode == ContractEnforcementMode::Warn {
+                        if enforcement_mode == PushdownEnforcementMode::Warn {
                             for violation in report.violations {
                                 py_warnings.push(
                                     RunWarning::new(

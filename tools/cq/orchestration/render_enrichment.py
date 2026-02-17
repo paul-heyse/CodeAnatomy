@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tools.cq.core.enrichment_mode import parse_incremental_enrichment_mode
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.ports import RenderEnrichmentPort
 from tools.cq.core.serialization import to_builtins
 from tools.cq.core.types import QueryLanguage
 from tools.cq.search.pipeline.classification import classify_match
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
-from tools.cq.search.pipeline.enrichment_contracts import parse_incremental_enrichment_mode
 from tools.cq.search.pipeline.smart_search_sections import build_finding
 from tools.cq.search.pipeline.smart_search_types import MatchClassifyOptions, RawMatch
 

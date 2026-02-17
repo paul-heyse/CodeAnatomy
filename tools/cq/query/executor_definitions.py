@@ -108,7 +108,9 @@ def process_def_query(
     scan_ctx = state.scan
     root = state.ctx.root
 
-    candidate_records = def_candidates if def_candidates is not None else scan_ctx.def_records
+    candidate_records = (
+        list(def_candidates) if def_candidates is not None else list(scan_ctx.def_records)
+    )
     matching_defs = filter_to_matching(candidate_records, query)
     relationship_policy = build_def_relationship_policy(query, matching_defs)
     append_definition_findings(
@@ -233,7 +235,7 @@ def definition_relationship_detail(
 
     if not policy.compute_relationship_details:
         return [], 0, "<module>"
-    calls_within = scan_ctx.calls_by_def.get(def_record, [])
+    calls_within = list(scan_ctx.calls_by_def.get(def_record, ()))
     caller_count = count_callers_for_definition(
         def_record,
         scan_ctx.call_records,

@@ -109,7 +109,7 @@ pub(crate) fn function_metadata(name: &str) -> Option<FunctionMetadata> {
     };
 
     Some(FunctionMetadata {
-        name: "",
+        name: None,
         kind,
         rewrite_tags,
         has_simplify,

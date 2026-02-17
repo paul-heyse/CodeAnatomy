@@ -11,7 +11,13 @@ import msgspec
 
 from tools.cq.core.id import stable_digest24
 from tools.cq.search.enrichment.core import parse_python_enrichment
+from tools.cq.search.objects.payload_views import (
+    EnrichmentPayloadView,
+    ResolutionView,
+)
 from tools.cq.search.objects.render import (
+    CoverageLevel,
+    ResolutionQuality,
     ResolvedObjectRef,
     SearchObjectResolvedViewV1,
     SearchObjectSummaryV1,
@@ -37,6 +43,33 @@ _CALLABLE_KINDS = {
     "type",
 }
 _EMPTY_OBJECT_PAYLOAD: dict[str, object] = {}
+
+
+def _payload_view(payload: dict[str, object]) -> EnrichmentPayloadView:
+    if not payload:
+        return EnrichmentPayloadView()
+    return EnrichmentPayloadView.from_raw(payload)
+
+
+def _resolution_view(payload: dict[str, object]) -> ResolutionView:
+    if not payload:
+        return ResolutionView()
+    return msgspec.convert(payload, type=ResolutionView, strict=False)
+
+
+def _struct_to_mapping(value: object) -> dict[str, object]:
+    built = msgspec.to_builtins(value, str_keys=True)
+    return built if isinstance(built, dict) else {}
+
+
+def _mapping_has_signal(payload: dict[str, object]) -> bool:
+    for value in payload.values():
+        if value in ("", None):
+            continue
+        if isinstance(value, (list, dict, tuple, set)) and not value:
+            continue
+        return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,10 +185,11 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
     semantic_raw = incremental.get("semantic")
     semantic = semantic_raw if isinstance(semantic_raw, dict) else _EMPTY_OBJECT_PAYLOAD
     python = python_enrichment_payload(match.python_enrichment)
+    python_view = _payload_view(python)
     python_facts = parse_python_enrichment(python) if python else None
-    resolution_raw = python.get("resolution")
+    resolution_raw = _struct_to_mapping(python_view.resolution)
     if (
-        not isinstance(resolution_raw, dict)
+        not _mapping_has_signal(resolution_raw)
         and python_facts is not None
         and python_facts.resolution
     ):
@@ -167,8 +201,12 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
             "enclosing_callable": python_facts.resolution.enclosing_callable,
             "enclosing_class": python_facts.resolution.enclosing_class,
         }
-    structural_raw = python.get("structural")
-    if not isinstance(structural_raw, dict) and python_facts is not None and python_facts.structure:
+    structural_raw = _struct_to_mapping(python_view.structural)
+    if (
+        not _mapping_has_signal(structural_raw)
+        and python_facts is not None
+        and python_facts.structure
+    ):
         structural_raw = {
             "node_kind": python_facts.structure.node_kind,
             "scope_kind": python_facts.structure.scope_kind,
@@ -178,18 +216,14 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
             "class_name": python_facts.structure.class_name,
             "class_kind": python_facts.structure.class_kind,
         }
-    agreement_raw = python.get("agreement")
+    agreement_raw = _struct_to_mapping(python_view.agreement)
     return _PayloadViews(
         semantic=semantic,
         incremental=incremental,
         python=python,
-        resolution=cast("dict[str, object]", resolution_raw)
-        if isinstance(resolution_raw, dict)
-        else _EMPTY_OBJECT_PAYLOAD,
-        structural=cast("dict[str, object]", structural_raw)
-        if isinstance(structural_raw, dict)
-        else _EMPTY_OBJECT_PAYLOAD,
-        agreement=agreement_raw if isinstance(agreement_raw, dict) else _EMPTY_OBJECT_PAYLOAD,
+        resolution=resolution_raw if resolution_raw else _EMPTY_OBJECT_PAYLOAD,
+        structural=structural_raw if structural_raw else _EMPTY_OBJECT_PAYLOAD,
+        agreement=agreement_raw if agreement_raw else _EMPTY_OBJECT_PAYLOAD,
     )
 
 
@@ -262,7 +296,7 @@ def _resolution_key_payload(
     query: str,
     seed: _ObjectIdentitySeed,
     views: _PayloadViews,
-) -> tuple[dict[str, object], str, bool]:
+) -> tuple[dict[str, object], ResolutionQuality, bool]:
     definition_target = seed.definition_target
     if definition_target is not None:
         return (
@@ -444,7 +478,7 @@ def _module_graph_for_match(match: EnrichedMatch) -> dict[str, object]:
 def _coverage_for_match(
     match: EnrichedMatch,
     object_ref: ResolvedObjectRef,
-) -> tuple[str, dict[str, str], tuple[str, ...]]:
+) -> tuple[CoverageLevel, dict[str, str], tuple[str, ...]]:
     incremental_payload = incremental_enrichment_payload(match.incremental_enrichment)
     python_payload = python_enrichment_payload(match.python_enrichment)
     reasons: list[str] = []
@@ -458,6 +492,7 @@ def _coverage_for_match(
 
     has_semantic = bool(incremental_payload)
     has_resolution = _has_resolution_signal(python_payload)
+    coverage_level: CoverageLevel
     if has_semantic and has_resolution:
         coverage_level = "full_signal"
     elif has_semantic or has_resolution:
@@ -476,9 +511,8 @@ def _coverage_for_match(
 
 
 def _has_resolution_signal(payload: dict[str, object]) -> bool:
-    resolution = payload.get("resolution")
-    if not isinstance(resolution, dict):
-        return False
+    payload_view = _payload_view(payload)
+    resolution = _struct_to_mapping(payload_view.resolution)
     return bool(
         _first_qualified_name_candidate(resolution)
         or _first_binding_candidate(resolution)
@@ -492,16 +526,15 @@ def _evidence_planes(
     semantic_payload: dict[str, object],
 ) -> list[str]:
     planes: list[str] = ["ast_grep"]
-    resolution = python_payload.get("resolution")
-    if isinstance(resolution, dict) and resolution:
+    payload_view = _payload_view(python_payload)
+    resolution = _struct_to_mapping(payload_view.resolution)
+    if resolution:
         planes.append("python_resolution")
         if _resolution_has_tree_sitter_source(resolution):
             planes.append("tree_sitter")
-    agreement = python_payload.get("agreement")
-    if isinstance(agreement, dict):
-        sources = agreement.get("sources")
-        if isinstance(sources, list):
-            planes.extend([source for source in sources if isinstance(source, str)])
+    planes.extend(
+        [source for source in payload_view.agreement.sources if isinstance(source, str) and source]
+    )
     if semantic_payload:
         planes.append("incremental")
     if match.rust_tree_sitter and rust_enrichment_payload(match.rust_tree_sitter):
@@ -510,47 +543,35 @@ def _evidence_planes(
 
 
 def _resolution_has_tree_sitter_source(resolution_payload: dict[str, object]) -> bool:
-    rows = resolution_payload.get("qualified_name_candidates")
-    if isinstance(rows, list):
-        for row in rows:
-            if isinstance(row, dict) and row.get("source") == "tree_sitter":
-                return True
-    rows = resolution_payload.get("binding_candidates")
-    if isinstance(rows, list):
-        for row in rows:
-            if isinstance(row, dict) and "tree_sitter" in str(row.get("kind", "")):
-                return True
+    resolution = _resolution_view(resolution_payload)
+    for row in resolution.qualified_name_candidates:
+        if isinstance(row, dict) and row.get("source") == "tree_sitter":
+            return True
+    for row in resolution.binding_candidates:
+        if isinstance(row, dict) and "tree_sitter" in str(row.get("kind", "")):
+            return True
     return False
 
 
 def _first_definition_target(payload: dict[str, object]) -> dict[str, object] | None:
-    grounding = payload.get("symbol_grounding")
-    if not isinstance(grounding, dict):
-        return None
-    targets = grounding.get("definition_targets")
-    if not isinstance(targets, list):
-        return None
-    for row in targets:
+    payload_view = _payload_view(payload)
+    for row in payload_view.symbol_grounding.definition_targets:
         if isinstance(row, dict):
             return row
     return None
 
 
 def _first_binding_candidate(resolution_payload: dict[str, object]) -> dict[str, object] | None:
-    rows = resolution_payload.get("binding_candidates")
-    if not isinstance(rows, list):
-        return None
-    for row in rows:
+    resolution = _resolution_view(resolution_payload)
+    for row in resolution.binding_candidates:
         if isinstance(row, dict):
             return row
     return None
 
 
 def _first_qualified_name_candidate(resolution_payload: dict[str, object]) -> str | None:
-    rows = resolution_payload.get("qualified_name_candidates")
-    if not isinstance(rows, list):
-        return None
-    for row in rows:
+    resolution = _resolution_view(resolution_payload)
+    for row in resolution.qualified_name_candidates:
         if not isinstance(row, dict):
             continue
         name = row.get("name")
@@ -591,23 +612,22 @@ def _resolved_import_path(
         resolved = import_resolution.get("resolved_path")
         if isinstance(resolved, str) and resolved:
             return resolved
-    chain = resolution_payload.get("import_alias_chain")
-    if isinstance(chain, list):
-        parts: list[str] = []
-        for row in chain:
-            if not isinstance(row, dict):
-                continue
-            module = row.get("module")
-            from_value = row.get("from")
-            alias = row.get("alias")
-            if isinstance(module, str) and module:
-                parts.append(module)
-            elif isinstance(from_value, str) and from_value:
-                parts.append(from_value)
-            elif isinstance(alias, str) and alias:
-                parts.append(alias)
-        if parts:
-            return ".".join(parts)
+    resolution = _resolution_view(resolution_payload)
+    parts: list[str] = []
+    for row in resolution.import_alias_chain:
+        if not isinstance(row, dict):
+            continue
+        module = row.get("module")
+        from_value = row.get("from")
+        alias = row.get("alias")
+        if isinstance(module, str) and module:
+            parts.append(module)
+        elif isinstance(from_value, str) and from_value:
+            parts.append(from_value)
+        elif isinstance(alias, str) and alias:
+            parts.append(alias)
+    if parts:
+        return ".".join(parts)
     return None
 
 

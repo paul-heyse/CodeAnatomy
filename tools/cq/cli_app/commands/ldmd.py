@@ -13,6 +13,7 @@ from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import protocol_group, require_context
 from tools.cq.cli_app.protocol_output import text_result, wants_json
 from tools.cq.core.types import LdmdSliceMode
+from tools.cq.ldmd.collapse_policy import LdmdCollapsePolicyV1
 from tools.cq.ldmd.format import (
     LdmdParseError,
     build_index,
@@ -55,8 +56,9 @@ def index(
         return text_result(ctx, f"Document not found: {path}", exit_code=2)
 
     content = doc_path.read_bytes()
+    collapse_policy = LdmdCollapsePolicyV1.default()
     try:
-        idx = build_index(content)
+        idx = build_index(content, collapse_policy=collapse_policy)
     except LdmdParseError as exc:
         return text_result(ctx, f"Failed to index document: {exc}", exit_code=2)
 
@@ -140,8 +142,9 @@ def get(
         return text_result(ctx, f"Document not found: {path}", exit_code=2)
 
     content = doc_path.read_bytes()
+    collapse_policy = LdmdCollapsePolicyV1.default()
     try:
-        idx = build_index(content)
+        idx = build_index(content, collapse_policy=collapse_policy)
         resolved_id = resolve_section_id(idx, section_id)
         slice_data = get_slice(
             content,
@@ -199,8 +202,9 @@ def search(
         return text_result(ctx, f"Document not found: {path}", exit_code=2)
 
     content = doc_path.read_bytes()
+    collapse_policy = LdmdCollapsePolicyV1.default()
     try:
-        idx = build_index(content)
+        idx = build_index(content, collapse_policy=collapse_policy)
         matches = search_sections(content, idx, query=query)
     except LdmdParseError as exc:
         return text_result(ctx, f"Search failed: {exc}", exit_code=2)
@@ -237,8 +241,9 @@ def neighbors(
         return text_result(ctx, f"Document not found: {path}", exit_code=2)
 
     content = doc_path.read_bytes()
+    collapse_policy = LdmdCollapsePolicyV1.default()
     try:
-        idx = build_index(content)
+        idx = build_index(content, collapse_policy=collapse_policy)
         nav = get_neighbors(idx, section_id=section_id)
     except LdmdParseError as exc:
         return text_result(ctx, f"Navigation failed: {exc}", exit_code=2)

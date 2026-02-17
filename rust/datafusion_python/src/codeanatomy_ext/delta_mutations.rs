@@ -7,17 +7,17 @@ use crate::delta_mutations::{
     delta_update_request as delta_update_native, delta_write_ipc_request as delta_write_ipc_native,
     DeltaDeleteRequest, DeltaMergeRequest, DeltaUpdateRequest, DeltaWriteIpcRequest,
 };
-use crate::delta_protocol::TableVersion;
 use datafusion_ext::{DeltaCommitOptions, DeltaFeatureGate};
 use deltalake::protocol::SaveMode;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use rmp_serde::from_slice;
 use serde::Deserialize;
-use tokio::runtime::Runtime;
 use tracing::instrument;
 
-use super::helpers::extract_session_ctx;
+use super::helpers::{
+    extract_session_ctx, mutation_report_to_pydict, parse_msgpack_payload, runtime,
+    table_version_from_options,
+};
 
 #[derive(Debug, Deserialize)]
 struct DeltaWriteRequestPayload {
@@ -81,24 +81,6 @@ struct DeltaMergeRequestPayload {
     commit_options: Option<DeltaCommitOptions>,
 }
 
-fn parse_msgpack_payload<T: for<'de> Deserialize<'de>>(
-    payload: &[u8],
-    label: &str,
-) -> PyResult<T> {
-    from_slice(payload)
-        .map_err(|err| PyValueError::new_err(format!("Invalid {label} payload: {err}")))
-}
-
-fn runtime() -> PyResult<Runtime> {
-    Runtime::new()
-        .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))
-}
-
-fn table_version_from_options(version: Option<i64>, timestamp: Option<String>) -> PyResult<TableVersion> {
-    TableVersion::from_options(version, timestamp)
-        .map_err(|err| PyValueError::new_err(format!("Invalid Delta table version options: {err}")))
-}
-
 fn save_mode_from_str(mode: &str) -> PyResult<SaveMode> {
     match mode.to_ascii_lowercase().as_str() {
         "append" => Ok(SaveMode::Append),
@@ -137,7 +119,7 @@ pub(crate) fn delta_write_ipc_request(
             extra_constraints: request.extra_constraints,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta write failed: {err}")))?;
-    super::legacy::mutation_report_to_pydict(py, &report)
+    mutation_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -163,7 +145,7 @@ pub(crate) fn delta_delete_request_payload(
             commit_options: request.commit_options,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta delete failed: {err}")))?;
-    super::legacy::mutation_report_to_pydict(py, &report)
+    mutation_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -195,7 +177,7 @@ pub(crate) fn delta_update_request_payload(
             commit_options: request.commit_options,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta update failed: {err}")))?;
-    super::legacy::mutation_report_to_pydict(py, &report)
+    mutation_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -238,7 +220,7 @@ pub(crate) fn delta_merge_request_payload(
             extra_constraints: request.extra_constraints,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta merge failed: {err}")))?;
-    super::legacy::mutation_report_to_pydict(py, &report)
+    mutation_report_to_pydict(py, &report)
 }
 
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {

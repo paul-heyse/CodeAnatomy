@@ -4,7 +4,7 @@ use crate::function_types::FunctionKind;
 
 #[derive(Debug, Clone)]
 pub struct FunctionMetadata {
-    pub name: &'static str,
+    pub name: Option<&'static str>,
     pub kind: FunctionKind,
     pub rewrite_tags: &'static [&'static str],
     pub has_simplify: bool,

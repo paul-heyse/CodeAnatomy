@@ -220,13 +220,13 @@ fn scalar_udf_snapshot_metadata_complete() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
     let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
-    for name in snapshot.scalar.iter() {
+    for name in snapshot.scalar() {
         assert!(
-            snapshot.signature_inputs.contains_key(name),
+            snapshot.signature_inputs().contains_key(name),
             "missing signature_inputs for {name}"
         );
         assert!(
-            snapshot.return_types.contains_key(name),
+            snapshot.return_types().contains_key(name),
             "missing return_types for {name}"
         );
     }
@@ -240,7 +240,7 @@ fn information_schema_routines_match_snapshot() -> Result<()> {
     udf_registry::register_all(&ctx)?;
     let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
     let custom_names: std::collections::HashSet<String> =
-        snapshot.custom_udfs.into_iter().collect();
+        snapshot.custom_udfs().iter().cloned().collect();
 
     let batches = run_query(
         &ctx,
@@ -296,7 +296,7 @@ fn information_schema_routines_match_snapshot() -> Result<()> {
                 panic!("missing information_schema.routines entry for {name}");
             };
             let expected_returns = snapshot
-                .return_types
+                .return_types()
                 .get(&name)
                 .map(|types| {
                     types
@@ -306,7 +306,7 @@ fn information_schema_routines_match_snapshot() -> Result<()> {
                 })
                 .unwrap_or_default();
             let has_any_signature = snapshot
-                .signature_inputs
+                .signature_inputs()
                 .get(&name)
                 .map(|rows| {
                     if expected_kind == "WINDOW" && rows.iter().any(|row| row.is_empty()) {
@@ -317,7 +317,7 @@ fn information_schema_routines_match_snapshot() -> Result<()> {
                 })
                 .unwrap_or(false);
             let expected_det = snapshot
-                .volatility
+                .volatility()
                 .get(&name)
                 .map(|value| value == "immutable")
                 .unwrap_or(false);
@@ -334,9 +334,9 @@ fn information_schema_routines_match_snapshot() -> Result<()> {
         }
     };
 
-    check_kind(snapshot.scalar, "SCALAR");
-    check_kind(snapshot.aggregate, "AGGREGATE");
-    check_kind(snapshot.window, "WINDOW");
+    check_kind(snapshot.scalar().to_vec(), "SCALAR");
+    check_kind(snapshot.aggregate().to_vec(), "AGGREGATE");
+    check_kind(snapshot.window().to_vec(), "WINDOW");
     Ok(())
 }
 
@@ -358,7 +358,7 @@ fn registry_snapshot_reports_short_circuits() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
     let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
-    assert_eq!(snapshot.short_circuits.get("map_get_default"), Some(&true));
+    assert_eq!(snapshot.short_circuits().get("map_get_default"), Some(&true));
     Ok(())
 }
 
@@ -560,7 +560,7 @@ fn information_schema_parameters_match_snapshot() -> Result<()> {
     udf_registry::register_all(&ctx)?;
     let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
     let custom_names: std::collections::HashSet<String> =
-        snapshot.custom_udfs.into_iter().collect();
+        snapshot.custom_udfs().iter().cloned().collect();
 
     let batches = run_query(
         &ctx,
@@ -624,20 +624,21 @@ fn information_schema_parameters_match_snapshot() -> Result<()> {
     }
 
     for name in snapshot
-        .scalar
-        .into_iter()
-        .chain(snapshot.aggregate)
-        .chain(snapshot.window)
+        .scalar()
+        .iter()
+        .cloned()
+        .chain(snapshot.aggregate().iter().cloned())
+        .chain(snapshot.window().iter().cloned())
     {
         if !custom_names.contains(&name) {
             continue;
         }
         let expected_inputs = snapshot
-            .signature_inputs
+            .signature_inputs()
             .get(&name)
             .cloned()
             .unwrap_or_default();
-        let expected_param_names = snapshot.parameter_names.get(&name).cloned();
+        let expected_param_names = snapshot.parameter_names().get(&name).cloned();
         let has_any_signature = expected_inputs
             .iter()
             .any(|row| row.iter().any(|entry| entry == "null"));

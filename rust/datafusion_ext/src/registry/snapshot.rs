@@ -8,6 +8,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 use crate::function_types::FunctionKind;
 use crate::registry::snapshot_types::{FunctionHookCapabilities, RegistrySnapshot};
+use crate::udf::common::span_struct_type;
 use crate::{udaf_builtin, udf, udf_docs, udf_registry, udwf_builtin};
 
 /// Build a hook-capability snapshot for all custom-registered functions.
@@ -367,16 +368,6 @@ fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
         },
     );
     signatures
-}
-
-fn span_struct_type() -> DataType {
-    DataType::Struct(Fields::from(vec![
-        Field::new("bstart", DataType::Int64, true),
-        Field::new("bend", DataType::Int64, true),
-        Field::new("line_base", DataType::Int32, true),
-        Field::new("col_unit", DataType::Utf8, true),
-        Field::new("end_exclusive", DataType::Boolean, true),
-    ]))
 }
 
 fn normalized_map_type() -> DataType {

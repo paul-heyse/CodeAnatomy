@@ -54,6 +54,7 @@ from tools.cq.search.tree_sitter.query.registry import load_query_pack_sources
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Query, Tree
+    from tools.cq.search.tree_sitter.core.parse import ParseSession
 
 try:
     from tree_sitter import Parser as _TreeSitterParser
@@ -105,11 +106,12 @@ def _parse_with_session(
     source: str,
     *,
     cache_key: str | None,
+    parse_session: ParseSession | None = None,
 ) -> tuple[Tree | None, bytes, tuple[object, ...]]:
     source_bytes = source.encode("utf-8", errors="replace")
     if not is_tree_sitter_python_available():
         return None, source_bytes, ()
-    session = get_parse_session(
+    session = parse_session or get_parse_session(
         language="python", parser_factory=lambda: make_parser_from_language(_python_language())
     )
     tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
@@ -493,9 +495,14 @@ def _parse_tree_for_enrichment(
     *,
     source: str,
     cache_key: str | None,
+    parse_session: ParseSession | None = None,
 ) -> tuple[Node, bytes, tuple[object, ...]] | None:
     try:
-        tree, source_bytes, changed_ranges = _parse_with_session(source, cache_key=cache_key)
+        tree, source_bytes, changed_ranges = _parse_with_session(
+            source,
+            cache_key=cache_key,
+            parse_session=parse_session,
+        )
     except ENRICHMENT_ERRORS as exc:
         _mark_degraded(payload, reason=type(exc).__name__)
         return None
@@ -553,6 +560,8 @@ def enrich_python_context_by_byte_range(
     cache_key: str | None = None,
     match_limit: int = _DEFAULT_MATCH_LIMIT,
     query_budget_ms: int | None = None,
+    parse_session: ParseSession | None = None,
+    cache_backend: object | None = None,
 ) -> dict[str, object] | None:
     """Best-effort tree-sitter Python enrichment for a byte-anchored match.
 
@@ -563,6 +572,7 @@ def enrich_python_context_by_byte_range(
     """
     if byte_start < 0 or byte_end <= byte_start or not is_tree_sitter_python_available():
         return None
+    _ = cache_backend
 
     source_bytes = source.encode("utf-8", errors="replace")
     if byte_end > len(source_bytes):
@@ -584,6 +594,7 @@ def enrich_python_context_by_byte_range(
         payload,
         source=source,
         cache_key=cache_key,
+        parse_session=parse_session,
     )
     if parsed is None:
         return canonicalize_python_lane_payload(payload)

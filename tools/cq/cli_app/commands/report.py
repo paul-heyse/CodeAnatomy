@@ -12,8 +12,8 @@ from cyclopts import Parameter
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
-from tools.cq.cli_app.options import ReportOptions, options_from_params
 from tools.cq.cli_app.params import ReportParams
+from tools.cq.cli_app.schema_projection import report_options_from_projected_params
 from tools.cq.cli_app.types import ReportPreset
 from tools.cq.core.result_factory import build_error_result
 
@@ -45,7 +45,7 @@ def report(
     from tools.cq.orchestration.bundles import BundleContext, run_bundle
 
     ctx = require_context(ctx)
-    options = options_from_params(opts, type_=ReportOptions)
+    options = report_options_from_projected_params(opts)
 
     # Parse target spec
     try:

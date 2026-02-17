@@ -15,6 +15,7 @@
 pub mod compat;
 pub mod compiler;
 pub mod compliance;
+pub mod contracts;
 pub mod executor;
 pub mod providers;
 pub mod rules;

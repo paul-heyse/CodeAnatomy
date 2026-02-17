@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import msgspec
+
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, mk_result
+from tools.cq.core.summary_contract import apply_summary_mapping
 from tools.cq.core.toolchain import Toolchain
 
 
@@ -43,8 +46,8 @@ def build_error_result(
     root = Path(root) if isinstance(root, str) else root
     run_ctx = RunContext.from_parts(root=root, argv=argv, tc=tc, started_ms=started_ms)
     result = mk_result(run_ctx.to_runmeta(macro))
-    result.summary.error = str(error)
-    return result
+    summary = apply_summary_mapping(result.summary, {"error": str(error)})
+    return msgspec.structs.replace(result, summary=summary)
 
 
 __all__ = [

@@ -1210,10 +1210,10 @@ class TestSmartSearchFiltersAndEnrichment:
         assert "python_semantic_diagnostics" in summary
 
     @staticmethod
-    def test_run_single_partition_delegates_to_enrichment_phase(
+    def test_run_single_partition_delegates_to_partition_pipeline(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Single-partition helper delegates to enrichment phase orchestration."""
+        """Single-partition helper delegates to partition pipeline orchestration."""
         clear_caches()
         ctx = SearchConfig(
             root=tmp_path,
@@ -1232,13 +1232,13 @@ class TestSmartSearchFiltersAndEnrichment:
         )
         captured: dict[str, object] = {}
 
-        def _fake_enrichment_phase(
+        def _fake_partition_pipeline(
             _plan: object,
             *,
-            config: SearchConfig,
+            ctx: SearchConfig,
             mode: QueryMode,
         ) -> LanguageSearchResult:
-            captured["config"] = config
+            captured["config"] = ctx
             captured["mode"] = mode
             return LanguageSearchResult(
                 lang="python",
@@ -1250,7 +1250,8 @@ class TestSmartSearchFiltersAndEnrichment:
             )
 
         monkeypatch.setattr(
-            "tools.cq.search.pipeline.smart_search.run_enrichment_phase", _fake_enrichment_phase
+            "tools.cq.search.pipeline.smart_search.run_search_partition",
+            _fake_partition_pipeline,
         )
 
         _run_single_partition(ctx, "python", mode=QueryMode.IDENTIFIER)

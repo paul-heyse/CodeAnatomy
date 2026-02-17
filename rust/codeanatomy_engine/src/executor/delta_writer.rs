@@ -20,6 +20,8 @@ use deltalake::kernel::{
 };
 use deltalake::{ensure_table_uri, DeltaTable};
 
+use crate::executor::result::{WriteOutcome, WriteOutcomeUnavailableReason};
+
 fn map_arrow_type(data_type: &ArrowDataType) -> Result<DeltaDataType> {
     match data_type {
         ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View => {
@@ -230,59 +232,42 @@ pub fn extract_row_count(batches: &[RecordBatch]) -> u64 {
     batches.iter().map(|b| b.num_rows() as u64).sum()
 }
 
-/// Post-write metadata outcome from a Delta table.
-///
-/// Captures best-effort metadata about the write: delta version, files
-/// added, and bytes written. All fields are optional because metadata
-/// capture must never block the pipeline.
-pub struct WriteOutcome {
-    /// Delta table version after the write commit.
-    pub delta_version: Option<i64>,
-    /// Number of files added by the write operation.
-    pub files_added: Option<u64>,
-    /// Total bytes written across all added files.
-    pub bytes_written: Option<u64>,
-}
-
 /// Best-effort read-back of Delta table metadata after a write.
 ///
 /// Attempts to load the Delta log at `delta_location` and extract the
-/// latest version plus file-level statistics. If any step fails, returns
-/// a `WriteOutcome` with all `None` fields -- metadata capture failure
-/// must never block the pipeline.
+/// latest version plus file-level statistics. If any step fails, returns an
+/// explicit unavailable outcome with a typed reason.
 pub async fn read_write_outcome(delta_location: &str) -> WriteOutcome {
     let table_uri = match ensure_table_uri(delta_location) {
         Ok(uri) => uri,
         Err(_) => {
-            return WriteOutcome {
-                delta_version: None,
-                files_added: None,
-                bytes_written: None,
-            };
+            return WriteOutcome::Unavailable {
+                reason: WriteOutcomeUnavailableReason::TableUriResolutionFailed,
+            }
         }
     };
 
     let mut table = match DeltaTable::try_from_url(table_uri).await {
         Ok(t) => t,
         Err(_) => {
-            return WriteOutcome {
-                delta_version: None,
-                files_added: None,
-                bytes_written: None,
-            };
+            return WriteOutcome::Unavailable {
+                reason: WriteOutcomeUnavailableReason::TableOpenFailed,
+            }
         }
     };
 
     // Load the latest snapshot so version() returns the current version.
     if table.load().await.is_err() {
-        return WriteOutcome {
-            delta_version: None,
-            files_added: None,
-            bytes_written: None,
+        return WriteOutcome::Unavailable {
+            reason: WriteOutcomeUnavailableReason::TableLoadFailed,
         };
     }
 
-    let delta_version = table.version();
+    let Some(delta_version) = table.version() else {
+        return WriteOutcome::Unavailable {
+            reason: WriteOutcomeUnavailableReason::SnapshotReadFailed,
+        };
+    };
 
     // Attempt to read file metadata from the snapshot for files_added / bytes_written.
     // Uses the same log_data() API as providers/snapshot.rs::snapshot_metadata().
@@ -292,12 +277,16 @@ pub async fn read_write_outcome(delta_location: &str) -> WriteOutcome {
             let log_data = eager.log_data();
             let count = log_data.iter().count() as u64;
             let total_bytes: i64 = log_data.iter().map(|file_view| file_view.size()).sum();
-            (Some(count), Some(total_bytes as u64))
+            (count, total_bytes as u64)
         }
-        Err(_) => (None, None),
+        Err(_) => {
+            return WriteOutcome::Unavailable {
+                reason: WriteOutcomeUnavailableReason::SnapshotReadFailed,
+            }
+        }
     };
 
-    WriteOutcome {
+    WriteOutcome::Captured {
         delta_version,
         files_added,
         bytes_written,

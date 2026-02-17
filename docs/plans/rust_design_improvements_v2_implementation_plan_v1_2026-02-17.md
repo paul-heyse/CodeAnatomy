@@ -2,40 +2,58 @@
 
 ## Scope Summary
 
-This plan synthesizes all actionable findings from 5 parallel design review agents covering the full `rust/` workspace (~65K LOC, 9 crates). The reviews evaluated all 24 design principles against the current codebase *after* the v1 improvement plan (S1-S14, D1-D5) was confirmed Complete. This v2 plan addresses **27 new or residual findings** across 5 themes: (1) DRY violations remain the systemic weakness (scored 0-1/3 by all 5 agents), (2) `legacy.rs` decomposition is structurally incomplete (2,368 LOC monolith behind thin facades), (3) correctness bugs (copy-paste error messages, `todo!()` panics), (4) cross-module helper duplication in both `codeanatomy_engine` and `datafusion_python`, and (5) expression binding boilerplate reducible via macros.
+This plan updates the previously drafted v2 scope with corrections and expansions from the five `rust_design_review_*` documents plus additional `dfdl_ref`-grounded capability opportunities. It keeps the original objective (aggressive design-phase migration) while fixing incorrect assumptions, removing shim-based transitions, and adding missing high-impact workstreams.
 
-**Design stance:**
-- Hard cutover: no backward-compatibility shims for internal Rust APIs.
-- `legacy.rs` decomposition moves *implementations*, not re-export facades. The file should reach zero `#[pyfunction]` definitions.
-- Macro-driven boilerplate reduction targets the `expr/` layer without changing the public Python API surface.
-- DataFusion remains pinned at `51.x`. Items requiring 52.x are tracked as roadmap but not implemented.
-- All correctness bugs are fixed immediately in S1 regardless of the scope they touch.
+The scope now covers 17 implementation items across engine compilation/execution, `datafusion_ext`, and `datafusion_python`, with hard-cutover semantics:
+- No compatibility shims for internal Rust APIs.
+- Full boundary contract redesign now (not incremental patching).
+- Immediate replacement of stubbed functionality where production-capable library primitives already exist.
+- Decompose/relocate ownership physically (not thin re-export facades).
 
 ## Design Principles
 
-1. **Single authority for shared knowledge.** Every constant, algorithm, helper, or type that appears in more than one module must live in exactly one location and be imported by consumers.
-2. **Modules have one reason to change.** Files exceeding 1,000 LOC are candidates for decomposition; files exceeding 2,000 LOC require decomposition.
-3. **Error messages are contracts.** Every user-facing error string must name the correct function, operation, and expected arguments.
-4. **Library capabilities over hand-rolled code.** DataFusion and DeltaLake APIs available in the current pinned version are preferred over equivalent custom implementations.
-5. **Type safety at boundaries.** Replace sentinel values (`""`, triple-None structs) with typed alternatives (`Option`, newtypes).
-6. **Facade modules must own implementations.** A facade that only re-exports from a monolith adds indirection without value.
-7. **Major upgrades are separate epics.** DataFusion 52.x migration (which would replace `rule_instrumentation.rs` entirely) is deferred to a dedicated plan.
+1. **Single authority for shared knowledge.** No duplicated algorithms, schema builders, enum contracts, or error-helper implementations.
+2. **No shim migration in design phase.** Replace call sites directly; do not introduce compatibility re-exports.
+3. **Boundary contracts are explicit and typed.** JSON/serde surfaces must represent valid state directly.
+4. **Dependency direction remains inward.** Shared contracts live in neutral modules; spec and providers import them, neither aliases the other.
+5. **Leverage built-in DataFusion/DeltaLake capabilities first.** Prefer `DeltaScanConfigBuilder`, maintenance builders, and TreeNode traversal over hand-rolled equivalents.
+6. **Facade modules own behavior.** Submodules must contain their own `#[pyfunction]` implementations; avoid `super::legacy::*` forwarding.
+7. **Eliminate sentinel states.** Replace `""` placeholders and triple-None structs with typed variants/options.
+8. **Observability is a first-class contract.** Add phase- and boundary-level spans on critical execution paths.
+9. **Test coverage follows ownership.** Every new module added in this plan has a corresponding new test file.
+10. **Delete superseded code promptly.** Decommission in explicit batches after prerequisites land.
 
 ## Current Baseline
 
-- **DRY is still the systemic weakest principle** — all 5 agents scored P7 at 0/3 or 1/3.
-- **`legacy.rs`** (2,368 LOC, 39 `#[pyfunction]`) is the renamed remnant of the prior `codeanatomy_ext.rs`. Four of seven submodules are thin re-export facades (9-38 LOC) delegating to `super::legacy::*`. Only 3 delta submodules (`delta_mutations.rs`, `delta_maintenance.rs`, `delta_provider.rs`) contain real logic.
-- **Compiler helper duplication:** 4 pairs of duplicated private helpers across `plan_bundle.rs`, `optimizer_pipeline.rs`, `graph_validator.rs`, `pushdown_probe_extract.rs`, `cache_boundaries.rs`, and `plan_compiler.rs`.
-- **Dual `PushdownEnforcementMode` enums:** `spec/runtime.rs:20` and `providers/pushdown_contract.rs:166` with identical variants, requiring duplicated `map_pushdown_mode` functions in `pipeline.rs:332` and `compile_contract.rs:274`.
-- **Helper triplication in `codeanatomy_ext/`:** `runtime()`, `table_version_from_options()`, and `parse_msgpack_payload()` are defined 2-3 times across `legacy.rs`, `delta_mutations.rs`, and `delta_maintenance.rs`.
-- **Expression binding boilerplate:** 10 identical unary boolean wrappers in `bool_expr.rs`, 6 duplicated builder methods between `PyExpr` and `PyExprFuncBuilder`, 25+ logical plan files with identical struct/From/Display/LogicalNode patterns.
-- **Correctness bugs:** `data_type.rs:339` says "ScalarValue::LargeList" for Union variant; `indexed_field.rs:64` has `todo!()` panic; `hash.rs:146` says "stable_hash_any" for `StableHash128Udf`; `physical_plan.rs:84` says "logical node" for physical plan; duplicate `PyLiteral` registration at `expr.rs:765,767`.
-- **`span_struct_type()`** duplicated between `udf/common.rs:483` and `registry/snapshot.rs:372`.
-- **`snapshot_payload()`** naming collision between `delta_protocol.rs:223` (returns `HashMap<String, String>`) and `delta_observability.rs:52` (returns `HashMap<String, serde_json::Value>`).
-- **`RegistrySnapshot`** has all 16 fields as `pub` at `snapshot_types.rs:11-28` with no accessor methods.
-- **`WriteOutcome`** in `delta_writer.rs` has three identical fallback blocks returning all-`None` fields at lines 257, 268, 278.
-- **Error helper duplication:** `errors.rs:77` defines `py_type_err(e: impl Debug)` while `sql/exceptions.rs:22` defines `py_type_err(e: impl Debug + Display)`.
-- **Dead code:** `signature.rs` is `#[allow(dead_code)]` with empty `#[pymethods]`.
+- `rust/datafusion_python/src/codeanatomy_ext/legacy.rs` is still a 2,368 LOC monolith with 39 `#[pyfunction]` entries; facade modules still forward to it via `super::legacy::*`.
+- S1 correctness bugs are still present:
+  - `rust/datafusion_python/src/common/data_type.rs:340` Union path emits `"ScalarValue::LargeList"`.
+  - `rust/datafusion_python/src/expr/indexed_field.rs:64` contains `todo!()`.
+  - `rust/datafusion_python/src/expr.rs:765,767` registers `PyLiteral` twice.
+  - `rust/datafusion_python/src/physical_plan.rs:84` says `"logical node"` in physical-plan decode path.
+  - `rust/datafusion_ext/src/udf/hash.rs:146` references `stable_hash_any` from `StableHash128Udf`.
+- Compiler helper duplication persists across six files (`plan_bundle.rs`, `optimizer_pipeline.rs`, `graph_validator.rs`, `pushdown_probe_extract.rs`, `cache_boundaries.rs`, `plan_compiler.rs`).
+- Two separate `PushdownEnforcementMode` enums still exist:
+  - `rust/codeanatomy_engine/src/spec/runtime.rs:20`
+  - `rust/codeanatomy_engine/src/providers/pushdown_contract.rs:166`
+- `WriteOutcome` remains a triple-Option struct (`rust/codeanatomy_engine/src/executor/delta_writer.rs:238`) mirrored as separate nullable fields in `MaterializationResult` (`rust/codeanatomy_engine/src/executor/result.rs:55`).
+- `datafusion_ext` DRY and naming issues remain:
+  - duplicated `span_struct_type()` in `rust/datafusion_ext/src/registry/snapshot.rs:372` and `rust/datafusion_ext/src/udf/common.rs:483`.
+  - colliding `snapshot_payload()` names in `rust/datafusion_ext/src/delta_protocol.rs:223` and `rust/datafusion_ext/src/delta_observability.rs:52`.
+- `RegistrySnapshot` fields are fully public (`rust/datafusion_ext/src/registry/snapshot_types.rs:12-27`), and metadata sentinel values still use `name: ""` (`rust/datafusion_ext/src/udf/mod.rs:112`, `rust/datafusion_ext/src/udaf_builtin.rs:1699`, `rust/datafusion_ext/src/udwf_builtin.rs:80`).
+- `datafusion_ext` public-surface assumption in prior plan was incorrect: `datafusion_ext::async_runtime` is consumed cross-crate (`rust/df_plugin_codeanatomy/src/lib.rs:108`, `rust/datafusion_python/src/utils.rs:39`), so shrinking visibility blindly would regress valid consumers.
+- Error helper authority remains split:
+  - `rust/datafusion_python/src/errors.rs:77`
+  - `rust/datafusion_python/src/sql/exceptions.rs:22`
+- Upstream robustness gaps remain:
+  - `dataset.rs` uses `unwrap()` in `schema()` (`rust/datafusion_python/src/dataset.rs:79,81`).
+  - `PyExpr::to_variant()` does not support `ScalarFunction`/`WindowFunction` (`rust/datafusion_python/src/expr.rs:172-177`).
+  - `pyerr_to_dferr` flattens Python exceptions into plain strings (`rust/datafusion_python/src/errors.rs:93`).
+- Compilation architecture still has unresolved structural concerns:
+  - monolithic orchestration in `rust/codeanatomy_engine/src/compiler/compile_contract.rs`.
+  - manual stack-walk lineage extraction in `rust/codeanatomy_engine/src/compiler/plan_bundle.rs:648`.
+- Engine maintenance remains stubbed (`rust/codeanatomy_engine/src/executor/maintenance.rs:9,174`) despite real Delta maintenance APIs already existing in `rust/datafusion_ext/src/delta_maintenance.rs`.
+- Existing-test mismatch: `is_scan_operator` test already exists at `rust/codeanatomy_engine/src/executor/metrics_collector.rs:249`, so that prior-plan item is stale.
 
 ---
 
@@ -43,19 +61,19 @@ This plan synthesizes all actionable findings from 5 parallel design review agen
 
 ### Goal
 
-Fix all copy-paste error messages, replace `todo!()` panics with proper errors, and remove duplicate class registrations across the workspace.
+Fix all known copy/paste error strings, panic placeholders, and duplicate registrations before larger refactors.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/datafusion_python/src/common/data_type.rs — fix Union error message
+// rust/datafusion_python/src/common/data_type.rs
 ScalarValue::Union(_, _, _) => Err(PyNotImplementedError::new_err(
     "ScalarValue::Union".to_string(),
 )),
 ```
 
 ```rust
-// rust/datafusion_python/src/expr/indexed_field.rs — replace todo!() with proper error
+// rust/datafusion_python/src/expr/indexed_field.rs
 fn key(&self) -> PyResult<PyLiteral> {
     match &self.indexed_field.field {
         GetFieldAccess::NamedStructField { name, .. } => Ok(name.clone().into()),
@@ -67,7 +85,7 @@ fn key(&self) -> PyResult<PyLiteral> {
 ```
 
 ```rust
-// rust/datafusion_ext/src/udf/hash.rs — fix StableHash128Udf error message
+// rust/datafusion_ext/src/udf/hash.rs
 fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
     if arg_types.is_empty() || arg_types.len() > 3 {
         return Err(DataFusionError::Plan(
@@ -79,18 +97,19 @@ fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
 ```
 
 ```rust
-// rust/datafusion_python/src/expr.rs — remove duplicate PyLiteral registration
-// Line 765: m.add_class::<PyLiteral>()?;  -- keep
-// Line 767: m.add_class::<PyLiteral>()?;  -- DELETE
+// rust/datafusion_python/src/physical_plan.rs
+PyRuntimeError::new_err(format!(
+    "Unable to decode physical plan node from serialized bytes: {e}"
+))
 ```
 
 ### Files to Edit
 
-- `rust/datafusion_python/src/common/data_type.rs` — fix `ScalarValue::Union` error message at line 339
-- `rust/datafusion_python/src/expr/indexed_field.rs` — replace `todo!()` at line 64 with `PyNotImplementedError`
-- `rust/datafusion_ext/src/udf/hash.rs` — fix `StableHash128Udf::coerce_types` error message at line 146
-- `rust/datafusion_python/src/expr.rs` — remove duplicate `m.add_class::<PyLiteral>()` at line 767
-- `rust/datafusion_python/src/physical_plan.rs` — fix "logical node" error message at line 84
+- `rust/datafusion_python/src/common/data_type.rs`
+- `rust/datafusion_python/src/expr/indexed_field.rs`
+- `rust/datafusion_python/src/expr.rs`
+- `rust/datafusion_python/src/physical_plan.rs`
+- `rust/datafusion_ext/src/udf/hash.rs`
 
 ### New Files to Create
 
@@ -98,8 +117,8 @@ None.
 
 ### Legacy Decommission/Delete Scope
 
-- Delete duplicate `m.add_class::<PyLiteral>()?;` at `expr.rs:767`.
-- Delete `todo!()` at `indexed_field.rs:64` (replaced by proper error).
+- Delete duplicate `m.add_class::<PyLiteral>()?;` at `rust/datafusion_python/src/expr.rs:767`.
+- Delete `todo!()` at `rust/datafusion_python/src/expr/indexed_field.rs:64`.
 
 ---
 
@@ -107,87 +126,100 @@ None.
 
 ### Goal
 
-Eliminate 4 pairs of duplicated private helpers within `codeanatomy_engine/src/compiler/` by creating a shared `compiler/plan_utils.rs` module with `pub(crate)` exports.
+Create a single compiler helper authority for normalization, hashing, view indexing, and fanout calculations.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/codeanatomy_engine/src/compiler/plan_utils.rs — NEW shared module
-
+// rust/codeanatomy_engine/src/compiler/plan_utils.rs
 use blake3::Hasher;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
-
-use crate::spec::execution_spec::{SemanticExecutionSpec, ViewDefinition};
 use std::collections::HashMap;
 
-/// Compute BLAKE3 hash of raw bytes.
+use crate::spec::execution_spec::SemanticExecutionSpec;
+use crate::spec::relations::ViewDefinition;
+
+pub(crate) fn normalize_logical(plan: &LogicalPlan) -> String {
+    format!("{}", plan.display_indent())
+}
+
+pub(crate) fn normalize_physical(plan: &dyn ExecutionPlan) -> String {
+    format!("{}", displayable(plan).indent(true))
+}
+
 pub(crate) fn blake3_hash_bytes(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
 
-/// Normalize a physical execution plan to a stable text representation.
-pub(crate) fn normalize_physical(plan: &dyn ExecutionPlan) -> String {
-    displayable(plan).indent(true).to_string()
-}
-
-/// Build a name -> ViewDefinition index from a spec.
 pub(crate) fn view_index(spec: &SemanticExecutionSpec) -> HashMap<&str, &ViewDefinition> {
-    spec.views
+    spec.view_definitions
         .iter()
-        .map(|v| (v.name.as_str(), v))
+        .map(|view| (view.name.as_str(), view))
         .collect()
 }
 
-/// Count downstream references (fanout) per view in the spec.
 pub(crate) fn compute_view_fanout(spec: &SemanticExecutionSpec) -> HashMap<String, usize> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for view in &spec.views {
-        for dep in view.input_names() {
-            *counts.entry(dep.to_string()).or_default() += 1;
+    let mut fanout: HashMap<String, usize> = spec
+        .view_definitions
+        .iter()
+        .map(|view| (view.name.clone(), 0usize))
+        .collect();
+    for view in &spec.view_definitions {
+        for dep in &view.view_dependencies {
+            *fanout.entry(dep.clone()).or_insert(0) += 1;
         }
     }
-    counts
+    for target in &spec.output_targets {
+        *fanout.entry(target.source_view.clone()).or_insert(0) += 1;
+    }
+    fanout
 }
 ```
 
 ### Files to Edit
 
-- `rust/codeanatomy_engine/src/compiler/plan_bundle.rs` — delete private `blake3_hash_bytes` (line 623) and `normalize_physical` (line 618), import from `plan_utils`
-- `rust/codeanatomy_engine/src/compiler/optimizer_pipeline.rs` — delete private `hash_bytes` (line 276) and `normalize_physical` (line 272), import from `plan_utils`
-- `rust/codeanatomy_engine/src/compiler/graph_validator.rs` — delete private `view_index` (line 99), import from `plan_utils` (convert `BTreeMap` usage to `HashMap`)
-- `rust/codeanatomy_engine/src/compiler/pushdown_probe_extract.rs` — delete private `view_index` (line 34), import from `plan_utils`
-- `rust/codeanatomy_engine/src/compiler/cache_boundaries.rs` — delete `compute_fanout` (line 20), import `compute_view_fanout` from `plan_utils`
-- `rust/codeanatomy_engine/src/compiler/plan_compiler.rs` — delete `compute_ref_counts` (line 387), import `compute_view_fanout` from `plan_utils`
-- `rust/codeanatomy_engine/src/compiler/mod.rs` — add `pub(crate) mod plan_utils;`
+- `rust/codeanatomy_engine/src/compiler/mod.rs`
+- `rust/codeanatomy_engine/src/compiler/plan_bundle.rs`
+- `rust/codeanatomy_engine/src/compiler/optimizer_pipeline.rs`
+- `rust/codeanatomy_engine/src/compiler/graph_validator.rs`
+- `rust/codeanatomy_engine/src/compiler/pushdown_probe_extract.rs`
+- `rust/codeanatomy_engine/src/compiler/cache_boundaries.rs`
+- `rust/codeanatomy_engine/src/compiler/plan_compiler.rs`
 
 ### New Files to Create
 
-- `rust/codeanatomy_engine/src/compiler/plan_utils.rs` — shared compiler utilities
+- `rust/codeanatomy_engine/src/compiler/plan_utils.rs`
+- `rust/codeanatomy_engine/tests/plan_utils_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete `fn blake3_hash_bytes` from `plan_bundle.rs:623-627`.
-- Delete `fn hash_bytes` from `optimizer_pipeline.rs:276-278`.
-- Delete `fn normalize_physical` from `plan_bundle.rs:618-620` and `optimizer_pipeline.rs:272-274`.
-- Delete `fn view_index` from `graph_validator.rs:99-104` and `pushdown_probe_extract.rs:34-39`.
-- Delete `fn compute_fanout` from `cache_boundaries.rs:20-41`.
-- Delete `fn compute_ref_counts` from `plan_compiler.rs:387-408`.
+- Delete duplicated helper implementations from:
+  - `rust/codeanatomy_engine/src/compiler/plan_bundle.rs`
+  - `rust/codeanatomy_engine/src/compiler/optimizer_pipeline.rs`
+  - `rust/codeanatomy_engine/src/compiler/graph_validator.rs`
+  - `rust/codeanatomy_engine/src/compiler/pushdown_probe_extract.rs`
+  - `rust/codeanatomy_engine/src/compiler/cache_boundaries.rs`
+  - `rust/codeanatomy_engine/src/compiler/plan_compiler.rs`
 
 ---
 
-## S3. PushdownEnforcementMode Unification
+## S3. PushdownEnforcementMode Canonical Contract
 
 ### Goal
 
-Eliminate the dual `PushdownEnforcementMode` enum definitions and both `map_pushdown_mode` mapping functions by establishing a single canonical definition.
+Unify `PushdownEnforcementMode` into one neutral contract module without spec/provider aliasing or re-export shims.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/codeanatomy_engine/src/providers/pushdown_contract.rs — KEEP as canonical
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+// rust/codeanatomy_engine/src/contracts/pushdown_mode.rs
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum PushdownEnforcementMode {
     #[default]
     Warn,
@@ -197,217 +229,247 @@ pub enum PushdownEnforcementMode {
 ```
 
 ```rust
-// rust/codeanatomy_engine/src/spec/runtime.rs — RE-EXPORT instead of redefining
-pub use crate::providers::pushdown_contract::PushdownEnforcementMode;
+// rust/codeanatomy_engine/src/spec/runtime.rs
+use crate::contracts::pushdown_mode::PushdownEnforcementMode;
 ```
 
 ```rust
-// rust/codeanatomy_engine/src/executor/pipeline.rs — direct use, no mapping
-use crate::providers::PushdownEnforcementMode;
-// DELETE: use crate::spec::runtime::PushdownEnforcementMode;
-// DELETE: fn map_pushdown_mode(mode: ...) -> ... { ... }
+// rust/codeanatomy_engine/src/providers/pushdown_contract.rs
+use crate::contracts::pushdown_mode::PushdownEnforcementMode;
+```
+
+```rust
+// rust/codeanatomy_engine/src/executor/pipeline.rs
+let mode = spec.runtime.pushdown_enforcement_mode;
+// no map_pushdown_mode conversion function
 ```
 
 ### Files to Edit
 
-- `rust/codeanatomy_engine/src/spec/runtime.rs` — replace enum definition (lines 20-25) with re-export from `providers::pushdown_contract`
-- `rust/codeanatomy_engine/src/executor/pipeline.rs` — remove alias import (line 54), remove `map_pushdown_mode` function (lines 332-338), use `PushdownEnforcementMode` directly
-- `rust/codeanatomy_engine/src/compiler/compile_contract.rs` — remove alias import (line 28), remove `map_pushdown_mode` function (lines 274-278), use `PushdownEnforcementMode` directly
-- `rust/codeanatomy_engine/src/compiler/pushdown_probe_extract.rs` — update import if needed (line 18)
+- `rust/codeanatomy_engine/src/lib.rs`
+- `rust/codeanatomy_engine/src/spec/runtime.rs`
+- `rust/codeanatomy_engine/src/providers/pushdown_contract.rs`
+- `rust/codeanatomy_engine/src/executor/pipeline.rs`
+- `rust/codeanatomy_engine/src/compiler/compile_contract.rs`
+- `rust/codeanatomy_engine/src/compiler/pushdown_probe_extract.rs`
 
 ### New Files to Create
 
-None.
+- `rust/codeanatomy_engine/src/contracts/mod.rs`
+- `rust/codeanatomy_engine/src/contracts/pushdown_mode.rs`
+- `rust/codeanatomy_engine/tests/pushdown_mode_contract_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete `pub enum PushdownEnforcementMode { Warn, Strict, Disabled }` from `spec/runtime.rs:20-25` (replaced by re-export).
-- Delete `fn map_pushdown_mode` from `executor/pipeline.rs:332-338`.
-- Delete `fn map_pushdown_mode` from `compiler/compile_contract.rs:274-278`.
+- Delete duplicate enum in `rust/codeanatomy_engine/src/spec/runtime.rs`.
+- Delete duplicate enum in `rust/codeanatomy_engine/src/providers/pushdown_contract.rs`.
+- Delete both `map_pushdown_mode` functions in:
+  - `rust/codeanatomy_engine/src/executor/pipeline.rs`
+  - `rust/codeanatomy_engine/src/compiler/compile_contract.rs`
 
 ---
 
-## S4. WriteOutcome Type Safety and DRY
+## S4. WriteOutcome Boundary Contract Redesign
 
 ### Goal
 
-Replace the triple-`Option` `WriteOutcome` struct with `Option<WriteOutcomeDetails>` to eliminate impossible states and consolidate three identical fallback blocks.
+Redesign execution boundary contracts to encode write metadata state explicitly, replacing nullable field clusters.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/codeanatomy_engine/src/executor/delta_writer.rs — improved types
+// rust/codeanatomy_engine/src/executor/result.rs
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WriteOutcomeDetails {
-    pub delta_version: i64,
-    pub files_added: u64,
-    pub bytes_written: u64,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum WriteOutcome {
+    Captured {
+        delta_version: i64,
+        files_added: u64,
+        bytes_written: u64,
+    },
+    Unavailable {
+        reason: WriteOutcomeUnavailableReason,
+    },
 }
 
-/// Outcome of a Delta write. `None` if metadata capture failed (not a
-/// pipeline-blocking error).
-pub type WriteOutcome = Option<WriteOutcomeDetails>;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteOutcomeUnavailableReason {
+    TableUriResolutionFailed,
+    TableOpenFailed,
+    TableLoadFailed,
+    SnapshotReadFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterializationResult {
+    pub table_name: String,
+    pub delta_location: Option<String>,
+    pub rows_written: u64,
+    pub partition_count: u32,
+    pub write_outcome: WriteOutcome,
+}
 ```
 
 ```rust
-// rust/codeanatomy_engine/src/executor/delta_writer.rs — simplified fallbacks
+// rust/codeanatomy_engine/src/executor/delta_writer.rs
 pub async fn read_write_outcome(delta_location: &str) -> WriteOutcome {
     let table_uri = match ensure_table_uri(delta_location) {
         Ok(uri) => uri,
-        Err(_) => return None,
+        Err(_) => {
+            return WriteOutcome::Unavailable {
+                reason: WriteOutcomeUnavailableReason::TableUriResolutionFailed,
+            }
+        }
     };
-    let mut table = match DeltaTable::try_from_url(&table_uri) {
-        Ok(t) => t,
-        Err(_) => return None,
-    };
-    if table.load().await.is_err() {
-        return None;
-    }
-    // ... extract details ...
-    Some(WriteOutcomeDetails {
-        delta_version,
-        files_added,
-        bytes_written,
-    })
+    // ...
 }
 ```
 
 ### Files to Edit
 
-- `rust/codeanatomy_engine/src/executor/delta_writer.rs` — replace `WriteOutcome` struct with `WriteOutcomeDetails` + type alias, simplify `read_write_outcome` fallbacks
-- All consumers of `WriteOutcome` fields — update to use `Option<WriteOutcomeDetails>` pattern (`.map(|d| d.delta_version)`)
+- `rust/codeanatomy_engine/src/executor/delta_writer.rs`
+- `rust/codeanatomy_engine/src/executor/result.rs`
+- `rust/codeanatomy_engine/src/executor/runner.rs`
+- `rust/codeanatomy_engine/src/compiler/compile_contract.rs`
+- `rust/codeanatomy_engine_py/src/materializer.rs`
 
 ### New Files to Create
 
-None.
+- `rust/codeanatomy_engine/tests/write_outcome_contract_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete `pub struct WriteOutcome { delta_version: Option<i64>, files_added: Option<u64>, bytes_written: Option<u64> }` (replaced by `WriteOutcomeDetails` + `Option`).
-- Delete three identical fallback blocks at `delta_writer.rs:257-261`, `267-271`, `278-282` (replaced by `return None`).
+- Delete `WriteOutcome` triple-Option struct in `rust/codeanatomy_engine/src/executor/delta_writer.rs`.
+- Delete `delta_version`, `files_added`, and `bytes_written` top-level fields from `MaterializationResult` in `rust/codeanatomy_engine/src/executor/result.rs`.
+- Delete all triple-None fallback literals in `read_write_outcome()`.
 
 ---
 
-## S5. DataFusion Extensions DRY Fixes
+## S5. DataFusion Extensions DRY and Naming Disambiguation
 
 ### Goal
 
-Eliminate `span_struct_type()` duplication, disambiguate `snapshot_payload()` naming collision, and fix the `StableHash128Udf` error message in `datafusion_ext`.
+Eliminate duplicated Delta/schema helpers and resolve payload-name collisions in `datafusion_ext`.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/datafusion_ext/src/registry/snapshot.rs — import instead of redefine
+// rust/datafusion_ext/src/registry/snapshot.rs
 use crate::udf::common::span_struct_type;
-// DELETE: fn span_struct_type() -> DataType { ... }
+// delete local duplicate fn span_struct_type
 ```
 
 ```rust
-// rust/datafusion_ext/src/delta_protocol.rs — disambiguated name
+// rust/datafusion_ext/src/delta_protocol.rs
 pub fn snapshot_info_as_strings(snapshot: &DeltaSnapshotInfo) -> HashMap<String, String> {
-    // ... existing body ...
+    // existing snapshot_payload body
 }
 ```
 
 ```rust
-// rust/datafusion_ext/src/delta_observability.rs — disambiguated name
-pub fn snapshot_info_as_values(snapshot: &DeltaSnapshotInfo) -> HashMap<String, serde_json::Value> {
-    // ... existing body ...
+// rust/datafusion_ext/src/delta_observability.rs
+pub fn snapshot_info_as_values(
+    snapshot: &DeltaSnapshotInfo,
+) -> HashMap<String, serde_json::Value> {
+    // existing snapshot_payload body
 }
 ```
 
 ### Files to Edit
 
-- `rust/datafusion_ext/src/registry/snapshot.rs` — delete private `span_struct_type()` at line 372, import from `crate::udf::common`
-- `rust/datafusion_ext/src/delta_protocol.rs` — rename `snapshot_payload` to `snapshot_info_as_strings` at line 223
-- `rust/datafusion_ext/src/delta_observability.rs` — rename `snapshot_payload` to `snapshot_info_as_values` at line 52
-- All callers of `delta_protocol::snapshot_payload` and `delta_observability::snapshot_payload` — update to new names
+- `rust/datafusion_ext/src/registry/snapshot.rs`
+- `rust/datafusion_ext/src/udf/common.rs`
+- `rust/datafusion_ext/src/delta_protocol.rs`
+- `rust/datafusion_ext/src/delta_observability.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/legacy.rs`
 
 ### New Files to Create
 
-None.
+- `rust/datafusion_ext/tests/delta_payload_naming_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete private `fn span_struct_type()` from `registry/snapshot.rs:372`.
-- Delete function name `snapshot_payload` from both `delta_protocol.rs:223` and `delta_observability.rs:52` (replaced by disambiguated names).
+- Delete local `span_struct_type()` from `rust/datafusion_ext/src/registry/snapshot.rs`.
+- Delete old `snapshot_payload` names in:
+  - `rust/datafusion_ext/src/delta_protocol.rs`
+  - `rust/datafusion_ext/src/delta_observability.rs`
 
 ---
 
-## S6. RegistrySnapshot Encapsulation
+## S6. Registry Contract Hardening and API Surface Correction
 
 ### Goal
 
-Make `RegistrySnapshot` fields `pub(crate)` with read-only accessor methods. Reduce `datafusion_ext/src/lib.rs` public surface by marking internal utility modules `pub(crate)`.
+Harden registry contracts (encapsulation + no sentinel names) and correct public-surface policy based on real external usage.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/datafusion_ext/src/registry/snapshot_types.rs — encapsulated fields
+// rust/datafusion_ext/src/registry/snapshot_types.rs
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistrySnapshot {
-    pub(crate) version: u32,
-    pub(crate) scalar: Vec<String>,
-    pub(crate) aggregate: Vec<String>,
-    pub(crate) window: Vec<String>,
-    pub(crate) table: Vec<String>,
-    pub(crate) aliases: BTreeMap<String, Vec<String>>,
-    pub(crate) parameter_names: BTreeMap<String, Vec<String>>,
-    pub(crate) volatility: BTreeMap<String, String>,
-    pub(crate) rewrite_tags: BTreeMap<String, Vec<String>>,
-    pub(crate) simplify: BTreeMap<String, bool>,
-    pub(crate) coerce_types: BTreeMap<String, bool>,
-    pub(crate) short_circuits: BTreeMap<String, bool>,
-    pub(crate) signature_inputs: BTreeMap<String, Vec<Vec<String>>>,
-    pub(crate) return_types: BTreeMap<String, Vec<String>>,
-    pub(crate) config_defaults: BTreeMap<String, BTreeMap<String, UdfConfigValue>>,
-    pub(crate) custom_udfs: Vec<String>,
+    version: u32,
+    scalar: Vec<String>,
+    // ...
 }
 
 impl RegistrySnapshot {
-    pub const CURRENT_VERSION: u32 = 1;
-
     pub fn version(&self) -> u32 { self.version }
     pub fn scalar(&self) -> &[String] { &self.scalar }
-    pub fn aggregate(&self) -> &[String] { &self.aggregate }
-    pub fn window(&self) -> &[String] { &self.window }
-    pub fn table(&self) -> &[String] { &self.table }
-    pub fn aliases(&self) -> &BTreeMap<String, Vec<String>> { &self.aliases }
-    pub fn parameter_names(&self) -> &BTreeMap<String, Vec<String>> { &self.parameter_names }
-    pub fn volatility(&self) -> &BTreeMap<String, String> { &self.volatility }
-    pub fn rewrite_tags(&self) -> &BTreeMap<String, Vec<String>> { &self.rewrite_tags }
-    pub fn simplify(&self) -> &BTreeMap<String, bool> { &self.simplify }
-    pub fn coerce_types(&self) -> &BTreeMap<String, bool> { &self.coerce_types }
-    pub fn short_circuits(&self) -> &BTreeMap<String, bool> { &self.short_circuits }
-    pub fn signature_inputs(&self) -> &BTreeMap<String, Vec<Vec<String>>> { &self.signature_inputs }
-    pub fn return_types(&self) -> &BTreeMap<String, Vec<String>> { &self.return_types }
-    pub fn config_defaults(&self) -> &BTreeMap<String, BTreeMap<String, UdfConfigValue>> { &self.config_defaults }
-    pub fn custom_udfs(&self) -> &[String] { &self.custom_udfs }
+    // ...
 }
 ```
 
 ```rust
-// rust/datafusion_ext/src/lib.rs — reduced public surface
-pub(crate) mod async_runtime;
+// rust/datafusion_ext/src/registry/metadata.rs
+#[derive(Debug, Clone)]
+pub struct FunctionMetadata {
+    pub name: Option<&'static str>,
+    pub kind: FunctionKind,
+    // ...
+}
+```
+
+```rust
+// rust/datafusion_ext/src/udaf_builtin.rs (similar in udf/mod.rs and udwf_builtin.rs)
+Some(FunctionMetadata {
+    name: None,
+    kind: FunctionKind::Aggregate,
+    // ...
+})
+```
+
+```rust
+// rust/datafusion_ext/src/lib.rs
+pub mod async_runtime;       // external consumers exist
 pub(crate) mod config_macros;
 pub(crate) mod error_conversion;
-pub(crate) mod operator_utils;
+pub mod operator_utils;      // integration tests and external consumers
 ```
 
 ### Files to Edit
 
-- `rust/datafusion_ext/src/registry/snapshot_types.rs` — change all fields from `pub` to `pub(crate)`, add accessor methods
-- `rust/datafusion_ext/src/lib.rs` — change `async_runtime`, `config_macros`, `error_conversion`, `operator_utils` from `pub` to `pub(crate)`
-- `rust/datafusion_python/src/codeanatomy_ext/legacy.rs` — update `registry_snapshot_py()` (lines 989-1063) to use accessor methods instead of direct field access
-- All other consumers of `RegistrySnapshot` fields — update to use accessors
+- `rust/datafusion_ext/src/registry/snapshot_types.rs`
+- `rust/datafusion_ext/src/registry/metadata.rs`
+- `rust/datafusion_ext/src/registry/snapshot.rs`
+- `rust/datafusion_ext/src/udf/mod.rs`
+- `rust/datafusion_ext/src/udaf_builtin.rs`
+- `rust/datafusion_ext/src/udwf_builtin.rs`
+- `rust/datafusion_ext/src/lib.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/legacy.rs`
 
 ### New Files to Create
 
-None.
+- `rust/datafusion_ext/tests/registry_snapshot_contract_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete direct field access patterns on `RegistrySnapshot` from `legacy.rs:989-1063` (replaced by accessor calls).
+- Delete direct field-access construction patterns for `RegistrySnapshot` payloads in `rust/datafusion_python/src/codeanatomy_ext/legacy.rs`.
+- Delete empty-string metadata sentinel usage (`name: ""`) from:
+  - `rust/datafusion_ext/src/udf/mod.rs`
+  - `rust/datafusion_ext/src/udaf_builtin.rs`
+  - `rust/datafusion_ext/src/udwf_builtin.rs`
 
 ---
 
@@ -415,160 +477,152 @@ None.
 
 ### Goal
 
-Move triplicated helpers (`runtime()`, `table_version_from_options()`, `parse_msgpack_payload()`) and duplicated report-to-pydict converters to `helpers.rs`, eliminating DRY violations in the `codeanatomy_ext` module.
+Consolidate bridge helpers into shared helper modules so decomposed submodules stop depending on legacy-owned utility functions.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/datafusion_python/src/codeanatomy_ext/helpers.rs — consolidated helpers
-
-use datafusion::execution::context::SessionContext;
-use pyo3::prelude::*;
-use serde::Deserialize;
-use tokio::runtime::Runtime;
-
-use crate::context::PySessionContext;
-use datafusion_ext::delta_protocol::TableVersion;
-
-/// Extract the underlying DataFusion `SessionContext` from a Python object.
-pub(crate) fn extract_session_ctx(ctx: &Bound<'_, PyAny>) -> PyResult<SessionContext> {
-    // ... existing implementation ...
-}
-
-/// Create a single-threaded Tokio runtime for blocking Delta operations.
+// rust/datafusion_python/src/codeanatomy_ext/helpers.rs
 pub(crate) fn runtime() -> PyResult<Runtime> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("tokio runtime: {e}")))
+    Runtime::new()
+        .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))
 }
 
-/// Parse TableVersion from optional version/timestamp parameters.
 pub(crate) fn table_version_from_options(
     version: Option<i64>,
     timestamp: Option<String>,
 ) -> PyResult<TableVersion> {
     TableVersion::from_options(version, timestamp)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))
+        .map_err(|err| PyValueError::new_err(format!("Invalid Delta table version options: {err}")))
 }
 
-/// Deserialize a msgpack payload from Python bytes.
 pub(crate) fn parse_msgpack_payload<T: for<'de> Deserialize<'de>>(
     payload: &[u8],
     label: &str,
 ) -> PyResult<T> {
     rmp_serde::from_slice(payload)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{label}: {e}")))
+        .map_err(|err| PyValueError::new_err(format!("Invalid {label} payload: {err}")))
 }
+```
+
+```rust
+// rust/datafusion_python/src/codeanatomy_ext/delta_provider.rs
+use super::helpers::{runtime, table_version_from_options};
+// remove super::legacy::runtime/table_version_from_options calls
 ```
 
 ### Files to Edit
 
-- `rust/datafusion_python/src/codeanatomy_ext/helpers.rs` — add `runtime()`, `table_version_from_options()`, `parse_msgpack_payload()`
-- `rust/datafusion_python/src/codeanatomy_ext/delta_mutations.rs` — delete private `runtime()` (line 92), `table_version_from_options()` (line 97), `parse_msgpack_payload()` (line 84), import from `super::helpers`
-- `rust/datafusion_python/src/codeanatomy_ext/delta_maintenance.rs` — delete private `runtime()` (line 132), `table_version_from_options()` (line 137), `parse_msgpack_payload()` (line 124), import from `super::helpers`
-- `rust/datafusion_python/src/codeanatomy_ext/legacy.rs` — delete `pub(crate) fn runtime()` (line 223), `pub(crate) fn table_version_from_options()` (line 149), import from `super::helpers`
-- `rust/datafusion_python/src/codeanatomy_ext/delta_provider.rs` — update `super::legacy::runtime()` and `super::legacy::table_version_from_options()` calls to use `super::helpers`
+- `rust/datafusion_python/src/codeanatomy_ext/helpers.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/delta_provider.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/delta_mutations.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/delta_maintenance.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/legacy.rs`
 
 ### New Files to Create
 
-None (editing existing `helpers.rs`).
+- `rust/datafusion_python/tests/codeanatomy_ext_helpers_cutover_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete `fn runtime()` from `delta_mutations.rs:92`, `delta_maintenance.rs:132`, `legacy.rs:223`.
-- Delete `fn table_version_from_options()` from `delta_mutations.rs:97`, `delta_maintenance.rs:137`, `legacy.rs:149`.
-- Delete `fn parse_msgpack_payload()` from `delta_mutations.rs:84`, `delta_maintenance.rs:124`.
+- Delete duplicated helper implementations from:
+  - `rust/datafusion_python/src/codeanatomy_ext/delta_mutations.rs`
+  - `rust/datafusion_python/src/codeanatomy_ext/delta_maintenance.rs`
+  - `rust/datafusion_python/src/codeanatomy_ext/legacy.rs`
+- Delete remaining helper call sites using `super::legacy::*` in decomposed modules.
 
 ---
 
-## S8. legacy.rs Full Decomposition
+## S8. legacy.rs Full Decomposition and Ownership Migration
 
 ### Goal
 
-Complete the physical decomposition of `legacy.rs` (2,368 LOC, 39 `#[pyfunction]` definitions) by moving all implementations into their respective submodules. Target: `legacy.rs` reaches 0 `#[pyfunction]` definitions and is deleted.
+Finish physical decomposition: all `#[pyfunction]` implementations and shared class ownership move to focused modules; `legacy.rs` is deleted.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/datafusion_python/src/codeanatomy_ext/udf_registration.rs — owns implementations
-use pyo3::prelude::*;
-use datafusion::execution::context::SessionContext;
-use super::helpers::extract_session_ctx;
-
+// rust/datafusion_python/src/codeanatomy_ext/udf_registration.rs
 #[pyfunction]
-pub fn install_function_factory(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn install_function_factory(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
     let session_ctx = extract_session_ctx(ctx)?;
-    datafusion_ext::sql_macro_factory::install_sql_macro_factory_native(&session_ctx)?;
-    Ok(())
+    datafusion_ext::sql_macro_factory::install_sql_macro_factory_native(&session_ctx)
+        .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))
 }
 
-#[pyfunction]
-pub fn derive_function_factory_policy(ctx: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-    // ... move implementation from legacy.rs:572 ...
-}
-
-// ... all 13 UDF registration functions moved from legacy.rs ...
-
-pub fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
+pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(install_function_factory, module)?)?;
-    module.add_function(wrap_pyfunction!(derive_function_factory_policy, module)?)?;
-    // ... register all functions directly ...
+    // ...
     Ok(())
 }
 ```
 
 ```rust
-// rust/datafusion_python/src/codeanatomy_ext/plugin_bridge.rs — owns implementations
-use pyo3::prelude::*;
+// rust/datafusion_python/src/codeanatomy_ext/mod.rs
+pub(crate) mod cache_tables;
+pub(crate) mod delta_maintenance;
+pub(crate) mod delta_mutations;
+pub(crate) mod delta_provider;
+pub(crate) mod helpers;
+pub(crate) mod plugin_bridge;
+pub(crate) mod registry_bridge;
+pub(crate) mod schema_evolution;
+pub(crate) mod session_utils;
+pub(crate) mod udf_registration;
 
-#[pyfunction]
-pub fn load_df_plugin(py: Python<'_>, path: &str) -> PyResult<PyObject> {
-    // ... move implementation from legacy.rs:1215 ...
-}
-
-// ... all 8 plugin functions moved from legacy.rs ...
-
-pub fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(load_df_plugin, module)?)?;
-    // ... register all functions directly ...
+pub fn init_module(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let _ = py;
+    session_utils::register_functions(module)?;
+    udf_registration::register_functions(module)?;
+    plugin_bridge::register_functions(module)?;
+    // ...
     Ok(())
 }
 ```
 
 ### Files to Edit
 
-- `rust/datafusion_python/src/codeanatomy_ext/udf_registration.rs` — move ~13 `#[pyfunction]` implementations from `legacy.rs`
-- `rust/datafusion_python/src/codeanatomy_ext/plugin_bridge.rs` — move ~8 `#[pyfunction]` implementations from `legacy.rs`
-- `rust/datafusion_python/src/codeanatomy_ext/cache_tables.rs` — move ~2 `#[pyfunction]` implementations from `legacy.rs`
-- `rust/datafusion_python/src/codeanatomy_ext/session_utils.rs` — move ~15 `#[pyfunction]` implementations from `legacy.rs`
-- `rust/datafusion_python/src/codeanatomy_ext/mod.rs` — update submodule wiring to call each submodule's `register_functions()`
-- `rust/datafusion_python/src/codeanatomy_ext/legacy.rs` — progressively empty as functions move out
+- `rust/datafusion_python/src/codeanatomy_ext/mod.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/udf_registration.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/plugin_bridge.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/cache_tables.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/session_utils.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/delta_provider.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/delta_mutations.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/delta_maintenance.rs`
+- `rust/datafusion_python/src/lib.rs`
 
 ### New Files to Create
 
-- `rust/datafusion_python/src/codeanatomy_ext/schema_evolution.rs` — `SchemaEvolutionAdapterFactory`, `CpgTableProvider` moved from `legacy.rs`
-- `rust/datafusion_python/src/codeanatomy_ext/registry_bridge.rs` — `registry_snapshot_py`, `registry_snapshot_hash`, `capabilities_snapshot`, `udf_docs_snapshot` moved from `legacy.rs`
-- `rust/datafusion_python/tests/test_legacy_decomposition_complete.rs` — verify `legacy.rs` is deleted and all submodules own their functions
+- `rust/datafusion_python/src/codeanatomy_ext/schema_evolution.rs`
+- `rust/datafusion_python/src/codeanatomy_ext/registry_bridge.rs`
+- `rust/datafusion_python/tests/codeanatomy_ext_schema_evolution_tests.rs`
+- `rust/datafusion_python/tests/codeanatomy_ext_registry_bridge_tests.rs`
+- `rust/datafusion_python/tests/codeanatomy_ext_legacy_decomposition_complete_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete `rust/datafusion_python/src/codeanatomy_ext/legacy.rs` entirely (all 2,368 LOC).
-- Delete all `super::legacy::*` re-export patterns from `plugin_bridge.rs`, `udf_registration.rs`, `cache_tables.rs`, `session_utils.rs`.
-- Move shared utility functions (`storage_options_map`, `delta_gate_from_params`, `scan_overrides_from_params`, `provider_capsule`, `snapshot_to_pydict`, `scan_config_to_pydict`, `json_to_py`, `mutation_report_to_pydict`, `maintenance_report_to_pydict`) to `helpers.rs` or domain-appropriate submodules.
+- Delete `rust/datafusion_python/src/codeanatomy_ext/legacy.rs` entirely.
+- Delete all `super::legacy::*` forwarding in:
+  - `rust/datafusion_python/src/codeanatomy_ext/plugin_bridge.rs`
+  - `rust/datafusion_python/src/codeanatomy_ext/udf_registration.rs`
+  - `rust/datafusion_python/src/codeanatomy_ext/cache_tables.rs`
+  - `rust/datafusion_python/src/codeanatomy_ext/session_utils.rs`
+  - `rust/datafusion_python/src/codeanatomy_ext/delta_provider.rs`
+- Delete legacy-owned shared class registration pathways once moved.
 
 ---
 
-## S9. Error Helper Consolidation
+## S9. Error Helper Consolidation (Including `py_value_err`)
 
 ### Goal
 
-Consolidate the duplicated `py_type_err` and `py_runtime_err` helpers between `errors.rs` and `sql/exceptions.rs` into a single authority.
+Create one error-helper authority in `errors.rs`, including `py_value_err`, and remove split helper modules.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/datafusion_python/src/errors.rs — single authority with Display bound
+// rust/datafusion_python/src/errors.rs
 pub fn py_type_err(e: impl std::fmt::Display) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!("{e}"))
 }
@@ -576,215 +630,218 @@ pub fn py_type_err(e: impl std::fmt::Display) -> PyErr {
 pub fn py_runtime_err(e: impl std::fmt::Display) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}"))
 }
+
+pub fn py_value_err(e: impl std::fmt::Display) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{e}"))
+}
 ```
 
 ```rust
-// rust/datafusion_python/src/sql/exceptions.rs — re-export instead of redefine
-pub use crate::errors::{py_type_err, py_runtime_err};
+// rust/datafusion_python/src/context.rs
+use crate::errors::py_value_err;
 ```
 
 ### Files to Edit
 
-- `rust/datafusion_python/src/errors.rs` — update `py_type_err` and `py_runtime_err` trait bound from `Debug` to `Display` (lines 77-83)
-- `rust/datafusion_python/src/sql/exceptions.rs` — replace function definitions with re-exports from `crate::errors`
-- All callers of `sql::exceptions::py_type_err` / `py_runtime_err` — update imports to `crate::errors`
+- `rust/datafusion_python/src/errors.rs`
+- `rust/datafusion_python/src/context.rs`
+- `rust/datafusion_python/src/sql.rs`
 
 ### New Files to Create
 
-None.
+- `rust/datafusion_python/tests/error_helper_contract_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete `pub fn py_type_err` and `pub fn py_runtime_err` definitions from `sql/exceptions.rs:22-28` (replaced by re-exports).
+- Delete `rust/datafusion_python/src/sql/exceptions.rs`.
+- Delete `pub mod exceptions;` from `rust/datafusion_python/src/sql.rs`.
+- Delete all imports of `crate::sql::exceptions::*`.
 
 ---
 
-## S10. Expression Binding Boilerplate Reduction
+## S10. Expression Boilerplate Reduction Across Bool and Logical Wrappers
 
 ### Goal
 
-Introduce declarative macros to reduce the ~900 LOC of duplicated boilerplate in the expression binding layer: 10 identical unary boolean wrappers, 6 duplicated builder methods, and 20+ logical plan wrapper files.
+Collapse repetitive wrapper code using declarative macros for unary bool wrappers and logical-plan wrapper patterns.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/datafusion_python/src/expr/bool_expr.rs — macro-driven wrappers
-macro_rules! unary_bool_expr {
-    ($py_name:ident, $rust_name:expr, $variant:ident) => {
-        #[pyclass(frozen, name = $rust_name, module = "datafusion.expr", subclass)]
+// rust/datafusion_python/src/expr/wrapper_macros.rs
+macro_rules! unary_bool_expr_wrapper {
+    ($ty:ident, $name:literal) => {
+        #[pyclass(frozen, name = $name, module = "datafusion.expr", subclass)]
         #[derive(Clone, Debug)]
-        pub struct $py_name {
-            expr: Expr,
-        }
+        pub struct $ty { expr: Expr }
 
-        impl From<Expr> for $py_name {
-            fn from(expr: Expr) -> Self {
-                Self { expr }
-            }
-        }
-
-        impl std::fmt::Display for $py_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.expr)
-            }
+        impl $ty {
+            pub fn new(expr: Expr) -> Self { Self { expr } }
         }
 
         #[pymethods]
-        impl $py_name {
-            fn expr(&self) -> PyResult<PyExpr> {
-                Ok(self.expr.clone().into())
-            }
-
-            fn __repr__(&self) -> String {
-                format!("{self}")
-            }
+        impl $ty {
+            fn expr(&self) -> PyResult<PyExpr> { Ok(self.expr.clone().into()) }
         }
     };
 }
 
-unary_bool_expr!(PyNot, "Not", Not);
-unary_bool_expr!(PyIsNotNull, "IsNotNull", IsNotNull);
-unary_bool_expr!(PyIsNull, "IsNull", IsNull);
-unary_bool_expr!(PyIsTrue, "IsTrue", IsTrue);
-unary_bool_expr!(PyIsFalse, "IsFalse", IsFalse);
-unary_bool_expr!(PyIsUnknown, "IsUnknown", IsUnknown);
-unary_bool_expr!(PyIsNotTrue, "IsNotTrue", IsNotTrue);
-unary_bool_expr!(PyIsNotFalse, "IsNotFalse", IsNotFalse);
-unary_bool_expr!(PyIsNotUnknown, "IsNotUnknown", IsNotUnknown);
-unary_bool_expr!(PyNegative, "Negative", Negative);
-```
-
-```rust
-// rust/datafusion_python/src/expr.rs — deduplicated builder methods
-// DELETE duplicated order_by/filter/distinct/null_treatment/partition_by/window_frame
-// on PyExprFuncBuilder (lines 653-686) — delegate to shared implementation
-impl PyExprFuncBuilder {
-    fn order_by(&self, order_by: Vec<PyExpr>) -> PyExprFuncBuilder {
-        self.builder_with(|e| add_builder_fns_to_expr(e, order_by, BuilderFn::OrderBy))
-    }
-    // ... same pattern for filter, distinct, null_treatment, partition_by, window_frame
+macro_rules! logical_plan_wrapper {
+    ($ty:ident, $plan_ty:ty, $variant:pat => $bind:ident) => {
+        // Generates Display + LogicalNode + TryFrom/From boilerplate
+    };
 }
 ```
 
-### Files to Edit
-
-- `rust/datafusion_python/src/expr/bool_expr.rs` — replace 10 manual struct definitions (300 LOC) with `unary_bool_expr!` macro invocations (~40 LOC)
-- `rust/datafusion_python/src/expr.rs` — deduplicate 6 builder methods between `PyExpr` and `PyExprFuncBuilder` (lines 569-598 + 653-686)
-
-### New Files to Create
-
-None.
-
-### Legacy Decommission/Delete Scope
-
-- Delete 10 hand-written struct/impl blocks from `bool_expr.rs:25-323` (replaced by macro invocations).
-- Delete 6 duplicated builder methods from `expr.rs:653-686` (replaced by delegation or shared impl).
-
----
-
-## S11. Dead Code and YAGNI Cleanup
-
-### Goal
-
-Remove dead code (`PySignature`), unused `RexType::Other` variant, and audit `datafusion_ext/src/registry/legacy.rs` for removal.
-
-### Representative Code Snippets
-
 ```rust
-// rust/datafusion_python/src/expr/signature.rs — DELETE entirely or implement
-// Currently: #[allow(dead_code)] with empty #[pymethods]
+// rust/datafusion_python/src/expr/bool_expr.rs
+unary_bool_expr_wrapper!(PyNot, "Not");
+unary_bool_expr_wrapper!(PyIsNotNull, "IsNotNull");
+// ...
 ```
 
 ### Files to Edit
 
-- `rust/datafusion_python/src/expr/signature.rs` — delete file if PySignature is unused, or implement if needed
-- `rust/datafusion_python/src/common/data_type.rs` — remove `RexType::Other` variant if unused
-- `rust/datafusion_python/src/expr.rs` — remove `mod signature;` declaration if file is deleted
-- `rust/datafusion_ext/src/registry/legacy.rs` — audit `#[allow(unused_imports)]` re-exports; remove if no external consumers remain
+- `rust/datafusion_python/src/expr/bool_expr.rs`
+- `rust/datafusion_python/src/expr.rs`
+- Logical wrapper modules under `rust/datafusion_python/src/expr/` that share `Display`/`LogicalNode` boilerplate (e.g. `filter.rs`, `projection.rs`, `limit.rs`, `create_view.rs`, `drop_view.rs`, `join.rs`, `union.rs`, `sort.rs`).
 
 ### New Files to Create
 
-None.
+- `rust/datafusion_python/src/expr/wrapper_macros.rs`
+- `rust/datafusion_python/tests/expr_wrapper_macros_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete `rust/datafusion_python/src/expr/signature.rs` if `PySignature` is unused.
-- Delete `RexType::Other` variant from `data_type.rs` if never constructed.
-- Delete `rust/datafusion_ext/src/registry/legacy.rs` if all re-exports are consumed via `registry/` directly.
+- Delete duplicated unary wrapper struct/impl blocks in `rust/datafusion_python/src/expr/bool_expr.rs`.
+- Delete duplicated builder-method implementations in `rust/datafusion_python/src/expr.rs` where replaced by shared helper pathways.
 
 ---
 
-## S12. Tracing Coverage Gaps
+## S11. Upstream Robustness and Completeness Cleanup
 
 ### Goal
 
-Add `#[instrument]` tracing spans to key functions that lack observability: compilation phases in `codeanatomy_engine`, high-traffic functions in the decomposed `codeanatomy_ext` submodules.
+Remove dead code and panic-prone paths, and close high-frequency unsupported variant gaps.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/codeanatomy_engine/src/compiler/plan_compiler.rs — add tracing
+// rust/datafusion_python/src/dataset.rs
+fn schema(&self) -> SchemaRef {
+    Python::attach(|py| -> PyResult<SchemaRef> {
+        let dataset = self.dataset.bind(py);
+        let schema = dataset
+            .getattr("schema")?
+            .extract::<PyArrowType<_>>()?
+            .0;
+        Ok(Arc::new(schema))
+    })
+    .unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::empty()))
+}
+```
+
+```rust
+// rust/datafusion_python/src/expr.rs
+Expr::ScalarFunction(value) => Ok(PyExpr::from(Expr::ScalarFunction(value.clone())).into_bound_py_any(py)?),
+Expr::WindowFunction(value) => Ok(PyExpr::from(Expr::WindowFunction(value.clone())).into_bound_py_any(py)?),
+```
+
+```rust
+// rust/datafusion_python/src/expr.rs
+// delete: pub mod signature;
+```
+
+### Files to Edit
+
+- `rust/datafusion_python/src/dataset.rs`
+- `rust/datafusion_python/src/expr.rs`
+- `rust/datafusion_python/src/common/data_type.rs`
+- `rust/datafusion_python/src/expr/signature.rs`
+
+### New Files to Create
+
+- `rust/datafusion_python/tests/upstream_robustness_tests.rs`
+
+### Legacy Decommission/Delete Scope
+
+- Delete dead module `rust/datafusion_python/src/expr/signature.rs`.
+- Delete `RexType::Other` from `rust/datafusion_python/src/common/data_type.rs` if still unconstructed.
+- Delete unsupported-variant error branches in `to_variant()` for cases now implemented.
+
+---
+
+## S12. Tracing and Observability Expansion
+
+### Goal
+
+Instrument phase boundaries and bridge hot paths so compilation and Python/Rust adapter latency can be attributed without ad hoc debugging.
+
+### Representative Code Snippets
+
+```rust
+// rust/codeanatomy_engine/src/compiler/plan_compiler.rs
 #[cfg_attr(feature = "tracing", instrument(skip(self)))]
-pub async fn compile_with_warnings(
-    &self,
-) -> Result<(Vec<CompiledView>, Vec<RunWarning>)> {
-    // ... existing body ...
+pub async fn compile_with_warnings(&self) -> Result<CompilationOutcome> {
+    // ...
 }
 ```
 
 ```rust
-// rust/codeanatomy_engine/src/compiler/optimizer_pipeline.rs — add tracing
-#[cfg_attr(feature = "tracing", instrument(skip(ctx, rules)))]
-pub fn run_optimizer_pipeline(
+// rust/codeanatomy_engine/src/compiler/optimizer_pipeline.rs
+#[cfg_attr(feature = "tracing", instrument(skip(ctx, unoptimized_plan, config)))]
+pub async fn run_optimizer_pipeline(
     ctx: &SessionContext,
-    rules: &CpgRuleSet,
-    plan: LogicalPlan,
+    unoptimized_plan: LogicalPlan,
     config: &OptimizerPipelineConfig,
-) -> OptimizerPipelineResult {
-    // ... existing body ...
+) -> Result<OptimizerPipelineResult> {
+    // ...
+}
+```
+
+```rust
+// rust/datafusion_python/src/dataset_exec.rs
+#[cfg_attr(feature = "tracing", instrument(skip(self, context)))]
+fn execute(&self, partition: usize, context: Arc<TaskContext>) -> DFResult<SendableRecordBatchStream> {
+    // ...
 }
 ```
 
 ### Files to Edit
 
-- `rust/codeanatomy_engine/src/compiler/plan_compiler.rs` — add `#[instrument]` to `compile_with_warnings`
-- `rust/codeanatomy_engine/src/compiler/optimizer_pipeline.rs` — add `#[instrument]` to `run_optimizer_pipeline`
-- `rust/codeanatomy_engine/src/compiler/plan_bundle.rs` — add `#[instrument]` to `build_plan_bundle_artifact_with_warnings`
-- `rust/codeanatomy_engine/src/compiler/pushdown_probe_extract.rs` — add `#[instrument]` to `extract_input_filter_predicates`
-- Post-S8: add `#[instrument]` to high-traffic decomposed `codeanatomy_ext` functions
+- `rust/codeanatomy_engine/src/compiler/plan_compiler.rs`
+- `rust/codeanatomy_engine/src/compiler/optimizer_pipeline.rs`
+- `rust/codeanatomy_engine/src/compiler/plan_bundle.rs`
+- `rust/codeanatomy_engine/src/compiler/pushdown_probe_extract.rs`
+- `rust/datafusion_python/src/dataset_exec.rs`
+- `rust/datafusion_python/src/udaf.rs`
+- `rust/datafusion_python/src/udwf.rs`
+- Post-S8 decomposed `codeanatomy_ext` modules
 
 ### New Files to Create
 
-None.
+- `rust/codeanatomy_engine/tests/compiler_tracing_phase_tests.rs`
+- `rust/datafusion_python/tests/adapter_tracing_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-None.
+- Delete reliance on top-level-only compile spans as the sole tracing boundary.
+- Delete uninstrumented hot-path function variants once instrumented replacements land.
 
 ---
 
-## S13. Overlay Sort Generics and RuleClassification
+## S13. Rule Overlay and Rulepack DRY Cleanup Using Existing `RuleClass`
 
 ### Goal
 
-Replace 3 nearly identical rule-sorting closures in `overlay.rs` with a generic helper. Add a typed `RuleClassification` to replace `is_correctness_rule` string matching.
+Remove duplicated sort closures and eliminate string-matching correctness classification by using typed rule intent/class semantics.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/codeanatomy_engine/src/rules/overlay.rs — generic sort helper
+// rust/codeanatomy_engine/src/rules/overlay.rs
 trait HasName {
     fn name(&self) -> &str;
-}
-
-impl HasName for Arc<dyn AnalyzerRule + Send + Sync> {
-    fn name(&self) -> &str { AnalyzerRule::name(self.as_ref()) }
-}
-impl HasName for Arc<dyn OptimizerRule + Send + Sync> {
-    fn name(&self) -> &str { OptimizerRule::name(self.as_ref()) }
-}
-impl HasName for Arc<dyn PhysicalOptimizerRule + Send + Sync> {
-    fn name(&self) -> &str { PhysicalOptimizerRule::name(self.as_ref()) }
 }
 
 fn sort_rules_by_priority<R: HasName>(
@@ -800,105 +857,226 @@ fn sort_rules_by_priority<R: HasName>(
 ```
 
 ```rust
-// rust/codeanatomy_engine/src/rules/rulepack.rs — typed classification
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleClassification {
-    Correctness,
-    Optimization,
-    Policy,
+// rust/codeanatomy_engine/src/rules/rulepack.rs
+use crate::spec::rule_intents::RuleClass;
+
+fn is_correctness_class(class: &RuleClass) -> bool {
+    matches!(class, RuleClass::SemanticIntegrity | RuleClass::Safety)
 }
-// Used in RuleIntent or CpgRuleMetadata to replace:
-// fn is_correctness_rule(rule_name: &str) -> bool { rule_name.contains("integrity") || ... }
+// remove rule-name substring matching
 ```
 
 ### Files to Edit
 
-- `rust/codeanatomy_engine/src/rules/overlay.rs` — replace 3 sort closures (lines 198-213) with `sort_rules_by_priority` generic
-- `rust/codeanatomy_engine/src/rules/rulepack.rs` — add `RuleClassification` enum, replace `is_correctness_rule` string matching (lines 151-157)
-- Callers of `is_correctness_rule` — update to use `RuleClassification` field
+- `rust/codeanatomy_engine/src/rules/overlay.rs`
+- `rust/codeanatomy_engine/src/rules/rulepack.rs`
+- `rust/codeanatomy_engine/src/spec/rule_intents.rs` (only if additional typed fields are required)
 
 ### New Files to Create
 
-None.
+- `rust/codeanatomy_engine/tests/rulepack_classification_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-- Delete `fn is_correctness_rule(rule_name: &str) -> bool` from `rulepack.rs:151-157`.
-- Delete 3 individual sort closures from `overlay.rs:198-213`.
+- Delete `is_correctness_rule(rule_name: &str)` string-matching function.
+- Delete three duplicated sort closures in `overlay.rs`.
 
 ---
 
-## S14. Upstream Expression Test Coverage
+## S14. Upstream Test Coverage Expansion
 
 ### Goal
 
-Add pure-Rust unit tests for the critical `data_type.rs` mapping functions (750+ LOC with zero test coverage) and `is_scan_operator` in the engine.
+Add high-signal tests for expression/type mapping and contract changes not currently guarded by tests.
 
 ### Representative Code Snippets
 
 ```rust
-// rust/datafusion_python/src/common/data_type.rs — new test module
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::datatypes::DataType;
-
-    #[test]
-    fn test_map_from_arrow_type_round_trip() {
-        let types = vec![
-            DataType::Boolean,
-            DataType::Int8, DataType::Int16, DataType::Int32, DataType::Int64,
-            DataType::Float32, DataType::Float64,
-            DataType::Utf8, DataType::LargeUtf8,
-            DataType::Binary, DataType::LargeBinary,
-            DataType::Date32, DataType::Date64,
-        ];
-        for dt in types {
-            let mapped = DataTypeMap::map_from_arrow_type(&dt);
-            assert!(mapped.is_ok(), "Failed to map {dt:?}");
-        }
-    }
-
-    #[test]
-    fn test_union_error_message_correctness() {
-        let union_type = ScalarValue::Union(None, vec![], UnionMode::Sparse);
-        let result = DataTypeMap::map_from_scalar_to_arrow(&union_type);
-        assert!(result.is_err());
-        let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("Union"), "Error message should mention Union, got: {err_msg}");
-    }
+// rust/datafusion_python/tests/data_type_mapping_tests.rs
+#[test]
+fn union_error_mentions_union_variant() {
+    let union_type = ScalarValue::Union(None, vec![], UnionMode::Sparse);
+    let result = DataTypeMap::map_from_scalar_value(&union_type);
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("Union"));
 }
 ```
 
 ```rust
-// rust/codeanatomy_engine/src/executor/metrics_collector.rs — test for is_scan_operator
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_known_scan_operators() {
-        assert!(is_scan_operator("ParquetExec"));
-        assert!(is_scan_operator("DeltaScan"));
-        assert!(is_scan_operator("CsvExec: ..."));
-        assert!(!is_scan_operator("FilterExec"));
-        assert!(!is_scan_operator("ProjectionExec"));
-    }
+// rust/codeanatomy_engine/tests/materialization_contract_tests.rs
+#[test]
+fn write_outcome_contract_serializes_captured_and_unavailable() {
+    // asserts serde tags and fields for both variants
 }
 ```
 
 ### Files to Edit
 
-- `rust/datafusion_python/src/common/data_type.rs` — add `#[cfg(test)] mod tests` with round-trip tests
-- `rust/codeanatomy_engine/src/executor/metrics_collector.rs` — add `#[cfg(test)] mod tests` for `is_scan_operator`
+- `rust/datafusion_python/src/common/data_type.rs` (if inline tests are chosen)
+- `rust/codeanatomy_engine/src/executor/result.rs` (test helpers if needed)
 
 ### New Files to Create
 
-None (inline test modules).
+- `rust/datafusion_python/tests/data_type_mapping_tests.rs`
+- `rust/datafusion_python/tests/expr_variant_conversion_tests.rs`
+- `rust/codeanatomy_engine/tests/materialization_contract_tests.rs`
 
 ### Legacy Decommission/Delete Scope
 
-None.
+- Delete stale plan task that re-adds `is_scan_operator` testing (already covered in existing test suite).
+
+---
+
+## S15. Compilation Pipeline Decomposition and TreeNode Traversal Adoption
+
+### Goal
+
+Decompose monolithic compile orchestration and replace manual plan tree walking with DataFusion TreeNode traversal for consistency and correctness.
+
+### Representative Code Snippets
+
+```rust
+// rust/codeanatomy_engine/src/compiler/compile_phases.rs
+pub(crate) async fn build_task_schedule_phase(
+    spec: &SemanticExecutionSpec,
+) -> (Option<TaskSchedule>, Option<StatsQuality>) {
+    // extracted from compile_contract::compile_request
+}
+
+pub(crate) async fn pushdown_probe_phase(
+    ctx: &SessionContext,
+    spec: &SemanticExecutionSpec,
+) -> (BTreeMap<String, PushdownContractReport>, Vec<RunWarning>) {
+    // extracted orchestration
+}
+```
+
+```rust
+// rust/codeanatomy_engine/src/compiler/plan_bundle.rs
+let _ = optimized_plan.apply(|node| {
+    if let LogicalPlan::TableScan(scan) = node {
+        // lineage capture
+    }
+    Ok(TreeNodeRecursion::Continue)
+});
+```
+
+### Files to Edit
+
+- `rust/codeanatomy_engine/src/compiler/compile_contract.rs`
+- `rust/codeanatomy_engine/src/compiler/plan_bundle.rs`
+- `rust/codeanatomy_engine/src/compiler/pushdown_probe_extract.rs`
+- `rust/codeanatomy_engine/src/compiler/mod.rs`
+
+### New Files to Create
+
+- `rust/codeanatomy_engine/src/compiler/compile_phases.rs`
+- `rust/codeanatomy_engine/tests/compile_phases_tests.rs`
+
+### Legacy Decommission/Delete Scope
+
+- Delete monolithic phase blocks in `compile_contract.rs` once extracted.
+- Delete manual stack-based plan traversals in:
+  - `rust/codeanatomy_engine/src/compiler/plan_bundle.rs`
+  - `rust/codeanatomy_engine/src/compiler/pushdown_probe_extract.rs`
+
+---
+
+## S16. Engine Delta Maintenance Stub Replacement
+
+### Goal
+
+Replace `executor/maintenance.rs` stub reporting with real calls to `datafusion_ext::delta_maintenance::*` operations and preserve strict maintenance ordering.
+
+### Representative Code Snippets
+
+```rust
+// rust/codeanatomy_engine/src/executor/maintenance.rs
+let compact_report = datafusion_ext::delta_maintenance::delta_optimize_compact_request(
+    DeltaOptimizeCompactRequest {
+        session_ctx: ctx,
+        table_uri,
+        storage_options: None,
+        table_version: TableVersion::Latest,
+        target_size: schedule.compact.as_ref().map(|p| p.target_file_size),
+        gate: None,
+        commit_options: None,
+    },
+)
+.await?;
+```
+
+```rust
+// rust/codeanatomy_engine/src/executor/maintenance.rs
+let (table, metrics) = table
+    .vacuum()
+    .with_retention_period(duration)
+    .with_enforce_retention_duration(true)
+    .with_dry_run(vacuum.dry_run_first)
+    .await?;
+```
+
+### Files to Edit
+
+- `rust/codeanatomy_engine/src/executor/maintenance.rs`
+- `rust/codeanatomy_engine/src/executor/pipeline.rs`
+- `rust/codeanatomy_engine/src/executor/result.rs`
+
+### New Files to Create
+
+- `rust/codeanatomy_engine/tests/maintenance_execution_tests.rs`
+
+### Legacy Decommission/Delete Scope
+
+- Delete all stub-only success messages in `rust/codeanatomy_engine/src/executor/maintenance.rs`.
+- Delete comments that describe maintenance as “integration-agent TODO” once actual calls are wired.
+
+---
+
+## S17. Delta Scan Config Builder Unification
+
+### Goal
+
+Adopt `DeltaScanConfigBuilder`/session-aware construction everywhere and remove custom duplicated config mutation/validation pathways.
+
+### Representative Code Snippets
+
+```rust
+// rust/codeanatomy_engine/src/providers/scan_config.rs
+pub fn standard_scan_config(
+    session: &dyn datafusion::catalog::Session,
+    snapshot: &deltalake::kernel::snapshot::EagerSnapshot,
+    requires_lineage: bool,
+) -> Result<DeltaScanConfig, DeltaTableError> {
+    let base = DeltaScanConfig::new_from_session(session);
+    let mut builder = DeltaScanConfigBuilder::new()
+        .with_parquet_pushdown(base.enable_parquet_pushdown)
+        .wrap_partition_values(base.wrap_partition_values);
+
+    if requires_lineage {
+        builder = builder.with_file_column_name("__source_file");
+    }
+
+    builder.build(snapshot)
+}
+```
+
+### Files to Edit
+
+- `rust/codeanatomy_engine/src/providers/scan_config.rs`
+- `rust/codeanatomy_engine/src/providers/registration.rs`
+- `rust/codeanatomy_engine/src/providers/snapshot.rs`
+- `rust/datafusion_ext/src/delta_control_plane.rs` (shared behavior alignment)
+
+### New Files to Create
+
+- `rust/codeanatomy_engine/tests/scan_config_builder_tests.rs`
+
+### Legacy Decommission/Delete Scope
+
+- Delete direct `DeltaScanConfig::default()` field mutation in `rust/codeanatomy_engine/src/providers/scan_config.rs`.
+- Delete redundant custom lineage-name collision checks superseded by `DeltaScanConfigBuilder::build(snapshot)` validation.
 
 ---
 
@@ -906,73 +1084,74 @@ None.
 
 ### Batch D1 (after S7, S8)
 
-- Delete `rust/datafusion_python/src/codeanatomy_ext/legacy.rs` entirely — all `#[pyfunction]` implementations moved to submodules by S8, shared helpers moved to `helpers.rs` by S7.
-- Delete all `super::legacy::*` re-export patterns from `plugin_bridge.rs`, `udf_registration.rs`, `cache_tables.rs`, `session_utils.rs`.
+- Delete `rust/datafusion_python/src/codeanatomy_ext/legacy.rs` after all functions/classes/helpers are re-homed.
+- Delete all `super::legacy::*` references from `codeanatomy_ext` submodules.
 
 ### Batch D2 (after S3, S4)
 
-- Delete both `map_pushdown_mode` functions after S3 enum unification.
-- Delete triple-None `WriteOutcome` struct after S4 type safety migration.
+- Delete duplicated pushdown enum definitions and `map_pushdown_mode` functions.
+- Delete legacy nullable write-metadata fields from run/materialization boundaries.
 
-### Batch D3 (after S10, S11)
+### Batch D3 (after S9)
 
-- Delete `signature.rs` dead code after S11 audit.
-- Delete hand-written boolean expression structs from `bool_expr.rs` after S10 macro introduction.
+- Delete `rust/datafusion_python/src/sql/exceptions.rs` and associated module/export wiring.
 
----
+### Batch D4 (after S10, S11)
+
+- Delete dead `signature.rs` and its module declaration.
+- Delete hand-written bool wrapper boilerplate superseded by macros.
+
+### Batch D5 (after S15)
+
+- Delete manual plan traversal loops replaced by TreeNode traversal.
+- Delete monolithic compile phase blocks replaced by extracted phase modules.
+
+### Batch D6 (after S16)
+
+- Delete maintenance stub messages and TODO integration commentary in `executor/maintenance.rs`.
 
 ## Implementation Sequence
 
-1. **S1 — Correctness Bug Fixes** — Zero risk, zero dependencies, immediate value. Fix all error messages, `todo!()`, and duplicate registrations.
-
-2. **S2 — Compiler Helper Consolidation** — Small effort, eliminates 8 duplicated functions. No dependencies on other scopes.
-
-3. **S3 — PushdownEnforcementMode Unification** — Small effort, eliminates dual enums + 2 mapping functions. Independent of S2.
-
-4. **S4 — WriteOutcome Type Safety** — Small effort, improves type safety. Independent of S2/S3.
-
-5. **S5 — DataFusion Extensions DRY Fixes** — Small effort, eliminates `span_struct_type` dup and `snapshot_payload` collision. Independent.
-
-6. **S7 — codeanatomy_ext Helper Consolidation** — Small effort, prerequisite for S8. Must land before S8 begins.
-
-7. **S6 — RegistrySnapshot Encapsulation** — Small-medium effort. Best done before or during S8 since S8 will touch the same `legacy.rs` code.
-
-8. **S9 — Error Helper Consolidation** — Small effort. Can be done anytime.
-
-9. **S8 — legacy.rs Full Decomposition** — Large effort, depends on S7 (helpers consolidated). This is the highest-impact structural change.
-
-10. **S10 — Expression Boilerplate Reduction** — Medium effort. Independent of engine changes, can parallel S8.
-
-11. **S11 — Dead Code Cleanup** — Small effort. Best after S8 and S10 when code ownership is clearer.
-
-12. **S12 — Tracing Coverage** — Small effort, best after S8 so tracing lands on decomposed modules.
-
-13. **S13 — Overlay Sort Generics** — Small effort. Independent.
-
-14. **S14 — Test Coverage** — Can be done at any time, but best after S1 (ensures the bug fixes are verified by tests).
-
-**Parallel tracks:**
-- Track A (engine): S1 → S2 → S3 → S4 → S12 → S13
-- Track B (datafusion_ext): S5 → S6
-- Track C (python bindings): S7 → S8 → S9 → S11
-- Track D (upstream bindings): S10 → S14
+1. **S1 — Correctness Bug Fixes.** Removes known correctness defects with minimal dependency risk.
+2. **S2 — Compiler Helper Consolidation.** Establishes shared helpers before further compiler decomposition.
+3. **S3 — Pushdown Contract Unification.** Removes contract duplication and clarifies dependency direction.
+4. **S4 — WriteOutcome Boundary Redesign.** Land boundary contract changes early so downstream scopes build on final shape.
+5. **S5 — datafusion_ext DRY/Naming Fixes.** Small independent fixes with low integration risk.
+6. **S6 — Registry Contract Hardening.** Tighten contracts and correct API visibility assumptions before Python bridge migration.
+7. **S7 — Helper Consolidation.** Prerequisite for deleting `legacy.rs`.
+8. **S8 — Full legacy Decomposition.** Largest structural change; depends on S7.
+9. **S9 — Error Helper Consolidation.** Apply hard cutover for Python error helpers after module decomposition stabilizes.
+10. **S10 — Expression Macro Reduction.** Medium refactor isolated to upstream binding layer.
+11. **S11 — Upstream Robustness Cleanup.** Remove dead/panic-prone paths once macro refactors settle.
+12. **S15 — Compile Pipeline Decomposition.** Structural compiler cleanup after helper consolidation.
+13. **S16 — Maintenance Stub Replacement.** Replace stubs with real Delta maintenance operations.
+14. **S12 — Tracing Expansion.** Instrument final function ownership paths (post-S8/S15/S16).
+15. **S13 — Rulepack/Overlay DRY Cleanup.** Typed classification cleanup after prior rule/contract work.
+16. **S17 — Delta Scan Config Builder Unification.** Finalize provider configuration model using builder-native APIs.
+17. **S14 — Test Coverage Expansion.** Finalize regression suite against the completed target design.
 
 ## Implementation Checklist
 
-- [ ] S1 — Correctness Bug Fixes (5 files, ~30 minutes)
-- [ ] S2 — Compiler Helper Consolidation (7 files + 1 new, ~2 hours)
-- [ ] S3 — PushdownEnforcementMode Unification (4 files, ~1 hour)
-- [ ] S4 — WriteOutcome Type Safety (1 file + consumers, ~1 hour)
-- [ ] S5 — DataFusion Extensions DRY Fixes (4 files, ~1 hour)
-- [ ] S6 — RegistrySnapshot Encapsulation (4 files, ~2 hours)
-- [ ] S7 — codeanatomy_ext Helper Consolidation (5 files, ~1 hour)
-- [ ] S8 — legacy.rs Full Decomposition (10+ files, ~6 hours)
-- [ ] S9 — Error Helper Consolidation (3 files, ~1 hour)
-- [ ] S10 — Expression Boilerplate Reduction (2 files, ~4 hours)
-- [ ] S11 — Dead Code Cleanup (4 files, ~1 hour)
-- [ ] S12 — Tracing Coverage (5+ files, ~2 hours)
-- [ ] S13 — Overlay Sort Generics (2 files, ~2 hours)
-- [ ] S14 — Upstream Expression Test Coverage (2 files, ~3 hours)
-- [ ] D1 — Delete legacy.rs (after S7, S8)
-- [ ] D2 — Delete mapping functions and old WriteOutcome (after S3, S4)
-- [ ] D3 — Delete dead code and old bool_expr structs (after S10, S11)
+- [ ] S1 — Correctness Bug Fixes
+- [ ] S2 — Compiler Helper Consolidation
+- [ ] S3 — PushdownEnforcementMode Canonical Contract
+- [ ] S4 — WriteOutcome Boundary Contract Redesign
+- [ ] S5 — DataFusion Extensions DRY and Naming Disambiguation
+- [ ] S6 — Registry Contract Hardening and API Surface Correction
+- [ ] S7 — codeanatomy_ext Helper Consolidation
+- [ ] S8 — legacy.rs Full Decomposition and Ownership Migration
+- [ ] S9 — Error Helper Consolidation (Including `py_value_err`)
+- [ ] S10 — Expression Boilerplate Reduction Across Bool and Logical Wrappers
+- [ ] S11 — Upstream Robustness and Completeness Cleanup
+- [ ] S12 — Tracing and Observability Expansion
+- [ ] S13 — Rule Overlay and Rulepack DRY Cleanup Using Existing `RuleClass`
+- [ ] S14 — Upstream Test Coverage Expansion
+- [ ] S15 — Compilation Pipeline Decomposition and TreeNode Traversal Adoption
+- [ ] S16 — Engine Delta Maintenance Stub Replacement
+- [ ] S17 — Delta Scan Config Builder Unification
+- [ ] D1 — Delete `legacy.rs` and all `super::legacy::*` forwarding
+- [ ] D2 — Delete duplicated pushdown contracts and legacy write-metadata fields
+- [ ] D3 — Delete `sql/exceptions.rs`
+- [ ] D4 — Delete dead signature module and manual bool wrapper boilerplate
+- [ ] D5 — Delete manual plan traversal and monolithic compile blocks
+- [ ] D6 — Delete maintenance stubs

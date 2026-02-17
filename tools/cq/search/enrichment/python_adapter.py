@@ -6,7 +6,11 @@ from collections.abc import Mapping
 
 from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
-from tools.cq.search.enrichment.core import string_or_none
+from tools.cq.search.enrichment.core import (
+    accumulate_runtime_flags,
+    build_tree_sitter_diagnostic_rows,
+    string_or_none,
+)
 from tools.cq.search.pipeline.enrichment_contracts import (
     IncrementalEnrichmentV1,
     PythonEnrichmentV1,
@@ -65,7 +69,7 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
                 lang_bucket=lang_bucket,
                 stage_timings=meta.get("stage_timings_ms"),
             )
-        _accumulate_runtime_flags(
+        accumulate_runtime_flags(
             lang_bucket=lang_bucket,
             runtime_payload=payload.get("query_runtime"),
         )
@@ -80,7 +84,7 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
         """
         _ = self
         rows: list[dict[str, object]] = []
-        rows.extend(_tree_sitter_diagnostics(payload.get("cst_diagnostics")))
+        rows.extend(build_tree_sitter_diagnostic_rows(payload.get("cst_diagnostics")))
         rows.extend(_parse_quality_diagnostics(payload.get("parse_quality")))
         rows.extend(_degrade_reason_diagnostics(payload))
         return rows[:16]
@@ -111,33 +115,6 @@ def _accumulate_stage_timings(*, lang_bucket: dict[str, object], stage_timings: 
         base = timings_bucket.get(stage)
         base_ms = float(base) if isinstance(base, (int, float)) else 0.0
         timings_bucket[stage] = base_ms + float(stage_ms)
-
-
-def _accumulate_runtime_flags(*, lang_bucket: dict[str, object], runtime_payload: object) -> None:
-    runtime_bucket = lang_bucket.get("query_runtime")
-    if not isinstance(runtime_payload, dict) or not isinstance(runtime_bucket, dict):
-        return
-    if bool(runtime_payload.get("did_exceed_match_limit")):
-        runtime_bucket["did_exceed_match_limit"] = (
-            int(runtime_bucket.get("did_exceed_match_limit", 0)) + 1
-        )
-    if bool(runtime_payload.get("cancelled")):
-        runtime_bucket["cancelled"] = int(runtime_bucket.get("cancelled", 0)) + 1
-
-
-def _tree_sitter_diagnostics(rows: object) -> list[dict[str, object]]:
-    if not isinstance(rows, list):
-        return []
-    return [
-        {
-            "kind": string_or_none(item.get("kind")) or "tree_sitter",
-            "message": string_or_none(item.get("message")) or "tree-sitter diagnostic",
-            "line": item.get("start_line"),
-            "col": item.get("start_col"),
-        }
-        for item in rows[:8]
-        if isinstance(item, Mapping)
-    ]
 
 
 def _parse_quality_diagnostics(parse_quality: object) -> list[dict[str, object]]:

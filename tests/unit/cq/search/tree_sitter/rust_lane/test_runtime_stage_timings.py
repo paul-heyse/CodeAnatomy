@@ -1,0 +1,53 @@
+"""Tests for Rust lane stage-timing parity fields."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from tools.cq.search.tree_sitter.rust_lane import runtime_core
+
+
+def test_rust_pipeline_emits_stage_timings_and_status(monkeypatch) -> None:
+    """Rust pipeline should emit Python-parity stage timing/status fields."""
+    monkeypatch.setattr(
+        runtime_core,
+        "_parse_with_session",
+        lambda source, *, cache_key, parse_session=None: (SimpleNamespace(root_node=object()), b"x", ()),
+    )
+    monkeypatch.setattr(
+        runtime_core,
+        "_collect_payload_with_timings",
+        lambda request: {
+            "language": "rust",
+            "enrichment_status": "applied",
+            "enrichment_sources": [],
+            "stage_timings_ms": {"query_pack": 1.0, "payload_build": 1.0},
+            "stage_status": {"query_pack": "applied", "payload_build": "applied"},
+        },
+    )
+
+    request = runtime_core._RustPipelineRequestV1(
+        source="fn target() {}",
+        cache_key="k",
+        max_scope_depth=4,
+        query_budget_ms=None,
+        resolve_node=lambda _root: object(),
+        byte_span_for_node=lambda _node: (0, 1),
+        error_prefix="test",
+    )
+
+    payload = runtime_core._run_rust_enrichment_pipeline(request)
+
+    assert isinstance(payload, dict)
+    timings = payload.get("stage_timings_ms")
+    status = payload.get("stage_status")
+    assert isinstance(timings, dict)
+    assert isinstance(status, dict)
+    assert "ast_grep" in timings
+    assert "tree_sitter" in timings
+    assert "query_pack" in timings
+    assert "payload_build" in timings
+    assert "attachment" in timings
+    assert "total" in timings
+    assert status.get("ast_grep") == "skipped"
+    assert status.get("tree_sitter") == "applied"

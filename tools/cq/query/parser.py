@@ -15,13 +15,14 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from tools.cq.core.types import QueryLanguageScope
 from tools.cq.query.ir import (
     CompositeOp,
     CompositeRule,
     DecoratorFilter,
+    EntityType,
     Expander,
     JoinConstraint,
     JoinTarget,
@@ -32,11 +33,12 @@ from tools.cq.query.ir import (
     RelationalConstraint,
     Scope,
     ScopeFilter,
+    StrictnessMode,
 )
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, parse_query_language_scope
 
 if TYPE_CHECKING:
-    from tools.cq.query.ir import EntityType, ExpanderKind, FieldType, RelationalOp, StrictnessMode
+    from tools.cq.query.ir import ExpanderKind, FieldType, RelationalOp
 
 JoinType = Literal["used_by", "defines", "raises", "exports"]
 
@@ -54,6 +56,8 @@ _MISSING_PATTERN_MESSAGE = "Pattern query must specify 'pattern'"
 _INVALID_COMPOSITE_MESSAGE = "'not' operator requires exactly one pattern"
 _COMPOSITE_OPS: tuple[CompositeOp, ...] = ("all", "any", "not")
 _QUERY_TOKEN_PATTERN = re.compile(r"([\w.]+|\$+\w+)=(?:'([^']+)'|\"([^\"]+)\"|([^\s]+))")
+_VALID_ENTITIES: tuple[str, ...] = tuple(get_args(EntityType))
+_VALID_STRICTNESS_MODES: tuple[str, ...] = tuple(get_args(StrictnessMode))
 
 
 def _invalid_entity_message(entity_str: str, valid: tuple[str, ...]) -> str:
@@ -423,15 +427,7 @@ def _parse_entity(entity_str: str) -> EntityType:
     Raises:
         QueryParseError: If the entity token is unsupported.
     """
-    valid_entities: tuple[EntityType, ...] = (
-        "function",
-        "class",
-        "method",
-        "module",
-        "callsite",
-        "import",
-        "decorator",
-    )
+    valid_entities = _VALID_ENTITIES
     valid_entity_set = set(valid_entities)
     if entity_str not in valid_entity_set:
         msg = _invalid_entity_message(entity_str, valid_entities)
@@ -451,7 +447,7 @@ def _parse_strictness(strictness_str: str) -> StrictnessMode:
     Raises:
         QueryParseError: If the strictness token is unsupported.
     """
-    valid_modes: tuple[StrictnessMode, ...] = ("cst", "smart", "ast", "relaxed", "signature")
+    valid_modes = _VALID_STRICTNESS_MODES
     valid_mode_set = set(valid_modes)
     if strictness_str not in valid_mode_set:
         msg = _invalid_strictness_message(strictness_str, valid_modes)

@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 import msgspec
 
 from tools.cq import SCHEMA_VERSION
+from tools.cq.core.contracts_constraints import NonEmptyStr, NonNegativeFloat
 from tools.cq.core.id import stable_digest24
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.summary_contract import SearchSummaryV1, SummaryV1, summary_for_macro
@@ -59,7 +60,7 @@ class ScoreDetails(msgspec.Struct, omit_defaults=True):
     evidence_kind: str | None = None
 
 
-class DetailPayload(msgspec.Struct, omit_defaults=True):
+class DetailPayload(msgspec.Struct, omit_defaults=True, frozen=True):
     """Structured details payload for findings."""
 
     kind: str | None = None
@@ -127,16 +128,19 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
             raise KeyError(key)
         return value
 
-    def __setitem__(self, key: str, value: object) -> None:
-        """Set a value for a key in the detail payload."""
+    def with_entry(self, key: str, value: object) -> DetailPayload:
+        """Return a new detail payload with one key updated."""
         if key == "kind":
-            self.kind = None if value is None else str(value)
-            return
+            return msgspec.structs.replace(self, kind=None if value is None else str(value))
         if key in _SCORE_FIELDS:
             base = self.score or ScoreDetails()
-            self.score = msgspec.structs.replace(base, **{key: value})
-            return
-        self.data[key] = value
+            return msgspec.structs.replace(
+                self,
+                score=msgspec.structs.replace(base, **{key: value}),
+            )
+        data = dict(self.data)
+        data[key] = value
+        return msgspec.structs.replace(self, data=data)
 
     def __contains__(self, key: object) -> bool:
         """Return whether the key exists in the detail payload.
@@ -260,7 +264,7 @@ class Finding(msgspec.Struct):
         Identifier taxonomy label for downstream consumers.
     """
 
-    category: str
+    category: NonEmptyStr
     message: str
     anchor: Anchor | None = None
     severity: Literal["info", "warning", "error"] = "info"
@@ -338,13 +342,13 @@ class RunMeta(msgspec.Struct):
     macro: str
     argv: list[str]
     root: str
-    started_ms: float
-    elapsed_ms: float
+    started_ms: NonNegativeFloat
+    elapsed_ms: NonNegativeFloat
     toolchain: dict[str, str | None] = msgspec.field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
     run_id: str | None = None
     run_uuid_version: int | None = None
-    run_created_ms: float | None = None
+    run_created_ms: NonNegativeFloat | None = None
 
 
 class CqResult(msgspec.Struct):

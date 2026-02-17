@@ -12,6 +12,7 @@ from tools.cq.cli_app.app import (
     ConfigOptionArgs,
     GlobalOptionArgs,
     _build_launch_context,
+    _configure_app,
     app,
 )
 
@@ -189,9 +190,9 @@ class TestConfigChain:
     @staticmethod
     def test_build_launch_context_config_enabled() -> None:
         """Test launch context config chain with config files enabled."""
+        _configure_app(ConfigOptionArgs())
         launch = _build_launch_context(
             argv=["calls", "foo"],
-            config_opts=ConfigOptionArgs(),
             global_opts=GlobalOptionArgs(),
         )
         assert launch.output_format is not None
@@ -201,9 +202,9 @@ class TestConfigChain:
     @staticmethod
     def test_build_launch_context_no_config_keeps_env() -> None:
         """Test launch context config chain with --no-config."""
+        _configure_app(ConfigOptionArgs(use_config=False))
         launch = _build_launch_context(
             argv=["calls", "foo"],
-            config_opts=ConfigOptionArgs(use_config=False),
             global_opts=GlobalOptionArgs(),
         )
         assert launch.output_format is not None

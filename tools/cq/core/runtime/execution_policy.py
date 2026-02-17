@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.cache.defaults import (
-    DEFAULT_CACHE_CULL_LIMIT,
-    DEFAULT_CACHE_EVICTION_POLICY,
-    DEFAULT_CACHE_SHARDS,
-    DEFAULT_CACHE_SIZE_LIMIT_BYTES,
-    DEFAULT_CACHE_TIMEOUT_SECONDS,
-    DEFAULT_CACHE_TTL_SECONDS,
+from tools.cq.core.cache.policy import (
+    CqCachePolicyV1,
+    default_cache_policy,
+    resolve_namespace_ttl_from_env,
 )
-from tools.cq.core.contracts_constraints import NonNegativeInt, PositiveFloat, PositiveInt
+from tools.cq.core.contracts_constraints import PositiveInt
 from tools.cq.core.runtime.env_namespace import (
     NamespacePatternV1,
     env_bool,
@@ -55,29 +53,12 @@ class SemanticRuntimePolicy(CqSettingsStruct, frozen=True):
     max_targets_entity: PositiveInt = 3
 
 
-class CacheRuntimePolicy(CqSettingsStruct, frozen=True):
-    """Cache policy for CQ runtime adapters."""
-
-    enabled: bool = True
-    ttl_seconds: PositiveInt = DEFAULT_CACHE_TTL_SECONDS
-    shards: PositiveInt = DEFAULT_CACHE_SHARDS
-    timeout_seconds: PositiveFloat = DEFAULT_CACHE_TIMEOUT_SECONDS
-    evict_run_tag_on_exit: bool = False
-    namespace_ttl_seconds: dict[str, int] = msgspec.field(default_factory=dict)
-    namespace_enabled: dict[str, bool] = msgspec.field(default_factory=dict)
-    namespace_ephemeral: dict[str, bool] = msgspec.field(default_factory=dict)
-    size_limit_bytes: PositiveInt = DEFAULT_CACHE_SIZE_LIMIT_BYTES
-    cull_limit: NonNegativeInt = DEFAULT_CACHE_CULL_LIMIT
-    eviction_policy: str = DEFAULT_CACHE_EVICTION_POLICY
-    statistics_enabled: bool = False
-
-
 class RuntimeExecutionPolicy(CqSettingsStruct, frozen=True):
     """Top-level runtime policy envelope."""
 
     parallelism: ParallelismPolicy
     semantic: SemanticRuntimePolicy = SemanticRuntimePolicy()
-    cache: CacheRuntimePolicy = CacheRuntimePolicy()
+    cache: CqCachePolicyV1 = CqCachePolicyV1()
 
 
 def _runtime_env(name: str) -> str | None:
@@ -93,24 +74,6 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
     except ValueError:
         return default
     return max(minimum, value)
-
-
-def _env_namespace_ttls() -> dict[str, int]:
-    parsed = parse_namespace_int_overrides(
-        env=os.environ,
-        patterns=(
-            NamespacePatternV1(
-                prefix=f"{_ENV_PREFIX}CACHE_NAMESPACE_",
-                suffix="_TTL_SECONDS",
-            ),
-            NamespacePatternV1(
-                prefix=f"{_ENV_PREFIX}CACHE_TTL_",
-                suffix="_SECONDS",
-            ),
-        ),
-        minimum=1,
-    )
-    return {str(key): int(value) for key, value in parsed.values.items() if isinstance(value, int)}
 
 
 def _env_namespace_enabled() -> dict[str, bool]:
@@ -168,6 +131,26 @@ def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
         default=_DEFAULT_SEMANTIC_TIMEOUT_MS,
         minimum=100,
     )
+    base_cache = default_cache_policy(root=Path.cwd())
+    runtime_namespace_ttl = parse_namespace_int_overrides(
+        env=os.environ,
+        patterns=(
+            NamespacePatternV1(
+                prefix=f"{_ENV_PREFIX}CACHE_NAMESPACE_",
+                suffix="_TTL_SECONDS",
+            ),
+            NamespacePatternV1(
+                prefix=f"{_ENV_PREFIX}CACHE_TTL_",
+                suffix="_SECONDS",
+            ),
+        ),
+        minimum=1,
+    )
+    namespace_ttl_defaults = dict(base_cache.namespace_ttl_seconds)
+    for key, value in runtime_namespace_ttl.values.items():
+        if isinstance(value, int):
+            namespace_ttl_defaults[str(key)] = int(value)
+    namespace_ttl_seconds = resolve_namespace_ttl_from_env(defaults=namespace_ttl_defaults)
 
     return RuntimeExecutionPolicy(
         parallelism=ParallelismPolicy(
@@ -202,45 +185,54 @@ def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
                 _runtime_env("SEMANTIC_TARGETS_ENTITY"), default=3, minimum=1
             ),
         ),
-        cache=CacheRuntimePolicy(
-            enabled=env_bool(_runtime_env("CACHE_ENABLED"), default=True),
+        cache=msgspec.structs.replace(
+            base_cache,
+            enabled=env_bool(_runtime_env("CACHE_ENABLED"), default=base_cache.enabled),
             ttl_seconds=env_int(
                 _runtime_env("CACHE_TTL_SECONDS"),
-                default=DEFAULT_CACHE_TTL_SECONDS,
+                default=base_cache.ttl_seconds,
                 minimum=1,
             ),
-            shards=env_int(_runtime_env("CACHE_SHARDS"), default=8, minimum=1),
-            timeout_seconds=_env_float("CACHE_TIMEOUT_SECONDS", 0.05),
+            shards=env_int(_runtime_env("CACHE_SHARDS"), default=base_cache.shards, minimum=1),
+            timeout_seconds=_env_float(
+                "CACHE_TIMEOUT_SECONDS",
+                float(base_cache.timeout_seconds),
+                minimum=0.001,
+            ),
             evict_run_tag_on_exit=env_bool(
                 _runtime_env("CACHE_EVICT_RUN_TAG_ON_EXIT"),
-                default=False,
+                default=base_cache.evict_run_tag_on_exit,
             ),
-            namespace_ttl_seconds=_env_namespace_ttls(),
+            namespace_ttl_seconds=namespace_ttl_seconds,
             namespace_enabled=_env_namespace_enabled(),
             namespace_ephemeral=_env_namespace_ephemeral(),
             size_limit_bytes=env_int(
                 _runtime_env("CACHE_SIZE_LIMIT_BYTES"),
-                default=DEFAULT_CACHE_SIZE_LIMIT_BYTES,
+                default=base_cache.size_limit_bytes,
                 minimum=1,
             ),
             cull_limit=env_int(
                 _runtime_env("CACHE_CULL_LIMIT"),
-                default=DEFAULT_CACHE_CULL_LIMIT,
+                default=base_cache.cull_limit,
                 minimum=0,
             ),
-            eviction_policy=(
-                _runtime_env("CACHE_EVICTION_POLICY") or DEFAULT_CACHE_EVICTION_POLICY
-            ),
+            eviction_policy=_runtime_env("CACHE_EVICTION_POLICY") or base_cache.eviction_policy,
             statistics_enabled=(
-                env_bool(_runtime_env("CACHE_STATISTICS_ENABLED"), default=False)
-                or env_bool(_runtime_env("CACHE_STATS_ENABLED"), default=False)
+                env_bool(
+                    _runtime_env("CACHE_STATISTICS_ENABLED"),
+                    default=base_cache.statistics_enabled,
+                )
+                or env_bool(
+                    _runtime_env("CACHE_STATS_ENABLED"),
+                    default=base_cache.statistics_enabled,
+                )
             ),
         ),
     )
 
 
 __all__ = [
-    "CacheRuntimePolicy",
+    "CqCachePolicyV1",
     "ParallelismPolicy",
     "RuntimeExecutionPolicy",
     "SemanticRuntimePolicy",

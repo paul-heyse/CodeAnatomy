@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import msgspec
-from tools.cq.core.summary_contracts import SummaryEnvelopeV1
+from tools.cq.core.summary_contracts import SummaryOutputEnvelopeV1
 
 
 def test_summary_envelope_schema_smoke() -> None:
     """Test summary envelope schema smoke."""
-    schema = msgspec.json.schema(SummaryEnvelopeV1)
+    schema = msgspec.json.schema(SummaryOutputEnvelopeV1)
     assert isinstance(schema, dict)
     if schema.get("type") is not None:
         assert schema.get("type") == "object"

@@ -6,7 +6,11 @@ from collections.abc import Mapping
 
 from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
-from tools.cq.search.enrichment.core import string_or_none
+from tools.cq.search.enrichment.core import (
+    accumulate_runtime_flags,
+    build_tree_sitter_diagnostic_rows,
+    string_or_none,
+)
 from tools.cq.search.pipeline.enrichment_contracts import (
     RustTreeSitterEnrichmentV1,
     rust_enrichment_payload,
@@ -46,7 +50,7 @@ class RustEnrichmentAdapter(LanguageEnrichmentPort):
                 tags
             )
 
-        _accumulate_runtime_flags(
+        accumulate_runtime_flags(
             lang_bucket=lang_bucket,
             runtime_payload=payload.get("query_runtime"),
         )
@@ -73,18 +77,7 @@ class RustEnrichmentAdapter(LanguageEnrichmentPort):
         if isinstance(degrade_events, list):
             rows.extend(dict(item) for item in degrade_events[:16] if isinstance(item, Mapping))
 
-        tree_sitter_rows = payload.get("cst_diagnostics")
-        if isinstance(tree_sitter_rows, list):
-            rows.extend(
-                {
-                    "kind": string_or_none(item.get("kind")) or "tree_sitter",
-                    "message": string_or_none(item.get("message")) or "tree-sitter diagnostic",
-                    "line": item.get("start_line"),
-                    "col": item.get("start_col"),
-                }
-                for item in tree_sitter_rows[:8]
-                if isinstance(item, Mapping)
-            )
+        rows.extend(build_tree_sitter_diagnostic_rows(payload.get("cst_diagnostics")))
         if rows:
             return rows[:16]
         reason = string_or_none(payload.get("degrade_reason"))
@@ -95,18 +88,6 @@ class RustEnrichmentAdapter(LanguageEnrichmentPort):
 
 def _counter(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _accumulate_runtime_flags(*, lang_bucket: dict[str, object], runtime_payload: object) -> None:
-    runtime_bucket = lang_bucket.get("query_runtime")
-    if not isinstance(runtime_payload, dict) or not isinstance(runtime_bucket, dict):
-        return
-    if bool(runtime_payload.get("did_exceed_match_limit")):
-        runtime_bucket["did_exceed_match_limit"] = (
-            _counter(runtime_bucket.get("did_exceed_match_limit")) + 1
-        )
-    if bool(runtime_payload.get("cancelled")):
-        runtime_bucket["cancelled"] = _counter(runtime_bucket.get("cancelled")) + 1
 
 
 def _accumulate_bundle_drift(*, lang_bucket: dict[str, object], bundle: object) -> None:

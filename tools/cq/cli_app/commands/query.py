@@ -13,8 +13,8 @@ from cyclopts import Parameter
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
-from tools.cq.cli_app.options import QueryOptions, options_from_params
 from tools.cq.cli_app.params import QueryParams
+from tools.cq.cli_app.schema_projection import query_options_from_projected_params
 from tools.cq.core.result_factory import build_error_result
 from tools.cq.orchestration.request_factory import (
     RequestContextV1,
@@ -41,14 +41,14 @@ def q(
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.core.schema import ms
-    from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
+    from tools.cq.query.executor_runtime import ExecutePlanRequestV1, execute_plan
     from tools.cq.query.parser import QueryParseError, has_query_tokens, parse_query
     from tools.cq.query.planner import compile_query
 
     ctx = require_context(ctx)
     if opts is None:
         opts = QueryParams()
-    options = options_from_params(opts, type_=QueryOptions)
+    options = query_options_from_projected_params(opts)
     has_tokens = has_query_tokens(query_string)
 
     # Parse the query string first; fallback only for plain searches.

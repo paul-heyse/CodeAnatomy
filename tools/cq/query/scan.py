@@ -5,32 +5,34 @@ Builds scan contexts from ast-grep records with interval indexing.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.query.sg_parser import filter_records_by_kind
 from tools.cq.utils.interval_index import FileIntervalIndex, IntervalIndex
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ScanContext:
     """Bundled context from ast-grep scan for query processing."""
 
-    def_records: list[SgRecord]
-    call_records: list[SgRecord]
+    def_records: tuple[SgRecord, ...]
+    call_records: tuple[SgRecord, ...]
     interval_index: IntervalIndex[SgRecord]
     file_index: FileIntervalIndex
-    calls_by_def: dict[SgRecord, list[SgRecord]]
-    all_records: list[SgRecord]
+    calls_by_def: Mapping[SgRecord, tuple[SgRecord, ...]]
+    all_records: tuple[SgRecord, ...]
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class EntityCandidates:
     """Candidate record buckets for entity queries."""
 
-    def_records: list[SgRecord]
-    import_records: list[SgRecord]
-    call_records: list[SgRecord]
+    def_records: tuple[SgRecord, ...]
+    import_records: tuple[SgRecord, ...]
+    call_records: tuple[SgRecord, ...]
 
 
 def build_scan_context(records: list[SgRecord]) -> ScanContext:
@@ -50,14 +52,14 @@ def build_scan_context(records: list[SgRecord]) -> ScanContext:
     interval_index = IntervalIndex.from_records(def_records)
     file_index = FileIntervalIndex.from_records(def_records)
     call_records = filter_records_by_kind(records, "call")
-    calls_by_def = assign_calls_to_defs(interval_index, call_records)
+    calls_by_def = MappingProxyType(assign_calls_to_defs(interval_index, call_records))
     return ScanContext(
-        def_records=def_records,
-        call_records=call_records,
+        def_records=tuple(def_records),
+        call_records=tuple(call_records),
         interval_index=interval_index,
         file_index=file_index,
         calls_by_def=calls_by_def,
-        all_records=records,
+        all_records=tuple(records),
     )
 
 
@@ -78,7 +80,7 @@ def build_entity_candidates(scan: ScanContext, records: list[SgRecord]) -> Entit
     """
     return EntityCandidates(
         def_records=scan.def_records,
-        import_records=filter_records_by_kind(records, "import"),
+        import_records=tuple(filter_records_by_kind(records, "import")),
         call_records=scan.call_records,
     )
 
@@ -86,7 +88,7 @@ def build_entity_candidates(scan: ScanContext, records: list[SgRecord]) -> Entit
 def assign_calls_to_defs(
     index: IntervalIndex[SgRecord],
     calls: list[SgRecord],
-) -> dict[SgRecord, list[SgRecord]]:
+) -> dict[SgRecord, tuple[SgRecord, ...]]:
     """Assign call records to their containing definitions.
 
     Parameters
@@ -98,7 +100,7 @@ def assign_calls_to_defs(
 
     Returns:
     -------
-    dict[SgRecord, list[SgRecord]]
+    dict[SgRecord, tuple[SgRecord, ...]]
         Mapping from definition to calls within it
     """
     from tools.cq.astgrep.sgpy_scanner import group_records_by_file
@@ -132,7 +134,7 @@ def assign_calls_to_defs(
                     result[containing_def] = []
                 result[containing_def].append(call)
 
-    return result
+    return {record: tuple(call_records) for record, call_records in result.items()}
 
 
 __all__ = [

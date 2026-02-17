@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.cq.core.enrichment_mode import (
+    IncrementalEnrichmentModeV1,
+    parse_incremental_enrichment_mode,
+)
 from tools.cq.core.locations import line_relative_byte_range_to_absolute
 from tools.cq.core.types import QueryLanguage
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, is_python_language, is_rust_language
@@ -34,11 +38,9 @@ from tools.cq.search.pipeline.context_window import (
     extract_search_context_snippet,
 )
 from tools.cq.search.pipeline.enrichment_contracts import (
-    IncrementalEnrichmentModeV1,
     IncrementalEnrichmentV1,
     PythonEnrichmentV1,
     RustTreeSitterEnrichmentV1,
-    parse_incremental_enrichment_mode,
     rust_enrichment_payload,
     wrap_incremental_enrichment,
     wrap_python_enrichment,

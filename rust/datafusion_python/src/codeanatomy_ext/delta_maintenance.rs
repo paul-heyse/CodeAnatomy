@@ -16,16 +16,16 @@ use crate::delta_maintenance::{
     DeltaOptimizeCompactRequest, DeltaRestoreRequest, DeltaSetPropertiesRequest,
     DeltaVacuumRequest,
 };
-use crate::delta_protocol::TableVersion;
 use datafusion_ext::{DeltaCommitOptions, DeltaFeatureGate};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use rmp_serde::from_slice;
 use serde::Deserialize;
-use tokio::runtime::Runtime;
 use tracing::instrument;
 
-use super::helpers::extract_session_ctx;
+use super::helpers::{
+    extract_session_ctx, maintenance_report_to_pydict, parse_msgpack_payload, runtime,
+    table_version_from_options,
+};
 
 #[derive(Debug, Deserialize)]
 struct DeltaOptimizeRequestPayload {
@@ -121,24 +121,6 @@ struct DeltaCheckpointRequestPayload {
     gate: Option<DeltaFeatureGate>,
 }
 
-fn parse_msgpack_payload<T: for<'de> Deserialize<'de>>(
-    payload: &[u8],
-    label: &str,
-) -> PyResult<T> {
-    from_slice(payload)
-        .map_err(|err| PyValueError::new_err(format!("Invalid {label} payload: {err}")))
-}
-
-fn runtime() -> PyResult<Runtime> {
-    Runtime::new()
-        .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))
-}
-
-fn table_version_from_options(version: Option<i64>, timestamp: Option<String>) -> PyResult<TableVersion> {
-    TableVersion::from_options(version, timestamp)
-        .map_err(|err| PyValueError::new_err(format!("Invalid Delta table version options: {err}")))
-}
-
 #[pyfunction]
 #[instrument(skip(py, ctx, request_msgpack))]
 pub(crate) fn delta_optimize_compact_request_payload(
@@ -168,7 +150,7 @@ pub(crate) fn delta_optimize_compact_request_payload(
             commit_options: request.commit_options,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta optimize failed: {err}")))?;
-    super::legacy::maintenance_report_to_pydict(py, &report)
+    maintenance_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -196,7 +178,7 @@ pub(crate) fn delta_vacuum_request_payload(
             commit_options: request.commit_options,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta vacuum failed: {err}")))?;
-    super::legacy::maintenance_report_to_pydict(py, &report)
+    maintenance_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -224,7 +206,7 @@ pub(crate) fn delta_restore_request_payload(
             commit_options: request.commit_options,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta restore failed: {err}")))?;
-    super::legacy::maintenance_report_to_pydict(py, &report)
+    maintenance_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -254,7 +236,7 @@ pub(crate) fn delta_set_properties_request_payload(
             commit_options: request.commit_options,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta set-properties failed: {err}")))?;
-    super::legacy::maintenance_report_to_pydict(py, &report)
+    maintenance_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -285,7 +267,7 @@ pub(crate) fn delta_add_features_request_payload(
             commit_options: request.commit_options,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta add-features failed: {err}")))?;
-    super::legacy::maintenance_report_to_pydict(py, &report)
+    maintenance_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -315,7 +297,7 @@ pub(crate) fn delta_add_constraints_request_payload(
             commit_options: request.commit_options,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta add-constraints failed: {err}")))?;
-    super::legacy::maintenance_report_to_pydict(py, &report)
+    maintenance_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -346,7 +328,7 @@ pub(crate) fn delta_drop_constraints_request_payload(
             commit_options: request.commit_options,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta drop-constraints failed: {err}")))?;
-    super::legacy::maintenance_report_to_pydict(py, &report)
+    maintenance_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -369,7 +351,7 @@ pub(crate) fn delta_create_checkpoint_request_payload(
             request.gate,
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta checkpoint failed: {err}")))?;
-    super::legacy::maintenance_report_to_pydict(py, &report)
+    maintenance_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
@@ -392,7 +374,7 @@ pub(crate) fn delta_cleanup_metadata_request_payload(
             request.gate,
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta metadata cleanup failed: {err}")))?;
-    super::legacy::maintenance_report_to_pydict(py, &report)
+    maintenance_report_to_pydict(py, &report)
 }
 
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {

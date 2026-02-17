@@ -16,7 +16,7 @@ from tools.cq.core.types import QueryLanguage
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
 from tools.cq.query.batch_spans import collect_span_filters
 from tools.cq.query.execution_requests import EntityQueryRequest, PatternQueryRequest
-from tools.cq.query.executor import (
+from tools.cq.query.executor_runtime import (
     execute_entity_query_from_records,
     execute_pattern_query_with_files,
 )

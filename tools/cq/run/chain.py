@@ -22,6 +22,7 @@ from tools.cq.run.spec import (
     SideEffectsStep,
     SigImpactStep,
 )
+from tools.cq.search._shared.types import QueryMode
 
 
 @dataclass(frozen=True)
@@ -131,7 +132,7 @@ def _build_search_step(args: tuple[object, ...], opts: object | None) -> RunStep
     if regex_enabled and literal_enabled:
         msg = "search step cannot set both regex and literal"
         raise RuntimeError(msg)
-    mode = "regex" if regex_enabled else "literal" if literal_enabled else None
+    mode = QueryMode.REGEX if regex_enabled else QueryMode.LITERAL if literal_enabled else None
     return SearchStep(
         query=_require_str_arg(args, 0, "query"),
         mode=mode,

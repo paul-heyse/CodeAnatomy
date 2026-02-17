@@ -3,8 +3,9 @@
 //! Ensures the view dependency graph is well-formed before attempting compilation.
 
 use datafusion_common::{DataFusionError, Result};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use crate::compiler::plan_utils::view_index;
 use crate::providers::registration::TableRegistration;
 use crate::spec::execution_spec::SemanticExecutionSpec;
 use crate::spec::relations::{ViewDefinition, ViewTransform};
@@ -96,17 +97,10 @@ pub fn validate_graph(spec: &SemanticExecutionSpec) -> Result<()> {
     Ok(())
 }
 
-fn view_index(spec: &SemanticExecutionSpec) -> BTreeMap<&str, &ViewDefinition> {
-    spec.view_definitions
-        .iter()
-        .map(|view| (view.name.as_str(), view))
-        .collect()
-}
-
 fn resolve_inputs_for_source(
     source: &str,
     input_names: &HashSet<&str>,
-    views: &BTreeMap<&str, &ViewDefinition>,
+    views: &HashMap<&str, &ViewDefinition>,
     visiting: &mut HashSet<String>,
     out: &mut BTreeSet<String>,
 ) {

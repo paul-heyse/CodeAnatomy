@@ -442,11 +442,13 @@ def summary_from_mapping(
         explicit=value.get("summary_variant"),
     )
     summary = summary_for_variant(variant)
-    apply_summary_mapping(summary, value)
-    summary.summary_variant = variant
-    summary.python_semantic_telemetry = coerce_semantic_telemetry(summary.python_semantic_telemetry)
-    summary.rust_semantic_telemetry = coerce_semantic_telemetry(summary.rust_semantic_telemetry)
-    return summary
+    updated = apply_summary_mapping(summary, value)
+    return msgspec.structs.replace(
+        updated,
+        summary_variant=variant,
+        python_semantic_telemetry=coerce_semantic_telemetry(updated.python_semantic_telemetry),
+        rust_semantic_telemetry=coerce_semantic_telemetry(updated.rust_semantic_telemetry),
+    )
 
 
 def as_search_summary(summary: SummaryV1) -> SearchSummaryV1:
@@ -509,17 +511,21 @@ def as_neighborhood_summary(summary: SummaryV1) -> NeighborhoodSummaryV1:
     raise TypeError(msg)
 
 
-def apply_summary_mapping(
-    summary: SummaryEnvelopeV1,
+def apply_summary_mapping[SummaryEnvelopeT: SummaryEnvelopeV1](
+    summary: SummaryEnvelopeT,
     mapping: Mapping[str, object] | Iterable[tuple[str, object]],
-) -> None:
+) -> SummaryEnvelopeT:
     """Apply a mapping payload onto a typed ``SummaryEnvelopeV1`` instance.
 
     Raises:
         TypeError: If any update key is not a string.
         KeyError: If an update key is not part of the schema.
+
+    Returns:
+        SummaryEnvelopeT: Copy of ``summary`` with updates applied.
     """
     items = mapping.items() if isinstance(mapping, Mapping) else mapping
+    updates: dict[str, object] = {}
     for key_obj, value in items:
         if not isinstance(key_obj, str):
             msg = "Summary update keys must be strings."
@@ -527,7 +533,8 @@ def apply_summary_mapping(
         if key_obj not in summary.__struct_fields__:
             msg = f"Unknown summary key: {key_obj}"
             raise KeyError(msg)
-        setattr(summary, key_obj, value)
+        updates[key_obj] = value
+    return cast("SummaryEnvelopeT", msgspec.structs.replace(summary, **updates))
 
 
 def extract_match_count(result: object | None) -> int:

@@ -9,12 +9,14 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from tools.cq.astgrep.metavar import (
+    extract_metavar_names,
+    extract_variadic_metavar_names,
+)
+
 if TYPE_CHECKING:
     from tools.cq.query.ir import MetaVarCapture, MetaVarFilter, MetaVarKind
     from tools.cq.query.planner import AstGrepRule
-
-_METAVAR_TOKEN_RE = re.compile(r"\${1,3}([A-Z][A-Z0-9_]*)")
-_VARIADIC_METAVAR_TOKEN_RE = re.compile(r"\${3}([A-Z][A-Z0-9_]*)")
 
 
 def parse_metavariables(match_result: dict[str, object]) -> dict[str, MetaVarCapture]:
@@ -163,32 +165,6 @@ def get_metavar_kind(metavar: str) -> MetaVarKind:
     if metavar.startswith("$$"):
         return "unnamed"
     return "single"
-
-
-def extract_metavar_names(text: str) -> tuple[str, ...]:
-    """Extract unique metavariable names from one pattern string.
-
-    Returns:
-    -------
-    tuple[str, ...]
-        Sorted unique metavariable names without ``$`` prefixes.
-    """
-    if not text:
-        return ()
-    return tuple(sorted({match.group(1) for match in _METAVAR_TOKEN_RE.finditer(text)}))
-
-
-def extract_variadic_metavar_names(text: str) -> tuple[str, ...]:
-    """Extract unique variadic metavariable names (``$$$NAME``) from one pattern string.
-
-    Returns:
-    -------
-    tuple[str, ...]
-        Sorted unique variadic metavariable names.
-    """
-    if not text:
-        return ()
-    return tuple(sorted({match.group(1) for match in _VARIADIC_METAVAR_TOKEN_RE.finditer(text)}))
 
 
 def extract_rule_metavars(rule: AstGrepRule) -> tuple[str, ...]:

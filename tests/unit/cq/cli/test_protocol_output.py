@@ -15,12 +15,13 @@ _TEST_ROOT = Path("/tmp")
 
 
 def _ctx(*, output_format: OutputFormat | None = None) -> CliContext:
+    resolved_output = output_format if output_format is not None else OutputFormat.md
     return CliContext(
         argv=["cq", "test"],
         root=_TEST_ROOT,
         toolchain=Toolchain.detect(),
         services=resolve_runtime_services(_TEST_ROOT),
-        output_format=output_format,
+        output_format=resolved_output,
     )
 
 
@@ -37,7 +38,7 @@ def test_wants_json_false() -> None:
 
 
 def test_wants_json_none() -> None:
-    """Test wants_json returns False when output format is None."""
+    """Test wants_json returns False when default output format is used."""
     ctx = _ctx(output_format=None)
     assert wants_json(ctx) is False
 

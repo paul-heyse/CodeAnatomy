@@ -7,7 +7,7 @@ from pathlib import Path
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor import (
+from tools.cq.query.executor_runtime import (
     ExecutePlanRequestV1,
     _collect_match_spans,
     execute_plan,

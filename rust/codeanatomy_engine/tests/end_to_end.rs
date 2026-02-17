@@ -210,24 +210,44 @@ async fn test_end_to_end_compile_and_materialize() {
 
 #[test]
 fn test_materialization_result_has_extended_fields() {
+    use codeanatomy_engine::executor::result::{WriteOutcome, WriteOutcomeUnavailableReason};
+
     let result = codeanatomy_engine::executor::result::MaterializationResult {
         table_name: "test".to_string(),
         delta_location: Some("/tmp/test".to_string()),
         rows_written: 100,
         partition_count: 4,
-        delta_version: Some(3),
-        files_added: Some(4),
-        bytes_written: Some(1024),
+        write_outcome: WriteOutcome::Captured {
+            delta_version: 3,
+            files_added: 4,
+            bytes_written: 1024,
+        },
     };
-    assert_eq!(result.delta_version, Some(3));
-    assert_eq!(result.files_added, Some(4));
-    assert_eq!(result.bytes_written, Some(1024));
+    assert!(matches!(
+        result.write_outcome,
+        WriteOutcome::Captured {
+            delta_version: 3,
+            files_added: 4,
+            bytes_written: 1024
+        }
+    ));
 
     // Verify serialization includes new fields
     let json = serde_json::to_string(&result).unwrap();
-    assert!(json.contains("delta_version"));
-    assert!(json.contains("files_added"));
-    assert!(json.contains("bytes_written"));
+    assert!(json.contains("write_outcome"));
+    assert!(json.contains("\"status\":\"captured\""));
+
+    let unavailable = codeanatomy_engine::executor::result::MaterializationResult {
+        table_name: "test2".to_string(),
+        delta_location: Some("/tmp/test2".to_string()),
+        rows_written: 0,
+        partition_count: 1,
+        write_outcome: WriteOutcome::Unavailable {
+            reason: WriteOutcomeUnavailableReason::SnapshotReadFailed,
+        },
+    };
+    let unavailable_json = serde_json::to_string(&unavailable).unwrap();
+    assert!(unavailable_json.contains("snapshot_read_failed"));
 }
 
 #[test]
@@ -327,7 +347,10 @@ async fn test_delta_history_contains_lineage_metadata() {
         .await
         .unwrap();
     assert_eq!(results.len(), 1);
-    assert!(results[0].delta_version.is_some());
+    assert!(matches!(
+        results[0].write_outcome,
+        codeanatomy_engine::executor::result::WriteOutcome::Captured { .. }
+    ));
 
     let expected_spec_hash = hex::encode(spec_hash);
     let expected_envelope_hash = hex::encode(envelope_hash);

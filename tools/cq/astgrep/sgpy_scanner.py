@@ -14,10 +14,10 @@ from typing import Any, Literal, cast
 
 from ast_grep_py import Config, Rule, SgNode, SgRoot
 
+from tools.cq.astgrep.metavar import extract_metavar_names, extract_variadic_metavar_names
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.types import QueryLanguage
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, is_rust_language
-from tools.cq.query.metavar import extract_metavar_names, extract_variadic_metavar_names
 
 # Record types from ast-grep rules
 RecordType = Literal["def", "call", "import", "raise", "except", "assign_ctor"]

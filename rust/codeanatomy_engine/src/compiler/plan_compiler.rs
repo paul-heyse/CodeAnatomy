@@ -16,6 +16,7 @@ use crate::compiler::cpg_builder;
 use crate::compiler::graph_validator;
 use crate::compiler::inline_policy::{compute_inline_policy, InlineDecision};
 use crate::compiler::join_builder;
+use crate::compiler::plan_utils::compute_view_fanout;
 use crate::compiler::param_compiler;
 use crate::compiler::semantic_validator::{
     self, SemanticValidationError, SemanticValidationWarning,
@@ -385,26 +386,17 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// Borrows from `self.spec` and returns owned `HashMap` with borrowed `&str` keys
     /// tied to the spec's lifetime.
     fn compute_ref_counts(&self) -> HashMap<&'a str, usize> {
-        let mut ref_counts: HashMap<&str, usize> = HashMap::new();
-
-        // Initialize all views with zero refs
-        for view in &self.spec.view_definitions {
-            ref_counts.insert(&view.name, 0);
-        }
-
-        // Count references from view dependencies
-        for view in &self.spec.view_definitions {
-            for dep in &view.view_dependencies {
-                *ref_counts.entry(dep.as_str()).or_insert(0) += 1;
-            }
-        }
-
-        // Count references from output targets
-        for target in &self.spec.output_targets {
-            *ref_counts.entry(target.source_view.as_str()).or_insert(0) += 1;
-        }
-
-        ref_counts
+        let owned = compute_view_fanout(self.spec);
+        self.spec
+            .view_definitions
+            .iter()
+            .map(|view| {
+                (
+                    view.name.as_str(),
+                    owned.get(view.name.as_str()).copied().unwrap_or(0usize),
+                )
+            })
+            .collect()
     }
 
     /// Resolve a source name, checking the inline cache before falling back

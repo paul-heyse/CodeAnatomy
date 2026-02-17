@@ -151,18 +151,12 @@ def _stamped_loader(language: str) -> object | None:
     if cache is None or memoize_stampede is None:
         return None
 
-    from tools.cq.search.tree_sitter.core.adaptive_runtime import memoized_value
-
     @memoize_stampede(cache, expire=_STAMP_TTL_SECONDS, tag=_STAMP_TAG)
     def _load(*, include_distribution: bool, local_hash: str) -> tuple[QueryPackSourceV1, ...]:
-        cache_key = f"ts_query_registry:{language}:{int(include_distribution)}:{local_hash}"
-        return memoized_value(
-            key=cache_key,
-            compute=lambda: _load_sources_uncached(
-                language=language,
-                include_distribution=include_distribution,
-            ),
-            ttl_seconds=_STAMP_TTL_SECONDS,
+        _ = local_hash
+        return _load_sources_uncached(
+            language=language,
+            include_distribution=include_distribution,
         )
 
     return _load

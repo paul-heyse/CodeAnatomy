@@ -1,7 +1,7 @@
 """Runtime primitives for CQ execution policies and worker orchestration."""
 
 from tools.cq.core.runtime.execution_policy import (
-    CacheRuntimePolicy,
+    CqCachePolicyV1,
     ParallelismPolicy,
     RuntimeExecutionPolicy,
     SemanticRuntimePolicy,
@@ -16,7 +16,7 @@ from tools.cq.core.runtime.worker_scheduler import (
 )
 
 __all__ = [
-    "CacheRuntimePolicy",
+    "CqCachePolicyV1",
     "ParallelismPolicy",
     "RuntimeExecutionPolicy",
     "SemanticRuntimePolicy",

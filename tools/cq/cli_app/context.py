@@ -25,7 +25,7 @@ class CliContextOptions:
 
     root: Path | None = None
     verbose: int = 0
-    output_format: OutputFormat | None = None
+    output_format: OutputFormat = OutputFormat.md
     artifact_dir: Path | None = None
     save_artifact: bool = True
 
@@ -42,7 +42,9 @@ class CliContextOptions:
         artifact_raw = kwargs.get("artifact_dir")
         verbose_raw = kwargs.get("verbose", 0)
         output_format_raw = kwargs.get("output_format")
-        output_format = output_format_raw if isinstance(output_format_raw, OutputFormat) else None
+        output_format = (
+            output_format_raw if isinstance(output_format_raw, OutputFormat) else OutputFormat.md
+        )
         return cls(
             root=(root_raw if isinstance(root_raw, Path) or root_raw is None else None),
             verbose=int(verbose_raw) if isinstance(verbose_raw, int | float) else 0,
@@ -80,7 +82,7 @@ class CliContext(CqStruct, frozen=True):
     toolchain: Toolchain
     services: CqRuntimeServices
     verbose: int = 0
-    output_format: OutputFormat | None = None
+    output_format: OutputFormat = OutputFormat.md
     artifact_dir: Path | None = None
     save_artifact: bool = True
 

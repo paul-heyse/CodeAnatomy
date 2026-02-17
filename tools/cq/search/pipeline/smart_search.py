@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
 
 import msgspec
 
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
+from tools.cq.core.enrichment_mode import (
+    parse_incremental_enrichment_mode,
+)
 from tools.cq.core.schema import (
     CqResult,
     Finding,
@@ -40,7 +42,6 @@ from tools.cq.search.pipeline.candidate_phase import (
     run_candidate_phase as _run_candidate_phase,
 )
 from tools.cq.search.pipeline.classifier import (
-    MatchCategory,
     QueryMode,
     clear_caches,
     detect_query_mode,
@@ -53,15 +54,13 @@ from tools.cq.search.pipeline.contracts import (
     SearchPartitionPlanV1,
     SearchRequest,
 )
-from tools.cq.search.pipeline.enrichment_contracts import (
-    IncrementalEnrichmentModeV1,
-    parse_incremental_enrichment_mode,
-)
-from tools.cq.search.pipeline.enrichment_phase import run_enrichment_phase
 from tools.cq.search.pipeline.orchestration import (
     SearchPipeline,
 )
+from tools.cq.search.pipeline.partition_pipeline import run_search_partition
 from tools.cq.search.pipeline.profiles import INTERACTIVE
+from tools.cq.search.pipeline.relevance import KIND_WEIGHTS, compute_relevance_score
+from tools.cq.search.pipeline.request_parsing import coerce_search_request
 from tools.cq.search.pipeline.runtime_context import build_search_runtime_context
 from tools.cq.search.pipeline.search_object_view_store import pop_search_object_view_for_run
 from tools.cq.search.pipeline.smart_search_types import (
@@ -75,9 +74,6 @@ from tools.cq.search.pipeline.smart_search_types import (
 from tools.cq.search.rg.runner import build_rg_command
 from tools.cq.utils.uuid_factory import uuid7_str
 
-if TYPE_CHECKING:
-    from tools.cq.core.toolchain import Toolchain
-
 # Derive smart search limits from INTERACTIVE profile
 SMART_SEARCH_LIMITS = msgspec.structs.replace(
     INTERACTIVE,
@@ -88,21 +84,6 @@ SMART_SEARCH_LIMITS = msgspec.structs.replace(
     timeout_seconds=30.0,
 )
 _CASE_SENSITIVE_DEFAULT = True
-
-# Kind weights for relevance scoring
-KIND_WEIGHTS: dict[MatchCategory, float] = {
-    "definition": 1.0,
-    "callsite": 0.8,
-    "import": 0.7,
-    "from_import": 0.7,
-    "reference": 0.6,
-    "assignment": 0.5,
-    "annotation": 0.5,
-    "text_match": 0.3,
-    "docstring_match": 0.2,
-    "comment_match": 0.15,
-    "string_match": 0.1,
-}
 
 
 def build_candidate_searcher(
@@ -204,125 +185,6 @@ def collect_candidates(request: CandidateCollectionRequest) -> tuple[list[RawMat
     return _collect_candidates_phase(request)
 
 
-def _classify_file_role(file_path: str) -> str:
-    """Classify file role for ranking.
-
-    Parameters
-    ----------
-    file_path
-        Relative file path.
-
-    Returns:
-    -------
-    str
-        One of "src", "test", "doc", "lib", "other".
-    """
-    path_lower = file_path.lower()
-
-    if "/test" in path_lower or "test_" in path_lower or "_test.py" in path_lower:
-        return "test"
-    if "/doc" in path_lower or "/docs/" in path_lower:
-        return "doc"
-    if "/vendor/" in path_lower or "/third_party/" in path_lower:
-        return "lib"
-    if "/src/" in path_lower or "/lib/" in path_lower:
-        return "src"
-
-    return "other"
-
-
-def compute_relevance_score(match: EnrichedMatch) -> float:
-    """Compute relevance score for ranking.
-
-    Parameters
-    ----------
-    match
-        Enriched match to score.
-
-    Returns:
-    -------
-    float
-        Relevance score (higher is better).
-    """
-    # Base weight from category
-    base = KIND_WEIGHTS.get(match.category, 0.3)
-
-    # File role multiplier
-    role = _classify_file_role(match.file)
-    role_mult = {
-        "src": 1.0,
-        "lib": 0.9,
-        "other": 0.7,
-        "test": 0.5,
-        "doc": 0.3,
-    }.get(role, 0.7)
-
-    # Path depth penalty (prefer shallow paths)
-    depth = match.file.count("/")
-    depth_penalty = min(0.2, depth * 0.02)
-
-    # Confidence factor
-    conf_factor = match.confidence
-
-    return base * role_mult * conf_factor - depth_penalty
-
-
-def _evidence_to_bucket(evidence_kind: str) -> str:
-    """Map evidence kind to confidence bucket.
-
-    Parameters
-    ----------
-    evidence_kind
-        Evidence kind string.
-
-    Returns:
-    -------
-    str
-        Confidence bucket name.
-    """
-    return {
-        "resolved_ast": "high",
-        "resolved_ast_record": "high",
-        "resolved_ast_heuristic": "medium",
-        "heuristic": "medium",
-        "rg_only": "low",
-    }.get(evidence_kind, "medium")
-
-
-def _category_message(category: MatchCategory, match: EnrichedMatch) -> str:
-    """Generate human-readable message for category.
-
-    Parameters
-    ----------
-    category
-        Match category.
-    match
-        Enriched match.
-
-    Returns:
-    -------
-    str
-        Human-readable message.
-    """
-    messages = {
-        "definition": "Function/class definition",
-        "callsite": "Function call",
-        "import": "Import statement",
-        "from_import": "From import",
-        "reference": "Reference",
-        "assignment": "Assignment",
-        "annotation": "Type annotation",
-        "docstring_match": "Match in docstring",
-        "comment_match": "Match in comment",
-        "string_match": "Match in string literal",
-        "text_match": "Text match",
-    }
-    base = messages.get(category, "Match")
-    if match.containing_scope:
-        return f"{base} in {match.containing_scope}"
-    return base
-
-
 def build_finding(match: EnrichedMatch, _root: Path) -> Finding:
     from tools.cq.search.pipeline.smart_search_sections import build_finding as _build_finding
 
@@ -398,83 +260,6 @@ def _build_search_context(request: SearchRequest) -> SearchConfig:
     )
 
 
-def _coerce_search_request(
-    *,
-    root: Path,
-    query: str,
-    kwargs: dict[str, object],
-) -> SearchRequest:
-    return SearchRequest(
-        root=root,
-        query=query,
-        mode=_coerce_query_mode(kwargs.get("mode")),
-        lang_scope=_coerce_lang_scope(kwargs.get("lang_scope")),
-        include_globs=_coerce_glob_list(kwargs.get("include_globs")),
-        exclude_globs=_coerce_glob_list(kwargs.get("exclude_globs")),
-        include_strings=bool(kwargs.get("include_strings")),
-        with_neighborhood=bool(kwargs.get("with_neighborhood")),
-        limits=_coerce_limits(kwargs.get("limits")),
-        tc=cast("Toolchain | None", kwargs.get("tc")),
-        argv=_coerce_argv(kwargs.get("argv")),
-        started_ms=_coerce_started_ms(kwargs.get("started_ms")),
-        run_id=_coerce_run_id(kwargs.get("run_id")),
-        incremental_enrichment_enabled=_coerce_incremental_enrichment_enabled(
-            kwargs.get("incremental_enrichment_enabled")
-        ),
-        incremental_enrichment_mode=_coerce_incremental_enrichment_mode(
-            kwargs.get("incremental_enrichment_mode")
-        ),
-    )
-
-
-def _coerce_query_mode(mode_value: object) -> QueryMode | None:
-    return mode_value if isinstance(mode_value, QueryMode) else None
-
-
-def _coerce_lang_scope(lang_scope_value: object) -> QueryLanguageScope:
-    if lang_scope_value in {"auto", "python", "rust"}:
-        return cast("QueryLanguageScope", lang_scope_value)
-    return DEFAULT_QUERY_LANGUAGE_SCOPE
-
-
-def _coerce_glob_list(globs_value: object) -> list[str] | None:
-    if not isinstance(globs_value, list):
-        return None
-    return [item for item in globs_value if isinstance(item, str)]
-
-
-def _coerce_limits(limits_value: object) -> SearchLimits | None:
-    return limits_value if isinstance(limits_value, SearchLimits) else None
-
-
-def _coerce_argv(argv_value: object) -> list[str] | None:
-    if not isinstance(argv_value, list):
-        return None
-    return [str(item) for item in argv_value]
-
-
-def _coerce_started_ms(started_ms_value: object) -> float | None:
-    if isinstance(started_ms_value, bool) or not isinstance(started_ms_value, (int, float)):
-        return None
-    return float(started_ms_value)
-
-
-def _coerce_run_id(run_id_value: object) -> str | None:
-    if isinstance(run_id_value, str) and run_id_value.strip():
-        return run_id_value
-    return None
-
-
-def _coerce_incremental_enrichment_enabled(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    return True
-
-
-def _coerce_incremental_enrichment_mode(value: object) -> IncrementalEnrichmentModeV1:
-    return parse_incremental_enrichment_mode(value)
-
-
 def run_candidate_phase(
     ctx: SearchConfig,
     *,
@@ -536,7 +321,7 @@ def _run_single_partition(
         incremental_enrichment_enabled=ctx.incremental_enrichment_enabled,
         incremental_enrichment_mode=ctx.incremental_enrichment_mode,
     )
-    return run_enrichment_phase(plan, config=ctx, mode=mode)
+    return run_search_partition(plan, ctx=ctx, mode=mode)
 
 
 def _partition_total_matches(partition_results: list[LanguageSearchResult]) -> int:
@@ -663,7 +448,7 @@ def smart_search(
     CqResult
         Complete search results.
     """
-    request = _coerce_search_request(root=root, query=query, kwargs=kwargs)
+    request = coerce_search_request(root=root, query=query, kwargs=kwargs)
     clear_caches()
     ctx = _build_search_context(request)
     build_search_runtime_context(ctx)

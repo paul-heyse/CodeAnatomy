@@ -44,19 +44,17 @@ use crate::compiler::pushdown_probe_extract::{
     extract_input_filter_predicates, verify_pushdown_contracts,
 };
 use crate::compiler::scheduling::{TaskGraph, TaskSchedule};
+use crate::contracts::pushdown_mode::PushdownEnforcementMode;
 use crate::executor::delta_writer::LineageContext;
 use crate::executor::maintenance;
 use crate::executor::metrics_collector::{self, summarize_collected_metrics, CollectedMetrics};
 use crate::executor::result::RunResult;
 use crate::executor::runner::execute_and_materialize_with_plans;
 use crate::executor::warnings::{warning_counts_by_code, RunWarning, WarningCode, WarningStage};
-use crate::providers::pushdown_contract::{
-    PushdownEnforcementMode as ContractEnforcementMode, PushdownProbe,
-};
+use crate::providers::pushdown_contract::PushdownProbe;
 use crate::providers::registration::probe_provider_pushdown;
 use crate::session::envelope::SessionEnvelope;
 use crate::spec::execution_spec::SemanticExecutionSpec;
-use crate::spec::runtime::PushdownEnforcementMode;
 
 /// Outcome of the unified pipeline execution.
 ///
@@ -151,7 +149,7 @@ pub async fn execute_pipeline(
     for (target, df) in &output_plans {
         match plan_bundle::capture_plan_bundle_runtime(ctx, df).await {
             Ok(runtime) => {
-                let pushdown_mode = map_pushdown_mode(spec.runtime.pushdown_enforcement_mode);
+                let pushdown_mode = spec.runtime.pushdown_enforcement_mode;
                 let pushdown_report = if pushdown_probe_map.is_empty() {
                     None
                 } else {
@@ -329,14 +327,6 @@ pub async fn execute_pipeline(
     })
 }
 
-fn map_pushdown_mode(mode: PushdownEnforcementMode) -> ContractEnforcementMode {
-    match mode {
-        PushdownEnforcementMode::Warn => ContractEnforcementMode::Warn,
-        PushdownEnforcementMode::Strict => ContractEnforcementMode::Strict,
-        PushdownEnforcementMode::Disabled => ContractEnforcementMode::Disabled,
-    }
-}
-
 fn build_task_graph_and_costs(
     spec: &SemanticExecutionSpec,
     warnings: &mut Vec<RunWarning>,
@@ -401,7 +391,7 @@ async fn probe_pushdown_contracts(
 
 fn enforce_pushdown_contracts(
     table_name: &str,
-    mode: ContractEnforcementMode,
+    mode: PushdownEnforcementMode,
     report: Option<&crate::providers::pushdown_contract::PushdownContractReport>,
     warnings: &mut Vec<RunWarning>,
 ) -> Result<()> {
@@ -410,13 +400,13 @@ fn enforce_pushdown_contracts(
     };
     for violation in &report.violations {
         match mode {
-            ContractEnforcementMode::Strict => {
+            PushdownEnforcementMode::Strict => {
                 return Err(DataFusionError::Plan(format!(
                     "Pushdown contract violation on table '{}': {}",
                     violation.table_name, violation.predicate_text
                 )));
             }
-            ContractEnforcementMode::Warn => warnings.push(
+            PushdownEnforcementMode::Warn => warnings.push(
                 RunWarning::new(
                     WarningCode::PushdownContractViolation,
                     WarningStage::Compilation,
@@ -428,7 +418,7 @@ fn enforce_pushdown_contracts(
                 .with_context("table_name", table_name.to_string())
                 .with_context("predicate", violation.predicate_text.clone()),
             ),
-            ContractEnforcementMode::Disabled => {}
+            PushdownEnforcementMode::Disabled => {}
         }
     }
     Ok(())

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import Literal
 
 import msgspec
 
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, Section
 from tools.cq.core.structs import CqOutputStruct, CqStruct
 from tools.cq.core.types import QueryLanguage
+
+ResolutionQuality = Literal["strong", "medium", "weak"]
+CoverageLevel = Literal["full_signal", "partial_signal", "structural_only"]
 
 
 class OccurrenceGroundingV1(CqOutputStruct, frozen=True):
@@ -33,7 +37,7 @@ class ResolvedObjectRef(CqOutputStruct, frozen=True):
     kind: str | None = None
     canonical_file: str | None = None
     canonical_line: int | None = None
-    resolution_quality: str = "weak"
+    resolution_quality: ResolutionQuality = "weak"
     evidence_planes: tuple[str, ...] = ()
     agreement: str | None = None
     fallback_used: bool = False
@@ -70,7 +74,7 @@ class SearchObjectSummaryV1(CqOutputStruct, frozen=True):
     representative_category: str | None = None
     code_facts: dict[str, object] = msgspec.field(default_factory=dict)
     module_graph: dict[str, object] = msgspec.field(default_factory=dict)
-    coverage_level: str = "structural_only"
+    coverage_level: CoverageLevel = "structural_only"
     applicability: dict[str, str] = msgspec.field(default_factory=dict)
     coverage_reasons: tuple[str, ...] = ()
 

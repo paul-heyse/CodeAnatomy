@@ -188,31 +188,6 @@ def _resolve_search_semantic_target(
     return target_file_path, target_language, anchor, symbol_hint
 
 
-def _apply_prefetched_search_semantic_outcome(
-    _outcome: _SearchSemanticOutcome,
-    _target_language: QueryLanguage,
-    _primary_target_match: EnrichedMatch | None,
-) -> bool:
-    """Apply prefetched python semantic outcome from primary target match.
-
-    Parameters
-    ----------
-    outcome
-        Semantic outcome accumulator to update.
-    target_language
-        Target language for enrichment.
-    primary_target_match
-        Primary target match (may have prefetched payload).
-
-    Returns:
-    -------
-    bool
-        True if prefetched payload was applied.
-    """
-    # Hard-cutover: search matches no longer carry prefetched python semantic payloads.
-    return False
-
-
 def _apply_search_semantic_payload_outcome(
     *,
     outcome: _SearchSemanticOutcome,
@@ -322,13 +297,6 @@ def collect_search_semantic_outcome(
         return outcome
 
     outcome.attempted = 1
-    if _apply_prefetched_search_semantic_outcome(
-        outcome,
-        target_language,
-        primary_target_match,
-    ):
-        return outcome
-
     semantic_outcome = enrich_with_language_semantics(
         LanguageSemanticEnrichmentRequest(
             language=target_language,

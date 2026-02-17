@@ -11,6 +11,7 @@ from tools.cq.core.structs import CqStruct
 
 PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
 NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
+NonNegativeFloat = Annotated[float, msgspec.Meta(ge=0.0)]
 PositiveFloat = Annotated[float, msgspec.Meta(gt=0.0)]
 NonEmptyStr = Annotated[str, msgspec.Meta(min_length=1)]
 BoundedRatio = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
@@ -54,6 +55,7 @@ __all__ = [
     "BoundedRatio",
     "ContractConstraintPolicyV1",
     "NonEmptyStr",
+    "NonNegativeFloat",
     "NonNegativeInt",
     "PositiveFloat",
     "PositiveInt",

@@ -9,22 +9,22 @@ use crate::udf_config::UdfConfigValue;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistrySnapshot {
-    pub version: u32,
-    pub scalar: Vec<String>,
-    pub aggregate: Vec<String>,
-    pub window: Vec<String>,
-    pub table: Vec<String>,
-    pub aliases: BTreeMap<String, Vec<String>>,
-    pub parameter_names: BTreeMap<String, Vec<String>>,
-    pub volatility: BTreeMap<String, String>,
-    pub rewrite_tags: BTreeMap<String, Vec<String>>,
-    pub simplify: BTreeMap<String, bool>,
-    pub coerce_types: BTreeMap<String, bool>,
-    pub short_circuits: BTreeMap<String, bool>,
-    pub signature_inputs: BTreeMap<String, Vec<Vec<String>>>,
-    pub return_types: BTreeMap<String, Vec<String>>,
-    pub config_defaults: BTreeMap<String, BTreeMap<String, UdfConfigValue>>,
-    pub custom_udfs: Vec<String>,
+    pub(crate) version: u32,
+    pub(crate) scalar: Vec<String>,
+    pub(crate) aggregate: Vec<String>,
+    pub(crate) window: Vec<String>,
+    pub(crate) table: Vec<String>,
+    pub(crate) aliases: BTreeMap<String, Vec<String>>,
+    pub(crate) parameter_names: BTreeMap<String, Vec<String>>,
+    pub(crate) volatility: BTreeMap<String, String>,
+    pub(crate) rewrite_tags: BTreeMap<String, Vec<String>>,
+    pub(crate) simplify: BTreeMap<String, bool>,
+    pub(crate) coerce_types: BTreeMap<String, bool>,
+    pub(crate) short_circuits: BTreeMap<String, bool>,
+    pub(crate) signature_inputs: BTreeMap<String, Vec<Vec<String>>>,
+    pub(crate) return_types: BTreeMap<String, Vec<String>>,
+    pub(crate) config_defaults: BTreeMap<String, BTreeMap<String, UdfConfigValue>>,
+    pub(crate) custom_udfs: Vec<String>,
 }
 
 impl RegistrySnapshot {
@@ -49,6 +49,70 @@ impl RegistrySnapshot {
             config_defaults: BTreeMap::new(),
             custom_udfs: Vec::new(),
         }
+    }
+
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    pub fn scalar(&self) -> &[String] {
+        &self.scalar
+    }
+
+    pub fn aggregate(&self) -> &[String] {
+        &self.aggregate
+    }
+
+    pub fn window(&self) -> &[String] {
+        &self.window
+    }
+
+    pub fn table(&self) -> &[String] {
+        &self.table
+    }
+
+    pub fn aliases(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.aliases
+    }
+
+    pub fn parameter_names(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.parameter_names
+    }
+
+    pub fn volatility(&self) -> &BTreeMap<String, String> {
+        &self.volatility
+    }
+
+    pub fn rewrite_tags(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.rewrite_tags
+    }
+
+    pub fn simplify(&self) -> &BTreeMap<String, bool> {
+        &self.simplify
+    }
+
+    pub fn coerce_types(&self) -> &BTreeMap<String, bool> {
+        &self.coerce_types
+    }
+
+    pub fn short_circuits(&self) -> &BTreeMap<String, bool> {
+        &self.short_circuits
+    }
+
+    pub fn signature_inputs(&self) -> &BTreeMap<String, Vec<Vec<String>>> {
+        &self.signature_inputs
+    }
+
+    pub fn return_types(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.return_types
+    }
+
+    pub fn config_defaults(&self) -> &BTreeMap<String, BTreeMap<String, UdfConfigValue>> {
+        &self.config_defaults
+    }
+
+    pub fn custom_udfs(&self) -> &[String] {
+        &self.custom_udfs
     }
 }
 

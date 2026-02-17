@@ -44,7 +44,6 @@ pub enum RexType {
     Call,
     Reference,
     ScalarSubquery,
-    Other,
 }
 
 /// These bindings are tying together several disparate systems.
@@ -337,7 +336,7 @@ impl DataTypeMap {
             ScalarValue::DurationMicrosecond(_) => Ok(DataType::Duration(TimeUnit::Microsecond)),
             ScalarValue::DurationNanosecond(_) => Ok(DataType::Duration(TimeUnit::Nanosecond)),
             ScalarValue::Union(_, _, _) => Err(PyNotImplementedError::new_err(
-                "ScalarValue::LargeList".to_string(),
+                "ScalarValue::Union".to_string(),
             )),
             ScalarValue::Utf8View(_) => Ok(DataType::Utf8View),
             ScalarValue::BinaryView(_) => Ok(DataType::BinaryView),

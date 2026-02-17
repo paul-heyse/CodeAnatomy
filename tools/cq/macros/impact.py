@@ -6,18 +6,14 @@ identifying downstream consumers and potential impacts of changes.
 
 from __future__ import annotations
 
-import ast
-from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 import msgspec
 
-TaintSiteKind = Literal["source", "call", "return", "assign"]
-
-from tools.cq.core.python_ast_utils import get_call_name
+from tools.cq.analysis.taint import TaintCallSite, TaintedSite, analyze_function_node, find_function_node
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
@@ -41,34 +37,6 @@ from tools.cq.search.rg.adapter import find_callers
 _DEFAULT_MAX_DEPTH = 5
 _SECTION_SITE_LIMIT = 50
 _CALLER_LIMIT = 30
-
-
-class TaintedSite(msgspec.Struct):
-    """A location where tainted data flows.
-
-    Parameters
-    ----------
-    file : str
-        File path.
-    line : int
-        Line number.
-    kind : TaintSiteKind
-        Site type: "source", "call", "return", "assign".
-    description : str
-        Human-readable description.
-    param : str | None
-        Tainted parameter at this site.
-    depth : int
-        Taint propagation depth from source.
-    """
-
-    file: str
-    line: int
-    kind: TaintSiteKind
-    description: str
-    param: str | None = None
-    depth: int = 0
-
 
 class TaintState(msgspec.Struct):
     """Taint analysis state.
@@ -132,346 +100,17 @@ class ImpactDepthSummary:
     scoring_details: ScoringDetailsV1
 
 
-class TaintVisitor(ast.NodeVisitor):
-    """AST visitor that tracks taint flow within a function."""
-
-    def __init__(
-        self,
-        file: str,
-        tainted_params: set[str],
-        depth: int,
-    ) -> None:
-        """Initialize the instance.
-
-        Args:
-            file: Description.
-            tainted_params: Description.
-            depth: Description.
-        """
-        self.file = file
-        self.tainted: set[str] = set(tainted_params)
-        self.sites: list[TaintedSite] = []
-        self.depth = depth
-        self.calls: list[tuple[CallInfo, set[int | str]]] = []  # (call, tainted_args)
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        """Record taint propagation on assignment."""
-        # Check if RHS uses tainted values
-        rhs_tainted = self.expr_tainted(node.value)
-
-        if rhs_tainted:
-            # Propagate taint to LHS targets
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    self.tainted.add(target.id)
-                    self.sites.append(
-                        TaintedSite(
-                            file=self.file,
-                            line=node.lineno,
-                            kind="assign",
-                            description=f"Taint propagates to {target.id}",
-                            param=target.id,
-                            depth=self.depth,
-                        )
-                    )
-                elif isinstance(target, ast.Tuple):
-                    for elt in target.elts:
-                        if isinstance(elt, ast.Name):
-                            self.tainted.add(elt.id)
-
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        """Record taint propagation through call sites."""
-        # Check which arguments are tainted
-        tainted_arg_indices: set[int] = set()
-        tainted_arg_values: set[str] = set()
-
-        for i, arg in enumerate(node.args):
-            if self.expr_tainted(arg):
-                tainted_arg_indices.add(i)
-                with suppress(ValueError, TypeError):
-                    tainted_arg_values.add(ast.unparse(arg))
-
-        for kw in node.keywords:
-            if kw.arg and self.expr_tainted(kw.value):
-                tainted_arg_values.add(kw.arg)
-
-        if tainted_arg_indices or tainted_arg_values:
-            # Record the call for inter-procedural analysis
-            callee_name, is_method, receiver = get_call_name(node.func)
-            call_info = CallInfo(
-                file=self.file,
-                line=node.lineno,
-                col=node.col_offset,
-                callee_name=callee_name,
-                args=node.args,
-                keywords=node.keywords,
-                is_method_call=is_method,
-                receiver_name=receiver,
-            )
-            self.calls.append((call_info, tainted_arg_indices | tainted_arg_values))
-
-            self.sites.append(
-                TaintedSite(
-                    file=self.file,
-                    line=node.lineno,
-                    kind="call",
-                    description=f"Tainted args passed to {callee_name}",
-                    depth=self.depth,
-                )
-            )
-
-        self.generic_visit(node)
-
-    def visit_Return(self, node: ast.Return) -> None:
-        """Record tainted return values."""
-        if node.value and self.expr_tainted(node.value):
-            self.sites.append(
-                TaintedSite(
-                    file=self.file,
-                    line=node.lineno,
-                    kind="return",
-                    description="Tainted value returned",
-                    depth=self.depth,
-                )
-            )
-        self.generic_visit(node)
-
-    def expr_tainted(self, expr: ast.expr) -> bool:
-        """Check if expression uses tainted values.
-
-        Returns:
-        -------
-        bool
-            True when expression references tainted values.
-        """
-        if isinstance(expr, ast.Name):
-            return expr.id in self.tainted
-        handler = _EXPR_TAINT_HANDLERS.get(type(expr))
-        if handler is not None:
-            return handler(self, expr)
-        if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
-            return any(self.expr_tainted(e) for e in expr.elts)
-        if isinstance(expr, ast.Dict):
-            keys_tainted = any(self.expr_tainted(k) for k in expr.keys if k is not None)
-            return keys_tainted or any(self.expr_tainted(v) for v in expr.values)
-        return False
-
-
-def _tainted_attribute(visitor: TaintVisitor, expr: ast.Attribute) -> bool:
-    return visitor.expr_tainted(expr.value)
-
-
-def _tainted_subscript(visitor: TaintVisitor, expr: ast.Subscript) -> bool:
-    return visitor.expr_tainted(expr.value) or visitor.expr_tainted(expr.slice)
-
-
-def _tainted_binop(visitor: TaintVisitor, expr: ast.BinOp) -> bool:
-    return visitor.expr_tainted(expr.left) or visitor.expr_tainted(expr.right)
-
-
-def _tainted_unary(visitor: TaintVisitor, expr: ast.UnaryOp) -> bool:
-    return visitor.expr_tainted(expr.operand)
-
-
-def _tainted_call(visitor: TaintVisitor, expr: ast.Call) -> bool:
-    # Check if any positional args are tainted
-    if any(visitor.expr_tainted(arg) for arg in expr.args):
-        return True
-    # Check if any keyword args are tainted
-    if any(visitor.expr_tainted(kw.value) for kw in expr.keywords):
-        return True
-    # Check if method receiver is tainted (e.g., `tainted_obj.method()`)
-    return isinstance(expr.func, ast.Attribute) and visitor.expr_tainted(expr.func.value)
-
-
-def _tainted_ifexp(visitor: TaintVisitor, expr: ast.IfExp) -> bool:
-    return (
-        visitor.expr_tainted(expr.test)
-        or visitor.expr_tainted(expr.body)
-        or visitor.expr_tainted(expr.orelse)
+def _to_call_info(callsite: TaintCallSite) -> CallInfo:
+    return CallInfo(
+        file=callsite.file,
+        line=callsite.line,
+        col=callsite.col,
+        callee_name=callsite.callee_name,
+        args=callsite.args,
+        keywords=callsite.keywords,
+        is_method_call=callsite.is_method_call,
+        receiver_name=callsite.receiver_name,
     )
-
-
-def _tainted_compare(visitor: TaintVisitor, expr: ast.Compare) -> bool:
-    return visitor.expr_tainted(expr.left) or any(
-        visitor.expr_tainted(cmp) for cmp in expr.comparators
-    )
-
-
-def _tainted_formatted(visitor: TaintVisitor, expr: ast.FormattedValue) -> bool:
-    return visitor.expr_tainted(expr.value)
-
-
-def _tainted_joined(visitor: TaintVisitor, expr: ast.JoinedStr) -> bool:
-    return any(
-        visitor.expr_tainted(val) for val in expr.values if isinstance(val, ast.FormattedValue)
-    )
-
-
-def _tainted_boolop(visitor: TaintVisitor, expr: ast.BoolOp) -> bool:
-    """Handle `or` and `and` expressions (e.g., `sources or {}`).
-
-    Returns:
-    -------
-    bool
-        True if any operand is tainted.
-    """
-    return any(visitor.expr_tainted(val) for val in expr.values)
-
-
-def _tainted_namedexpr(visitor: TaintVisitor, expr: ast.NamedExpr) -> bool:
-    """Handle walrus operator (e.g., `(x := tainted_val)`).
-
-    Returns:
-    -------
-    bool
-        True if the assigned value is tainted.
-    """
-    return visitor.expr_tainted(expr.value)
-
-
-def _tainted_starred(visitor: TaintVisitor, expr: ast.Starred) -> bool:
-    """Handle starred expressions (e.g., `*tainted_list`).
-
-    Returns:
-    -------
-    bool
-        True if the starred value is tainted.
-    """
-    return visitor.expr_tainted(expr.value)
-
-
-def _tainted_lambda(_visitor: TaintVisitor, _expr: ast.Lambda) -> bool:
-    """Lambda captures are not tracked; assume not tainted for simplicity.
-
-    Returns:
-    -------
-    bool
-        Always False for lambdas.
-    """
-    return False
-
-
-def _tainted_comprehension(
-    visitor: TaintVisitor,
-    *,
-    generators: list[ast.comprehension],
-    expressions: tuple[ast.expr, ...],
-) -> bool:
-    """Handle comprehension taint propagation with shared generator logic.
-
-    Returns:
-    -------
-    bool
-        True if any generator source or expression payload is tainted.
-    """
-    for gen in generators:
-        if visitor.expr_tainted(gen.iter):
-            return True
-    return any(visitor.expr_tainted(expr) for expr in expressions)
-
-
-TaintHandler = Callable[[TaintVisitor, ast.AST], bool]
-
-_EXPR_TAINT_HANDLERS: dict[type[ast.AST], TaintHandler] = {
-    ast.Attribute: cast("TaintHandler", _tainted_attribute),
-    ast.Subscript: cast("TaintHandler", _tainted_subscript),
-    ast.BinOp: cast("TaintHandler", _tainted_binop),
-    ast.UnaryOp: cast("TaintHandler", _tainted_unary),
-    ast.Call: cast("TaintHandler", _tainted_call),
-    ast.IfExp: cast("TaintHandler", _tainted_ifexp),
-    ast.Compare: cast("TaintHandler", _tainted_compare),
-    ast.FormattedValue: cast("TaintHandler", _tainted_formatted),
-    ast.JoinedStr: cast("TaintHandler", _tainted_joined),
-    ast.BoolOp: cast("TaintHandler", _tainted_boolop),
-    ast.NamedExpr: cast("TaintHandler", _tainted_namedexpr),
-    ast.Starred: cast("TaintHandler", _tainted_starred),
-    ast.Lambda: cast("TaintHandler", _tainted_lambda),
-    ast.GeneratorExp: cast(
-        "TaintHandler",
-        lambda visitor, expr: _tainted_comprehension(
-            visitor,
-            generators=cast("ast.GeneratorExp", expr).generators,
-            expressions=(cast("ast.GeneratorExp", expr).elt,),
-        ),
-    ),
-    ast.ListComp: cast(
-        "TaintHandler",
-        lambda visitor, expr: _tainted_comprehension(
-            visitor,
-            generators=cast("ast.ListComp", expr).generators,
-            expressions=(cast("ast.ListComp", expr).elt,),
-        ),
-    ),
-    ast.SetComp: cast(
-        "TaintHandler",
-        lambda visitor, expr: _tainted_comprehension(
-            visitor,
-            generators=cast("ast.SetComp", expr).generators,
-            expressions=(cast("ast.SetComp", expr).elt,),
-        ),
-    ),
-    ast.DictComp: cast(
-        "TaintHandler",
-        lambda visitor, expr: _tainted_comprehension(
-            visitor,
-            generators=cast("ast.DictComp", expr).generators,
-            expressions=(
-                cast("ast.DictComp", expr).key,
-                cast("ast.DictComp", expr).value,
-            ),
-        ),
-    ),
-}
-
-
-def _find_top_level_function(
-    tree: ast.AST,
-    fn: FnDecl,
-) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == fn.name
-            and node.lineno == fn.line
-        ):
-            return node
-    return None
-
-
-def _find_class_method(
-    tree: ast.AST,
-    fn: FnDecl,
-) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    if fn.class_name is None:
-        return None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == fn.class_name:
-            for child in node.body:
-                if (
-                    isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and child.name == fn.name
-                    and child.lineno == fn.line
-                ):
-                    return child
-    return None
-
-
-def _find_function_node(source: str, fn: FnDecl) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    """Find the AST node for a function declaration.
-
-    Returns:
-    -------
-    ast.FunctionDef | ast.AsyncFunctionDef | None
-        Matched AST node if found.
-    """
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return None
-    return _find_class_method(tree, fn) or _find_top_level_function(tree, fn)
 
 
 class _AnalyzeContext(msgspec.Struct, frozen=True):
@@ -507,17 +146,27 @@ def _analyze_function(
         return
 
     # Find function AST
-    fn_node = _find_function_node(source, fn)
+    fn_node = find_function_node(
+        source,
+        function_name=fn.name,
+        function_line=fn.line,
+        class_name=fn.class_name,
+    )
     if fn_node is None:
         return
 
-    # Run taint visitor
-    visitor = TaintVisitor(fn.file, tainted_params, current_depth)
-    visitor.visit(fn_node)
-    context.state.add_sites(visitor.sites)
+    # Run pure taint analysis
+    analysis = analyze_function_node(
+        file=fn.file,
+        function_node=fn_node,
+        tainted_params=tainted_params,
+        depth=current_depth,
+    )
+    context.state.add_sites(analysis.sites)
 
     # Propagate to callees
-    for call_info, tainted_args in visitor.calls:
+    for callsite, tainted_args in analysis.calls:
+        call_info = _to_call_info(callsite)
         resolved = resolve_call_targets(context.index, call_info)
         if resolved.targets:
             for target in resolved.targets:
@@ -870,3 +519,6 @@ def cmd_impact(request: ImpactRequest) -> CqResult:
             query=request.function_name,
         ),
     )
+
+
+__all__ = ["ImpactRequest", "cmd_impact"]

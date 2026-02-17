@@ -21,6 +21,8 @@ use datafusion_common::DataFusionError;
 use datafusion_expr::Expr;
 use serde::{Deserialize, Serialize};
 
+use crate::contracts::pushdown_mode::PushdownEnforcementMode;
+
 /// Serializable mirror of DataFusion's `TableProviderFilterPushDown`.
 ///
 /// DataFusion's native enum does not derive `Serialize`/`Deserialize`, so we
@@ -159,15 +161,6 @@ pub enum PushdownContractResult {
     InexactWithoutResidual { detail: String },
     ExactWithRedundantResidual,
     UnsupportedPredicateLost { detail: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PushdownEnforcementMode {
-    #[default]
-    Warn,
-    Strict,
-    Disabled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

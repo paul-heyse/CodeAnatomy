@@ -5,18 +5,7 @@ Provides preset search limits for different use cases (interactive, audit, liter
 
 from __future__ import annotations
 
-from tools.cq.search._shared.types import SearchLimits
-
-# Default limits for general-purpose searches
-DEFAULT = SearchLimits()
-
-# Interactive limits for fast user-facing queries
-INTERACTIVE = SearchLimits(
-    max_files=1000,
-    timeout_seconds=10.0,
-    max_depth=20,
-    max_file_size_bytes=1 * 1024 * 1024,
-)
+from tools.cq.search._shared.profiles import DEFAULT, INTERACTIVE, SearchLimits
 
 # Audit limits for comprehensive codebase scans
 AUDIT = SearchLimits(
@@ -44,3 +33,5 @@ LITERAL = SearchLimits(
     max_depth=25,
     max_file_size_bytes=2 * 1024 * 1024,
 )
+
+__all__ = ["AUDIT", "CI", "DEFAULT", "INTERACTIVE", "LITERAL", "SearchLimits"]

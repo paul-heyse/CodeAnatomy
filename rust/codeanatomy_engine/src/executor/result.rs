@@ -52,9 +52,29 @@ pub struct MaterializationResult {
     pub delta_location: Option<String>,
     pub rows_written: u64,
     pub partition_count: u32,
-    pub delta_version: Option<i64>,
-    pub files_added: Option<u64>,
-    pub bytes_written: Option<u64>,
+    pub write_outcome: WriteOutcome,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum WriteOutcome {
+    Captured {
+        delta_version: i64,
+        files_added: u64,
+        bytes_written: u64,
+    },
+    Unavailable {
+        reason: WriteOutcomeUnavailableReason,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteOutcomeUnavailableReason {
+    TableUriResolutionFailed,
+    TableOpenFailed,
+    TableLoadFailed,
+    SnapshotReadFailed,
 }
 
 /// Three-layer determinism contract.

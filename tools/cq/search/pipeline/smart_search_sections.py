@@ -31,7 +31,7 @@ def _evidence_to_bucket(evidence_kind: str) -> str:
     if evidence_kind in {"resolved_ast", "resolved_ast_record"}:
         return "high"
     if evidence_kind in {"heuristic"}:
-        return "med"
+        return "medium"
     return "low"
 
 

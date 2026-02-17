@@ -9,9 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.core.enrichment_mode import IncrementalEnrichmentModeV1
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.search.pipeline.enrichment_contracts import IncrementalEnrichmentModeV1
 
 if TYPE_CHECKING:
     from tools.cq.core.services import CallsServiceRequest, SearchServiceRequest
@@ -127,7 +127,7 @@ class RequestFactory:
         return SearchServiceRequest(
             root=ctx.root,
             query=query,
-            mode=opts.mode,
+            mode=opts.mode.value if opts.mode is not None else None,
             lang_scope=opts.lang_scope,
             include_globs=opts.include_globs,
             exclude_globs=opts.exclude_globs,

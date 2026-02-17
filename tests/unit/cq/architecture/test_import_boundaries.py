@@ -83,10 +83,6 @@ def test_no_private_cross_module_imports() -> None:
         "tools/cq/search/tree_sitter/rust_lane/payload_assembly.py:25:    from tools.cq.search.tree_sitter.rust_lane import runtime_core as _runtime_core",
         # Query/run decomposition - intra-subsystem call delegation helpers
         "tools/cq/query/symbol_resolver.py:11:from tools.cq.query.finding_builders import extract_call_target as _extract_call_target",
-        "tools/cq/query/executor_dispatch.py:15:    from tools.cq.query.executor_entity import execute_entity_query as _execute_entity_query",
-        "tools/cq/query/executor_dispatch.py:26:    from tools.cq.query.executor_pattern import execute_pattern_query as _execute_pattern_query",
-        "tools/cq/query/executor_entity.py:16:    from tools.cq.query.executor import _execute_entity_query",
-        "tools/cq/query/executor_pattern.py:16:    from tools.cq.query.executor import _execute_pattern_query",
         "tools/cq/run/runner.py:21:from tools.cq.run.helpers import error_result as _error_result",
         "tools/cq/run/runner.py:30:from tools.cq.run.scope import apply_run_scope as _apply_run_scope",
         "tools/cq/run/step_executors.py:23:from tools.cq.run.helpers import error_result as _error_result",

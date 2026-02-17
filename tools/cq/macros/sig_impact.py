@@ -5,13 +5,14 @@ Simulates a signature change and classifies call sites as would_break, ambiguous
 
 from __future__ import annotations
 
-import ast
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-import msgspec
-
+from tools.cq.analysis.calls import (
+    classify_call_against_signature,
+    classify_calls_against_signature,
+)
+from tools.cq.analysis.signature import SigParam, parse_signature
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
@@ -35,177 +36,11 @@ if TYPE_CHECKING:
 _MAX_SITES_DISPLAY = 30
 
 
-class SigParam(msgspec.Struct):
-    """Parsed signature parameter.
-
-    Parameters
-    ----------
-    name : str
-        Parameter name.
-    has_default : bool
-        Whether parameter has a default value.
-    is_kwonly : bool
-        Whether parameter is keyword-only.
-    is_vararg : bool
-        Whether this is *args.
-    is_kwarg : bool
-        Whether this is **kwargs.
-    """
-
-    name: str
-    has_default: bool
-    is_kwonly: bool
-    is_vararg: bool
-    is_kwarg: bool
-
-
 class SigImpactRequest(MacroRequestBase, frozen=True):
     """Inputs required for signature impact analysis."""
 
     symbol: str
     to: str
-
-
-def _parse_signature(sig: str) -> list[SigParam]:
-    """Parse a signature string like 'foo(a, b, *, c=None)' into params.
-
-    Parameters
-    ----------
-    sig : str
-        Signature string to parse.
-
-    Returns:
-    -------
-    list[SigParam]
-        Parsed parameter list.
-    """
-    # Extract inside parens
-    m = re.match(r"^\s*\w+\s*\((.*)\)\s*$", sig.strip())
-    inside = m.group(1) if m else sig.strip().strip("()")
-
-    # Parse as function def
-    tmp = f"def _tmp({inside}):\n  pass\n"
-    try:
-        tree = ast.parse(tmp)
-        fn = tree.body[0]
-        if not isinstance(fn, ast.FunctionDef):
-            return []
-        args = fn.args
-    except SyntaxError:
-        return []
-
-    params: list[SigParam] = []
-
-    # Positional params
-    defaults_start = len(args.args) - len(args.defaults)
-    for i, arg in enumerate(args.args):
-        params.append(
-            SigParam(
-                name=arg.arg,
-                has_default=i >= defaults_start,
-                is_kwonly=False,
-                is_vararg=False,
-                is_kwarg=False,
-            )
-        )
-
-    # *args
-    if args.vararg:
-        params.append(
-            SigParam(
-                name=args.vararg.arg,
-                has_default=False,
-                is_kwonly=False,
-                is_vararg=True,
-                is_kwarg=False,
-            )
-        )
-
-    # Keyword-only params
-    for i, arg in enumerate(args.kwonlyargs):
-        has_default = args.kw_defaults[i] is not None
-        params.append(
-            SigParam(
-                name=arg.arg,
-                has_default=has_default,
-                is_kwonly=True,
-                is_vararg=False,
-                is_kwarg=False,
-            )
-        )
-
-    # **kwargs
-    if args.kwarg:
-        params.append(
-            SigParam(
-                name=args.kwarg.arg,
-                has_default=False,
-                is_kwonly=False,
-                is_vararg=False,
-                is_kwarg=True,
-            )
-        )
-
-    return params
-
-
-def _classify_call(
-    site: CallSite,
-    new_params: list[SigParam],
-) -> tuple[str, str]:
-    """Classify a call site against new signature.
-
-    Parameters
-    ----------
-    site : CallSite
-        Call site to classify.
-    new_params : list[SigParam]
-        New signature parameters.
-
-    Returns:
-    -------
-    tuple[str, str]
-        (bucket, reason) where bucket is 'would_break', 'ambiguous', or 'ok'.
-    """
-    # Check if call has *args/**kwargs (can't analyze statically)
-    if site.has_star_args or site.has_star_kwargs:
-        return ("ambiguous", "call uses *args/**kwargs - cannot verify")
-
-    # Build list of required param names (positional params without defaults)
-    required_params = [
-        p.name
-        for p in new_params
-        if not p.has_default and not p.is_kwonly and not p.is_vararg and not p.is_kwarg
-    ]
-
-    # For each required param, check coverage by position or keyword
-    kwargs_set = set(site.kwargs)
-    for i, param_name in enumerate(required_params):
-        # Covered by positional arg?
-        if i < site.num_args:
-            continue
-        # Covered by keyword arg?
-        if param_name in kwargs_set:
-            continue
-        return ("would_break", f"parameter '{param_name}' not provided")
-
-    # Check for excess positional args (if no *args in new sig)
-    has_vararg = any(p.is_vararg for p in new_params)
-    max_positional = sum(
-        1 for p in new_params if not p.is_kwonly and not p.is_vararg and not p.is_kwarg
-    )
-    if not has_vararg and site.num_args > max_positional:
-        return ("would_break", f"too many positional args: {site.num_args} > {max_positional}")
-
-    # Check keyword args exist in new signature
-    has_kwarg = any(p.is_kwarg for p in new_params)
-    param_names = {p.name for p in new_params if not p.is_vararg and not p.is_kwarg}
-    for kw in site.kwargs:
-        if kw not in param_names and not has_kwarg:
-            return ("would_break", f"keyword '{kw}' not in new signature")
-
-    return ("ok", "compatible")
-
 
 def _collect_sites(
     root: Path,
@@ -238,15 +73,7 @@ def _classify_sites(
     all_sites: list[CallSite],
     new_params: list[SigParam],
 ) -> dict[str, list[tuple[CallSite, str]]]:
-    buckets: dict[str, list[tuple[CallSite, str]]] = {
-        "would_break": [],
-        "ambiguous": [],
-        "ok": [],
-    }
-    for site in all_sites:
-        bucket, reason = _classify_call(site, new_params)
-        buckets[bucket].append((site, reason))
-    return buckets
+    return classify_calls_against_signature(all_sites, new_params)
 
 
 def _append_bucket_sections(
@@ -295,7 +122,7 @@ def _append_evidence(
     scoring_details: ScoringDetailsV1,
 ) -> None:
     for site in all_sites:
-        bucket_name, reason = _classify_call(site, new_params)
+        bucket_name, reason = classify_call_against_signature(site, new_params)
         details = {"preview": site.arg_preview}
         result.evidence.append(
             Finding(
@@ -321,7 +148,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
         Analysis result with call sites classified.
     """
     started = ms()
-    new_params = _parse_signature(request.to)
+    new_params = parse_signature(request.to)
     all_sites = _collect_sites(request.root, request.symbol)
     buckets = _classify_sites(all_sites, new_params)
 

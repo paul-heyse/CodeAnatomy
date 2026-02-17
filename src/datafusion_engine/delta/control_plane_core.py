@@ -7,6 +7,8 @@ This module centralizes access to the Rust Delta control plane exposed via
 3. File-pruned provider construction for scan planning.
 4. Maintenance operations (optimize/vacuum/checkpoint).
 """
+
+# ruff: noqa: DOC201
 # NOTE(size-exception): This module is temporarily >800 LOC during hard-cutover
 # decomposition. Remaining extraction and contraction work is tracked in
 # docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
@@ -28,15 +30,12 @@ from datafusion_engine.delta.capabilities import (
     resolve_delta_extension_module,
 )
 from datafusion_engine.delta.commit_payload import commit_payload_parts
-from datafusion_engine.delta.object_store import register_delta_object_store
 from datafusion_engine.delta.payload import (
     cdf_options_payload,
     commit_payload,
-    schema_ipc_payload,
 )
 from datafusion_engine.delta.protocol import delta_feature_gate_rust_payload
 from datafusion_engine.delta.protocols import (
-    DeltaCdfExtensionModule,
     DeltaProviderHandle,
     InternalSessionContext,
     RustCdfOptionsHandle,
@@ -52,7 +51,6 @@ from datafusion_engine.delta.specs import (
 from datafusion_engine.delta.specs import (
     DeltaCommitOptionsSpec as DeltaCommitOptions,
 )
-from datafusion_engine.delta.store_policy import resolve_storage_profile
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.extensions.context_adaptation import select_context_candidate
 from datafusion_engine.generated.delta_types import (
@@ -724,55 +722,14 @@ def delta_provider_with_files(
         Provider capsule and control-plane metadata.
 
     """
-    storage_profile = resolve_storage_profile(
-        table_uri=request.table_uri,
-        policy=None,
-        storage_options=request.storage_options,
-        log_storage_options=None,
+    from datafusion_engine.delta.control_plane_provider import (
+        delta_provider_with_files as _delta_provider_with_files,
     )
-    register_delta_object_store(
+
+    return _delta_provider_with_files(
         ctx,
-        table_uri=storage_profile.canonical_uri,
-        storage_options=storage_profile.to_datafusion_object_store_options(),
-        storage_profile=storage_profile,
-    )
-    provider_factory = _require_internal_entrypoint("delta_table_provider_with_files")
-    schema_ipc = schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
-    storage_payload = (
-        list(storage_profile.to_deltalake_options().items())
-        if storage_profile.storage_options
-        else None
-    )
-    response = provider_factory(
-        _internal_ctx(
-            ctx,
-            entrypoint="delta_table_provider_with_files",
-        ),
-        storage_profile.canonical_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        list(files),
-        request.delta_scan.file_column_name if request.delta_scan else None,
-        request.delta_scan.enable_parquet_pushdown if request.delta_scan else None,
-        request.delta_scan.schema_force_view_types if request.delta_scan else None,
-        request.delta_scan.wrap_partition_values if request.delta_scan else None,
-        schema_ipc,
-        *delta_feature_gate_rust_payload(request.gate),
-    )
-    payload = ensure_mapping(response, label="delta_table_provider_with_files")
-    snapshot = ensure_mapping(payload.get("snapshot"), label="snapshot")
-    scan_config = ensure_mapping(payload.get("scan_config"), label="scan_config")
-    provider = payload.get("provider")
-    if provider is None:
-        msg = "Delta control-plane response missing provider capsule."
-        _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    return DeltaProviderBundle(
-        provider=cast("DeltaProviderHandle", provider),
-        snapshot=snapshot,
-        scan_config=scan_config,
-        scan_effective=_scan_effective_payload(scan_config),
-        add_actions=_parse_add_actions(payload.get("add_actions")),
+        files=files,
+        request=request,
     )
 
 
@@ -780,105 +737,34 @@ def delta_cdf_provider(
     *,
     request: DeltaCdfRequest,
 ) -> DeltaCdfProviderBundle:
-    """Build a Delta CDF provider through the Rust control plane.
-
-    Parameters
-    ----------
-    request
-        CDF provider request describing snapshot pins and CDF options.
-
-    Returns:
-    -------
-    DeltaCdfProviderBundle
-        Provider capsule plus snapshot metadata and CDF options payload.
-
-    """
-    module = _resolve_extension_module(
-        required_attr="DeltaCdfOptions",
-        entrypoint="delta_cdf_table_provider",
+    """Build a Delta CDF provider through the Rust control plane."""
+    from datafusion_engine.delta.control_plane_provider import (
+        delta_cdf_provider as _delta_cdf_provider,
     )
-    provider_factory = cast("DeltaCdfExtensionModule", module).delta_cdf_table_provider
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    ext_options = _cdf_options_to_ext(module, request.options)
-    response = provider_factory(
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        ext_options,
-        *delta_feature_gate_rust_payload(request.gate),
-    )
-    payload = ensure_mapping(response, label="delta_cdf_table_provider")
-    snapshot = ensure_mapping(payload.get("snapshot"), label="snapshot")
-    provider = payload.get("provider")
-    if provider is None:
-        msg = "Delta control-plane CDF response missing provider capsule."
-        _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    return DeltaCdfProviderBundle(
-        provider=cast("DeltaProviderHandle", provider),
-        snapshot=snapshot,
-        cdf_options=request.options,
-    )
+
+    return _delta_cdf_provider(request=request)
 
 
 def delta_snapshot_info(
     request: DeltaSnapshotRequest,
 ) -> Mapping[str, object]:
-    """Load protocol-aware Delta snapshot metadata.
+    """Load protocol-aware Delta snapshot metadata."""
+    from datafusion_engine.delta.control_plane_provider import (
+        delta_snapshot_info as _delta_snapshot_info,
+    )
 
-    Parameters
-    ----------
-    request
-        Snapshot request describing protocol gates and snapshot pinning.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Snapshot metadata payload from the control plane.
-
-    """
-    snapshot_factory = _require_internal_entrypoint("delta_snapshot_info")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    try:
-        response = snapshot_factory(
-            request.table_uri,
-            storage_payload,
-            request.version,
-            request.timestamp,
-            *delta_feature_gate_rust_payload(request.gate),
-        )
-    except (RuntimeError, TypeError, ValueError) as exc:
-        msg = "Delta snapshot retrieval failed."
-        _raise_engine_error(msg, kind=ErrorKind.DELTA, exc=exc)
-    return ensure_mapping(response, label="delta_snapshot_info")
+    return _delta_snapshot_info(request)
 
 
 def delta_add_actions(
     request: DeltaSnapshotRequest,
 ) -> Mapping[str, object]:
-    """Return protocol-aware snapshot info and add actions.
-
-    Parameters
-    ----------
-    request
-        Snapshot request describing protocol gates and snapshot pinning.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Snapshot metadata plus Add-action payload.
-
-    """
-    add_actions_factory = _require_internal_entrypoint("delta_add_actions")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    response = add_actions_factory(
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        *delta_feature_gate_rust_payload(request.gate),
+    """Return protocol-aware snapshot info and add actions."""
+    from datafusion_engine.delta.control_plane_provider import (
+        delta_add_actions as _delta_add_actions,
     )
-    return ensure_mapping(response, label="delta_add_actions")
+
+    return _delta_add_actions(request)
 
 
 def delta_write_ipc(
@@ -1134,41 +1020,12 @@ def delta_restore(
     *,
     request: DeltaRestoreRequest,
 ) -> Mapping[str, object]:
-    """Run Rust-native Delta restore.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context for restore.
-    request
-        Restore request describing target and restore pins.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
-
-    """
-    restore_fn = _require_internal_entrypoint("delta_restore")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
-    response = restore_fn(
-        _internal_ctx(ctx, entrypoint="delta_restore"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        request.restore_version,
-        request.restore_timestamp,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+    """Run Rust-native Delta restore."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_restore as _delta_restore,
     )
-    return ensure_mapping(response, label="delta_restore")
+
+    return _delta_restore(ctx, request=request)
 
 
 def delta_set_properties(
@@ -1176,44 +1033,12 @@ def delta_set_properties(
     *,
     request: DeltaSetPropertiesRequest,
 ) -> Mapping[str, object]:
-    """Run Rust-native Delta property updates.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context for property updates.
-    request
-        Property update request describing target and properties.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
-
-    """
-    if not request.properties:
-        msg = "Delta property update requires at least one key/value pair."
-        _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    set_fn = _require_internal_entrypoint("delta_set_properties")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
-    properties_payload = sorted((str(key), str(value)) for key, value in request.properties.items())
-    response = set_fn(
-        _internal_ctx(ctx, entrypoint="delta_set_properties"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        properties_payload,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+    """Run Rust-native Delta property updates."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_set_properties as _delta_set_properties,
     )
-    return ensure_mapping(response, label="delta_set_properties")
+
+    return _delta_set_properties(ctx, request=request)
 
 
 def delta_add_features(
@@ -1221,45 +1046,12 @@ def delta_add_features(
     *,
     request: DeltaAddFeaturesRequest,
 ) -> Mapping[str, object]:
-    """Run Rust-native Delta feature enablement.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context for feature enablement.
-    request
-        Feature-enable request describing target table and features.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
-
-    """
-    if not request.features:
-        msg = "Delta add-features requires at least one feature name."
-        _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    add_fn = _require_internal_entrypoint("delta_add_features")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
-    features_payload = [str(feature) for feature in request.features]
-    response = add_fn(
-        _internal_ctx(ctx, entrypoint="delta_add_features"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        features_payload,
-        request.allow_protocol_versions_increase,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+    """Run Rust-native Delta feature enablement."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_add_features as _delta_add_features,
     )
-    return ensure_mapping(response, label="delta_add_features")
+
+    return _delta_add_features(ctx, request=request)
 
 
 def delta_add_constraints(
@@ -1267,39 +1059,12 @@ def delta_add_constraints(
     *,
     request: DeltaAddConstraintsRequest,
 ) -> Mapping[str, object]:
-    """Run Rust-native Delta add-constraints.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Control-plane response payload for the constraint update.
-
-    """
-    if not request.constraints:
-        msg = "Delta add-constraints requires at least one constraint."
-        _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    add_fn = _require_internal_entrypoint("delta_add_constraints")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
-    constraints_payload = sorted(
-        (str(name), str(expr)) for name, expr in request.constraints.items()
+    """Run Rust-native Delta add-constraints."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_add_constraints as _delta_add_constraints,
     )
-    response = add_fn(
-        _internal_ctx(ctx, entrypoint="delta_add_constraints"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        constraints_payload,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
-    )
-    return ensure_mapping(response, label="delta_add_constraints")
+
+    return _delta_add_constraints(ctx, request=request)
 
 
 def delta_drop_constraints(
@@ -1307,37 +1072,12 @@ def delta_drop_constraints(
     *,
     request: DeltaDropConstraintsRequest,
 ) -> Mapping[str, object]:
-    """Run Rust-native Delta drop-constraints.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Control-plane response payload for the constraint drop.
-
-    """
-    if not request.constraints:
-        msg = "Delta drop-constraints requires at least one constraint name."
-        _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    drop_fn = _require_internal_entrypoint("delta_drop_constraints")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    commit_parts = commit_payload_parts(commit_payload(request.commit_options))
-    response = drop_fn(
-        _internal_ctx(ctx, entrypoint="delta_drop_constraints"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        [str(name) for name in request.constraints],
-        request.raise_if_not_exists,
-        *delta_feature_gate_rust_payload(request.gate),
-        commit_parts.metadata_payload,
-        commit_parts.app_id,
-        commit_parts.app_version,
-        commit_parts.app_last_updated,
-        commit_parts.max_retries,
-        commit_parts.create_checkpoint,
+    """Run Rust-native Delta drop-constraints."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_drop_constraints as _delta_drop_constraints,
     )
-    return ensure_mapping(response, label="delta_drop_constraints")
+
+    return _delta_drop_constraints(ctx, request=request)
 
 
 def delta_create_checkpoint(
@@ -1364,109 +1104,12 @@ def delta_cleanup_metadata(
     *,
     request: DeltaCheckpointRequest,
 ) -> Mapping[str, object]:
-    """Clean expired Delta log metadata for the requested table.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Control-plane response payload for the cleanup request.
-
-    """
-    cleanup_fn = _require_internal_entrypoint("delta_cleanup_metadata")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    response = cleanup_fn(
-        _internal_ctx(ctx, entrypoint="delta_cleanup_metadata"),
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        *delta_feature_gate_rust_payload(request.gate),
-    )
-    return ensure_mapping(response, label="delta_cleanup_metadata")
-
-
-def _feature_reports(
-    *,
-    properties_report: Mapping[str, object] | None,
-    features_report: Mapping[str, object] | None,
-) -> Mapping[str, object]:
-    payload: dict[str, object] = {}
-    if properties_report is not None:
-        payload["properties"] = properties_report
-    if features_report is not None:
-        payload["features"] = features_report
-    return payload
-
-
-def _feature_properties_report(
-    ctx: SessionContext,
-    *,
-    request: DeltaFeatureEnableRequest,
-    properties: Mapping[str, str],
-) -> Mapping[str, object]:
-    return delta_set_properties(
-        ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties=properties,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
+    """Clean expired Delta log metadata for the requested table."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_cleanup_metadata as _delta_cleanup_metadata,
     )
 
-
-def _feature_add_report(
-    ctx: SessionContext,
-    *,
-    request: DeltaFeatureEnableRequest,
-    features: Sequence[str],
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    return delta_add_features(
-        ctx,
-        request=DeltaAddFeaturesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            features=features,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-
-
-def _feature_toggle_report(
-    ctx: SessionContext,
-    *,
-    request: DeltaFeatureEnableRequest,
-    properties: Mapping[str, str] | None = None,
-    features: Sequence[str] | None = None,
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    properties_report = (
-        _feature_properties_report(ctx, request=request, properties=properties)
-        if properties is not None
-        else None
-    )
-    features_report = (
-        _feature_add_report(
-            ctx,
-            request=request,
-            features=features,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-        )
-        if features is not None
-        else None
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=features_report,
-    )
+    return _delta_cleanup_metadata(ctx, request=request)
 
 
 def delta_enable_column_mapping(
@@ -1476,22 +1119,15 @@ def delta_enable_column_mapping(
     mode: str = "name",
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta column mapping with the desired mode.
+    """Enable Delta column mapping with the desired mode."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_column_mapping as _delta_enable_column_mapping,
+    )
 
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties/features report payload.
-    """
-    return _feature_toggle_report(
+    return _delta_enable_column_mapping(
         ctx,
         request=request,
-        properties={
-            "delta.columnMapping.mode": mode,
-            "delta.minReaderVersion": "2",
-            "delta.minWriterVersion": "5",
-        },
-        features=["columnMapping"],
+        mode=mode,
         allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
@@ -1502,18 +1138,14 @@ def delta_enable_deletion_vectors(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta deletion vectors (table feature + property).
+    """Enable Delta deletion vectors (table feature + property)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_deletion_vectors as _delta_enable_deletion_vectors,
+    )
 
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties/features report payload.
-    """
-    return _feature_toggle_report(
+    return _delta_enable_deletion_vectors(
         ctx,
         request=request,
-        properties={"delta.enableDeletionVectors": "true"},
-        features=["deletionVectors"],
         allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
@@ -1524,18 +1156,14 @@ def delta_enable_row_tracking(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta row tracking (table feature + property).
+    """Enable Delta row tracking (table feature + property)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_row_tracking as _delta_enable_row_tracking,
+    )
 
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties/features report payload.
-    """
-    return _feature_toggle_report(
+    return _delta_enable_row_tracking(
         ctx,
         request=request,
-        properties={"delta.enableRowTracking": "true"},
-        features=["rowTracking"],
         allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
@@ -1546,18 +1174,14 @@ def delta_enable_change_data_feed(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta Change Data Feed (table feature + property).
+    """Enable Delta Change Data Feed (table feature + property)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_change_data_feed as _delta_enable_change_data_feed,
+    )
 
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties/features report payload.
-    """
-    return _feature_toggle_report(
+    return _delta_enable_change_data_feed(
         ctx,
         request=request,
-        properties={"delta.enableChangeDataFeed": "true"},
-        features=["changeDataFeed"],
         allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
@@ -1568,17 +1192,14 @@ def delta_enable_generated_columns(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta generated columns feature.
+    """Enable Delta generated columns feature."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_generated_columns as _delta_enable_generated_columns,
+    )
 
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties/features report payload.
-    """
-    return _feature_toggle_report(
+    return _delta_enable_generated_columns(
         ctx,
         request=request,
-        features=["generatedColumns"],
         allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
@@ -1589,17 +1210,14 @@ def delta_enable_invariants(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta invariants feature.
+    """Enable Delta invariants feature."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_invariants as _delta_enable_invariants,
+    )
 
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties/features report payload.
-    """
-    return _feature_toggle_report(
+    return _delta_enable_invariants(
         ctx,
         request=request,
-        features=["invariants"],
         allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
@@ -1610,17 +1228,14 @@ def delta_enable_check_constraints(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta check constraints feature.
+    """Enable Delta check constraints feature."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_check_constraints as _delta_enable_check_constraints,
+    )
 
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties/features report payload.
-    """
-    return _feature_toggle_report(
+    return _delta_enable_check_constraints(
         ctx,
         request=request,
-        features=["checkConstraints"],
         allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
@@ -1632,19 +1247,17 @@ def delta_enable_in_commit_timestamps(
     enablement_version: int | None = None,
     enablement_timestamp: str | None = None,
 ) -> Mapping[str, object]:
-    """Enable Delta in-commit timestamps via table properties.
+    """Enable Delta in-commit timestamps via table properties."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_in_commit_timestamps as _delta_enable_in_commit_timestamps,
+    )
 
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties report payload.
-    """
-    properties: dict[str, str] = {"delta.enableInCommitTimestamps": "true"}
-    if enablement_version is not None:
-        properties["delta.inCommitTimestampEnablementVersion"] = str(enablement_version)
-    if enablement_timestamp is not None:
-        properties["delta.inCommitTimestampEnablementTimestamp"] = enablement_timestamp
-    return _feature_toggle_report(ctx, request=request, properties=properties)
+    return _delta_enable_in_commit_timestamps(
+        ctx,
+        request=request,
+        enablement_version=enablement_version,
+        enablement_timestamp=enablement_timestamp,
+    )
 
 
 def delta_enable_v2_checkpoints(
@@ -1653,18 +1266,14 @@ def delta_enable_v2_checkpoints(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta v2 checkpoints via feature + checkpoint policy property.
+    """Enable Delta v2 checkpoints via feature + checkpoint policy property."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_v2_checkpoints as _delta_enable_v2_checkpoints,
+    )
 
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties/features report payload.
-    """
-    return _feature_toggle_report(
+    return _delta_enable_v2_checkpoints(
         ctx,
         request=request,
-        properties={"delta.checkpointPolicy": "v2"},
-        features=["v2Checkpoint"],
         allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
@@ -1674,18 +1283,12 @@ def delta_enable_vacuum_protocol_check(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Enable vacuum protocol checks via table properties (best-effort).
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties report payload.
-    """
-    return _feature_toggle_report(
-        ctx,
-        request=request,
-        properties={"delta.vacuumProtocolCheck": "true"},
+    """Enable vacuum protocol checks via table properties (best-effort)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_vacuum_protocol_check as _delta_enable_vacuum_protocol_check,
     )
+
+    return _delta_enable_vacuum_protocol_check(ctx, request=request)
 
 
 def delta_enable_checkpoint_protection(
@@ -1693,18 +1296,12 @@ def delta_enable_checkpoint_protection(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Enable checkpoint protection via table properties (best-effort).
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties report payload.
-    """
-    return _feature_toggle_report(
-        ctx,
-        request=request,
-        properties={"delta.checkpointProtection": "true"},
+    """Enable checkpoint protection via table properties (best-effort)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_enable_checkpoint_protection as _delta_enable_checkpoint_protection,
     )
+
+    return _delta_enable_checkpoint_protection(ctx, request=request)
 
 
 def delta_disable_change_data_feed(
@@ -1712,18 +1309,12 @@ def delta_disable_change_data_feed(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta Change Data Feed via table properties (best-effort).
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties report payload.
-    """
-    return _feature_toggle_report(
-        ctx,
-        request=request,
-        properties={"delta.enableChangeDataFeed": "false"},
+    """Disable Delta Change Data Feed via table properties (best-effort)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_change_data_feed as _delta_disable_change_data_feed,
     )
+
+    return _delta_disable_change_data_feed(ctx, request=request)
 
 
 def delta_disable_deletion_vectors(
@@ -1731,18 +1322,12 @@ def delta_disable_deletion_vectors(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta deletion vectors via table properties (best-effort).
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties report payload.
-    """
-    return _feature_toggle_report(
-        ctx,
-        request=request,
-        properties={"delta.enableDeletionVectors": "false"},
+    """Disable Delta deletion vectors via table properties (best-effort)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_deletion_vectors as _delta_disable_deletion_vectors,
     )
+
+    return _delta_disable_deletion_vectors(ctx, request=request)
 
 
 def delta_disable_row_tracking(
@@ -1750,18 +1335,12 @@ def delta_disable_row_tracking(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta row tracking via table properties (best-effort).
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties report payload.
-    """
-    return _feature_toggle_report(
-        ctx,
-        request=request,
-        properties={"delta.enableRowTracking": "false"},
+    """Disable Delta row tracking via table properties (best-effort)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_row_tracking as _delta_disable_row_tracking,
     )
+
+    return _delta_disable_row_tracking(ctx, request=request)
 
 
 def delta_disable_in_commit_timestamps(
@@ -1769,18 +1348,12 @@ def delta_disable_in_commit_timestamps(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta in-commit timestamps via table properties (best-effort).
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties report payload.
-    """
-    return _feature_toggle_report(
-        ctx,
-        request=request,
-        properties={"delta.enableInCommitTimestamps": "false"},
+    """Disable Delta in-commit timestamps via table properties (best-effort)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_in_commit_timestamps as _delta_disable_in_commit_timestamps,
     )
+
+    return _delta_disable_in_commit_timestamps(ctx, request=request)
 
 
 def delta_disable_vacuum_protocol_check(
@@ -1788,18 +1361,12 @@ def delta_disable_vacuum_protocol_check(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable vacuum protocol check flag via table properties (best-effort).
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties report payload.
-    """
-    return _feature_toggle_report(
-        ctx,
-        request=request,
-        properties={"delta.vacuumProtocolCheck": "false"},
+    """Disable vacuum protocol check flag via table properties (best-effort)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_vacuum_protocol_check as _delta_disable_vacuum_protocol_check,
     )
+
+    return _delta_disable_vacuum_protocol_check(ctx, request=request)
 
 
 def delta_disable_checkpoint_protection(
@@ -1807,48 +1374,57 @@ def delta_disable_checkpoint_protection(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable checkpoint protection via table properties (best-effort).
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Properties report payload.
-    """
-    return _feature_toggle_report(
-        ctx,
-        request=request,
-        properties={"delta.checkpointProtection": "false"},
+    """Disable checkpoint protection via table properties (best-effort)."""
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_checkpoint_protection as _delta_disable_checkpoint_protection,
     )
+
+    return _delta_disable_checkpoint_protection(ctx, request=request)
 
 
 def delta_disable_column_mapping(*_args: object, **_kwargs: object) -> None:
     """Raise when Delta column mapping cannot be disabled safely."""
-    msg = "Delta column mapping cannot be disabled safely once enabled."
-    _raise_engine_error(msg, kind=ErrorKind.DELTA)
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_column_mapping as _delta_disable_column_mapping,
+    )
+
+    _delta_disable_column_mapping(*_args, **_kwargs)
 
 
 def delta_disable_generated_columns(*_args: object, **_kwargs: object) -> None:
     """Raise when Delta generated columns cannot be disabled safely."""
-    msg = "Delta generated columns cannot be disabled safely once enabled."
-    _raise_engine_error(msg, kind=ErrorKind.DELTA)
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_generated_columns as _delta_disable_generated_columns,
+    )
+
+    _delta_disable_generated_columns(*_args, **_kwargs)
 
 
 def delta_disable_invariants(*_args: object, **_kwargs: object) -> None:
     """Raise when Delta invariants cannot be disabled safely."""
-    msg = "Delta invariants cannot be disabled safely once enabled."
-    _raise_engine_error(msg, kind=ErrorKind.DELTA)
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_invariants as _delta_disable_invariants,
+    )
+
+    _delta_disable_invariants(*_args, **_kwargs)
 
 
 def delta_disable_check_constraints(*_args: object, **_kwargs: object) -> None:
     """Raise when Delta check constraints must be dropped individually."""
-    msg = "Delta check constraints must be dropped individually."
-    _raise_engine_error(msg, kind=ErrorKind.DELTA)
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_check_constraints as _delta_disable_check_constraints,
+    )
+
+    _delta_disable_check_constraints(*_args, **_kwargs)
 
 
 def delta_disable_v2_checkpoints(*_args: object, **_kwargs: object) -> None:
     """Raise when Delta v2 checkpoints cannot be disabled safely."""
-    msg = "Delta v2 checkpoints cannot be disabled safely once enabled."
-    _raise_engine_error(msg, kind=ErrorKind.DELTA)
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_disable_v2_checkpoints as _delta_disable_v2_checkpoints,
+    )
+
+    _delta_disable_v2_checkpoints(*_args, **_kwargs)
 
 
 __all__ = [

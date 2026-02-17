@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
-from semantics import pipeline_build
+from importlib import import_module
+
+pipeline_build = import_module("semantics.pipeline_build")
 
 
 def test_pipeline_build_exports_cpg_entrypoint() -> None:

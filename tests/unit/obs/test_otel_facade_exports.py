@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
-from obs import otel
+from importlib import import_module
+
+otel = import_module("obs.otel")
 
 
 def test_otel_facade_exposes_common_symbols() -> None:

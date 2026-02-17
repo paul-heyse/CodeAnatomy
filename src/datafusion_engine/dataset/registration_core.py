@@ -1412,40 +1412,11 @@ def _provider_for_registration(provider: object) -> object:
 def _register_delta_provider(
     context: DataFusionRegistrationContext,
 ) -> tuple[DataFrame, str | None]:
-    state = _resolve_delta_registration_state(context)
-    _enforce_delta_native_provider_policy(state, context)
-    result = _register_delta_provider_with_adapter(state, context)
-    schema_identity_hash_value, ddl_fingerprint, fingerprint_details = (
-        _update_table_provider_fingerprints(
-            context.ctx,
-            name=context.name,
-            schema=result.df.schema(),
-        )
+    from datafusion_engine.dataset.registration_delta import (
+        _register_delta_provider as _delegate,
     )
-    if state.resolution.provider_kind == "delta_cdf":
-        _record_delta_cdf_registration_artifacts(
-            state,
-            context,
-            fingerprint_details=fingerprint_details,
-        )
-    else:
-        _record_delta_table_registration_artifacts(
-            state,
-            context,
-            fingerprint_details=fingerprint_details,
-            schema_identity_hash_value=schema_identity_hash_value,
-            ddl_fingerprint=ddl_fingerprint,
-        )
-    _update_table_provider_capabilities(
-        context.ctx,
-        name=context.name,
-        supports_insert=state.resolution.provider_kind != "delta_cdf",
-        supports_cdf=(
-            state.resolution.provider_kind == "delta_cdf"
-            or context.location.delta_cdf_options is not None
-        ),
-    )
-    return _maybe_cache(context, result.df), result.cache_prefix
+
+    return _delegate(context)
 
 
 def _resolve_delta_registration_state(
@@ -1496,11 +1467,11 @@ def _register_delta_provider_with_adapter(
     state: _DeltaRegistrationState,
     context: DataFusionRegistrationContext,
 ) -> _DeltaRegistrationResult:
-    state.adapter.register_table(context.name, state.provider_to_register)
-    return _DeltaRegistrationResult(
-        df=context.ctx.table(context.name),
-        cache_prefix=state.cache_prefix,
+    from datafusion_engine.dataset.registration_delta import (
+        _register_delta_provider_with_adapter as _delegate,
     )
+
+    return _delegate(state, context)
 
 
 def _delta_registration_mode(state: _DeltaRegistrationState) -> str:
@@ -1515,43 +1486,14 @@ def _record_delta_cdf_registration_artifacts(
     *,
     fingerprint_details: Mapping[str, object] | None,
 ) -> None:
-    location = context.location
-    resolution = state.resolution
-    details = _delta_cdf_artifact_payload(location, resolution=resolution)
-    details["ffi_table_provider"] = state.provider_is_native
-    provider_mode = _delta_registration_mode(state)
-    details["provider_mode"] = provider_mode
-    strict_enabled = (
-        context.runtime_profile.features.enforce_delta_ffi_provider
-        if context.runtime_profile is not None
-        else None
+    from datafusion_engine.dataset.registration_delta import (
+        _record_delta_cdf_registration_artifacts as _delegate,
     )
-    details["strict_native_provider_enabled"] = strict_enabled
-    details["strict_native_provider_violation"] = (
-        bool(strict_enabled) and not state.provider_is_native
-    )
-    if fingerprint_details:
-        details.update(fingerprint_details)
-    _record_table_provider_artifact(
-        context.runtime_profile,
-        artifact=_TableProviderArtifact(
-            name=context.name,
-            provider=state.provider,
-            provider_kind=provider_mode,
-            source=None,
-            details=details,
-        ),
-    )
-    _record_delta_cdf_artifact(
-        context.runtime_profile,
-        artifact=DeltaCdfArtifact(
-            name=context.name,
-            path=str(location.path),
-            provider="table_provider",
-            options=location.delta_cdf_options,
-            log_storage_options=location.delta_log_storage_options,
-            snapshot=resolution.delta_snapshot,
-        ),
+
+    _delegate(
+        state,
+        context,
+        fingerprint_details=fingerprint_details,
     )
 
 

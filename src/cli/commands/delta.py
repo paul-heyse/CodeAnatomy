@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, cast
 
 import msgspec
 from cyclopts import Parameter
@@ -19,7 +19,6 @@ from datafusion_engine.delta.control_plane_core import (
     delta_provider_from_session,
     delta_restore,
 )
-from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.errors import DataFusionEngineError
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
@@ -30,6 +29,9 @@ from datafusion_engine.tables.metadata import TableProviderCapsule
 from serde_msgspec import JSON_ENCODER_SORTED, StructBaseCompat, json_default
 from storage.deltalake import DeltaVacuumOptions
 from utils.uuid_factory import uuid7_hex
+
+if TYPE_CHECKING:
+    from datafusion_engine.delta.service import DeltaService
 
 
 class VacuumReport(StructBaseCompat, frozen=True):
@@ -222,6 +224,11 @@ _DEFAULT_EXPORT_OPTIONS = ExportOptions()
 _DEFAULT_RESTORE_OPTIONS = RestoreOptions()
 
 
+def _default_delta_service() -> DeltaService:
+    profile = DataFusionRuntimeProfile()
+    return cast("DeltaService", profile.delta_ops.delta_service())
+
+
 def vacuum_command(
     path: Annotated[
         str,
@@ -256,7 +263,7 @@ def vacuum_command(
         keep_versions=keep_versions_list,
         commit_metadata=commit_payload or None,
     )
-    service = DeltaService(profile=DataFusionRuntimeProfile())
+    service = _default_delta_service()
     files = service.vacuum(
         path=path,
         options=vacuum_options,
@@ -295,7 +302,7 @@ def checkpoint_command(
         Exit status code.
     """
     storage_options: dict[str, str] = parse_kv_pairs(storage_option) if storage_option else {}
-    service = DeltaService(profile=DataFusionRuntimeProfile())
+    service = _default_delta_service()
     service.create_checkpoint(
         path=path,
         storage_options=storage_options or None,
@@ -323,7 +330,7 @@ def cleanup_log_command(
         Exit status code.
     """
     storage_options: dict[str, str] = parse_kv_pairs(storage_option) if storage_option else {}
-    service = DeltaService(profile=DataFusionRuntimeProfile())
+    service = _default_delta_service()
     service.cleanup_log(
         path=path,
         storage_options=storage_options or None,

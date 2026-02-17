@@ -5,20 +5,27 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from datafusion_engine.dataset import registration_core as _core
 from datafusion_engine.dataset.registration_core import (
     _cache_prefix_for_registration,
+    _delta_cdf_artifact_payload,
     _delta_provider_artifact_payload,
     _delta_pruning_predicate,
     _DeltaProviderArtifactContext,
     _DeltaProviderRegistration,
     _DeltaRegistrationResult,
     _DeltaRegistrationState,
+    _enforce_delta_native_provider_policy,
+    _maybe_cache,
     _provider_for_registration,
+    _record_delta_cdf_artifact,
     _record_delta_log_health,
     _record_delta_snapshot_if_applicable,
     _record_table_provider_artifact,
     _table_provider_capsule,
     _TableProviderArtifact,
+    _update_table_provider_capabilities,
+    _update_table_provider_fingerprints,
     _update_table_provider_scan_config,
 )
 from datafusion_engine.dataset.resolution import (
@@ -170,10 +177,109 @@ def _record_delta_table_registration_artifacts(
     )
 
 
+def _record_delta_cdf_registration_artifacts(
+    state: _DeltaRegistrationState,
+    context: DataFusionRegistrationContext,
+    *,
+    fingerprint_details: Mapping[str, object] | None,
+) -> None:
+    location = context.location
+    resolution = state.resolution
+    details = _delta_cdf_artifact_payload(location, resolution=resolution)
+    details["ffi_table_provider"] = state.provider_is_native
+    provider_mode = _delta_registration_mode(state)
+    details["provider_mode"] = provider_mode
+    strict_enabled = (
+        context.runtime_profile.features.enforce_delta_ffi_provider
+        if context.runtime_profile is not None
+        else None
+    )
+    details["strict_native_provider_enabled"] = strict_enabled
+    details["strict_native_provider_violation"] = (
+        bool(strict_enabled) and not state.provider_is_native
+    )
+    if fingerprint_details:
+        details.update(fingerprint_details)
+    _record_table_provider_artifact(
+        context.runtime_profile,
+        artifact=_TableProviderArtifact(
+            name=context.name,
+            provider=state.provider,
+            provider_kind=provider_mode,
+            source=None,
+            details=details,
+        ),
+    )
+    _record_delta_cdf_artifact(
+        context.runtime_profile,
+        artifact=_core.DeltaCdfArtifact(
+            name=context.name,
+            path=str(location.path),
+            provider="table_provider",
+            options=location.delta_cdf_options,
+            log_storage_options=location.delta_log_storage_options,
+            snapshot=resolution.delta_snapshot,
+        ),
+    )
+
+
+def _register_delta_provider_with_adapter(
+    state: _DeltaRegistrationState,
+    context: DataFusionRegistrationContext,
+) -> _DeltaRegistrationResult:
+    state.adapter.register_table(context.name, state.provider_to_register)
+    return _DeltaRegistrationResult(
+        df=context.ctx.table(context.name),
+        cache_prefix=state.cache_prefix,
+    )
+
+
+def _register_delta_provider(
+    context: DataFusionRegistrationContext,
+) -> tuple[_core.DataFrame, str | None]:
+    state = _resolve_delta_registration_state(context)
+    _enforce_delta_native_provider_policy(state, context)
+    result = _register_delta_provider_with_adapter(state, context)
+    schema_identity_hash_value, ddl_fingerprint, fingerprint_details = (
+        _update_table_provider_fingerprints(
+            context.ctx,
+            name=context.name,
+            schema=result.df.schema(),
+        )
+    )
+    if state.resolution.provider_kind == "delta_cdf":
+        _record_delta_cdf_registration_artifacts(
+            state,
+            context,
+            fingerprint_details=fingerprint_details,
+        )
+    else:
+        _record_delta_table_registration_artifacts(
+            state,
+            context,
+            fingerprint_details=fingerprint_details,
+            schema_identity_hash_value=schema_identity_hash_value,
+            ddl_fingerprint=ddl_fingerprint,
+        )
+    _update_table_provider_capabilities(
+        context.ctx,
+        name=context.name,
+        supports_insert=state.resolution.provider_kind != "delta_cdf",
+        supports_cdf=(
+            state.resolution.provider_kind == "delta_cdf"
+            or context.location.delta_cdf_options is not None
+        ),
+    )
+    return _maybe_cache(context, result.df), result.cache_prefix
+
+
 __all__ = [
     "_DeltaRegistrationResult",
     "_build_delta_provider_registration",
     "_delta_registration_mode",
+    "_record_delta_cdf_registration_artifacts",
     "_record_delta_table_registration_artifacts",
+    "_register_delta_provider",
+    "_register_delta_provider_with_adapter",
     "_resolve_delta_registration_state",
 ]

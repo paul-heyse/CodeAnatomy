@@ -43,6 +43,7 @@ def semantic_diagnostic_view_builders() -> dict[str, Callable[[SessionContext], 
         file_coverage_report_df_builder,
         file_quality_df_builder,
         relationship_ambiguity_report_df_builder,
+        relationship_decisions_df_builder,
         relationship_quality_metrics_df_builder,
     )
 
@@ -52,7 +53,7 @@ def semantic_diagnostic_view_builders() -> dict[str, Callable[[SessionContext], 
         "relationship_ambiguity_report": relationship_ambiguity_report_df_builder,
         "file_coverage_report": file_coverage_report_df_builder,
         "relationship_candidates": build_relationship_candidates_view,
-        "relationship_decisions": build_relationship_candidates_view,
+        "relationship_decisions": relationship_decisions_df_builder,
         "schema_anomalies": build_schema_anomalies_view,
     }
 

@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 import pyarrow as pa
 from cyclopts import Parameter
@@ -15,7 +15,6 @@ from datafusion_engine.delta.control_plane_core import (
     DeltaProviderRequest,
     delta_provider_from_session,
 )
-from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema import extract_schema_for
@@ -27,6 +26,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
 
     from datafusion import SessionContext
+
+    from datafusion_engine.delta.service import DeltaService
 
 
 @dataclass(frozen=True)
@@ -114,7 +115,8 @@ def diag_command(
 def _is_delta_table(path: Path) -> bool:
     try:
         profile = DataFusionRuntimeProfile()
-        return DeltaService(profile=profile).table_version(path=str(path)) is not None
+        service = cast("DeltaService", profile.delta_ops.delta_service())
+        return service.table_version(path=str(path)) is not None
     except (RuntimeError, TypeError, ValueError):
         return False
 

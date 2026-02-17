@@ -377,7 +377,7 @@ def scan_file_line_index_plan(
     """
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
 
-    cache_profile = diskcache_profile_from_ctx(session.engine_session.datafusion_profile)
+    cache_profile = diskcache_profile_from_ctx(session.runtime_profile)
     extract_cache = cache_for_extract(cache_profile)
     cache_ttl = cache_ttl_seconds(cache_profile, "extract")
 

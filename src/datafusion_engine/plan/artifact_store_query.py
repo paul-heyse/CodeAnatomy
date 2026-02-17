@@ -3,12 +3,170 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
+import msgspec
+import pyarrow as pa
 from datafusion import SessionContext
+from msgspec.convert import convert
 
 from datafusion_engine.plan import artifact_store_core as _core
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 DeterminismValidationResult = _core.DeterminismValidationResult
+
+
+def _latest_plan_snapshot_by_view(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+    *,
+    table_path: str,
+    view_names: Sequence[str],
+) -> dict[str, tuple[str | None, str | None]]:
+    sql_options = _core.planning_sql_options(profile)
+    snapshots: dict[str, tuple[str | None, str | None]] = {}
+    for view_name in sorted(set(view_names)):
+        escaped_view = view_name.replace("'", "''")
+        query = (
+            "SELECT plan_fingerprint, plan_identity_hash "
+            f"FROM delta_scan('{table_path}') "
+            f"WHERE view_name = '{escaped_view}' "
+            "ORDER BY event_time_unix_ms DESC LIMIT 1"
+        )
+        try:
+            batches = ctx.sql_with_options(query, sql_options).collect()
+        except (RuntimeError, ValueError, TypeError):
+            continue
+        rows: list[dict[str, object]] = (
+            [dict(row) for row in pa.Table.from_batches(batches).to_pylist()] if batches else []
+        )
+        if not rows:
+            continue
+        payload = rows[0]
+        plan_fingerprint = payload.get("plan_fingerprint")
+        plan_identity = payload.get("plan_identity_hash")
+        snapshots[view_name] = (
+            str(plan_fingerprint) if isinstance(plan_fingerprint, str) else None,
+            str(plan_identity) if isinstance(plan_identity, str) else None,
+        )
+    return snapshots
+
+
+def _plan_diff_gate_violations(
+    rows: Sequence[_core.PlanArtifactRow],
+    *,
+    previous_by_view: Mapping[str, tuple[str | None, str | None]],
+) -> tuple[dict[str, object], ...]:
+    violations: list[dict[str, object]] = []
+    for row in rows:
+        previous = previous_by_view.get(row.view_name)
+        if previous is None:
+            continue
+        previous_fingerprint, previous_identity = previous
+        if previous_identity is not None and previous_identity != row.plan_identity_hash:
+            violations.append(
+                {
+                    "view_name": row.view_name,
+                    "previous_plan_fingerprint": previous_fingerprint,
+                    "previous_plan_identity_hash": previous_identity,
+                    "current_plan_fingerprint": row.plan_fingerprint,
+                    "current_plan_identity_hash": row.plan_identity_hash,
+                }
+            )
+    return tuple(violations)
+
+
+def _collect_determinism_results(
+    ctx: SessionContext,
+    table_path: str,
+    *,
+    view_name: str | None,
+    plan_fingerprint: str,
+    sql_options: object,
+) -> tuple[list[pa.RecordBatch] | None, str | None]:
+    identity_error: str | None = None
+    identity_query = _determinism_validation_query(
+        table_path,
+        view_name=view_name,
+        plan_fingerprint=plan_fingerprint,
+        include_identity=True,
+    )
+    try:
+        return ctx.sql_with_options(identity_query, sql_options).collect(), None
+    except (RuntimeError, ValueError, TypeError) as exc:
+        identity_error = str(exc)
+    fallback_query = _determinism_validation_query(
+        table_path,
+        view_name=view_name,
+        plan_fingerprint=plan_fingerprint,
+        include_identity=False,
+    )
+    try:
+        return ctx.sql_with_options(fallback_query, sql_options).collect(), identity_error
+    except (RuntimeError, ValueError, TypeError) as fallback_exc:
+        error = identity_error or str(fallback_exc)
+        return None, error
+
+
+def _determinism_sets(
+    results: Sequence[pa.RecordBatch],
+) -> tuple[int, set[str], set[str]]:
+    fingerprints: set[str] = set()
+    identities: set[str] = set()
+    row_count = 0
+    for batch in results:
+        for row in batch.to_pylist():
+            row_count += 1
+            try:
+                payload = convert(row, target_type=_core._DeterminismRow, strict=True)
+            except msgspec.ValidationError as exc:
+                details = _core.validation_error_payload(exc)
+                msg = f"Determinism row validation failed: {details}"
+                raise ValueError(msg) from exc
+            if payload.plan_fingerprint is not None:
+                fingerprints.add(str(payload.plan_fingerprint))
+            if payload.plan_identity_hash is not None:
+                identities.add(str(payload.plan_identity_hash))
+    return row_count, fingerprints, identities
+
+
+def _determinism_outcome(
+    *,
+    plan_fingerprint: str,
+    fingerprints: set[str],
+    identities: set[str],
+) -> tuple[bool, tuple[str, ...], tuple[str, ...]]:
+    plan_identity_hashes = tuple(sorted(identities))
+    if plan_identity_hashes:
+        baseline_identity = plan_identity_hashes[0]
+        conflicting_identities = tuple(
+            value for value in plan_identity_hashes if value != baseline_identity
+        )
+        return (not conflicting_identities), plan_identity_hashes, conflicting_identities
+    is_deterministic = len(fingerprints) <= 1 or plan_fingerprint in fingerprints
+    return is_deterministic, plan_identity_hashes, ()
+
+
+def _determinism_validation_query(
+    table_path: str,
+    *,
+    view_name: str | None,
+    plan_fingerprint: str,
+    include_identity: bool,
+) -> str:
+    """Build SQL query for determinism validation."""
+    plan_literal = plan_fingerprint.replace("'", "''")
+    select_cols = "plan_fingerprint"
+    if include_identity:
+        select_cols = "plan_fingerprint, plan_identity_hash"
+    base = (
+        f"SELECT DISTINCT {select_cols} FROM delta_scan('{table_path}') "
+        f"WHERE plan_fingerprint = '{plan_literal}'"
+    )
+    if view_name is None:
+        return base
+    view_literal = view_name.replace("'", "''")
+    return f"{base} AND view_name = '{view_literal}'"
 
 
 def validate_plan_determinism(
@@ -36,7 +194,7 @@ def validate_plan_determinism(
             validation_error="artifact_store_disabled",
         )
     table_path = str(location.path)
-    results, identity_error = _core._collect_determinism_results(
+    results, identity_error = _collect_determinism_results(
         ctx,
         table_path,
         view_name=view_name,
@@ -52,8 +210,8 @@ def validate_plan_determinism(
             conflicting_fingerprints=(),
             validation_error=identity_error,
         )
-    row_count, fingerprints, identities = _core._determinism_sets(results)
-    is_deterministic, plan_identity_hashes, conflicting_identities = _core._determinism_outcome(
+    row_count, fingerprints, identities = _determinism_sets(results)
+    is_deterministic, plan_identity_hashes, conflicting_identities = _determinism_outcome(
         plan_fingerprint=plan_fingerprint,
         fingerprints=fingerprints,
         identities=identities,
@@ -95,7 +253,7 @@ def persist_plan_artifacts_for_views(
         return ()
     previous_by_view: dict[str, tuple[str | None, str | None]] = {}
     if comparison_policy.enable_diff_gates:
-        previous_by_view = _core._latest_plan_snapshot_by_view(
+        previous_by_view = _latest_plan_snapshot_by_view(
             ctx,
             profile,
             table_path=str(location.path),
@@ -130,7 +288,7 @@ def persist_plan_artifacts_for_views(
     if not rows:
         return ()
     if comparison_policy.enable_diff_gates:
-        violations = _core._plan_diff_gate_violations(
+        violations = _plan_diff_gate_violations(
             rows,
             previous_by_view=previous_by_view,
         )

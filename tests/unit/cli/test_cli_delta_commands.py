@@ -15,7 +15,6 @@ from cli.commands.delta import (
     clone_delta_snapshot,
     vacuum_command,
 )
-from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from tests.test_helpers.delta_seed import write_delta_table
 from tests.test_helpers.optional_deps import (
@@ -28,7 +27,8 @@ require_datafusion()
 require_deltalake()
 require_delta_extension()
 
-_DELTA_SERVICE = DeltaService(profile=DataFusionRuntimeProfile())
+_PROFILE = DataFusionRuntimeProfile()
+_DELTA_SERVICE = _PROFILE.delta_ops.delta_service()
 
 EXPECTED_ROW_COUNT = 2
 

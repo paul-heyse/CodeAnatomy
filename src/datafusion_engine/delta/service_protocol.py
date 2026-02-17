@@ -8,9 +8,10 @@ from typing import TYPE_CHECKING, Protocol
 import pyarrow as pa
 
 from storage.deltalake import DeltaSchemaRequest
-from storage.deltalake.delta_read import DeltaVacuumOptions, StorageOptions
+from storage.deltalake.delta_read import DeltaCdfOptions, DeltaVacuumOptions, StorageOptions
 
 if TYPE_CHECKING:
+    from datafusion_engine.arrow.interop import RecordBatchReaderLike
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.delta.protocol import DeltaFeatureGate, DeltaProtocolSnapshot
 
@@ -145,6 +146,39 @@ class DeltaServicePort(Protocol):
         gate: DeltaFeatureGate | None = None,
     ) -> DeltaProtocolSnapshot | None:
         """Return protocol snapshot metadata."""
+        ...
+
+    def cdf_enabled(
+        self,
+        *,
+        path: str,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+        gate: DeltaFeatureGate | None = None,
+    ) -> bool:
+        """Return whether CDF is enabled for a Delta table path."""
+        ...
+
+    def read_cdf(
+        self,
+        *,
+        table_path: str,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+        cdf_options: DeltaCdfOptions | None = None,
+    ) -> RecordBatchReaderLike:
+        """Read CDF rows as a streaming reader."""
+        ...
+
+    def read_cdf_eager(
+        self,
+        *,
+        table_path: str,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+        cdf_options: DeltaCdfOptions | None = None,
+    ) -> pa.Table:
+        """Read CDF rows as an eager Arrow table."""
         ...
 
     def vacuum(

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from serde_msgspec import StructBaseCompat
 from utils.hashing import hash_msgpack_canonical
@@ -24,36 +24,42 @@ if TYPE_CHECKING:
     from semantics.program_manifest import SemanticProgramManifest
 
 
+@runtime_checkable
 class SemanticIrHashLike(Protocol):
     """Protocol for semantic IR hash access."""
 
     ir_hash: str
 
 
+@runtime_checkable
 class ManifestHashLike(Protocol):
     """Protocol for manifest hash access."""
 
     model_hash: str
 
 
+@runtime_checkable
 class ManifestWithSemanticIr(Protocol):
     """Protocol for manifest objects carrying semantic IR payloads."""
 
     semantic_ir: SemanticIrHashLike | None
 
 
+@runtime_checkable
 class PolicyFingerprintLike(Protocol):
     """Protocol for compiled policy fingerprint access."""
 
     policy_fingerprint: str | None
 
 
+@runtime_checkable
 class SettingsHashValueLike(Protocol):
     """Protocol for settings hash attribute access."""
 
     settings_hash: str
 
 
+@runtime_checkable
 class SettingsHashCallableLike(Protocol):
     """Protocol for settings hash method access."""
 
@@ -78,55 +84,55 @@ class ExecutionPackageArtifact(StructBaseCompat, frozen=True):
 
 
 def _hash_manifest(
-    manifest: SemanticProgramManifest | ManifestHashLike | ManifestWithSemanticIr | object | None,
+    manifest: SemanticProgramManifest | ManifestHashLike | ManifestWithSemanticIr | None,
 ) -> str:
     if manifest is None:
         return ""
-    model_hash = getattr(manifest, "model_hash", None)
-    if isinstance(model_hash, str) and model_hash:
-        return model_hash
-    ir = getattr(manifest, "semantic_ir", None)
-    ir_hash = getattr(ir, "ir_hash", None)
-    if isinstance(ir_hash, str) and ir_hash:
-        return ir_hash
-    return hash_msgpack_canonical(repr(manifest))
+    if isinstance(manifest, ManifestHashLike) and manifest.model_hash:
+        return manifest.model_hash
+    if isinstance(manifest, ManifestWithSemanticIr):
+        semantic_ir = manifest.semantic_ir
+        if isinstance(semantic_ir, SemanticIrHashLike) and semantic_ir.ir_hash:
+            return semantic_ir.ir_hash
+    msg = "manifest must expose model_hash or semantic_ir.ir_hash"
+    raise TypeError(msg)
 
 
-def _hash_policy(compiled_policy: PolicyFingerprintLike | object | None) -> str:
+def _hash_policy(compiled_policy: PolicyFingerprintLike | None) -> str:
     if compiled_policy is None:
         return ""
-    fingerprint = getattr(compiled_policy, "policy_fingerprint", None)
-    if isinstance(fingerprint, str) and fingerprint:
-        return fingerprint
-    return hash_msgpack_canonical(repr(compiled_policy))
+    if compiled_policy.policy_fingerprint:
+        return compiled_policy.policy_fingerprint
+    msg = "compiled_policy must include policy_fingerprint"
+    raise TypeError(msg)
 
 
 def _hash_capability_snapshot(
-    capability_snapshot: SettingsHashValueLike | object | None,
+    capability_snapshot: SettingsHashValueLike | None,
 ) -> str:
     if capability_snapshot is None:
         return ""
-    settings_hash = getattr(capability_snapshot, "settings_hash", None)
-    if isinstance(settings_hash, str) and settings_hash:
-        return settings_hash
-    return hash_msgpack_canonical(repr(capability_snapshot))
+    if capability_snapshot.settings_hash:
+        return capability_snapshot.settings_hash
+    msg = "capability_snapshot must expose a non-empty settings_hash"
+    raise TypeError(msg)
 
 
 def _hash_session_config(
-    session_config: SettingsHashValueLike | SettingsHashCallableLike | str | object | None,
+    session_config: SettingsHashValueLike | SettingsHashCallableLike | str | None,
 ) -> str:
     if session_config is None:
         return ""
     if isinstance(session_config, str):
         return session_config
-    settings_hash_method = getattr(session_config, "settings_hash", None)
-    if callable(settings_hash_method):
-        result = settings_hash_method()
-        if isinstance(result, str):
+    if isinstance(session_config, SettingsHashCallableLike):
+        result = session_config.settings_hash()
+        if result:
             return result
-    if isinstance(settings_hash_method, str) and settings_hash_method:
-        return settings_hash_method
-    return hash_msgpack_canonical(repr(session_config))
+    if isinstance(session_config, SettingsHashValueLike) and session_config.settings_hash:
+        return session_config.settings_hash
+    msg = "session_config must expose settings_hash value or callable"
+    raise TypeError(msg)
 
 
 def _normalize_plan_bundle_fingerprints(
@@ -157,11 +163,11 @@ def _composite_fingerprint(
 
 def build_execution_package(
     *,
-    manifest: SemanticProgramManifest | object | None = None,
-    compiled_policy: object | None = None,
-    capability_snapshot: object | None = None,
+    manifest: SemanticProgramManifest | ManifestHashLike | ManifestWithSemanticIr | None = None,
+    compiled_policy: PolicyFingerprintLike | None = None,
+    capability_snapshot: SettingsHashValueLike | None = None,
     plan_bundle_fingerprints: Mapping[str, str] | None = None,
-    session_config: object | None = None,
+    session_config: SettingsHashValueLike | SettingsHashCallableLike | str | None = None,
 ) -> ExecutionPackageArtifact:
     """Build a reproducible execution package from pipeline components.
 

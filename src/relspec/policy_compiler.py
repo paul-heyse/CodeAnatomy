@@ -244,7 +244,7 @@ def _cache_overrides_from_view_nodes(
         return {}
     overrides: dict[str, str] = {}
     for node in view_nodes:
-        policy_value = _normalize_cache_policy_value(getattr(node, "cache_policy", None))
+        policy_value = _normalize_cache_policy_value(node.cache_policy)
         if policy_value is None:
             continue
         overrides[node.name] = policy_value
@@ -459,10 +459,7 @@ def _derive_maintenance_policies(
     """
     policies: dict[str, CompiledMaintenancePolicy] = {}
     for dataset_name, location in sorted(output_locations.items()):
-        resolved = getattr(location, "resolved", None)
-        if resolved is None:
-            continue
-        maintenance_policy = getattr(resolved, "delta_maintenance_policy", None)
+        maintenance_policy = location.delta_maintenance_policy
         if maintenance_policy is None:
             continue
         payload = to_builtins(maintenance_policy, str_keys=True)
@@ -496,9 +493,9 @@ def _derive_materialization_strategy(
         return None
     normalized_workload = _normalize_workload_class(workload_class)
     base_strategy: str
-    if getattr(getattr(runtime_profile, "policies", None), "write_policy", None) is not None:
+    if runtime_profile.policies.write_policy is not None:
         base_strategy = "delta_write_policy"
-    elif bool(getattr(getattr(runtime_profile, "features", None), "enable_delta_cdf", False)):
+    elif runtime_profile.features.enable_delta_cdf:
         base_strategy = "delta_cdf_outputs"
     else:
         base_strategy = "delta_outputs"

@@ -9,7 +9,7 @@ import pyarrow as pa
 
 from datafusion_engine.arrow.coercion import coerce_table_to_storage, to_arrow_table
 from datafusion_engine.arrow.interop import TableLike
-from datafusion_engine.delta.service import DeltaService
+from datafusion_engine.delta.service_protocol import DeltaServicePort
 from storage.deltalake import DeltaCdfOptions, StorageOptions
 
 
@@ -62,7 +62,7 @@ class DeltaCdfPort(Protocol):
 class DeltaServiceCdfPort:
     """Default Delta CDF port backed by ``DeltaService``."""
 
-    service: DeltaService
+    service: DeltaServicePort
 
     def table_version(
         self,

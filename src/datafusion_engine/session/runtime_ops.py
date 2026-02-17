@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+from weakref import WeakKeyDictionary
 
 import msgspec
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.delta.service_protocol import DeltaServicePort
     from obs.datafusion_runs import DataFusionRun
     from semantics.program_manifest import ManifestDatasetResolver
     from serde_schema_registry import ArtifactSpec
@@ -34,6 +35,30 @@ if TYPE_CHECKING:
 
 
 _EXTENSION_MODULE_NAMES: tuple[str, ...] = ("datafusion_engine.extensions.datafusion_ext",)
+_BOUND_DELTA_SERVICES: WeakKeyDictionary[object, object] = WeakKeyDictionary()
+
+
+def bind_delta_service(
+    profile: DataFusionRuntimeProfile,
+    *,
+    service: DeltaServicePort | None,
+) -> None:
+    """Bind an explicit Delta service implementation to a runtime profile."""
+    if service is None:
+        _BOUND_DELTA_SERVICES.pop(profile, None)
+        return
+    _BOUND_DELTA_SERVICES[profile] = service
+
+
+def _resolve_delta_service(profile: DataFusionRuntimeProfile) -> DeltaServicePort:
+    bound = _BOUND_DELTA_SERVICES.get(profile)
+    if bound is not None:
+        return cast("DeltaServicePort", bound)
+    msg = (
+        "DeltaServicePort is not bound to this runtime profile. "
+        "Profiles must bind an explicit delta service during construction."
+    )
+    raise RuntimeError(msg)
 
 
 def _resolve_runtime_extension_module(required_attr: str | None = None) -> object | None:
@@ -103,17 +128,15 @@ class RuntimeProfileDeltaOps:
         """
         return self.profile.session_context()
 
-    def delta_service(self) -> DeltaService:
+    def delta_service(self) -> DeltaServicePort:
         """Return the Delta service bound to this runtime profile.
 
         Returns:
         -------
-        DeltaService
+        DeltaServicePort
             Delta service bound to the runtime profile.
         """
-        from datafusion_engine.delta.service import DeltaService
-
-        return DeltaService(profile=self.profile)
+        return _resolve_delta_service(self.profile)
 
     def reserve_delta_commit(
         self,
@@ -458,18 +481,16 @@ class _RuntimeProfileCatalogFacadeMixin:
 class _RuntimeProfileDeltaFacadeMixin:
     """Facade methods for runtime-profile Delta operations."""
 
-    def delta_service(self) -> DeltaService:
+    def delta_service(self) -> DeltaServicePort:
         """Return a DeltaService bound to this runtime profile.
 
         Returns:
         -------
-        DeltaService
+        DeltaServicePort
             DeltaService instance bound to this profile.
         """
-        from datafusion_engine.delta.service import DeltaService
-
         profile = cast("DataFusionRuntimeProfile", self)
-        return DeltaService(profile=profile)
+        return profile.delta_ops.delta_service()
 
 
 def _delta_commit_spec() -> ArtifactSpec:

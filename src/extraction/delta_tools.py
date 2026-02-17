@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike
-from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.delta.service_protocol import DeltaServicePort
 from datafusion_engine.session.facade import DataFusionExecutionFacade
 from extraction.diagnostics import EngineEventRecorder
@@ -101,7 +100,7 @@ def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
         History and protocol snapshots for the Delta table.
     """
     profile = _resolve_runtime_profile(request.runtime_profile)
-    service = request.delta_service or DeltaService(profile=profile)
+    service = request.delta_service or profile.delta_ops.delta_service()
     history = service.history_snapshot(
         path=request.path,
         storage_options=request.storage_options,
@@ -165,7 +164,7 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
         )
         raise ValueError(msg)
     profile = _resolve_runtime_profile(request.runtime_profile)
-    service = request.delta_service or DeltaService(profile=profile)
+    service = request.delta_service or profile.delta_ops.delta_service()
     removed = service.vacuum(
         path=request.path,
         options=resolved,
@@ -221,7 +220,7 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     from datafusion_engine.dataset.registry import DatasetLocation
 
     ctx = profile.session_context()
-    service = request.delta_service or DeltaService(profile=profile)
+    service = request.delta_service or profile.delta_ops.delta_service()
     location = DatasetLocation(
         path=request.path,
         format="delta",

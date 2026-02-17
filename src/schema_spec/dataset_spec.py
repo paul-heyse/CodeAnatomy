@@ -34,7 +34,6 @@ from datafusion_engine.arrow.metadata import (
     SchemaMetadataSpec,
     encoding_policy_from_spec,
     merge_metadata_specs,
-    metadata_spec_from_schema,
     ordering_metadata_spec,
 )
 from datafusion_engine.delta.protocol import DeltaFeatureGate
@@ -63,7 +62,6 @@ from storage.dataset_sources import (
     PathLike,
     normalize_dataset_source,
 )
-from storage.deltalake import DeltaSchemaRequest
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from utils.hashing import hash_sha256_hex
 from utils.validation import validate_required_items
@@ -1530,15 +1528,9 @@ def dataset_spec_from_schema(
     DatasetSpec
         Dataset spec derived from the schema.
     """
-    table_spec = TableSchemaSpec.from_schema(name, schema, version=version)
-    metadata_spec = metadata_spec_from_schema(schema)
-    evolution_spec = resolve_schema_evolution_spec(name)
-    return make_dataset_spec(
-        table_spec=table_spec,
-        metadata_spec=metadata_spec,
-        evolution_spec=evolution_spec,
-        delta_constraints=_delta_constraints_from_table_spec(table_spec),
-    )
+    from schema_spec.discovery import dataset_spec_from_schema as _dataset_spec_from_schema
+
+    return _dataset_spec_from_schema(name=name, schema=schema, version=version)
 
 
 def dataset_table_definition(name: str, *, introspector: SchemaIntrospector) -> str | None:
@@ -1651,7 +1643,9 @@ def dataset_spec_from_dataset(
     DatasetSpec
         Dataset spec derived from the dataset schema.
     """
-    return dataset_spec_from_schema(name, dataset.schema, version=version)
+    from schema_spec.discovery import dataset_spec_from_dataset as _dataset_spec_from_dataset
+
+    return _dataset_spec_from_dataset(name=name, dataset=dataset, version=version)
 
 
 def dataset_spec_from_path(
@@ -1664,39 +1658,20 @@ def dataset_spec_from_path(
 ) -> DatasetSpec:
     """Create a DatasetSpec from a dataset path.
 
-    Args:
-        name: Dataset name.
-        path: Dataset path or URI.
-        options: Optional dataset-open options.
-        version: Optional schema version override.
-        delta_service: Optional Delta service used for Delta schema resolution.
-
     Returns:
-        DatasetSpec: Result.
-
-    Raises:
-        ValueError: If dataset schema cannot be resolved.
+    -------
+    DatasetSpec
+        Dataset spec resolved from the provided dataset location.
     """
-    options = options or DatasetOpenSpec()
-    if options.dataset_format == "delta":
-        if delta_service is None:
-            msg = "dataset_spec_from_path(..., dataset_format='delta') requires delta_service."
-            raise ValueError(msg)
-        schema = delta_service.table_schema(
-            DeltaSchemaRequest(
-                path=str(path),
-                storage_options=options.storage_options or None,
-                log_storage_options=options.delta_log_storage_options or None,
-                version=options.delta_version,
-                timestamp=options.delta_timestamp,
-            )
-        )
-        if schema is None:
-            msg = f"Delta schema unavailable for dataset at {path!r}."
-            raise ValueError(msg)
-        return dataset_spec_from_schema(name, schema, version=version)
-    dataset = options.open(path)
-    return dataset_spec_from_dataset(name, dataset, version=version)
+    from schema_spec.discovery import dataset_spec_from_path as _dataset_spec_from_path
+
+    return _dataset_spec_from_path(
+        name=name,
+        path=path,
+        options=options,
+        version=version,
+        delta_service=delta_service,
+    )
 
 
 @lru_cache(maxsize=1)

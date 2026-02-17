@@ -377,7 +377,6 @@ class FeatureGatesConfig(StructBaseStrict, frozen=True):
     enable_delta_cdf: bool = False
     enable_delta_session_defaults: bool = False
     enable_delta_querybuilder: bool = False
-    enable_delta_data_checker: bool = False
     enable_delta_plan_codecs: bool = False
     enforce_delta_ffi_provider: bool = True
     enable_metrics: bool = False
@@ -406,7 +405,6 @@ class FeatureGatesConfig(StructBaseStrict, frozen=True):
             "enable_delta_cdf": self.enable_delta_cdf,
             "enable_delta_session_defaults": self.enable_delta_session_defaults,
             "enable_delta_querybuilder": self.enable_delta_querybuilder,
-            "enable_delta_data_checker": self.enable_delta_data_checker,
             "enable_delta_plan_codecs": self.enable_delta_plan_codecs,
             "enforce_delta_ffi_provider": self.enforce_delta_ffi_provider,
             "enable_metrics": self.enable_metrics,

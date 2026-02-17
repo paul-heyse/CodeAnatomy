@@ -1541,33 +1541,53 @@ class CompileExecutionPolicyRequestV1(msgspec.Struct, frozen=True):
 
 ---
 
+## Status Snapshot (2026-02-17)
+
+Scope status after in-repo audit (`src/` + relevant `tests/`):
+
+- Complete: `S1`, `S2`, `S3`, `S4`, `S7`, `S8`, `S19`, `S20`, `D1`, `D4`
+- Partial: `S5`, `S6`, `S9`, `S10`, `S11`, `S12`, `S13`, `S14`, `S15`, `S16`, `S17`, `S18`, `S21`, `S22`, `D2`, `D3`, `D5`, `D6`
+- Not started: none
+
+Primary evidence for remaining partial scope:
+
+- `S5`: `.resolved.delta_*` chains are eliminated in `src` (`0` matches), but `session.engine_session.*` chains remain (`10` matches in `src`).
+- `S6`: `delta_service_for_profile(...)` is removed, but direct `DeltaService(profile=...)` construction remains at `13` `src` callsites.
+- `S9`-`S16`: legacy monolith files are deleted, but major `*_core.py`/builder modules still retain most logic (`registration_core.py` `3120` LOC, `write_core.py` `2732`, `control_plane_core.py` `1917`, `pipeline_build.py` `1607`, `delta_read.py` `2346`, `artifact_store_core.py` `1534`, `extension_core.py` `1629`, `dataset_spec.py` `1837`, `introspection_core.py` `1278`).
+- `S17`: `DiagnosticBatchBuilder` exists and is used, but adoption is still selective (`issue_batching.py`, `schema_anomalies.py`, `diagnostics_emission.py`) rather than comprehensive across all listed diagnostics modules.
+- `S18`: provider-first registration and predicate overwrite paths exist, but runtime-facing `delta_data_checker` surface remains (`8` matches in `src`).
+- `S21`: `semantics/spec_registry.py` is deleted and diagnostics utils are centralized, but the `relationship_decisions` alias still maps to `build_relationship_candidates_view` in `semantics/diagnostics/__init__.py`.
+- `S22`: metadata decode helper consolidation is complete, but weak fallback typing remains in `relspec/execution_package.py` (`6` `getattr(...)` pathways).
+
+---
+
 ## Implementation Checklist
 
-- [ ] S1. Consolidate session constants and helper definitions (`_RUNTIME_SESSION_ID`, split caches, duplicated runtime constants/helpers)
-- [ ] S2. Consolidate type coercion and boolean parsing helpers
-- [ ] S3. Fix dependency direction violations (4 confirmed)
-- [ ] S4. Expand and enforce OTel facade (73 bypass import lines across 37 files)
-- [ ] S5. Add convenience properties for Law of Demeter (25+ chain sites)
-- [ ] S6. Inject dependencies to replace hidden service creation (8 sites)
-- [ ] S7. Define ExtractorPort protocol and extract shared coordination
-- [ ] S8. Decompose session re-export hub (102-entry `__all__`)
-- [ ] S9. Decompose `dataset/registration.py` (3,368 LOC)
-- [ ] S10. Decompose `io/write.py` (2,689 LOC)
-- [ ] S11. Decompose `delta/control_plane.py` (2,070 LOC)
-- [ ] S12. Decompose `semantics/pipeline.py` (1,671 LOC)
-- [ ] S13. Decompose `storage/deltalake/delta.py` (2,824 LOC)
-- [ ] S14. Decompose `artifact_store.py` (1,654 LOC) and `extension_runtime.py` (1,660 LOC)
-- [ ] S15. Decompose extractor files (1,388–1,900 LOC each)
-- [ ] S16. Decompose `schema_spec/contracts.py` (1,858 LOC) and `schema/introspection.py` (1,305 LOC)
-- [ ] S17. Extract diagnostic builder framework
-- [ ] S18. Leverage available DataFusion/Delta capabilities (EXPLAIN ANALYZE capture, runtime extension metrics snapshot, provider-first Delta registration, replaceWhere)
-- [ ] S19. Collapse positional commit payload indexing in `delta/control_plane.py`
-- [ ] S20. Apply schema/introspection quick-win deduplications
-- [ ] S21. Consolidate semantics registry and diagnostics surfaces
-- [ ] S22. Harden relspec/schema_spec boundary typing and metadata decode helpers
-- [ ] D1. Delete re-export hub block from `runtime.py` (after S1 + S8)
-- [ ] D2. Delete private coercion/line_offsets/metadata decode/diagnostic helper duplicates (after S2 + S7 + S21 + S22)
-- [ ] D3. Delete `delta_service_for_profile(None)` pattern, `cli.config_models` reverse import, and factory shim (after S3 + S6)
-- [ ] D4. Delete all direct `obs.otel.*` bypass imports and enforce boundary tests (after S4)
-- [ ] D5. Delete original god files after sub-module migration (after S9 + S10 + S11 + S12 + S13 + S14 + S15 + S16 + S19)
-- [ ] D6. Delete quick-win legacy surfaces (`spec_registry.py`, `_schema_from_table`, duplicate normalization helpers, manual metadata copy methods) (after S20 + S21 + S22)
+- [x] S1. Consolidate session constants and helper definitions (`_RUNTIME_SESSION_ID`, split caches, duplicated runtime constants/helpers)
+- [x] S2. Consolidate type coercion and boolean parsing helpers
+- [x] S3. Fix dependency direction violations (4 confirmed)
+- [x] S4. Expand and enforce OTel facade (73 bypass import lines across 37 files)
+- [ ] S5. Add convenience properties for Law of Demeter (25+ chain sites) — partial
+- [ ] S6. Inject dependencies to replace hidden service creation (8 sites) — partial
+- [x] S7. Define ExtractorPort protocol and extract shared coordination
+- [x] S8. Decompose session re-export hub (102-entry `__all__`)
+- [ ] S9. Decompose `dataset/registration.py` (3,368 LOC) — partial
+- [ ] S10. Decompose `io/write.py` (2,689 LOC) — partial
+- [ ] S11. Decompose `delta/control_plane.py` (2,070 LOC) — partial
+- [ ] S12. Decompose `semantics/pipeline.py` (1,671 LOC) — partial
+- [ ] S13. Decompose `storage/deltalake/delta.py` (2,824 LOC) — partial
+- [ ] S14. Decompose `artifact_store.py` (1,654 LOC) and `extension_runtime.py` (1,660 LOC) — partial
+- [ ] S15. Decompose extractor files (1,388–1,900 LOC each) — partial
+- [ ] S16. Decompose `schema_spec/contracts.py` (1,858 LOC) and `schema/introspection.py` (1,305 LOC) — partial
+- [ ] S17. Extract diagnostic builder framework — partial
+- [ ] S18. Leverage available DataFusion/Delta capabilities (EXPLAIN ANALYZE capture, runtime extension metrics snapshot, provider-first Delta registration, replaceWhere) — partial
+- [x] S19. Collapse positional commit payload indexing in `delta/control_plane.py`
+- [x] S20. Apply schema/introspection quick-win deduplications
+- [ ] S21. Consolidate semantics registry and diagnostics surfaces — partial
+- [ ] S22. Harden relspec/schema_spec boundary typing and metadata decode helpers — partial
+- [x] D1. Delete re-export hub block from `runtime.py` (after S1 + S8)
+- [ ] D2. Delete private coercion/line_offsets/metadata decode/diagnostic helper duplicates (after S2 + S7 + S21 + S22) — partial
+- [ ] D3. Delete `delta_service_for_profile(None)` pattern, `cli.config_models` reverse import, and factory shim (after S3 + S6) — partial
+- [x] D4. Delete all direct `obs.otel.*` bypass imports and enforce boundary tests (after S4)
+- [ ] D5. Delete original god files after sub-module migration (after S9 + S10 + S11 + S12 + S13 + S14 + S15 + S16 + S19) — partial
+- [ ] D6. Delete quick-win legacy surfaces (`spec_registry.py`, `_schema_from_table`, duplicate normalization helpers, manual metadata copy methods) (after S20 + S21 + S22) — partial

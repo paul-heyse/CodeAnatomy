@@ -12,6 +12,8 @@ from extraction.engine_session_factory import build_engine_session
 from extraction.runtime_profile import RuntimeProfileSpec
 
 if TYPE_CHECKING:
+    from core_types import DeterminismTier
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.runtime_session import SessionRuntime
 
 
@@ -43,6 +45,16 @@ class ExtractSession:
 
         """
         return self.engine_session.df_runtime()
+
+    @property
+    def runtime_profile(self) -> DataFusionRuntimeProfile:
+        """Return the DataFusion runtime profile for extract workloads."""
+        return self.engine_session.datafusion_profile
+
+    @property
+    def determinism_tier(self) -> DeterminismTier:
+        """Return the configured determinism tier for extract workloads."""
+        return self.engine_session.surface_policy.determinism_tier
 
 
 def build_extract_session(runtime_spec: RuntimeProfileSpec) -> ExtractSession:

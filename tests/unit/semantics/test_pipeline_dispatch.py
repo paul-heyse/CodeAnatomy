@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import inspect
+from importlib import import_module
 
-from semantics import pipeline_dispatch
+pipeline_dispatch = import_module("semantics.pipeline_dispatch")
 
 
 def test_pipeline_dispatch_owns_dispatch_helpers() -> None:

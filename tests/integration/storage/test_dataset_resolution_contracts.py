@@ -73,7 +73,7 @@ def _write_delta_table_for_resolution(profile: DataFusionRuntimeProfile, delta_p
 def test_storage_options_merge_request_overrides_policy(tmp_path: Path) -> None:
     """Verify storage options merging when request and policy conflict.
 
-    When location.storage_options and location.resolved.delta_log_storage_options
+    When location.storage_options and location.delta_log_storage_options
     have conflicting keys, merged_storage_options() should prefer the log storage
     options (following dict.update semantics).
     """

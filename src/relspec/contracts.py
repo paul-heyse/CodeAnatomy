@@ -28,7 +28,7 @@ REL_DEF_SYMBOL_NAME: Final[str] = REL_DEF_SYMBOL_OUTPUT
 REL_CALLSITE_SYMBOL_NAME: Final[str] = REL_CALLSITE_SYMBOL_OUTPUT
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -38,19 +38,19 @@ if TYPE_CHECKING:
 
 
 class OutDegreeGraph(Protocol):
-    def out_degree(self, node_idx: object) -> int: ...
+    def out_degree(self, node_idx: int) -> int: ...
 
 
 class TaskGraphLike(Protocol):
-    task_idx: Mapping[str, object]
+    task_idx: Mapping[str, int]
     graph: OutDegreeGraph
 
 
 class ScanOverrideLike(Protocol):
     dataset_name: str
-    policy: object
-    reasons: object
-    inference_confidence: object | None
+    policy: Mapping[str, object]
+    reasons: Sequence[str] | str
+    inference_confidence: Mapping[str, object] | None
 
 
 class CompileExecutionPolicyRequestV1(msgspec.Struct, frozen=True):

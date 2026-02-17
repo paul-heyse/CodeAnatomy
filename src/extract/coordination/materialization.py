@@ -890,8 +890,8 @@ def materialize_extract_reader(
     return materialize_extract_plan(
         name,
         plan,
-        runtime_profile=session.engine_session.datafusion_profile,
-        determinism_tier=session.engine_session.surface_policy.determinism_tier,
+        runtime_profile=session.runtime_profile,
+        determinism_tier=session.determinism_tier,
         options=resolved_materialize,
     )
 

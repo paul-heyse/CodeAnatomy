@@ -20,7 +20,7 @@ require_delta_extension()
 
 
 def _create_cdf_table(path: Path) -> None:
-    from storage.deltalake.delta_read import DeltaFeatureMutationOptions, enable_delta_features
+    from storage.deltalake.delta_write import DeltaFeatureMutationOptions, enable_delta_features
 
     table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
     _ = write_delta_table(

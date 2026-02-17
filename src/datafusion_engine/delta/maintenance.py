@@ -6,7 +6,7 @@ import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 from datafusion import SessionContext
@@ -30,7 +30,7 @@ from obs.datafusion_engine_runtime_metrics import (
     maintenance_tracer,
     record_delta_maintenance_run,
 )
-from storage.deltalake.delta_read import DeltaFeatureMutationOptions
+from storage.deltalake.delta_write import DeltaFeatureMutationOptions
 
 if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
@@ -428,7 +428,7 @@ def run_delta_maintenance(
         Sequence of maintenance reports emitted by the control plane.
     """
     policy = plan.policy
-    service = DeltaService(profile=runtime_profile)
+    service = cast("DeltaService", runtime_profile.delta_ops.delta_service())
     reports: list[Mapping[str, object]] = []
     logger.info(
         "Running delta maintenance table_uri=%s dataset=%s",

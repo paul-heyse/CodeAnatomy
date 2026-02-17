@@ -142,7 +142,7 @@ class ExtractExecutionContext:
         DataFusionRuntimeProfile
             Resolved DataFusion runtime profile.
         """
-        profile = self.ensure_session().engine_session.datafusion_profile
+        profile = self.ensure_session().runtime_profile
         if profile.diagnostics.capture_plan_artifacts:
             return msgspec.structs.replace(
                 profile,
@@ -161,7 +161,7 @@ class ExtractExecutionContext:
         DeterminismTier
             Determinism tier for extract execution.
         """
-        return self.ensure_session().engine_session.surface_policy.determinism_tier
+        return self.ensure_session().determinism_tier
 
 
 @dataclass(frozen=True)

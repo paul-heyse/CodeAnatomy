@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from datafusion import col, lit
 from datafusion import functions as f
@@ -38,7 +38,9 @@ def dataframe_row_count(df: DataFrame) -> int:
     table = count_df.to_arrow_table()
     if table.num_rows == 0:
         return 0
-    rows = cast("list[dict[str, object]]", table.to_pylist())
+    builder = DiagnosticBatchBuilder()
+    builder.add_arrow_table(table)
+    rows = builder.rows()
     value = rows[0].get("row_count")
     if value is None:
         return 0
@@ -143,7 +145,7 @@ def _issue_rows_from_df(
     limited = df.limit(max_rows)
     table = limited.to_arrow_table()
     builder = DiagnosticBatchBuilder()
-    builder.add_many(cast("list[dict[str, object]]", table.to_pylist()))
+    builder.add_arrow_table(table)
     return builder.rows()
 
 

@@ -90,6 +90,7 @@ from datafusion_engine.session.runtime_ops import (
     _RuntimeProfileCatalogFacadeMixin,
     _RuntimeProfileDeltaFacadeMixin,
     _RuntimeProfileIOFacadeMixin,
+    bind_delta_service,
     delta_runtime_env_options,
 )
 from datafusion_engine.session.runtime_profile_config import (
@@ -333,6 +334,11 @@ class DataFusionRuntimeProfile(
         if not async_policy["valid"]:
             msg = f"Async UDF policy invalid: {async_policy['errors']}."
             raise ValueError(msg)
+        # Bind the default Delta service instance eagerly so all downstream
+        # call paths consume an explicitly attached service port.
+        from datafusion_engine.delta.service import DeltaService
+
+        bind_delta_service(self, service=DeltaService(profile=self))
 
     def _session_config(self) -> SessionConfig:
         """Return a SessionConfig configured from the profile.

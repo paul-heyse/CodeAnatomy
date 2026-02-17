@@ -510,7 +510,7 @@ def scan_repo_plan(
     """
     repo_root_path = ensure_path(repo_root).resolve()
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
-    cache_profile = diskcache_profile_from_ctx(session.engine_session.datafusion_profile)
+    cache_profile = diskcache_profile_from_ctx(session.runtime_profile)
     cache_options = RepoScanCacheOptions(
         cache=cache_for_kind_optional(cache_profile, "repo_scan"),
         coord_cache=cache_for_kind_optional(cache_profile, "coordination"),
@@ -568,7 +568,7 @@ def scan_repo_plans(
     """
     repo_root_path = ensure_path(repo_root).resolve()
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
-    cache_profile = diskcache_profile_from_ctx(session.engine_session.datafusion_profile)
+    cache_profile = diskcache_profile_from_ctx(session.runtime_profile)
     cache_options = RepoScanCacheOptions(
         cache=cache_for_kind_optional(cache_profile, "repo_scan"),
         coord_cache=cache_for_kind_optional(cache_profile, "coordination"),
@@ -979,7 +979,7 @@ def _record_repo_scope_stats(
     options: RepoScanOptions,
     session: ExtractSession,
 ) -> None:
-    runtime_profile = session.engine_session.datafusion_profile
+    runtime_profile = session.runtime_profile
     if runtime_profile is None or runtime_profile.diagnostics.diagnostics_sink is None:
         return
     scope_policy = _resolve_scope_policy(options)
@@ -1071,7 +1071,7 @@ def _record_repo_scope_trace(
 ) -> None:
     if not options.record_pathspec_trace:
         return
-    runtime_profile = session.engine_session.datafusion_profile
+    runtime_profile = session.runtime_profile
     if runtime_profile is None or runtime_profile.diagnostics.diagnostics_sink is None:
         return
     scoped_roots = _scoped_roots(repo_root, options=options)
@@ -1127,7 +1127,7 @@ def _record_repo_blame(
 ) -> None:
     if not options.record_blame:
         return
-    runtime_profile = session.engine_session.datafusion_profile
+    runtime_profile = session.runtime_profile
     if runtime_profile is None or runtime_profile.diagnostics.diagnostics_sink is None:
         return
     paths = _blame_paths(entries, limit=options.blame_max_files)

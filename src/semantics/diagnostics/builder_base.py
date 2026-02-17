@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
 import pyarrow as pa
 
@@ -22,6 +23,10 @@ class DiagnosticBatchBuilder:
         """Append multiple diagnostic row payloads."""
         for row in rows:
             self.add(row)
+
+    def add_arrow_table(self, table: pa.Table) -> None:
+        """Append rows decoded from an Arrow table."""
+        self.add_many(cast("list[dict[str, object]]", table.to_pylist()))
 
     def build_table(self, *, schema: pa.Schema) -> pa.Table:
         """Build a PyArrow table using the provided schema.

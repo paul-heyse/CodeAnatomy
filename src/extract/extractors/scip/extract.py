@@ -154,7 +154,7 @@ class ScipExtractContext:
         DataFusionRuntimeProfile
             Runtime profile derived from the extract session.
         """
-        return self.ensure_session().engine_session.datafusion_profile
+        return self.ensure_session().runtime_profile
 
 
 @dataclass
@@ -1167,7 +1167,7 @@ def _resolve_scip_index(
     scip_pb2 = _load_scip_pb2(resolved_opts)
     index_id: str | None = None
     normalize = ExtractNormalizeOptions(options=resolved_opts)
-    determinism_tier = context.ensure_session().engine_session.surface_policy.determinism_tier
+    determinism_tier = context.ensure_session().determinism_tier
     return _ResolvedScipExtraction(
         index=index,
         index_id=index_id,
@@ -1422,7 +1422,7 @@ def extract_scip_tables(
         evidence_plan = options.evidence_plan
         session = context.ensure_session()
         runtime_profile = context.ensure_runtime_profile()
-        determinism_tier = session.engine_session.surface_policy.determinism_tier
+        determinism_tier = session.determinism_tier
         resolved = _resolve_scip_index(context, normalized_opts, runtime_profile)
         if resolved is not None and _should_stream_outputs(
             resolved.index_path, options=options, prefer_reader=prefer_reader

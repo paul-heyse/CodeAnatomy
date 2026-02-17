@@ -73,6 +73,21 @@ class TestCliContext:
         # Should use current repo root
         assert ctx.root.exists()
 
+    @staticmethod
+    def test_from_parts_allows_explicit_dependency_injection(tmp_path: Path) -> None:
+        """Test from_parts creates context without filesystem/toolchain probing."""
+        built = CliContext.build(argv=["seed"], root=tmp_path)
+        injected = CliContext.from_parts(
+            root=tmp_path,
+            toolchain=built.toolchain,
+            services=built.services,
+            argv=["custom"],
+        )
+        assert injected.root == tmp_path
+        assert injected.toolchain is built.toolchain
+        assert injected.services is built.services
+        assert injected.argv == ["custom"]
+
 
 class TestCliResult:
     """Tests for CliResult."""

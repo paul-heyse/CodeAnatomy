@@ -18,7 +18,6 @@ from tools.cq.cli_app.types import (
     QueryLanguageToken,
     SeverityLevel,
     _converter_value,
-    comma_separated_enum,
     comma_separated_list,
 )
 from tools.cq.run.spec import RunStep
@@ -113,7 +112,7 @@ class FilterParams:
             group=filter_group,
             help="Filter by impact bucket (comma-separated: low,med,high)",
             consume_multiple=True,
-            converter=comma_separated_enum(ImpactBucket),
+            converter=comma_separated_list(ImpactBucket),
         ),
     ] = field(default_factory=list)
 
@@ -124,7 +123,7 @@ class FilterParams:
             group=filter_group,
             help="Filter by confidence bucket (comma-separated: low,med,high)",
             consume_multiple=True,
-            converter=comma_separated_enum(ConfidenceBucket),
+            converter=comma_separated_list(ConfidenceBucket),
         ),
     ] = field(default_factory=list)
 
@@ -135,7 +134,7 @@ class FilterParams:
             group=filter_group,
             help="Filter by severity (comma-separated: error,warning,info)",
             consume_multiple=True,
-            converter=comma_separated_enum(SeverityLevel),
+            converter=comma_separated_list(SeverityLevel),
         ),
     ] = field(default_factory=list)
 

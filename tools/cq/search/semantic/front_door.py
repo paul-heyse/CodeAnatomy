@@ -283,7 +283,13 @@ def _python_payload(
     byte_start: int,
     byte_end: int,
 ) -> dict[str, object] | None:
-    sg_root = get_sg_root(context.target_file_path, lang="python")
+    from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
+
+    sg_root = get_sg_root(
+        context.target_file_path,
+        lang="python",
+        cache_context=ClassifierCacheContext(),
+    )
     query_budget_ms = int(
         1000.0 * (context.budget.startup_timeout_seconds + context.budget.probe_timeout_seconds)
     )

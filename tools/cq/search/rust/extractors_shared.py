@@ -26,6 +26,16 @@ RUST_TEST_ATTRS: frozenset[str] = frozenset(
     }
 )
 
+_RUST_ITEM_ROLE_MAP: dict[str, str] = {
+    "use_declaration": "use_import",
+    "macro_invocation": "macro_call",
+    "field_declaration": "struct_field",
+    "enum_variant": "enum_variant",
+    "const_item": "const_item",
+    "type_item": "type_alias",
+    "static_item": "static_item",
+}
+
 _MAX_FUNCTION_PARAMS = 12
 _MAX_ATTRIBUTES = 10
 
@@ -324,9 +334,15 @@ def extract_attributes(node: RustNodeAccess) -> list[str]:
     return attrs
 
 
+def classify_rust_item_role(node: RustNodeAccess) -> str | None:
+    """Return canonical role for simple Rust item kinds."""
+    return _RUST_ITEM_ROLE_MAP.get(node.kind())
+
+
 __all__ = [
     "RUST_SCOPE_KINDS",
     "RUST_TEST_ATTRS",
+    "classify_rust_item_role",
     "extract_attributes",
     "extract_call_target",
     "extract_enum_shape",

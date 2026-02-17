@@ -16,9 +16,10 @@ import msgspec
 from tools.cq.core.schema import Finding, ScoreDetails
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
+from tools.cq.search.pipeline.context_window import ContextWindow
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_builders import InsightNeighborhoodV1
+    from tools.cq.core.front_door_assembly import InsightNeighborhoodV1
 
 
 @dataclass(frozen=True)
@@ -49,7 +50,7 @@ def compute_calls_context_window(
     line: int,
     def_lines: list[tuple[int, int]],
     total_lines: int,
-) -> dict[str, int]:
+) -> ContextWindow:
     """Public wrapper for callsite context window calculation.
 
     Returns:
@@ -62,7 +63,7 @@ def _compute_context_window(
     call_line: int,
     def_lines: list[tuple[int, int]],
     total_lines: int,
-) -> dict[str, int]:
+) -> ContextWindow:
     """Compute context window for a call site.
 
     Finds the containing def based on indentation and computes line bounds.
@@ -78,8 +79,8 @@ def _compute_context_window(
 
     Returns:
     -------
-    dict[str, int]
-        Dict with 'start_line' and 'end_line' keys.
+    ContextWindow
+        Inclusive window bounds for the containing scope.
     """
     # Find containing def (nearest preceding def at same/lesser indent).
     # Allow equality so definition matches use their own block.
@@ -90,7 +91,7 @@ def _compute_context_window(
             break
 
     if containing_def is None:
-        return {"start_line": 1, "end_line": total_lines}
+        return ContextWindow(start_line=1, end_line=max(1, total_lines))
 
     start_line, def_indent = containing_def
     end_line = total_lines
@@ -101,13 +102,13 @@ def _compute_context_window(
             end_line = def_line - 1
             break
 
-    return {"start_line": start_line, "end_line": end_line}
+    return ContextWindow(start_line=start_line, end_line=max(start_line, end_line))
 
 
 def _build_calls_neighborhood(
     request: CallsNeighborhoodRequest,
 ) -> tuple[InsightNeighborhoodV1, list[Finding], list[str]]:
-    from tools.cq.core.front_door_builders import (
+    from tools.cq.core.front_door_assembly import (
         InsightNeighborhoodV1,
         InsightSliceV1,
         build_neighborhood_from_slices,

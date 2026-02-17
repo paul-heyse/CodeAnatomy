@@ -4,10 +4,10 @@
 - Query: `build_graph`
 - Mode: `identifier`
 - Language Scope: `auto`
-- Top Symbols: N/A — no symbol like matches
-- Top Files: N/A — no anchored matches
-- Match Categories: N/A — no findings
-- Python semantic overview: N/A — python semantic overview missing
+- Top Symbols: N/A - no symbol like matches
+- Top Files: N/A - no anchored matches
+- Match Categories: N/A - no findings
+- Python semantic overview: N/A - python semantic overview missing
 
 ---
 _Completed in 12ms | Schema: cq.v2_

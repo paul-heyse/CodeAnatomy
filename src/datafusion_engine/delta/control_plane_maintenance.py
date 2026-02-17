@@ -1,7 +1,5 @@
 """Maintenance and feature-mutation operations for the Delta control plane."""
 
-# ruff: noqa: DOC201
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -131,7 +129,11 @@ def delta_restore(
     *,
     request: DeltaRestoreRequest,
 ) -> Mapping[str, object]:
-    """Run Delta restore through control-plane authority."""
+    """Run Delta restore through control-plane authority.
+
+    Returns:
+        Mapping[str, object]: Control-plane restore report payload.
+    """
     restore_fn = _require_internal_entrypoint("delta_restore")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     commit_parts = commit_payload_parts(commit_payload(request.commit_options))
@@ -159,7 +161,11 @@ def delta_set_properties(
     *,
     request: DeltaSetPropertiesRequest,
 ) -> Mapping[str, object]:
-    """Run Delta set-properties through control-plane authority."""
+    """Run Delta set-properties through control-plane authority.
+
+    Returns:
+        Mapping[str, object]: Control-plane property update report payload.
+    """
     if not request.properties:
         msg = "Delta property update requires at least one key/value pair."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
@@ -190,7 +196,11 @@ def delta_add_features(
     *,
     request: DeltaAddFeaturesRequest,
 ) -> Mapping[str, object]:
-    """Run Delta add-features through control-plane authority."""
+    """Run Delta add-features through control-plane authority.
+
+    Returns:
+        Mapping[str, object]: Control-plane feature update report payload.
+    """
     if not request.features:
         msg = "Delta add-features requires at least one feature name."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
@@ -222,7 +232,11 @@ def delta_add_constraints(
     *,
     request: DeltaAddConstraintsRequest,
 ) -> Mapping[str, object]:
-    """Run Delta add-constraints through control-plane authority."""
+    """Run Delta add-constraints through control-plane authority.
+
+    Returns:
+        Mapping[str, object]: Control-plane constraint update report payload.
+    """
     if not request.constraints:
         msg = "Delta add-constraints requires at least one constraint."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
@@ -255,7 +269,11 @@ def delta_drop_constraints(
     *,
     request: DeltaDropConstraintsRequest,
 ) -> Mapping[str, object]:
-    """Run Delta drop-constraints through control-plane authority."""
+    """Run Delta drop-constraints through control-plane authority.
+
+    Returns:
+        Mapping[str, object]: Control-plane constraint removal report payload.
+    """
     if not request.constraints:
         msg = "Delta drop-constraints requires at least one constraint name."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
@@ -286,7 +304,11 @@ def delta_cleanup_metadata(
     *,
     request: DeltaCheckpointRequest,
 ) -> Mapping[str, object]:
-    """Clean expired Delta log metadata through control-plane authority."""
+    """Clean expired Delta log metadata through control-plane authority.
+
+    Returns:
+        Mapping[str, object]: Control-plane metadata cleanup report payload.
+    """
     cleanup_fn = _require_internal_entrypoint("delta_cleanup_metadata")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     response = cleanup_fn(
@@ -391,7 +413,11 @@ def delta_enable_column_mapping(
     mode: str = "name",
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta column mapping with the requested mode."""
+    """Enable Delta column mapping with the requested mode.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -411,7 +437,11 @@ def delta_enable_deletion_vectors(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta deletion vectors (feature + property)."""
+    """Enable Delta deletion vectors (feature + property).
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -427,7 +457,11 @@ def delta_enable_row_tracking(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta row tracking (feature + property)."""
+    """Enable Delta row tracking (feature + property).
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -443,7 +477,11 @@ def delta_enable_change_data_feed(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta change data feed (feature + property)."""
+    """Enable Delta change data feed (feature + property).
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -459,7 +497,11 @@ def delta_enable_generated_columns(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta generated columns feature."""
+    """Enable Delta generated-columns feature.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -474,7 +516,11 @@ def delta_enable_invariants(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta invariants feature."""
+    """Enable Delta invariants feature.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -489,7 +535,11 @@ def delta_enable_check_constraints(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta check-constraints feature."""
+    """Enable Delta check-constraints feature.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -505,7 +555,11 @@ def delta_enable_in_commit_timestamps(
     enablement_version: int | None = None,
     enablement_timestamp: str | None = None,
 ) -> Mapping[str, object]:
-    """Enable Delta in-commit timestamps via table properties."""
+    """Enable Delta in-commit timestamps via table properties.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     properties: dict[str, str] = {"delta.enableInCommitTimestamps": "true"}
     if enablement_version is not None:
         properties["delta.inCommitTimestampEnablementVersion"] = str(enablement_version)
@@ -520,7 +574,11 @@ def delta_enable_v2_checkpoints(
     request: DeltaFeatureEnableRequest,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta v2 checkpoints via feature + checkpoint policy property."""
+    """Enable Delta v2 checkpoints via feature and checkpoint policy property.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -535,7 +593,11 @@ def delta_enable_vacuum_protocol_check(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Enable Delta vacuum protocol check via table properties."""
+    """Enable Delta vacuum protocol check via table properties.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -548,7 +610,11 @@ def delta_enable_checkpoint_protection(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Enable Delta checkpoint protection via table properties."""
+    """Enable Delta checkpoint protection via table properties.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -561,7 +627,11 @@ def delta_disable_change_data_feed(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta change data feed via table properties."""
+    """Disable Delta change data feed via table properties.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -574,7 +644,11 @@ def delta_disable_deletion_vectors(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta deletion vectors via table properties."""
+    """Disable Delta deletion vectors via table properties.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -587,7 +661,11 @@ def delta_disable_row_tracking(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta row tracking via table properties."""
+    """Disable Delta row tracking via table properties.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -600,7 +678,11 @@ def delta_disable_in_commit_timestamps(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta in-commit timestamps via table properties."""
+    """Disable Delta in-commit timestamps via table properties.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -613,7 +695,11 @@ def delta_disable_vacuum_protocol_check(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta vacuum protocol check via table properties."""
+    """Disable Delta vacuum protocol check via table properties.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,
@@ -626,7 +712,11 @@ def delta_disable_checkpoint_protection(
     *,
     request: DeltaFeatureEnableRequest,
 ) -> Mapping[str, object]:
-    """Disable Delta checkpoint protection via table properties."""
+    """Disable Delta checkpoint protection via table properties.
+
+    Returns:
+        Mapping[str, object]: Delta feature/property mutation report payload.
+    """
     return _feature_toggle_report(
         ctx,
         request=request,

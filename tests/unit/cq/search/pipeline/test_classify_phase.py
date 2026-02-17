@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from tools.cq.core.locations import SourceSpan
 from tools.cq.search._shared.types import QueryMode, SearchLimits
+from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.classify_phase import run_classify_phase
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch, RawMatch
@@ -44,14 +45,17 @@ def test_run_classify_phase_filters_by_language_scope(monkeypatch: pytest.Monkey
         raw: RawMatch,
         root: Path,
         *,
-        _lang: str = "python",
+        lang: str = "python",
+        cache_context: object,
         **_kwargs: object,
     ) -> EnrichedMatch:
         _ = root
+        _ = cache_context
+        assert lang == "python"
         calls.append(raw.file)
         return _enriched(raw)
 
-    monkeypatch.setattr("tools.cq.search.pipeline.smart_search.classify_match", _fake_classify)
+    monkeypatch.setattr("tools.cq.search.pipeline.classify_phase.classify_match", _fake_classify)
     config = SearchConfig(
         root=Path(),
         query="target",
@@ -63,6 +67,7 @@ def test_run_classify_phase_filters_by_language_scope(monkeypatch: pytest.Monkey
         config,
         lang="python",
         raw_matches=[_raw("src/app.py"), _raw("src/lib.rs")],
+        cache_context=ClassifierCacheContext(),
     )
 
     assert len(result) == 1

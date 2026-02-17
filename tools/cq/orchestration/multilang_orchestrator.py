@@ -14,6 +14,7 @@ from tools.cq.core.summary_contract import (
     coerce_semantic_telemetry as coerce_summary_semantic_telemetry,
 )
 from tools.cq.core.summary_contract import (
+    extract_match_count,
     summary_from_mapping,
 )
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
@@ -28,7 +29,7 @@ from tools.cq.query.language import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_builders import FrontDoorInsightV1
+    from tools.cq.core.front_door_assembly import FrontDoorInsightV1
     from tools.cq.core.schema import RunMeta
     from tools.cq.core.toolchain import Toolchain
 
@@ -149,16 +150,6 @@ def _clone_finding_with_language(
     )
 
 
-def _result_match_count(result: CqResult) -> int:
-    summary_matches = result.summary.matches
-    if isinstance(summary_matches, int):
-        return summary_matches
-    summary_total = result.summary.total_matches
-    if isinstance(summary_total, int):
-        return summary_total
-    return len(result.key_findings)
-
-
 def _zero_semantic_telemetry() -> dict[str, int]:
     return {
         "attempted": 0,
@@ -260,7 +251,7 @@ def _select_front_door_insight(
     scope: QueryLanguageScope,
     results: Mapping[QueryLanguage, CqResult],
 ) -> FrontDoorInsightV1 | None:
-    from tools.cq.core.front_door_builders import (
+    from tools.cq.core.front_door_assembly import (
         coerce_front_door_insight,
         mark_partial_for_missing_languages,
     )
@@ -356,7 +347,7 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
             continue
         partitions[lang] = partition_stats_from_result_summary(
             result.summary,
-            fallback_matches=_result_match_count(result),
+            fallback_matches=extract_match_count(result),
         )
         merged.key_findings.extend(
             _clone_finding_with_language(finding, lang=lang) for finding in result.key_findings
@@ -387,7 +378,7 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
             continue
         partitions[lang] = partition_stats_from_result_summary(
             result.summary,
-            fallback_matches=_result_match_count(result),
+            fallback_matches=extract_match_count(result),
         )
 
     merged.key_findings.sort(

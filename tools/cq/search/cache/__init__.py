@@ -1,21 +1,5 @@
-"""Search cache contracts and helpers."""
+"""Search cache lifecycle registry exports."""
 
-from __future__ import annotations
+from tools.cq.search.cache.registry import CACHE_REGISTRY, CacheRegistry
 
-from tools.cq.search.cache.contracts import (
-    PatternFragmentCacheV1,
-    QueryEntityScanCacheV1,
-    SearchCandidatesCacheV1,
-    SearchEnrichmentAnchorCacheV1,
-    SearchPartitionCacheV1,
-    SgRecordCacheV1,
-)
-
-__all__ = [
-    "PatternFragmentCacheV1",
-    "QueryEntityScanCacheV1",
-    "SearchCandidatesCacheV1",
-    "SearchEnrichmentAnchorCacheV1",
-    "SearchPartitionCacheV1",
-    "SgRecordCacheV1",
-]
+__all__ = ["CACHE_REGISTRY", "CacheRegistry"]

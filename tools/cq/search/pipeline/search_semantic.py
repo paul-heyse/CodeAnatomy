@@ -28,6 +28,7 @@ from tools.cq.search.pipeline._semantic_helpers import (
     normalize_python_semantic_degradation_reason as _normalize_python_semantic_degradation_reason,
 )
 from tools.cq.search.pipeline.contracts import SearchConfig
+from tools.cq.search.pipeline.enrichment_contracts import python_semantic_enrichment_payload
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch, _SearchSemanticOutcome
 from tools.cq.search.semantic.models import (
     LanguageSemanticEnrichmentRequest,
@@ -38,7 +39,7 @@ from tools.cq.search.semantic.models import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_builders import FrontDoorInsightV1
+    from tools.cq.core.front_door_assembly import FrontDoorInsightV1
 
 
 def _payload_coverage_status(payload: dict[str, object]) -> tuple[str | None, str | None]:
@@ -210,22 +211,19 @@ def _apply_prefetched_search_semantic_outcome(
     bool
         True if prefetched payload was applied.
     """
-    if (
-        target_language != "python"
-        or primary_target_match is None
-        or not isinstance(primary_target_match.python_semantic_enrichment, dict)
-    ):
+    if target_language != "python" or primary_target_match is None:
         return False
 
-    prefetch_status, prefetch_reason = _payload_coverage_status(
-        primary_target_match.python_semantic_enrichment
-    )
+    payload = python_semantic_enrichment_payload(primary_target_match.python_semantic_enrichment)
+    if not payload:
+        return False
+    prefetch_status, prefetch_reason = _payload_coverage_status(payload)
     if prefetch_status in {"applied", "degraded", "partial_signal", "structural_only"}:
-        outcome.payload = primary_target_match.python_semantic_enrichment
+        outcome.payload = payload
         outcome.applied = 1
-    elif primary_target_match.python_semantic_enrichment:
+    elif payload:
         # Retain closest-fit payload even when strict signal threshold is not met.
-        outcome.payload = primary_target_match.python_semantic_enrichment
+        outcome.payload = payload
         outcome.applied = 1
         if prefetch_reason:
             outcome.reasons.append(prefetch_reason)
@@ -564,7 +562,7 @@ def apply_search_semantic_insight(
     FrontDoorInsightV1
         Augmented insight with semantic contract state.
     """
-    from tools.cq.core.front_door_builders import augment_insight_with_semantic
+    from tools.cq.core.front_door_assembly import augment_insight_with_semantic
 
     outcome = collect_search_semantic_outcome(
         ctx=ctx,

@@ -13,11 +13,17 @@ from tools.cq.core.locations import SourceSpan
 from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage
 from tools.cq.search.pipeline.classifier import MatchCategory, SymtableEnrichment
+from tools.cq.search.pipeline.context_window import ContextWindow
+from tools.cq.search.pipeline.enrichment_contracts import (
+    PythonEnrichmentV1,
+    PythonSemanticEnrichmentV1,
+    RustTreeSitterEnrichmentV1,
+)
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
 
-    from tools.cq.core.front_door_builders import InsightNeighborhoodV1
+    from tools.cq.core.front_door_assembly import InsightNeighborhoodV1
     from tools.cq.core.schema import Finding, Section
     from tools.cq.core.semantic_contracts import SemanticProvider
     from tools.cq.core.summary_contract import CqSummary
@@ -122,11 +128,11 @@ class MatchEnrichment:
     """Match enrichment data."""
 
     symtable: SymtableEnrichment | None
-    context_window: dict[str, int] | None
+    context_window: ContextWindow | None
     context_snippet: str | None
-    rust_tree_sitter: dict[str, object] | None
-    python_enrichment: dict[str, object] | None
-    python_semantic_enrichment: dict[str, object] | None
+    rust_tree_sitter: RustTreeSitterEnrichmentV1 | None
+    python_enrichment: PythonEnrichmentV1 | None
+    python_semantic_enrichment: PythonSemanticEnrichmentV1 | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,12 +219,12 @@ class EnrichedMatch(CqStruct, frozen=True):
     evidence_kind: str
     node_kind: str | None = None
     containing_scope: str | None = None
-    context_window: dict[str, int] | None = None
+    context_window: ContextWindow | None = None
     context_snippet: str | None = None
     symtable: SymtableEnrichment | None = None
-    rust_tree_sitter: dict[str, object] | None = None
-    python_enrichment: dict[str, object] | None = None
-    python_semantic_enrichment: dict[str, object] | None = None
+    rust_tree_sitter: RustTreeSitterEnrichmentV1 | None = None
+    python_enrichment: PythonEnrichmentV1 | None = None
+    python_semantic_enrichment: PythonSemanticEnrichmentV1 | None = None
     language: QueryLanguage = "python"
 
     @property
@@ -335,7 +341,7 @@ class SearchResultAssembly:
     """Assembly inputs for compatibility with package-level orchestrators."""
 
     context: SearchConfig
-    partition_results: list[object]
+    partition_results: list[LanguageSearchResult]
 
 
 PythonSemanticPrefetchResult = _PythonSemanticPrefetchResult

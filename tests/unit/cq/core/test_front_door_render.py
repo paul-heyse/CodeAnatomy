@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.core.front_door_builders import FrontDoorInsightV1, InsightTargetV1
+from tools.cq.core.front_door_assembly import FrontDoorInsightV1, InsightTargetV1
 from tools.cq.core.front_door_render import (
     coerce_front_door_insight,
     render_insight_card,

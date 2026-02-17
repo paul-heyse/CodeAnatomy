@@ -55,7 +55,7 @@ def test_assign_result_finding_ids_sets_stable_and_execution_fields() -> None:
     """Assign both stable and execution IDs on all result findings."""
     result = _build_result(run_id="run-A")
 
-    assign_result_finding_ids(result)
+    result = assign_result_finding_ids(result)
 
     for finding in [*result.key_findings, *result.evidence, *result.sections[0].findings]:
         assert isinstance(finding.stable_id, str)
@@ -70,8 +70,8 @@ def test_stable_ids_match_across_runs_but_execution_ids_differ() -> None:
     result_a = _build_result(run_id="run-A")
     result_b = _build_result(run_id="run-B")
 
-    assign_result_finding_ids(result_a)
-    assign_result_finding_ids(result_b)
+    result_a = assign_result_finding_ids(result_a)
+    result_b = assign_result_finding_ids(result_b)
 
     assert result_a.key_findings[0].stable_id == result_b.key_findings[0].stable_id
     assert result_a.key_findings[0].execution_id != result_b.key_findings[0].execution_id

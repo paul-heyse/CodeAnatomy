@@ -17,6 +17,7 @@ from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
 from cli.context import RunContext
 from cli.groups import admin_group, observability_group, session_group
 from cli.result_action import cli_result_action
+from cli.runtime_services import build_cli_runtime_services
 from cli.telemetry import apply_telemetry_config, invoke_with_telemetry
 from cli.validation import validate_config_mutual_exclusion
 from core_types import JsonValue
@@ -275,6 +276,12 @@ class ObservabilityOptions:
 
 _DEFAULT_SESSION_OPTIONS = SessionOptions()
 _DEFAULT_OBSERVABILITY_OPTIONS = ObservabilityOptions()
+
+
+def _requires_delta_runtime_services(tokens: tuple[str, ...]) -> bool:
+    if not tokens:
+        return False
+    return tokens[0] in {"delta", "diag", "d"}
 
 
 def _config_str(config: Mapping[str, JsonValue], key: str) -> str | None:
@@ -560,12 +567,17 @@ def meta_launcher(
     otel_options = _build_otel_options(effective_config_contents, observability)
 
     effective_run_id = session.run_id or uuid7_str()
+    command_tokens = tuple(tokens)
+    runtime_services = (
+        build_cli_runtime_services() if _requires_delta_runtime_services(command_tokens) else None
+    )
     run_context = RunContext(
         run_id=effective_run_id,
         log_level=session.log_level,
         config_contents=effective_config_contents,
         config_sources=config_sources or config_resolution.sources,
         otel_options=otel_options,
+        runtime_services=runtime_services,
     )
 
     exit_code, _event = invoke_with_telemetry(

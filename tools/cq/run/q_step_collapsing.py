@@ -7,6 +7,7 @@ from typing import cast
 from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.run_context import RunExecutionContext
 from tools.cq.core.schema import CqResult, Finding
+from tools.cq.core.summary_contract import extract_match_count
 from tools.cq.orchestration.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
@@ -76,18 +77,6 @@ def _result_query_mode(result: CqResult) -> str | None:
     return None
 
 
-def _result_match_count(result: CqResult | None) -> int:
-    if result is None:
-        return 0
-    total = result.summary.total_matches
-    if isinstance(total, int):
-        return total
-    matches = result.summary.matches
-    if isinstance(matches, int):
-        return matches
-    return len(result.key_findings)
-
-
 def _result_lang_scope(result: CqResult) -> QueryLanguageScope | None:
     value = result.summary.lang_scope
     if value in {"auto", "python", "rust"}:
@@ -107,8 +96,8 @@ def _build_collapse_diagnostics(
     diagnostics: list[Finding] = list(
         build_cross_language_diagnostics(
             lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-            python_matches=_result_match_count(lang_results.get("python")),
-            rust_matches=_result_match_count(lang_results.get("rust")),
+            python_matches=extract_match_count(lang_results.get("python")),
+            rust_matches=extract_match_count(lang_results.get("rust")),
             python_oriented=is_python_oriented_query_text(query_text),
         )
     )

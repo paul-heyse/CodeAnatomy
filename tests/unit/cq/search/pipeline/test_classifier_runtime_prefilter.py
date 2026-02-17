@@ -15,7 +15,8 @@ def test_get_record_context_disables_prefilter_for_single_file(
     tmp_path: Path,
 ) -> None:
     """Disable prefilter when running single-file record-context queries."""
-    classifier_runtime.get_default_classifier_cache_context().clear()
+    cache_context = classifier_runtime.ClassifierCacheContext()
+    cache_context.clear()
     file_path = tmp_path / "a.py"
     file_path.write_text("def foo():\n    return 1\n", encoding="utf-8")
 
@@ -47,5 +48,10 @@ def test_get_record_context_disables_prefilter_for_single_file(
         return []
 
     monkeypatch.setattr(classifier_runtime, "scan_files", _fake_scan)
-    classifier_runtime.get_record_context(file_path, tmp_path, lang="python")
+    classifier_runtime.get_record_context(
+        file_path,
+        tmp_path,
+        lang="python",
+        cache_context=cache_context,
+    )
     assert observed["prefilter"] is False

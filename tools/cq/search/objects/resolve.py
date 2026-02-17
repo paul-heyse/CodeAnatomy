@@ -17,6 +17,12 @@ from tools.cq.search.objects.render import (
     SearchObjectSummaryV1,
     SearchOccurrenceV1,
 )
+from tools.cq.search.pipeline.context_window import ContextWindow
+from tools.cq.search.pipeline.enrichment_contracts import (
+    python_enrichment_payload,
+    python_semantic_enrichment_payload,
+    rust_enrichment_payload,
+)
 from tools.cq.search.python.evidence import evaluate_python_semantic_signal_from_mapping
 
 if TYPE_CHECKING:
@@ -142,16 +148,8 @@ def build_object_resolved_view(
 
 
 def _payload_views(match: EnrichedMatch) -> _PayloadViews:
-    semantic = (
-        match.python_semantic_enrichment
-        if isinstance(match.python_semantic_enrichment, dict)
-        else _EMPTY_OBJECT_PAYLOAD
-    )
-    python = (
-        match.python_enrichment
-        if isinstance(match.python_enrichment, dict)
-        else _EMPTY_OBJECT_PAYLOAD
-    )
+    semantic = python_semantic_enrichment_payload(match.python_semantic_enrichment)
+    python = python_enrichment_payload(match.python_enrichment)
     python_facts = parse_python_enrichment(python) if python else None
     resolution_raw = python.get("resolution")
     if (
@@ -203,11 +201,16 @@ def _build_occurrence_row(match: EnrichedMatch, *, object_id: str) -> _ObjectOcc
             "evidence_kind": match.evidence_kind,
         }
     )
-    window = (
-        match.context_window if isinstance(match.context_window, dict) else _EMPTY_OBJECT_PAYLOAD
+    context_start_line = (
+        match.context_window.start_line
+        if isinstance(match.context_window, ContextWindow)
+        else match.line
     )
-    context_start_line = _as_int(window.get("start_line")) or match.line
-    context_end_line = _as_int(window.get("end_line")) or context_start_line
+    context_end_line = (
+        match.context_window.end_line
+        if isinstance(match.context_window, ContextWindow)
+        else context_start_line
+    )
     snippet = match.context_snippet if isinstance(match.context_snippet, str) else None
     return _ObjectOccurrenceRow(
         occurrence=SearchOccurrenceV1(
@@ -411,17 +414,22 @@ def _code_facts_for_match(match: EnrichedMatch) -> dict[str, object]:
     enrichment["item_role"] = match.category
     if isinstance(match.containing_scope, str) and match.containing_scope:
         enrichment["enclosing_callable"] = match.containing_scope
-    if isinstance(match.rust_tree_sitter, dict) and match.rust_tree_sitter:
-        enrichment["rust"] = dict(match.rust_tree_sitter)
+    if match.rust_tree_sitter:
+        enrichment["rust"] = rust_enrichment_payload(match.rust_tree_sitter)
     python_payload: dict[str, object] | None = None
-    if isinstance(match.python_enrichment, dict):
-        python_payload = dict(match.python_enrichment)
+    if match.python_enrichment:
+        python_payload = python_enrichment_payload(match.python_enrichment)
     if python_payload is not None:
-        if isinstance(match.python_semantic_enrichment, dict):
-            python_payload.setdefault("python_semantic", dict(match.python_semantic_enrichment))
+        if match.python_semantic_enrichment:
+            python_payload.setdefault(
+                "python_semantic",
+                python_semantic_enrichment_payload(match.python_semantic_enrichment),
+            )
         enrichment["python"] = python_payload
-    if isinstance(match.python_semantic_enrichment, dict):
-        enrichment["python_semantic"] = dict(match.python_semantic_enrichment)
+    if match.python_semantic_enrichment:
+        enrichment["python_semantic"] = python_semantic_enrichment_payload(
+            match.python_semantic_enrichment
+        )
     if match.symtable is not None:
         enrichment["symtable"] = msgspec.to_builtins(match.symtable)
     facts["enrichment"] = enrichment
@@ -429,9 +437,9 @@ def _code_facts_for_match(match: EnrichedMatch) -> dict[str, object]:
 
 
 def _module_graph_for_match(match: EnrichedMatch) -> dict[str, object]:
-    if not isinstance(match.rust_tree_sitter, dict):
+    if not match.rust_tree_sitter:
         return {}
-    module_graph = match.rust_tree_sitter.get("rust_module_graph")
+    module_graph = rust_enrichment_payload(match.rust_tree_sitter).get("rust_module_graph")
     if isinstance(module_graph, dict):
         return dict(module_graph)
     return {}
@@ -441,16 +449,8 @@ def _coverage_for_match(
     match: EnrichedMatch,
     object_ref: ResolvedObjectRef,
 ) -> tuple[str, dict[str, str], tuple[str, ...]]:
-    semantic_payload = (
-        match.python_semantic_enrichment
-        if isinstance(match.python_semantic_enrichment, dict)
-        else _EMPTY_OBJECT_PAYLOAD
-    )
-    python_payload = (
-        match.python_enrichment
-        if isinstance(match.python_enrichment, dict)
-        else _EMPTY_OBJECT_PAYLOAD
-    )
+    semantic_payload = python_semantic_enrichment_payload(match.python_semantic_enrichment)
+    python_payload = python_enrichment_payload(match.python_enrichment)
     reasons: list[str] = []
     semantic_reasons: tuple[str, ...] = ()
     if semantic_payload:
@@ -509,15 +509,14 @@ def _evidence_planes(
         planes.append("python_resolution")
         if _resolution_has_tree_sitter_source(resolution):
             planes.append("tree_sitter")
-    if isinstance(match.python_enrichment, dict):
-        agreement = match.python_enrichment.get("agreement")
-        if isinstance(agreement, dict):
-            sources = agreement.get("sources")
-            if isinstance(sources, list):
-                planes.extend([source for source in sources if isinstance(source, str)])
+    agreement = python_payload.get("agreement")
+    if isinstance(agreement, dict):
+        sources = agreement.get("sources")
+        if isinstance(sources, list):
+            planes.extend([source for source in sources if isinstance(source, str)])
     if semantic_payload:
         planes.append("python_semantic")
-    if isinstance(match.rust_tree_sitter, dict) and match.rust_tree_sitter:
+    if match.rust_tree_sitter and rust_enrichment_payload(match.rust_tree_sitter):
         planes.append("tree_sitter")
     return sorted(set(planes))
 

@@ -22,7 +22,6 @@ from datafusion_engine.extensions.context_adaptation import (
 )
 from datafusion_engine.udf.constants import (
     ABI_LOAD_FAILURE_MSG,
-    ABI_VERSION_MISMATCH_MSG,
     EXTENSION_MODULE_LABEL,
     EXTENSION_MODULE_PATH,
     REBUILD_WHEELS_HINT,
@@ -495,33 +494,11 @@ def _extension_module_with_capabilities() -> ModuleType:
     return module
 
 
-def extension_capabilities_snapshot() -> Mapping[str, object]:
-    """Return the Rust extension capabilities snapshot when available."""
-    from datafusion_engine.udf.extension_validation import (
-        extension_capabilities_snapshot as _delegate,
-    )
+from datafusion_engine.udf import extension_validation as _extension_validation
 
-    return _delegate()
-
-
-def extension_capabilities_report() -> dict[str, object]:
-    """Return compatibility report for the Rust extension ABI snapshot."""
-    from datafusion_engine.udf.extension_validation import capability_report as _delegate
-
-    return dict(_delegate())
-
-
-def validate_extension_capabilities(
-    *,
-    strict: bool = True,
-    ctx: SessionContext | None = None,
-) -> dict[str, object]:
-    """Validate extension ABI snapshot and optionally raise on mismatch."""
-    from datafusion_engine.udf.extension_validation import (
-        validate_runtime_capabilities as _delegate,
-    )
-
-    return dict(_delegate(strict=strict, ctx=ctx))
+extension_capabilities_snapshot = _extension_validation.extension_capabilities_snapshot
+extension_capabilities_report = _extension_validation.capability_report
+validate_extension_capabilities = _extension_validation.validate_runtime_capabilities
 
 
 def udf_backend_available() -> bool:

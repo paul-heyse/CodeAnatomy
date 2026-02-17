@@ -19,6 +19,10 @@ from tools.cq.search.pipeline._semantic_helpers import (
     normalize_python_semantic_degradation_reason as _normalize_python_semantic_degradation_reason,
 )
 from tools.cq.search.pipeline.contracts import SearchConfig
+from tools.cq.search.pipeline.enrichment_contracts import (
+    python_semantic_enrichment_payload,
+    wrap_python_semantic_enrichment,
+)
 from tools.cq.search.pipeline.smart_search_telemetry import (
     new_python_semantic_telemetry as _new_python_semantic_telemetry,
 )
@@ -516,21 +520,23 @@ def _merge_match_with_python_semantic_payload(
     EnrichedMatch
         Match with merged python_semantic_enrichment field.
     """
-    if isinstance(payload, dict) and payload:
-        has_signal, reasons = evaluate_python_semantic_signal_from_mapping(payload)
+    typed_payload = wrap_python_semantic_enrichment(payload)
+    if typed_payload is not None and typed_payload.payload:
+        payload_map = python_semantic_enrichment_payload(typed_payload)
+        has_signal, reasons = evaluate_python_semantic_signal_from_mapping(payload_map)
         if not has_signal:
             if attempted_in_place:
                 telemetry["applied"] += 1
                 diagnostics.append(
                     _python_semantic_partial_signal_diagnostic(
                         reasons,
-                        coverage_reason=_python_semantic_coverage_reason(payload),
+                        coverage_reason=_python_semantic_coverage_reason(payload_map),
                     )
                 )
-            return msgspec.structs.replace(match, python_semantic_enrichment=payload)
+            return msgspec.structs.replace(match, python_semantic_enrichment=typed_payload)
         if attempted_in_place:
             telemetry["applied"] += 1
-        return msgspec.structs.replace(match, python_semantic_enrichment=payload)
+        return msgspec.structs.replace(match, python_semantic_enrichment=typed_payload)
 
     if attempted_in_place:
         telemetry["failed"] += 1
@@ -653,8 +659,8 @@ def _build_python_semantic_overview(matches: list[EnrichedMatch]) -> dict[str, o
     """
     acc = _PythonSemanticOverviewAccumulator()
     for match in matches:
-        payload = match.python_semantic_enrichment
-        if isinstance(payload, dict):
+        payload = python_semantic_enrichment_payload(match.python_semantic_enrichment)
+        if payload:
             _accumulate_python_semantic_overview(
                 acc=acc, payload=payload, match_text=match.match_text
             )

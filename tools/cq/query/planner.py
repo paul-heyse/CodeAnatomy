@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.query.ir import (
     CompositeRule,
     Expander,
@@ -238,20 +239,6 @@ class ToolPlan(msgspec.Struct, frozen=True):
     lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
 
 
-_ENTITY_RECORDS: dict[str, set[str]] = {
-    "function": {"def"},
-    "class": {"def"},
-    "method": {"def"},
-    "module": {"def"},
-    "callsite": {"call"},
-    "import": {"import"},
-    "decorator": {"def"},
-}
-_ENTITY_EXTRA_RECORDS: dict[str, set[str]] = {
-    "function": {"call"},
-    "class": {"call"},
-    "method": {"call"},
-}
 _EXPANDER_RECORDS: dict[str, set[str]] = {
     "callers": {"def", "call"},
     "callees": {"def", "call"},
@@ -588,8 +575,8 @@ def _determine_record_types(query: Query) -> set[str]:
     record_types: set[str] = set()
 
     if query.entity is not None:
-        record_types.update(_ENTITY_RECORDS.get(query.entity, set()))
-        record_types.update(_ENTITY_EXTRA_RECORDS.get(query.entity, set()))
+        record_types.update(ENTITY_KINDS.record_types_for_entity(query.entity))
+        record_types.update(ENTITY_KINDS.extra_record_types_for_entity(query.entity))
 
     for expander in query.expand:
         record_types.update(_EXPANDER_RECORDS.get(expander.kind, set()))

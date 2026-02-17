@@ -7,6 +7,7 @@ from pathlib import Path
 
 import msgspec
 
+from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import build_scope_hash
 from tools.cq.core.cache.snapshot_fingerprint import build_scope_snapshot_fingerprint
 from tools.cq.core.structs import CqStruct
@@ -40,6 +41,7 @@ InventoryFn = Callable[[Path], Mapping[str, object]]
 def resolve_scope(
     plan: ScopePlanV1,
     *,
+    backend: CqCacheBackend,
     list_files: ListFilesFn,
     inventory_token_fn: InventoryFn | None = None,
 ) -> ScopeResolutionV1:
@@ -71,6 +73,7 @@ def resolve_scope(
     )
     snapshot = build_scope_snapshot_fingerprint(
         root=resolved_root,
+        backend=backend,
         files=files,
         language=plan.language,
         scope_globs=globs,

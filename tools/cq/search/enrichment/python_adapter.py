@@ -7,6 +7,10 @@ from collections.abc import Mapping
 from tools.cq.query.language import QueryLanguage
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
 from tools.cq.search.enrichment.core import string_or_none
+from tools.cq.search.pipeline.enrichment_contracts import (
+    PythonEnrichmentV1,
+    python_enrichment_payload,
+)
 
 
 class PythonEnrichmentAdapter(LanguageEnrichmentPort):
@@ -24,7 +28,9 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
         """
         _ = self
         payload = getattr(match, "python_enrichment", None)
-        return dict(payload) if isinstance(payload, dict) else None
+        if not isinstance(payload, PythonEnrichmentV1):
+            return None
+        return python_enrichment_payload(payload)
 
     def accumulate_telemetry(
         self,

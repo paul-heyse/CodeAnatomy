@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from tools.cq.search.enrichment.rust_adapter import RustEnrichmentAdapter
+from tools.cq.search.pipeline.enrichment_contracts import RustTreeSitterEnrichmentV1
 
 _TAG_COUNT = 2
 _REMOVED_FIELD_COUNT = 2
@@ -19,7 +20,7 @@ class _Match:
 def test_payload_from_match_extracts_rust_payload() -> None:
     """Adapter should extract rust_tree_sitter mapping from match object."""
     adapter = RustEnrichmentAdapter()
-    payload = adapter.payload_from_match(_Match({"kind": "ok"}))
+    payload = adapter.payload_from_match(_Match(RustTreeSitterEnrichmentV1(payload={"kind": "ok"})))
 
     assert payload == {"kind": "ok"}
 

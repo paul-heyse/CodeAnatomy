@@ -12,7 +12,7 @@ from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.type_coercion import coerce_float_optional
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 
 if TYPE_CHECKING:
     from tools.cq.core.ports import RenderEnrichmentPort

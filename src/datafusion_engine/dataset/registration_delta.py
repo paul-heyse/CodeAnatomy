@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from datafusion_engine.dataset import registration_core as _core
 from datafusion_engine.dataset.registration_core import (
+    DataFrame,
+    DeltaCdfArtifact,
     _cache_prefix_for_registration,
     _delta_cdf_artifact_payload,
     _delta_provider_artifact_payload,
@@ -212,7 +213,7 @@ def _record_delta_cdf_registration_artifacts(
     )
     _record_delta_cdf_artifact(
         context.runtime_profile,
-        artifact=_core.DeltaCdfArtifact(
+        artifact=DeltaCdfArtifact(
             name=context.name,
             path=str(location.path),
             provider="table_provider",
@@ -236,7 +237,7 @@ def _register_delta_provider_with_adapter(
 
 def _register_delta_provider(
     context: DataFusionRegistrationContext,
-) -> tuple[_core.DataFrame, str | None]:
+) -> tuple[DataFrame, str | None]:
     state = _resolve_delta_registration_state(context)
     _enforce_delta_native_provider_policy(state, context)
     result = _register_delta_provider_with_adapter(state, context)

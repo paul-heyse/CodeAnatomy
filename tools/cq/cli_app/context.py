@@ -85,6 +85,35 @@ class CliContext(CqStruct, frozen=True):
     save_artifact: bool = True
 
     @classmethod
+    def from_parts(
+        cls,
+        *,
+        root: Path,
+        toolchain: Toolchain,
+        services: CqRuntimeServices,
+        argv: list[str] | None = None,
+        verbose: int = 0,
+        output_format: OutputFormat | None = None,
+        artifact_dir: Path | None = None,
+        save_artifact: bool = True,
+    ) -> CliContext:
+        """Build context from explicit injected dependencies.
+
+        Returns:
+            CliContext: Fully initialized CLI context.
+        """
+        return cls(
+            argv=list(argv or []),
+            root=root,
+            toolchain=toolchain,
+            services=services,
+            verbose=verbose,
+            output_format=output_format,
+            artifact_dir=artifact_dir,
+            save_artifact=save_artifact,
+        )
+
+    @classmethod
     def build(
         cls,
         argv: list[str],
@@ -125,15 +154,15 @@ class CliContext(CqStruct, frozen=True):
 
         services = resolve_runtime_services(root)
 
-        return cls(
-            argv=argv,
+        return cls.from_parts(
             root=root,
             toolchain=toolchain,
+            services=services,
+            argv=argv,
             verbose=options.verbose,
             output_format=options.output_format,
             artifact_dir=options.artifact_dir,
             save_artifact=options.save_artifact,
-            services=services,
         )
 
 

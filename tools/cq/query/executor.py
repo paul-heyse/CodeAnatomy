@@ -45,6 +45,7 @@ from tools.cq.core.cache.telemetry import (
     record_cache_set,
 )
 from tools.cq.core.contracts import SummaryBuildRequest, contract_to_builtins
+from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.result_factory import build_error_result
 from tools.cq.core.run_context import RunContext
@@ -323,8 +324,7 @@ def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
     )
     result.summary.update(_summary_common_for_context(ctx))
     _finalize_single_scope_summary(ctx, result)
-    assign_result_finding_ids(result)
-    return result
+    return assign_result_finding_ids(result)
 
 
 def _resolve_entity_paths(
@@ -451,15 +451,16 @@ def _build_entity_fragment_context(
             "lang": ctx.plan.lang,
         }
     )
+    cache = get_cq_cache_backend(root=resolved_root)
     snapshot = build_scope_snapshot_fingerprint(
         root=resolved_root,
+        backend=cache,
         files=files,
         language=ctx.plan.lang,
         scope_globs=scope_globs or [],
         scope_roots=paths,
     )
     policy = default_cache_policy(root=resolved_root)
-    cache = get_cq_cache_backend(root=resolved_root)
     cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
     tag = resolve_write_cache_tag(
         CacheWriteTagRequestV1(
@@ -834,7 +835,7 @@ def _execute_auto_scope_plan(request: _AutoScopePlanRequest) -> CqResult:
         )
     )
     merged.summary.cache_backend = snapshot_backend_metrics(root=request.root)
-    assign_result_finding_ids(merged)
+    merged = assign_result_finding_ids(merged)
     for lang in expand_language_scope(query.lang_scope):
         maybe_evict_run_cache_tag(root=request.root, language=lang, run_id=request.run_id)
     return merged
@@ -892,8 +893,7 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     _finalize_single_scope_summary(ctx, result)
     _attach_entity_insight(result, services=ctx.services)
     result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
-    assign_result_finding_ids(result)
-    return result
+    return assign_result_finding_ids(result)
 
 
 def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
@@ -940,8 +940,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     _finalize_single_scope_summary(ctx, result)
     _attach_entity_insight(result, services=ctx.services)
     result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
-    assign_result_finding_ids(result)
-    return result
+    return assign_result_finding_ids(result)
 
 
 def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
@@ -986,8 +985,7 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     _maybe_add_pattern_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
     result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
-    assign_result_finding_ids(result)
-    return result
+    return assign_result_finding_ids(result)
 
 
 def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
@@ -1051,8 +1049,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     _maybe_add_pattern_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
     result.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
-    assign_result_finding_ids(result)
-    return result
+    return assign_result_finding_ids(result)
 
 
 def _process_decorator_query(
@@ -1071,13 +1068,7 @@ def _process_decorator_query(
     candidate_records = def_candidates if def_candidates is not None else ctx.def_records
     for def_record in candidate_records:
         # Skip non-function/class definitions
-        if def_record.kind not in {
-            "function",
-            "async_function",
-            "function_typeparams",
-            "class",
-            "class_bases",
-        }:
+        if def_record.kind not in ENTITY_KINDS.decorator_kinds:
             continue
 
         # Check if matches name pattern

@@ -14,6 +14,7 @@ from tools.cq.core.cache.defaults import (
     DEFAULT_CACHE_TRANSACTION_BATCH_SIZE,
 )
 from tools.cq.core.cache.policy import CqCachePolicyV1
+from tools.cq.core.runtime.env_namespace import env_bool
 
 
 def resolve_cache_runtime_tuning(policy: CqCachePolicyV1) -> CacheRuntimeTuningV1:
@@ -41,14 +42,14 @@ def resolve_cache_runtime_tuning(policy: CqCachePolicyV1) -> CacheRuntimeTuningV
         os.getenv("CQ_CACHE_EVICTION_POLICY", policy.eviction_policy)
         or DEFAULT_CACHE_EVICTION_POLICY
     ).strip()
-    stats_enabled_raw = os.getenv("CQ_CACHE_STATISTICS_ENABLED")
-    stats_enabled = policy.statistics_enabled
-    if isinstance(stats_enabled_raw, str) and stats_enabled_raw.strip():
-        stats_enabled = stats_enabled_raw.strip().lower() in {"1", "true", "yes", "on"}
-    tag_index_raw = os.getenv("CQ_CACHE_TAG_INDEX_ENABLED")
-    create_tag_index = True
-    if isinstance(tag_index_raw, str) and tag_index_raw.strip():
-        create_tag_index = tag_index_raw.strip().lower() in {"1", "true", "yes", "on"}
+    stats_enabled = env_bool(
+        os.getenv("CQ_CACHE_STATISTICS_ENABLED"),
+        default=bool(policy.statistics_enabled),
+    )
+    create_tag_index = env_bool(
+        os.getenv("CQ_CACHE_TAG_INDEX_ENABLED"),
+        default=True,
+    )
     return CacheRuntimeTuningV1(
         cull_limit=max(0, cull_limit),
         eviction_policy=eviction_policy or policy.eviction_policy,

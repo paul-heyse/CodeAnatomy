@@ -45,6 +45,7 @@ def build_semantic_telemetry(
 class CqSummary(msgspec.Struct, omit_defaults=True):
     """Typed summary payload for :class:`tools.cq.core.schema.CqResult`."""
 
+    schema_version: int = 1
     matches: int = 0
     files_scanned: int = 0
     total_matches: int = 0
@@ -306,10 +307,34 @@ def summary_from_mapping(value: CqSummary | Mapping[str, object] | None) -> CqSu
     return summary
 
 
+def extract_match_count(result: object | None) -> int:
+    """Extract canonical match count from a result-like object.
+
+    Returns:
+    -------
+    int
+        Match count resolved as ``total_matches`` -> ``matches`` -> key findings length.
+    """
+    if result is None:
+        return 0
+    summary = getattr(result, "summary", None)
+    if summary is None:
+        return 0
+    total = getattr(summary, "total_matches", None)
+    if isinstance(total, int):
+        return total
+    matches = getattr(summary, "matches", None)
+    if isinstance(matches, int):
+        return matches
+    key_findings = getattr(result, "key_findings", ())
+    return len(key_findings) if hasattr(key_findings, "__len__") else 0
+
+
 __all__ = [
     "CqSummary",
     "SemanticTelemetryV1",
     "build_semantic_telemetry",
     "coerce_semantic_telemetry",
+    "extract_match_count",
     "summary_from_mapping",
 ]

@@ -7,6 +7,8 @@ from pathlib import Path
 
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.query.language import QueryLanguage, is_path_in_lang_scope
+from tools.cq.search.pipeline.classification import classify_match
+from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search_types import (
     ClassificationBatchResult,
@@ -20,13 +22,12 @@ from tools.cq.search.pipeline.worker_policy import resolve_search_worker_count
 def _classify_partition_batch(
     task: ClassificationBatchTask,
 ) -> list[ClassificationBatchResult]:
-    from tools.cq.search.pipeline.smart_search import classify_match
-
     root = Path(task.root)
+    cache_context = ClassifierCacheContext()
     return [
         ClassificationBatchResult(
             index=idx,
-            match=classify_match(raw, root, lang=task.lang),
+            match=classify_match(raw, root, lang=task.lang, cache_context=cache_context),
         )
         for idx, raw in task.batch
     ]
@@ -37,6 +38,7 @@ def run_classify_phase(
     *,
     lang: QueryLanguage,
     raw_matches: list[RawMatch],
+    cache_context: ClassifierCacheContext,
 ) -> list[EnrichedMatch]:
     """Run match classification/enrichment for one language partition.
 
@@ -57,9 +59,10 @@ def run_classify_phase(
     workers = resolve_search_worker_count(len(batches))
 
     if workers <= 1 or len(batches) <= 1:
-        from tools.cq.search.pipeline.smart_search import classify_match
-
-        return [classify_match(raw, config.root, lang=lang) for raw in filtered_raw_matches]
+        return [
+            classify_match(raw, config.root, lang=lang, cache_context=cache_context)
+            for raw in filtered_raw_matches
+        ]
 
     tasks = [
         ClassificationBatchTask(root=str(config.root), lang=lang, batch=batch) for batch in batches
@@ -77,9 +80,10 @@ def run_classify_phase(
             timeout_seconds=max(1.0, float(len(tasks))),
         )
         if batch.timed_out > 0:
-            from tools.cq.search.pipeline.smart_search import classify_match
-
-            return [classify_match(raw, config.root, lang=lang) for raw in filtered_raw_matches]
+            return [
+                classify_match(raw, config.root, lang=lang, cache_context=cache_context)
+                for raw in filtered_raw_matches
+            ]
         indexed_results: list[tuple[int, EnrichedMatch]] = []
         for batch_results in batch.done:
             indexed_results.extend((item.index, item.match) for item in batch_results)
@@ -91,9 +95,10 @@ def run_classify_phase(
         ValueError,
         TypeError,
     ):
-        from tools.cq.search.pipeline.smart_search import classify_match
-
-        return [classify_match(raw, config.root, lang=lang) for raw in filtered_raw_matches]
+        return [
+            classify_match(raw, config.root, lang=lang, cache_context=cache_context)
+            for raw in filtered_raw_matches
+        ]
 
     indexed_results.sort(key=lambda pair: pair[0])
     return [match for _idx, match in indexed_results]

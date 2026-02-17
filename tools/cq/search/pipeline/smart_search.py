@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import multiprocessing
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -11,10 +10,6 @@ import msgspec
 
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.contracts import SummaryBuildRequest
-from tools.cq.core.locations import (
-    line_relative_byte_range_to_absolute,
-)
-from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
@@ -33,28 +28,20 @@ from tools.cq.orchestration.multilang_summary import (
     build_multilang_summary,
 )
 from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE,
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
     QueryLanguageScope,
-    constrain_include_globs_for_language,
     expand_language_scope,
     file_globs_for_scope,
-    is_path_in_lang_scope,
     is_python_language,
     is_rust_language,
-    language_extension_exclude_globs,
-    ripgrep_type_for_language,
     ripgrep_types_for_scope,
 )
 from tools.cq.search._shared.core import (
     CandidateCollectionRequest,
-    PythonByteRangeEnrichmentRequest,
     RgRunRequest,
 )
-from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search._shared.types import SearchLimits
-from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
 from tools.cq.search.objects.render import (
     SearchOccurrenceV1,
     build_non_code_occurrence_section,
@@ -66,34 +53,31 @@ from tools.cq.search.objects.render import (
 )
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime, build_object_resolved_view
 from tools.cq.search.pipeline.assembly import assemble_smart_search_result
+from tools.cq.search.pipeline.candidate_phase import (
+    collect_candidates as _collect_candidates_phase,
+)
+from tools.cq.search.pipeline.candidate_phase import (
+    run_candidate_phase as _run_candidate_phase,
+)
 from tools.cq.search.pipeline.classifier import (
-    HeuristicResult,
     MatchCategory,
-    NodeClassification,
     QueryMode,
     SymtableEnrichment,
-    classify_from_node,
-    classify_from_records,
-    classify_from_resolved_node,
-    classify_heuristic,
     clear_caches,
     detect_query_mode,
-    enrich_with_symtable_from_table,
-    get_cached_source,
-    get_def_lines_cached,
-    get_node_index,
-    get_sg_root,
-    get_symtable_table,
 )
-from tools.cq.search.pipeline.context_window import (
-    compute_search_context_window,
-    extract_search_context_snippet,
-)
+from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
+from tools.cq.search.pipeline.classify_phase import run_classify_phase
 from tools.cq.search.pipeline.contracts import (
     CandidateSearchRequest,
     SearchConfig,
     SearchPartitionPlanV1,
     SearchRequest,
+)
+from tools.cq.search.pipeline.enrichment_contracts import (
+    python_enrichment_payload,
+    python_semantic_enrichment_payload,
+    rust_enrichment_payload,
 )
 from tools.cq.search.pipeline.enrichment_phase import run_enrichment_phase
 from tools.cq.search.pipeline.orchestration import (
@@ -109,41 +93,22 @@ from tools.cq.search.pipeline.smart_search_telemetry import (
     new_python_semantic_telemetry as _new_python_semantic_telemetry,
 )
 from tools.cq.search.pipeline.smart_search_types import (
-    ClassificationBatchResult,
-    ClassificationBatchTask,
-    ClassificationResult,
     EnrichedMatch,
     LanguageSearchResult,
-    MatchClassifyOptions,
-    MatchEnrichment,
     RawMatch,
-    ResolvedNodeContext,
     SearchResultAssembly,
     SearchStats,
     SearchSummaryInputs,
     _PythonSemanticAnchorKey,
     _PythonSemanticPrefetchResult,
 )
-from tools.cq.search.pipeline.worker_policy import (
-    resolve_search_worker_count as _resolve_search_worker_count,
-)
-from tools.cq.search.python.analysis_session import get_python_analysis_session
-from tools.cq.search.python.extractors import enrich_python_context_by_byte_range
-from tools.cq.search.rg.collector import RgCollector
-from tools.cq.search.rg.runner import RgCountRequest, build_rg_command, run_rg_count, run_rg_json
-from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
+from tools.cq.search.rg.runner import build_rg_command
 from tools.cq.search.semantic.diagnostics import (
     build_cross_language_diagnostics,
     build_language_capabilities,
     diagnostics_to_summary_payload,
     is_python_oriented_query_text,
 )
-from tools.cq.search.semantic.models import (
-    LanguageSemanticEnrichmentRequest,
-    enrich_with_language_semantics,
-)
-from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
-from tools.cq.search.tree_sitter.core.runtime_support import budget_ms_per_anchor
 from tools.cq.search.tree_sitter.query.lint import lint_search_query_packs
 from tools.cq.utils.uuid_factory import uuid7_str
 
@@ -160,31 +125,6 @@ SMART_SEARCH_LIMITS = msgspec.structs.replace(
     timeout_seconds=30.0,
 )
 _CASE_SENSITIVE_DEFAULT = True
-
-_TREE_SITTER_QUERY_BUDGET_FALLBACK_MS = budget_ms_per_anchor(
-    timeout_seconds=SMART_SEARCH_LIMITS.timeout_seconds,
-    max_anchors=SMART_SEARCH_LIMITS.max_total_matches,
-)
-
-
-def _merged_classify_options(
-    options: MatchClassifyOptions | None,
-    legacy_flags: dict[str, bool],
-) -> MatchClassifyOptions:
-    base = options or MatchClassifyOptions()
-    return MatchClassifyOptions(
-        enable_symtable=bool(legacy_flags.get("enable_symtable", base.enable_symtable)),
-        force_semantic_enrichment=bool(
-            legacy_flags.get("force_semantic_enrichment", base.force_semantic_enrichment)
-        ),
-        enable_python_semantic=bool(
-            legacy_flags.get("enable_python_semantic", base.enable_python_semantic)
-        ),
-        enable_deep_enrichment=bool(
-            legacy_flags.get("enable_deep_enrichment", base.enable_deep_enrichment)
-        ),
-    )
-
 
 # Kind weights for relevance scoring
 KIND_WEIGHTS: dict[MatchCategory, float] = {
@@ -292,592 +232,13 @@ def _identifier_pattern(query: str) -> str:
     return re.escape(query)
 
 
-def _adaptive_limits_from_count(request: RgCountRequest, *, lang: QueryLanguage) -> SearchLimits:
-    """Choose candidate limits from a quick rg count preflight.
-
-    Returns:
-        SearchLimits: Function return value.
-    """
-    counts = run_rg_count(
-        RgCountRequest(
-            root=request.root,
-            pattern=request.pattern,
-            mode=request.mode,
-            lang_types=(ripgrep_type_for_language(lang),),
-            include_globs=request.include_globs,
-            exclude_globs=request.exclude_globs,
-            paths=request.paths,
-            limits=request.limits,
-        )
-    )
-    active_limits = request.limits or INTERACTIVE
-    if not counts:
-        return active_limits
-    estimated_total = sum(max(0, value) for value in counts.values())
-    if estimated_total > active_limits.max_total_matches * 10:
-        return msgspec.structs.replace(
-            active_limits,
-            max_matches_per_file=min(active_limits.max_matches_per_file, 100),
-        )
-    return active_limits
-
-
-def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchStats:
-    scanned_files = len(
-        collector.files_completed or collector.files_started or collector.seen_files
-    )
-    matched_files = len(collector.seen_files)
-    total_matches = len(collector.matches)
-    scanned_files_is_estimate = not bool(collector.files_completed or collector.files_started)
-    summary_stats = collector.summary_stats
-    if isinstance(summary_stats, dict):
-        searches = summary_stats.get("searches")
-        searches_with_match = summary_stats.get("searches_with_match")
-        matches_reported = summary_stats.get("matches")
-        if isinstance(searches, int):
-            scanned_files = searches
-            scanned_files_is_estimate = False
-        if isinstance(searches_with_match, int):
-            matched_files = searches_with_match
-        if isinstance(matches_reported, int):
-            total_matches = matches_reported
-
-    return SearchStats(
-        scanned_files=scanned_files,
-        matched_files=matched_files,
-        total_matches=total_matches,
-        truncated=collector.truncated,
-        timed_out=timed_out,
-        max_files_hit=collector.max_files_hit,
-        max_matches_hit=collector.max_matches_hit,
-        scanned_files_is_estimate=scanned_files_is_estimate,
-        rg_stats=summary_stats if isinstance(summary_stats, dict) else None,
-    )
-
-
 def collect_candidates(request: CandidateCollectionRequest) -> tuple[list[RawMatch], SearchStats]:
-    """Execute native ``rg`` search and collect raw matches.
-
-    Parameters
-    ----------
-    root
-        Repository root path.
-    pattern
-        Effective pattern passed to ripgrep.
-    mode
-        Search mode.
-    limits
-        Search safety limits.
-    lang
-        Concrete language partition for this candidate pass.
-    include_globs
-        Optional include globs for the candidate pass.
-    exclude_globs
-        Optional exclude globs for the candidate pass.
+    """Compatibility wrapper delegating candidate collection to phase module.
 
     Returns:
-    -------
-    tuple[list[RawMatch], SearchStats]
-        Raw matches and collection statistics.
+        tuple[list[RawMatch], SearchStats]: Raw matches and aggregate scan stats.
     """
-    proc = run_rg_json(
-        RgRunRequest(
-            root=request.root,
-            pattern=request.pattern,
-            mode=request.mode,
-            lang_types=(ripgrep_type_for_language(request.lang),),
-            include_globs=request.include_globs or [],
-            exclude_globs=request.exclude_globs or [],
-            limits=request.limits,
-        ),
-        pcre2_available=request.pcre2_available,
-    )
-    collector = RgCollector(limits=request.limits, match_factory=RawMatch)
-    for event in proc.events:
-        collector.handle_event(event)
-    collector.finalize()
-    scope_filtered = [
-        match for match in collector.matches if is_path_in_lang_scope(match.file, request.lang)
-    ]
-    dropped_by_scope = len(collector.matches) - len(scope_filtered)
-    stats = _build_search_stats(collector, timed_out=proc.timed_out)
-    stats = msgspec.structs.replace(
-        stats,
-        matched_files=len({match.file for match in scope_filtered}),
-        total_matches=len(scope_filtered),
-        dropped_by_scope=dropped_by_scope,
-    )
-    return scope_filtered, stats
-
-
-def classify_match(
-    raw: RawMatch,
-    root: Path,
-    *,
-    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    options: MatchClassifyOptions | None = None,
-    **legacy_flags: bool,
-) -> EnrichedMatch:
-    """Run three-stage classification pipeline on a raw match.
-
-    Returns:
-        EnrichedMatch: Fully classified match with enrichment payloads.
-    """
-    resolved_options = _merged_classify_options(options, legacy_flags)
-
-    # Stage 1: Fast heuristic
-    heuristic = classify_heuristic(raw.text, raw.col, raw.match_text)
-
-    if (
-        heuristic.skip_deeper
-        and heuristic.category is not None
-        and not resolved_options.force_semantic_enrichment
-    ):
-        file_path = root / raw.file
-        context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
-        return _build_heuristic_enriched(
-            raw,
-            heuristic,
-            raw.match_text,
-            lang=lang,
-            context_window=context_window,
-            context_snippet=context_snippet,
-        )
-
-    file_path = root / raw.file
-    resolved_python = (
-        _resolve_python_node_context(file_path, raw) if is_python_language(lang) else None
-    )
-    classification = _resolve_match_classification(
-        raw,
-        file_path,
-        heuristic,
-        root,
-        lang=lang,
-        resolved_python=resolved_python,
-    )
-    symtable_enrichment = _maybe_symtable_enrichment(
-        file_path,
-        raw,
-        classification,
-        lang=lang,
-        enable_symtable=resolved_options.enable_symtable,
-    )
-    tree_sitter_budget_ms = adaptive_query_budget_ms(
-        language=str(lang),
-        fallback_budget_ms=_TREE_SITTER_QUERY_BUDGET_FALLBACK_MS,
-    )
-    rust_tree_sitter = (
-        _maybe_rust_tree_sitter_enrichment(
-            file_path,
-            raw,
-            lang=lang,
-            query_budget_ms=tree_sitter_budget_ms,
-        )
-        if resolved_options.enable_deep_enrichment
-        else None
-    )
-    python_enrichment = (
-        _maybe_python_enrichment(
-            file_path,
-            raw,
-            lang=lang,
-            resolved_python=resolved_python,
-            query_budget_ms=tree_sitter_budget_ms,
-        )
-        if resolved_options.enable_deep_enrichment
-        else None
-    )
-    python_semantic_enrichment = (
-        _maybe_python_semantic_enrichment(
-            root,
-            file_path,
-            raw,
-            lang=lang,
-            enable_python_semantic=resolved_options.enable_python_semantic,
-        )
-        if resolved_options.enable_deep_enrichment
-        else None
-    )
-    context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
-    enrichment = MatchEnrichment(
-        symtable=symtable_enrichment,
-        context_window=context_window,
-        context_snippet=context_snippet,
-        rust_tree_sitter=rust_tree_sitter,
-        python_enrichment=python_enrichment,
-        python_semantic_enrichment=python_semantic_enrichment,
-    )
-    return _build_enriched_match(
-        raw,
-        raw.match_text,
-        classification,
-        enrichment,
-        lang=lang,
-    )
-
-
-def _build_heuristic_enriched(
-    raw: RawMatch,
-    heuristic: HeuristicResult,
-    match_text: str,
-    *,
-    lang: QueryLanguage,
-    context_window: dict[str, int] | None = None,
-    context_snippet: str | None = None,
-) -> EnrichedMatch:
-    category = heuristic.category or "text_match"
-    return EnrichedMatch(
-        span=raw.span,
-        text=raw.text,
-        match_text=match_text,
-        category=category,
-        confidence=heuristic.confidence,
-        evidence_kind="heuristic",
-        context_window=context_window,
-        context_snippet=context_snippet,
-        language=lang,
-    )
-
-
-def _resolve_match_classification(
-    raw: RawMatch,
-    file_path: Path,
-    heuristic: HeuristicResult,
-    root: Path,
-    *,
-    lang: QueryLanguage,
-    resolved_python: ResolvedNodeContext | None = None,
-) -> ClassificationResult:
-    lang_suffixes = {".py", ".pyi"} if is_python_language(lang) else {".rs"}
-    if file_path.suffix not in lang_suffixes:
-        return _classification_from_heuristic(
-            heuristic, default_confidence=0.4, evidence_kind="rg_only"
-        )
-
-    ast_result = _classify_from_node(
-        file_path,
-        raw,
-        lang=lang,
-        resolved_python=resolved_python,
-    )
-    if ast_result is None:
-        ast_result = classify_from_records(file_path, root, raw.line, raw.col, lang=lang)
-    if ast_result is not None:
-        return _classification_from_node(ast_result)
-    if heuristic.category is not None:
-        return _classification_from_heuristic(heuristic, default_confidence=heuristic.confidence)
-    return _default_classification()
-
-
-def _classify_from_node(
-    file_path: Path,
-    raw: RawMatch,
-    *,
-    lang: QueryLanguage,
-    resolved_python: ResolvedNodeContext | None = None,
-) -> NodeClassification | None:
-    if is_python_language(lang) and resolved_python is not None:
-        return classify_from_resolved_node(resolved_python.node)
-    sg_root = get_sg_root(file_path, lang=lang)
-    if sg_root is None:
-        return None
-    return classify_from_node(sg_root, raw.line, raw.col, lang=lang)
-
-
-def _classification_from_node(result: NodeClassification) -> ClassificationResult:
-    return ClassificationResult(
-        category=result.category,
-        confidence=result.confidence,
-        evidence_kind=result.evidence_kind,
-        node_kind=result.node_kind,
-        containing_scope=result.containing_scope,
-    )
-
-
-def _classification_from_heuristic(
-    heuristic: HeuristicResult,
-    *,
-    default_confidence: float,
-    evidence_kind: str = "heuristic",
-) -> ClassificationResult:
-    category = heuristic.category or "text_match"
-    confidence = heuristic.confidence if heuristic.category is not None else default_confidence
-    return ClassificationResult(
-        category=category,
-        confidence=confidence,
-        evidence_kind=evidence_kind,
-        node_kind=None,
-        containing_scope=None,
-    )
-
-
-def _default_classification() -> ClassificationResult:
-    return ClassificationResult(
-        category="text_match",
-        confidence=0.50,
-        evidence_kind="rg_only",
-        node_kind=None,
-        containing_scope=None,
-    )
-
-
-def _maybe_symtable_enrichment(
-    file_path: Path,
-    raw: RawMatch,
-    classification: ClassificationResult,
-    *,
-    lang: QueryLanguage,
-    enable_symtable: bool,
-) -> SymtableEnrichment | None:
-    if not is_python_language(lang):
-        return None
-    if not enable_symtable:
-        return None
-    if classification.category not in {"definition", "callsite", "reference", "assignment"}:
-        return None
-    source = get_cached_source(file_path)
-    if source is None:
-        return None
-    table = get_symtable_table(file_path, source)
-    if table is None:
-        return None
-    return enrich_with_symtable_from_table(table, raw.match_text, raw.line)
-
-
-def _build_context_enrichment(
-    file_path: Path,
-    raw: RawMatch,
-    *,
-    lang: QueryLanguage,
-) -> tuple[dict[str, int] | None, str | None]:
-    source = get_cached_source(file_path)
-    if source is None:
-        return None, None
-    source_lines = source.splitlines()
-    def_lines = get_def_lines_cached(file_path, lang=lang)
-    context_window = compute_search_context_window(
-        source_lines,
-        match_line=raw.line,
-        def_lines=def_lines,
-    )
-    context_snippet = extract_search_context_snippet(
-        source_lines,
-        context_window=context_window,
-        match_line=raw.line,
-    )
-    return context_window, context_snippet
-
-
-def _build_enriched_match(
-    raw: RawMatch,
-    match_text: str,
-    classification: ClassificationResult,
-    enrichment: MatchEnrichment,
-    *,
-    lang: QueryLanguage,
-) -> EnrichedMatch:
-    containing_scope = classification.containing_scope
-    if containing_scope is None and enrichment.rust_tree_sitter is not None:
-        impl_type = enrichment.rust_tree_sitter.get("impl_type")
-        scope_name = enrichment.rust_tree_sitter.get("scope_name")
-        if isinstance(impl_type, str) and isinstance(scope_name, str):
-            containing_scope = f"{impl_type}::{scope_name}"
-        elif isinstance(scope_name, str):
-            containing_scope = scope_name
-
-    return EnrichedMatch(
-        span=raw.span,
-        text=raw.text,
-        match_text=match_text,
-        category=classification.category,
-        confidence=classification.confidence,
-        evidence_kind=classification.evidence_kind,
-        node_kind=classification.node_kind,
-        containing_scope=containing_scope,
-        context_window=enrichment.context_window,
-        context_snippet=enrichment.context_snippet,
-        symtable=enrichment.symtable,
-        rust_tree_sitter=enrichment.rust_tree_sitter,
-        python_enrichment=enrichment.python_enrichment,
-        python_semantic_enrichment=enrichment.python_semantic_enrichment,
-        language=lang,
-    )
-
-
-def _raw_match_abs_byte_range(raw: RawMatch, source_bytes: bytes) -> tuple[int, int] | None:
-    """Resolve absolute file-byte range for a raw line-relative match.
-
-    Returns:
-    -------
-    tuple[int, int] | None
-        Absolute start/end byte offsets when a range can be resolved.
-    """
-    if isinstance(raw.match_abs_byte_start, int) and isinstance(raw.match_abs_byte_end, int):
-        start = max(0, min(raw.match_abs_byte_start, len(source_bytes)))
-        end = max(start + 1, min(raw.match_abs_byte_end, len(source_bytes)))
-        return start, end
-
-    abs_range = line_relative_byte_range_to_absolute(
-        source_bytes,
-        line=raw.line,
-        byte_start=raw.match_byte_start,
-        byte_end=raw.match_byte_end,
-    )
-    if abs_range is not None:
-        return abs_range
-    # Fallback: derive from line/column when line-relative byte data is missing.
-    line_start_byte = line_relative_byte_range_to_absolute(
-        source_bytes,
-        line=raw.line,
-        byte_start=0,
-        byte_end=1,
-    )
-    if line_start_byte is None:
-        return None
-    start = line_start_byte[0] + max(0, raw.col)
-    end = max(start + 1, start + max(1, raw.match_end - raw.match_start))
-    return start, min(end, len(source_bytes))
-
-
-def _resolve_python_node_context(
-    file_path: Path,
-    raw: RawMatch,
-) -> ResolvedNodeContext | None:
-    sg_root = get_sg_root(file_path, lang="python")
-    if sg_root is None:
-        return None
-    index = get_node_index(file_path, sg_root, lang="python")
-    node = index.find_containing(raw.line, raw.col)
-    if node is None:
-        return None
-    return ResolvedNodeContext(
-        sg_root=sg_root,
-        node=node,
-        line=raw.line,
-        col=raw.col,
-    )
-
-
-def _maybe_rust_tree_sitter_enrichment(
-    file_path: Path,
-    raw: RawMatch,
-    *,
-    lang: QueryLanguage,
-    query_budget_ms: int | None = None,
-) -> dict[str, object] | None:
-    if not is_rust_language(lang):
-        return None
-    source = get_cached_source(file_path)
-    if source is None:
-        return None
-    source_bytes = source.encode("utf-8", errors="replace")
-    abs_range = _raw_match_abs_byte_range(raw, source_bytes)
-    if abs_range is None:
-        return None
-    byte_start, byte_end = abs_range
-    try:
-        payload = enrich_rust_context_by_byte_range(
-            source,
-            byte_start=byte_start,
-            byte_end=byte_end,
-            cache_key=str(file_path),
-            query_budget_ms=query_budget_ms,
-        )
-        return normalize_rust_payload(payload)
-    except ENRICHMENT_ERRORS:
-        return None
-
-
-def _maybe_python_enrichment(
-    file_path: Path,
-    raw: RawMatch,
-    *,
-    lang: QueryLanguage,
-    resolved_python: ResolvedNodeContext | None = None,
-    query_budget_ms: int | None = None,
-) -> dict[str, object] | None:
-    """Attempt Python context enrichment for a match.
-
-    Parameters
-    ----------
-    file_path
-        Path to the source file.
-    raw
-        Raw match from ripgrep.
-    lang
-        Query language.
-
-    Returns:
-    -------
-    dict[str, object] | None
-        Enrichment payload, or None if not applicable.
-    """
-    if not is_python_language(lang):
-        return None
-    sg_root = (
-        resolved_python.sg_root
-        if resolved_python is not None
-        else get_sg_root(file_path, lang=lang)
-    )
-    if sg_root is None:
-        return None
-    source = get_cached_source(file_path)
-    if source is None:
-        return None
-    session = get_python_analysis_session(file_path, source, sg_root=sg_root)
-    source_bytes = source.encode("utf-8", errors="replace")
-    abs_range = _raw_match_abs_byte_range(raw, source_bytes)
-    if abs_range is None:
-        return None
-    byte_start, byte_end = abs_range
-    try:
-        payload = enrich_python_context_by_byte_range(
-            PythonByteRangeEnrichmentRequest(
-                sg_root=sg_root,
-                source_bytes=source_bytes,
-                byte_start=byte_start,
-                byte_end=byte_end,
-                cache_key=str(file_path),
-                resolved_node=resolved_python.node if resolved_python is not None else None,
-                resolved_line=resolved_python.line if resolved_python is not None else None,
-                resolved_col=resolved_python.col if resolved_python is not None else None,
-                query_budget_ms=query_budget_ms,
-                session=session,
-            )
-        )
-        return normalize_python_payload(payload)
-    except ENRICHMENT_ERRORS:
-        return None
-
-
-def _maybe_python_semantic_enrichment(
-    root: Path,
-    file_path: Path,
-    raw: RawMatch,
-    *,
-    lang: QueryLanguage,
-    enable_python_semantic: bool,
-) -> dict[str, object] | None:
-    if not enable_python_semantic or not is_python_language(lang):
-        return None
-    if file_path.suffix not in {".py", ".pyi"}:
-        return None
-    try:
-        outcome = enrich_with_language_semantics(
-            LanguageSemanticEnrichmentRequest(
-                language="python",
-                mode="search",
-                root=root,
-                file_path=file_path,
-                line=raw.line,
-                col=raw.col,
-                symbol_hint=raw.match_text,
-            )
-        )
-    except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
-        return None
-    return outcome.payload if isinstance(outcome.payload, dict) else None
+    return _collect_candidates_phase(request)
 
 
 def _classify_file_role(file_path: str) -> str:
@@ -1085,20 +446,25 @@ def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) ->
     """
     enrichment: dict[str, object] = {"language": match.language}
     if match.rust_tree_sitter:
-        enrichment["rust"] = match.rust_tree_sitter
+        enrichment["rust"] = rust_enrichment_payload(match.rust_tree_sitter)
     python_payload: dict[str, object] | None = None
     if match.python_enrichment:
-        python_payload = dict(match.python_enrichment)
+        python_payload = python_enrichment_payload(match.python_enrichment)
     elif is_python_language(match.language):
         # Keep a stable python payload container for Python findings even when
         # only secondary enrichment sources are available.
         python_payload = {}
     if python_payload is not None:
         if match.python_semantic_enrichment:
-            python_payload.setdefault("python_semantic", match.python_semantic_enrichment)
+            python_payload.setdefault(
+                "python_semantic",
+                python_semantic_enrichment_payload(match.python_semantic_enrichment),
+            )
         enrichment["python"] = python_payload
     if match.python_semantic_enrichment:
-        enrichment["python_semantic"] = match.python_semantic_enrichment
+        enrichment["python_semantic"] = python_semantic_enrichment_payload(
+            match.python_semantic_enrichment
+        )
     if match.symtable:
         enrichment["symtable"] = match.symtable
     if len(enrichment) > 1:
@@ -1410,9 +776,6 @@ def _build_search_context(request: SearchRequest) -> SearchConfig:
     limits = request.limits or SMART_SEARCH_LIMITS
     argv = request.argv or ["search", request.query]
 
-    # Clear caches from previous runs
-    clear_caches()
-
     actual_mode = detect_query_mode(request.query, force_mode=request.mode)
     return SearchConfig(
         root=request.root,
@@ -1495,43 +858,6 @@ def _coerce_run_id(run_id_value: object) -> str | None:
     return None
 
 
-def _run_candidate_phase(
-    ctx: SearchConfig,
-    *,
-    lang: QueryLanguage,
-    mode: QueryMode,
-) -> tuple[list[RawMatch], SearchStats, str]:
-    pattern = _identifier_pattern(ctx.query) if mode == QueryMode.IDENTIFIER else ctx.query
-    include_globs = constrain_include_globs_for_language(ctx.include_globs, lang)
-    exclude_globs = list(ctx.exclude_globs or [])
-    exclude_globs.extend(language_extension_exclude_globs(lang))
-    effective_limits = _adaptive_limits_from_count(
-        RgCountRequest(
-            root=ctx.root,
-            pattern=pattern,
-            mode=mode,
-            lang_types=(ripgrep_type_for_language(lang),),
-            include_globs=tuple(include_globs or ()),
-            exclude_globs=tuple(exclude_globs),
-            limits=ctx.limits,
-        ),
-        lang=lang,
-    )
-    raw_matches, stats = collect_candidates(
-        CandidateCollectionRequest(
-            root=ctx.root,
-            pattern=pattern,
-            mode=mode,
-            limits=effective_limits,
-            lang=lang,
-            include_globs=include_globs,
-            exclude_globs=exclude_globs,
-            pcre2_available=bool(getattr(ctx.tc, "rg_pcre2_available", False)),
-        )
-    )
-    return raw_matches, stats, pattern
-
-
 def run_candidate_phase(
     ctx: SearchConfig,
     *,
@@ -1541,64 +867,9 @@ def run_candidate_phase(
     """Public wrapper around candidate-phase execution.
 
     Returns:
-        tuple[list[RawMatch], SearchStats, str]:
-            Raw matches, match statistics, and effective candidate pattern.
+        tuple[list[RawMatch], SearchStats, str]: Candidate matches, stats, and search pattern.
     """
     return _run_candidate_phase(ctx, lang=lang, mode=mode)
-
-
-def _run_classification_phase(
-    ctx: SearchConfig,
-    *,
-    lang: QueryLanguage,
-    raw_matches: list[RawMatch],
-) -> list[EnrichedMatch]:
-    filtered_raw_matches = [m for m in raw_matches if is_path_in_lang_scope(m.file, lang)]
-    if not filtered_raw_matches:
-        return []
-
-    indexed: list[tuple[int, RawMatch]] = list(enumerate(filtered_raw_matches))
-    partitioned: dict[str, list[tuple[int, RawMatch]]] = {}
-    for idx, raw in indexed:
-        partitioned.setdefault(raw.file, []).append((idx, raw))
-    batches = list(partitioned.values())
-    workers = _resolve_search_worker_count(len(batches))
-
-    if workers <= 1 or len(batches) <= 1:
-        return [classify_match(raw, ctx.root, lang=lang) for raw in filtered_raw_matches]
-
-    tasks = [
-        ClassificationBatchTask(root=str(ctx.root), lang=lang, batch=batch) for batch in batches
-    ]
-    scheduler = get_worker_scheduler()
-    try:
-        futures = [
-            scheduler.submit_cpu(_classify_partition_batch, task) for task in tasks[:workers]
-        ]
-        futures.extend(
-            scheduler.submit_cpu(_classify_partition_batch, task) for task in tasks[workers:]
-        )
-        batch = scheduler.collect_bounded(
-            futures,
-            timeout_seconds=max(1.0, float(len(tasks))),
-        )
-        if batch.timed_out > 0:
-            return [classify_match(raw, ctx.root, lang=lang) for raw in filtered_raw_matches]
-        indexed_results: list[tuple[int, EnrichedMatch]] = []
-        for batch_results in batch.done:
-            indexed_results.extend((item.index, item.match) for item in batch_results)
-    except (
-        multiprocessing.ProcessError,
-        OSError,
-        RuntimeError,
-        TimeoutError,
-        ValueError,
-        TypeError,
-    ):
-        return [classify_match(raw, ctx.root, lang=lang) for raw in filtered_raw_matches]
-
-    indexed_results.sort(key=lambda pair: pair[0])
-    return [match for _idx, match in indexed_results]
 
 
 def run_classification_phase(
@@ -1606,26 +877,19 @@ def run_classification_phase(
     *,
     lang: QueryLanguage,
     raw_matches: list[RawMatch],
+    cache_context: ClassifierCacheContext,
 ) -> list[EnrichedMatch]:
     """Public wrapper around classification phase execution.
 
     Returns:
-        list[EnrichedMatch]: Enriched matches after classification.
+        list[EnrichedMatch]: Classified/enriched matches.
     """
-    return _run_classification_phase(ctx, lang=lang, raw_matches=raw_matches)
-
-
-def _classify_partition_batch(
-    task: ClassificationBatchTask,
-) -> list[ClassificationBatchResult]:
-    root = Path(task.root)
-    return [
-        ClassificationBatchResult(
-            index=idx,
-            match=classify_match(raw, root, lang=task.lang),
-        )
-        for idx, raw in task.batch
-    ]
+    return run_classify_phase(
+        ctx,
+        lang=lang,
+        raw_matches=raw_matches,
+        cache_context=cache_context,
+    )
 
 
 def _run_language_partitions(ctx: SearchConfig) -> list[LanguageSearchResult]:
@@ -1902,6 +1166,7 @@ def smart_search(
         Complete search results.
     """
     request = _coerce_search_request(root=root, query=query, kwargs=kwargs)
+    clear_caches()
     ctx = _build_search_context(request)
     build_search_runtime_context(ctx)
     pipeline = SearchPipeline(ctx)
@@ -1972,7 +1237,6 @@ __all__ = [
     "assemble_result",
     "assemble_smart_search_result",
     "build_candidate_searcher",
-    "classify_match",
     "collect_candidates",
     "compute_relevance_score",
     "pop_search_object_view_for_run",

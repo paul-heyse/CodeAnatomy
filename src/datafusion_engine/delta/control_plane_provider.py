@@ -1,7 +1,5 @@
 """Provider and snapshot helpers for the Delta control plane."""
 
-# ruff: noqa: DOC201
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -103,7 +101,18 @@ def delta_provider_with_files(
     files: Sequence[str],
     request: DeltaProviderRequest,
 ) -> DeltaProviderBundle:
-    """Resolve a file-pruned Delta provider bundle from a live session."""
+    """Resolve a file-pruned Delta provider bundle from a live session.
+
+    Returns:
+        DeltaProviderBundle: Provider capsule and control-plane metadata.
+    """
+    """Resolve a file-pruned Delta provider bundle from a live session.
+
+    Returns:
+    -------
+    DeltaProviderBundle
+        Provider capsule plus snapshot/config metadata for the pruned file set.
+    """
     storage_profile = resolve_storage_profile(
         table_uri=request.table_uri,
         policy=None,
@@ -160,7 +169,18 @@ def delta_cdf_provider(
     *,
     request: DeltaCdfRequest,
 ) -> DeltaCdfProviderBundle:
-    """Resolve a Delta CDF provider bundle from the control-plane extension."""
+    """Resolve a Delta CDF provider bundle from the control-plane extension.
+
+    Returns:
+        DeltaCdfProviderBundle: CDF provider capsule and snapshot metadata.
+    """
+    """Resolve a Delta CDF provider bundle from the control-plane extension.
+
+    Returns:
+    -------
+    DeltaCdfProviderBundle
+        CDF provider capsule plus snapshot metadata.
+    """
     module = _resolve_extension_module(
         required_attr="DeltaCdfOptions",
         entrypoint="delta_cdf_table_provider",
@@ -193,7 +213,18 @@ def delta_cdf_provider(
 
 
 def delta_snapshot_info(request: DeltaSnapshotRequest) -> Mapping[str, object]:
-    """Load protocol-aware Delta snapshot metadata."""
+    """Load protocol-aware Delta snapshot metadata.
+
+    Returns:
+        Mapping[str, object]: Snapshot metadata payload.
+    """
+    """Load protocol-aware Delta snapshot metadata.
+
+    Returns:
+    -------
+    Mapping[str, object]
+        Snapshot payload returned by the Delta control-plane extension.
+    """
     snapshot_factory = _require_internal_entrypoint("delta_snapshot_info")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     try:

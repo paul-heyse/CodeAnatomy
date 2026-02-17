@@ -27,10 +27,15 @@ from tools.cq.query.sg_parser import SgRecord, sg_scan
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 
-_RUST_DEF_RE = re.compile(
-    r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?"
-    r"(?:extern(?:\s+\"[^\"]+\")?\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+_RUST_FN_QUALIFIERS = (
+    r"(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?"
+    r"(?:extern(?:\s+\"[^\"]+\")?\s+)?"
 )
+_RUST_DEF_RE = re.compile(rf"^{_RUST_FN_QUALIFIERS}fn\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+
+
+def _rust_call_site_pattern(base_name: str) -> str:
+    return rf"\b{_RUST_FN_QUALIFIERS}fn\s+{base_name}\s*\("
 
 
 def resolve_target_definition(
@@ -79,7 +84,7 @@ def infer_target_language(
         return "python"
     rust_files = find_files_with_pattern(
         root,
-        rf"\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s+{base_name}\s*\(",
+        _rust_call_site_pattern(base_name),
         options=FilePatternSearchOptions(
             limits=INTERACTIVE,
             lang_scope="rust",
@@ -126,10 +131,7 @@ def _resolve_rust_target_definition(
     root: Path,
     base_name: str,
 ) -> tuple[str, int] | None:
-    pattern = (
-        rf"\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?"
-        rf"(?:extern(?:\s+\"[^\"]+\")?\s+)?fn\s+{base_name}\s*\("
-    )
+    pattern = _rust_call_site_pattern(base_name)
     def_files = find_files_with_pattern(
         root,
         pattern,
@@ -455,15 +457,21 @@ class AttachTargetMetadataRequestV1(CqStruct, frozen=True):
     run_id: str | None = None
 
 
-def attach_target_metadata(
-    result: CqResult,
+class TargetMetadataResultV1(CqStruct, frozen=True):
+    """Resolved calls-target metadata payload."""
+
+    target_location: tuple[str, int] | None
+    target_callees: Counter[str]
+    resolved_language: QueryLanguage | None
+
+
+def resolve_target_metadata(
     request: AttachTargetMetadataRequestV1,
-) -> tuple[tuple[str, int] | None, Counter[str], QueryLanguage | None]:
-    """Resolve target location, collect target callees, and update result payload.
+) -> TargetMetadataResultV1:
+    """Resolve target metadata and persist cache side effects only.
 
     Returns:
-        tuple[tuple[str, int] | None, collections.Counter[str], QueryLanguage | None]:
-        Resolved target path/line, target callees counter, and detected language.
+        TargetMetadataResultV1: Resolved target location, callees, and language.
     """
     resolved_language = request.target_language or infer_target_language(
         request.root,
@@ -479,6 +487,7 @@ def attach_target_metadata(
         context=context,
         resolve_fn=lambda: resolve_target_payload(
             root=context.root,
+            backend=context.cache,
             function_name=request.function_name,
             resolved_language=resolved_language,
             resolve_target_definition=resolve_target_definition,
@@ -492,6 +501,7 @@ def attach_target_metadata(
     if target_location is not None and snapshot_digest is None:
         snapshot_digest = target_scope_snapshot_digest(
             root=context.root,
+            backend=context.cache,
             target_location=target_location,
             language=resolved_language,
         )
@@ -507,23 +517,39 @@ def attach_target_metadata(
             ),
             run_id=request.run_id,
         )
-    if target_location is not None:
-        result.summary.target_file = target_location[0]
-        result.summary.target_line = target_location[1]
+    return TargetMetadataResultV1(
+        target_location=target_location,
+        target_callees=target_callees,
+        resolved_language=resolved_language,
+    )
+
+
+def apply_target_metadata(
+    result: CqResult,
+    metadata: TargetMetadataResultV1,
+    *,
+    score: ScoreDetails | None,
+    preview_limit: int = CALLS_TARGET_CALLEE_PREVIEW,
+) -> None:
+    """Apply resolved target metadata onto a result payload."""
+    if metadata.target_location is not None:
+        result.summary.target_file = metadata.target_location[0]
+        result.summary.target_line = metadata.target_location[1]
     add_target_callees_section(
         result,
-        target_callees,
-        request.score,
-        preview_limit=request.preview_limit,
+        metadata.target_callees,
+        score,
+        preview_limit=preview_limit,
     )
-    return target_location, target_callees, resolved_language
 
 
 __all__ = [
     "AttachTargetMetadataRequestV1",
+    "TargetMetadataResultV1",
     "add_target_callees_section",
-    "attach_target_metadata",
+    "apply_target_metadata",
     "infer_target_language",
     "resolve_target_definition",
+    "resolve_target_metadata",
     "scan_target_callees",
 ]

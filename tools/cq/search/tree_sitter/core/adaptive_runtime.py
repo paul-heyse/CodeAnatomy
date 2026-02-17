@@ -1,72 +1,79 @@
-"""Adaptive runtime helpers backed by diskcache-aware primitives."""
+"""Adaptive runtime helpers backed by cache protocol primitives."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import suppress
 from pathlib import Path
 from typing import cast
 
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.search.tree_sitter.contracts.core_models import AdaptiveRuntimeSnapshotV1
 
-try:
-    from diskcache import Averager
-except ImportError:  # pragma: no cover - optional dependency
-    Averager = None
+_RUNTIME_TTL_SECONDS = 300
 
 
-def _cache(cache_backend: object | None = None) -> object | None:
-    if cache_backend is None:
-        cache_backend = get_cq_cache_backend(root=Path.cwd())
-    backend = cache_backend
-    return getattr(backend, "cache", None)
+def _stats_key(language: str) -> str:
+    return f"tree_sitter:runtime_stats:{language}"
 
 
-def _sample_count_key(language: str) -> str:
-    return f"tree_sitter:runtime_samples:{language}:count"
-
-
-def _averager(language: str, *, cache_backend: object | None = None) -> object | None:
-    cache = _cache(cache_backend)
-    if cache is None or Averager is None:
-        return None
-    try:
-        return Averager(
-            cache,
-            f"tree_sitter:runtime_ms:{language}",
-            expire=300,
-            tag="ns:tree_sitter|kind:runtime_ms",
-        )
-    except (RuntimeError, TypeError, ValueError):
-        return None
+def _resolve_backend(cache_backend: object | None = None) -> object:
+    if cache_backend is not None:
+        return cache_backend
+    return get_cq_cache_backend(root=Path.cwd())
 
 
 def memoized_value[T](
     *,
     key: str,
     compute: Callable[[], T],
-    ttl_seconds: int = 300,
+    ttl_seconds: int = _RUNTIME_TTL_SECONDS,
     cache_backend: object | None = None,
 ) -> T:
-    """Resolve cached value using diskcache memoize/get-set fallback.
+    """Resolve cached value using cache protocol get/set.
 
     Returns:
-        T: Cached or computed value.
+        T: Cached value when present, otherwise computed value.
     """
-    cache = _cache(cache_backend)
-    if cache is None:
+    backend = _resolve_backend(cache_backend)
+    get_fn = getattr(backend, "get", None)
+    set_fn = getattr(backend, "set", None)
+    if not callable(get_fn) or not callable(set_fn):
         return compute()
-    get_fn = getattr(cache, "get", None)
-    set_fn = getattr(cache, "set", None)
-    if callable(get_fn) and callable(set_fn):
-        hit = get_fn(key)
-        if hit is not None:
-            return cast("T", hit)
-        value = compute()
-        set_fn(key, value, expire=ttl_seconds)
-        return value
-    return compute()
+    hit = get_fn(key)
+    if hit is not None:
+        return cast("T", hit)
+    value = compute()
+    set_fn(key, value, expire=ttl_seconds)
+    return value
+
+
+def _read_runtime_stats(language: str, *, cache_backend: object | None = None) -> dict[str, object]:
+    backend = _resolve_backend(cache_backend)
+    get_fn = getattr(backend, "get", None)
+    if not callable(get_fn):
+        return {"count": 0, "sum_ms": 0.0}
+    raw = get_fn(_stats_key(language))
+    if not isinstance(raw, dict):
+        return {"count": 0, "sum_ms": 0.0}
+    return raw
+
+
+def _write_runtime_stats(
+    language: str,
+    stats: dict[str, object],
+    *,
+    cache_backend: object | None = None,
+) -> None:
+    backend = _resolve_backend(cache_backend)
+    set_fn = getattr(backend, "set", None)
+    if not callable(set_fn):
+        return
+    set_fn(
+        _stats_key(language),
+        stats,
+        expire=_RUNTIME_TTL_SECONDS,
+        tag="ns:tree_sitter|kind:runtime_ms",
+    )
 
 
 def record_runtime_sample(
@@ -78,58 +85,36 @@ def record_runtime_sample(
     """Record per-language latency sample for adaptive budgeting."""
     if elapsed_ms <= 0:
         return
-    sample = float(elapsed_ms)
-    avg = _averager(language, cache_backend=cache_backend)
-    if avg is None:
-        return
-    add_fn = getattr(avg, "add", None)
-    if callable(add_fn):
-        with suppress(RuntimeError, TypeError, ValueError):
-            add_fn(sample)
-    cache = _cache(cache_backend)
-    if cache is None:
-        return
-    incr_fn = getattr(cache, "incr", None)
-    if not callable(incr_fn):
-        return
-    try:
-        incr_fn(_sample_count_key(language), delta=1, default=0)
-    except TypeError:
-        with suppress(RuntimeError, ValueError, OSError, AttributeError):
-            incr_fn(_sample_count_key(language), 1)
-    except (RuntimeError, ValueError, OSError, AttributeError):
-        pass
+    stats = _read_runtime_stats(language, cache_backend=cache_backend)
+    count = stats.get("count")
+    sum_ms = stats.get("sum_ms")
+    next_count = int(count) + 1 if isinstance(count, int) else 1
+    next_sum = (
+        float(sum_ms) + float(elapsed_ms) if isinstance(sum_ms, int | float) else float(elapsed_ms)
+    )
+    _write_runtime_stats(
+        language,
+        {"count": next_count, "sum_ms": next_sum},
+        cache_backend=cache_backend,
+    )
 
 
 def _cached_average_ms(language: str, *, cache_backend: object | None = None) -> float | None:
-    avg = _averager(language, cache_backend=cache_backend)
-    if avg is None:
+    stats = _read_runtime_stats(language, cache_backend=cache_backend)
+    count = stats.get("count")
+    sum_ms = stats.get("sum_ms")
+    if not isinstance(count, int) or count <= 0:
         return None
-    get_fn = getattr(avg, "get", None)
-    if not callable(get_fn):
+    if not isinstance(sum_ms, int | float):
         return None
-    try:
-        value = get_fn()
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    if isinstance(value, int | float):
-        return float(value)
-    return None
+    return float(sum_ms) / float(count)
 
 
 def _cached_sample_count(language: str, *, cache_backend: object | None = None) -> int | None:
-    cache = _cache(cache_backend)
-    if cache is None:
-        return None
-    get_fn = getattr(cache, "get", None)
-    if not callable(get_fn):
-        return None
-    try:
-        value = get_fn(_sample_count_key(language))
-    except (RuntimeError, TypeError, ValueError, OSError, AttributeError):
-        return None
-    if isinstance(value, int):
-        return value
+    stats = _read_runtime_stats(language, cache_backend=cache_backend)
+    count = stats.get("count")
+    if isinstance(count, int):
+        return count
     return None
 
 

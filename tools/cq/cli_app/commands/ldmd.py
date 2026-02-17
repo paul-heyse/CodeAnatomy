@@ -18,6 +18,7 @@ from tools.cq.ldmd.format import (
     build_index,
     get_neighbors,
     get_slice,
+    resolve_section_id,
     search_sections,
 )
 
@@ -141,12 +142,7 @@ def get(
     content = doc_path.read_bytes()
     try:
         idx = build_index(content)
-        resolved_id = section_id
-        if section_id == "root" and idx.sections:
-            resolved_id = min(
-                idx.sections,
-                key=lambda section: section.start_offset,
-            ).id
+        resolved_id = resolve_section_id(idx, section_id)
         slice_data = get_slice(
             content,
             idx,

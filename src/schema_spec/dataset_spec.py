@@ -62,6 +62,7 @@ from storage.dataset_sources import (
     PathLike,
     normalize_dataset_source,
 )
+from storage.deltalake import DeltaSchemaRequest
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from utils.hashing import hash_sha256_hex
 from utils.validation import validate_required_items
@@ -1761,6 +1762,7 @@ __all__ = [
     "DeltaScanOptions",
     "DeltaScanPolicyDefaults",
     "DeltaSchemaPolicy",
+    "DeltaSchemaRequest",
     "DeltaWritePolicy",
     "ParquetColumnOptions",
     "ScanPolicyConfig",

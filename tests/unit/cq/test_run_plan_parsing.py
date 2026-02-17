@@ -7,11 +7,19 @@ from pathlib import Path
 from tools.cq.cli_app.app import app
 from tools.cq.cli_app.options import RunOptions, options_from_params
 from tools.cq.run.loader import load_run_plan
-from tools.cq.run.spec import CallsStep, NeighborhoodStep, QStep
+from tools.cq.run.spec import CallsStep, NeighborhoodStep, QStep, RunLoadInput
 
 MULTI_STEP_PLAN_COUNT = 2
 DEFAULT_NEIGHBORHOOD_TOP_K = 10
 CUSTOM_NEIGHBORHOOD_TOP_K = 3
+
+
+def _to_load_input(options: RunOptions) -> RunLoadInput:
+    return RunLoadInput(
+        plan=options.plan,
+        step=tuple(options.step),
+        steps=tuple(options.steps),
+    )
 
 
 def test_run_plan_inline_step() -> None:
@@ -27,7 +35,7 @@ def test_run_plan_inline_step() -> None:
     )
     opts = bound.kwargs["opts"]
     options = options_from_params(opts, type_=RunOptions)
-    plan = load_run_plan(options)
+    plan = load_run_plan(_to_load_input(options))
     assert len(plan.steps) == 1
     assert isinstance(plan.steps[0], QStep)
     assert plan.steps[0].query == "entity=function name=foo"
@@ -46,7 +54,7 @@ def test_run_plan_inline_steps_array() -> None:
     )
     opts = bound.kwargs["opts"]
     options = options_from_params(opts, type_=RunOptions)
-    plan = load_run_plan(options)
+    plan = load_run_plan(_to_load_input(options))
     assert len(plan.steps) == MULTI_STEP_PLAN_COUNT
     assert isinstance(plan.steps[0], QStep)
     assert isinstance(plan.steps[1], CallsStep)
@@ -65,7 +73,7 @@ def test_run_plan_inline_neighborhood_step() -> None:
     )
     opts = bound.kwargs["opts"]
     options = options_from_params(opts, type_=RunOptions)
-    plan = load_run_plan(options)
+    plan = load_run_plan(_to_load_input(options))
     assert len(plan.steps) == 1
     assert isinstance(plan.steps[0], NeighborhoodStep)
     assert plan.steps[0].target == "tools/cq/search/python_analysis_session.py:1"
@@ -90,7 +98,7 @@ def test_run_plan_inline_neighborhood_steps_array() -> None:
     )
     opts = bound.kwargs["opts"]
     options = options_from_params(opts, type_=RunOptions)
-    plan = load_run_plan(options)
+    plan = load_run_plan(_to_load_input(options))
     assert len(plan.steps) == 1
     assert isinstance(plan.steps[0], NeighborhoodStep)
     assert plan.steps[0].target == "tools/cq/search/python_analysis_session.py:1"
@@ -115,7 +123,7 @@ def test_run_plan_inline_mixed_steps_array_with_neighborhood() -> None:
     )
     opts = bound.kwargs["opts"]
     options = options_from_params(opts, type_=RunOptions)
-    plan = load_run_plan(options)
+    plan = load_run_plan(_to_load_input(options))
     assert len(plan.steps) == MULTI_STEP_PLAN_COUNT
     assert isinstance(plan.steps[0], QStep)
     assert isinstance(plan.steps[1], NeighborhoodStep)
@@ -138,6 +146,6 @@ def test_run_plan_toml(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     options = RunOptions(plan=plan_path)
-    plan = load_run_plan(options)
+    plan = load_run_plan(_to_load_input(options))
     assert len(plan.steps) == 1
     assert isinstance(plan.steps[0], QStep)

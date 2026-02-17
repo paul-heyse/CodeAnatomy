@@ -9,7 +9,6 @@ from pathlib import Path
 
 from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.interface import CqCacheBackend
-from tools.cq.core.report import set_render_enrichment_port
 from tools.cq.core.runtime import RuntimeExecutionPolicy
 from tools.cq.core.services import CallsService, EntityService, SearchService
 from tools.cq.core.settings_factory import SettingsFactory
@@ -32,9 +31,6 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
     Returns:
         Runtime services wired for the provided repository root.
     """
-    from tools.cq.orchestration.render_enrichment import SmartSearchRenderEnrichmentAdapter
-
-    set_render_enrichment_port(SmartSearchRenderEnrichmentAdapter())
     return CqRuntimeServices(
         search=SearchService(),
         entity=EntityService(),
@@ -72,7 +68,6 @@ def clear_runtime_services() -> None:
     """Clear cached runtime service bundles."""
     with _RUNTIME_SERVICES_LOCK:
         _RUNTIME_SERVICES.clear()
-    set_render_enrichment_port(None)
     close_cq_cache_backend()
 
 

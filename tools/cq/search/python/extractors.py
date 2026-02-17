@@ -38,6 +38,7 @@ from tools.cq.search._shared.core import (
 from tools.cq.search._shared.core import source_hash as _shared_source_hash
 from tools.cq.search._shared.core import truncate as _shared_truncate
 from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
+from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.enrichment.core import (
     append_source as _append_enrichment_source,
 )
@@ -257,6 +258,7 @@ def _try_extract(
 _AST_CACHE: BoundedCache[str, tuple[ast.Module, str]] = BoundedCache(
     max_size=_MAX_TREE_CACHE_ENTRIES, policy="fifo"
 )
+CACHE_REGISTRY.register_cache("python", "python_enrichment:ast", _AST_CACHE)
 
 
 def _get_ast(source_bytes: bytes, *, cache_key: str) -> ast.Module | None:
@@ -1355,11 +1357,20 @@ def enrich_python_context_by_byte_range(
         return None
 
     from tools.cq.search.pipeline.classifier import get_node_index
+    from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 
     if request.resolved_node is None:
         line, col = byte_offset_to_line_col(request.source_bytes, request.byte_start)
+        cache_context = (
+            request.session.classifier_cache
+            if request.session is not None
+            else ClassifierCacheContext()
+        )
         index = get_node_index(
-            Path(request.cache_key), cast("SgRoot", request.sg_root), lang="python"
+            Path(request.cache_key),
+            cast("SgRoot", request.sg_root),
+            lang="python",
+            cache_context=cache_context,
         )
         node = index.find_containing(line, col)
         if node is None:
@@ -1397,6 +1408,9 @@ def enrich_python_context_by_byte_range(
 def clear_python_enrichment_cache() -> None:
     """Clear per-process Python enrichment caches."""
     _AST_CACHE.clear()
+
+
+CACHE_REGISTRY.register_clear_callback("python", clear_python_enrichment_cache)
 
 
 def extract_python_node(request: PythonNodeEnrichmentRequest) -> dict[str, object]:

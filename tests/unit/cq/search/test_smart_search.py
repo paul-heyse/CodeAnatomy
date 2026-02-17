@@ -9,8 +9,15 @@ from typing import cast
 import pytest
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.summary_contract import SemanticTelemetryV1
+from tools.cq.search.pipeline.classification import classify_match
 from tools.cq.search.pipeline.classifier import QueryMode, clear_caches
+from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
+from tools.cq.search.pipeline.context_window import ContextWindow
 from tools.cq.search.pipeline.contracts import SearchConfig
+from tools.cq.search.pipeline.enrichment_contracts import (
+    PythonEnrichmentV1,
+    python_semantic_enrichment_payload,
+)
 from tools.cq.search.pipeline.python_semantic import (
     _python_semantic_no_signal_diagnostic,
     attach_python_semantic_enrichment,
@@ -23,7 +30,6 @@ from tools.cq.search.pipeline.smart_search import (
     build_followups,
     build_sections,
     build_summary,
-    classify_match,
     compute_relevance_score,
     smart_search,
 )
@@ -351,7 +357,7 @@ class TestClassifyMatch:
         )
         # Create file with comment
         (sample_repo / "src" / "module_a.py").write_text("# build_graph is here\n")
-        enriched = classify_match(raw, sample_repo)
+        enriched = classify_match(raw, sample_repo, cache_context=ClassifierCacheContext())
         assert enriched.category == "comment_match"
         assert enriched.evidence_kind == "heuristic"
 
@@ -370,7 +376,7 @@ class TestClassifyMatch:
         )
         # Create file with import
         (sample_repo / "src" / "module_a.py").write_text("import build_graph\n")
-        enriched = classify_match(raw, sample_repo)
+        enriched = classify_match(raw, sample_repo, cache_context=ClassifierCacheContext())
         assert enriched.category == "import"
 
     @staticmethod
@@ -387,9 +393,14 @@ class TestClassifyMatch:
             match_byte_end=18,
         )
         (sample_repo / "src" / "module_a.py").write_text("import build_graph\n", encoding="utf-8")
-        enriched = classify_match(raw, sample_repo, force_semantic_enrichment=True)
+        enriched = classify_match(
+            raw,
+            sample_repo,
+            cache_context=ClassifierCacheContext(),
+            force_semantic_enrichment=True,
+        )
         assert enriched.category == "import"
-        assert isinstance(enriched.python_enrichment, dict)
+        assert isinstance(enriched.python_enrichment, PythonEnrichmentV1)
 
 
 class TestBuildFinding:
@@ -1040,9 +1051,9 @@ class TestSmartSearchFiltersAndEnrichment:
         assert result.evidence
         detail_data = result.evidence[0].details.data
         context_window = detail_data.get("context_window")
-        assert isinstance(context_window, dict)
-        start_line = cast("int", context_window["start_line"])
-        end_line = cast("int", context_window["end_line"])
+        assert isinstance(context_window, ContextWindow)
+        start_line = context_window.start_line
+        end_line = context_window.end_line
         assert start_line == 1
         assert end_line < MAX_CONTEXT_END_LINE
 
@@ -1290,7 +1301,10 @@ class TestSmartSearchFiltersAndEnrichment:
             prefetched=prefetched,
         )
         assert not diagnostics
-        assert enriched[0].python_semantic_enrichment == prefetched_payload
+        assert (
+            python_semantic_enrichment_payload(enriched[0].python_semantic_enrichment)
+            == prefetched_payload
+        )
         telemetry_map = cast("Mapping[str, object]", telemetry)
         assert telemetry_map.get("attempted") == 1
         assert telemetry_map.get("applied") == 1

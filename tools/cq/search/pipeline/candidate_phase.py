@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import msgspec
 
@@ -83,6 +84,34 @@ def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchSta
         scanned_files_is_estimate=scanned_files_is_estimate,
         rg_stats=summary_stats if isinstance(summary_stats, dict) else None,
     )
+
+
+def prefilter_scope_paths_for_ast(
+    scope_paths: tuple[Path, ...] | None,
+    *,
+    lang: QueryLanguage,
+) -> tuple[Path, ...] | None:
+    """Filter scope paths to files parseable by ast-grep for the language.
+
+    Returns:
+    -------
+    tuple[Path, ...] | None
+        Filtered paths when parseable files exist; otherwise original scope paths.
+    """
+    if not scope_paths:
+        return None
+    from tools.cq.search.pipeline.classifier import get_sg_root
+    from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
+
+    cache_context = ClassifierCacheContext()
+    filtered: list[Path] = []
+    for path in scope_paths:
+        if path.is_file():
+            if get_sg_root(path, lang=lang, cache_context=cache_context) is not None:
+                filtered.append(path)
+            continue
+        filtered.append(path)
+    return tuple(filtered) if filtered else scope_paths
 
 
 def collect_candidates(request: CandidateCollectionRequest) -> tuple[list[RawMatch], SearchStats]:
@@ -167,4 +196,4 @@ def run_candidate_phase(
     return raw_matches, stats, pattern
 
 
-__all__ = ["collect_candidates", "run_candidate_phase"]
+__all__ = ["collect_candidates", "prefilter_scope_paths_for_ast", "run_candidate_phase"]

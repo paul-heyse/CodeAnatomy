@@ -158,7 +158,15 @@ def build_index(content: bytes) -> LdmdIndex:
     )
 
 
-def _resolve_section_id(index: LdmdIndex, section_id: str) -> str:
+def resolve_section_id(index: LdmdIndex, section_id: str) -> str:
+    """Resolve root alias to the first section identifier in byte order.
+
+    Returns:
+        str: Provided section id, or earliest section id when ``section_id`` is ``root``.
+
+    Raises:
+        LdmdParseError: If ``section_id`` is ``root`` and the document has no sections.
+    """
     if section_id != "root":
         return section_id
     if not index.sections:
@@ -222,7 +230,7 @@ def get_slice(
         logger.warning("LDMD slice failure: %s", msg)
         raise LdmdParseError(msg)
 
-    resolved_id = _resolve_section_id(index, section_id)
+    resolved_id = resolve_section_id(index, section_id)
     section = next((s for s in index.sections if s.id == resolved_id), None)
     if section is None:
         msg = f"Section not found: {resolved_id}"
@@ -361,7 +369,7 @@ def get_neighbors(
     Raises:
         LdmdParseError: If `section_id` is not found.
     """
-    resolved_id = _resolve_section_id(index, section_id)
+    resolved_id = resolve_section_id(index, section_id)
     # Find section index
     section_idx = None
     for idx, s in enumerate(index.sections):

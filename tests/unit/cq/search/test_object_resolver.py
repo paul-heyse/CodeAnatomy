@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from tools.cq.core.locations import SourceSpan
 from tools.cq.search.objects.resolve import build_object_resolved_view
+from tools.cq.search.pipeline.context_window import ContextWindow
+from tools.cq.search.pipeline.enrichment_contracts import PythonEnrichmentV1
 from tools.cq.search.pipeline.smart_search import EnrichedMatch
 
 OCCURRENCE_COUNT_TWO = 2
@@ -32,12 +34,14 @@ def test_object_resolver_groups_occurrences_by_qualified_name() -> None:
             category="callsite",
             confidence=0.9,
             evidence_kind="resolved_ast",
-            python_enrichment={
-                "resolution": {
-                    "qualified_name_candidates": [{"name": "pkg.core.build_graph"}],
+            python_enrichment=PythonEnrichmentV1(
+                payload={
+                    "resolution": {
+                        "qualified_name_candidates": [{"name": "pkg.core.build_graph"}],
+                    }
                 }
-            },
-            context_window={"start_line": 8, "end_line": 12},
+            ),
+            context_window=ContextWindow(start_line=8, end_line=12),
             context_snippet="def run():\n    build_graph(x)",
         ),
         EnrichedMatch(
@@ -47,12 +51,14 @@ def test_object_resolver_groups_occurrences_by_qualified_name() -> None:
             category="callsite",
             confidence=0.8,
             evidence_kind="resolved_ast",
-            python_enrichment={
-                "resolution": {
-                    "qualified_name_candidates": [{"name": "pkg.core.build_graph"}],
+            python_enrichment=PythonEnrichmentV1(
+                payload={
+                    "resolution": {
+                        "qualified_name_candidates": [{"name": "pkg.core.build_graph"}],
+                    }
                 }
-            },
-            context_window={"start_line": 20, "end_line": 25},
+            ),
+            context_window=ContextWindow(start_line=20, end_line=25),
             context_snippet="def run2():\n    build_graph(y)",
         ),
     ]
@@ -78,10 +84,12 @@ def test_object_resolver_marks_non_callable_applicability() -> None:
         category="reference",
         confidence=0.7,
         evidence_kind="resolved_ast",
-        python_enrichment={
-            "structural": {"item_role": "attribute"},
-            "resolution": {"binding_candidates": [{"name": "stable_id"}]},
-        },
+        python_enrichment=PythonEnrichmentV1(
+            payload={
+                "structural": {"item_role": "attribute"},
+                "resolution": {"binding_candidates": [{"name": "stable_id"}]},
+            }
+        ),
     )
 
     runtime = build_object_resolved_view([match], query="stable_id")

@@ -7,7 +7,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
+from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.snapshot_fingerprint import build_scope_snapshot_fingerprint
 from tools.cq.core.cache.telemetry import reset_cache_telemetry, snapshot_cache_telemetry
 
@@ -32,9 +32,11 @@ def test_scope_snapshot_digest_is_deterministic_and_cacheable(tmp_path: Path) ->
     b_file = root / "b.py"
     a_file.write_text("def alpha() -> int:\n    return 1\n", encoding="utf-8")
     b_file.write_text("def beta() -> int:\n    return 2\n", encoding="utf-8")
+    backend = get_cq_cache_backend(root=root)
 
     snapshot_a = build_scope_snapshot_fingerprint(
         root=root,
+        backend=backend,
         files=[b_file, a_file],
         language="python",
         scope_globs=["*.py"],
@@ -44,6 +46,7 @@ def test_scope_snapshot_digest_is_deterministic_and_cacheable(tmp_path: Path) ->
 
     snapshot_b = build_scope_snapshot_fingerprint(
         root=root,
+        backend=backend,
         files=[a_file, b_file],
         language="python",
         scope_globs=["*.py"],

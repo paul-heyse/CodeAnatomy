@@ -19,7 +19,7 @@ from utils.uuid_factory import uuid7_hex
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.delta.service_protocol import DeltaServicePort
     from datafusion_engine.delta.store_policy import DeltaStorePolicy
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.registry_facade import RegistryFacade
@@ -149,7 +149,7 @@ class IncrementalRuntime:
         """
         return DataFusionIOAdapter(ctx=self._session_runtime.ctx, profile=self.profile)
 
-    def delta_service(self) -> DeltaService:
+    def delta_service(self) -> DeltaServicePort:
         """Return the Delta service from the runtime profile."""
         return self.profile.delta_ops.delta_service()
 

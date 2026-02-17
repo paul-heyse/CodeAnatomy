@@ -18,6 +18,11 @@ from tools.cq.search.objects.render import (
 )
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime, build_object_resolved_view
 from tools.cq.search.pipeline.classifier import MatchCategory, SymtableEnrichment
+from tools.cq.search.pipeline.enrichment_contracts import (
+    python_enrichment_payload,
+    python_semantic_enrichment_payload,
+    rust_enrichment_payload,
+)
 from tools.cq.search.pipeline.smart_search_followups import build_followups
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
@@ -97,18 +102,23 @@ def _populate_optional_fields(data: dict[str, object], match: EnrichedMatch) -> 
 def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) -> None:
     enrichment: dict[str, object] = {"language": match.language}
     if match.rust_tree_sitter:
-        enrichment["rust"] = match.rust_tree_sitter
+        enrichment["rust"] = rust_enrichment_payload(match.rust_tree_sitter)
     python_payload: dict[str, object] | None = None
     if match.python_enrichment:
-        python_payload = dict(match.python_enrichment)
+        python_payload = python_enrichment_payload(match.python_enrichment)
     elif is_python_language(match.language):
         python_payload = {}
     if python_payload is not None:
         if match.python_semantic_enrichment:
-            python_payload.setdefault("python_semantic", match.python_semantic_enrichment)
+            python_payload.setdefault(
+                "python_semantic",
+                python_semantic_enrichment_payload(match.python_semantic_enrichment),
+            )
         enrichment["python"] = python_payload
     if match.python_semantic_enrichment:
-        enrichment["python_semantic"] = match.python_semantic_enrichment
+        enrichment["python_semantic"] = python_semantic_enrichment_payload(
+            match.python_semantic_enrichment
+        )
     if match.symtable:
         enrichment["symtable"] = match.symtable
     if len(enrichment) > 1:

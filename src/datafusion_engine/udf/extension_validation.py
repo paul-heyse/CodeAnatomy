@@ -6,9 +6,11 @@ from collections.abc import Mapping
 
 from datafusion import SessionContext
 
-from datafusion_engine.udf.extension_core import (
+from datafusion_engine.udf.constants import (
     ABI_VERSION_MISMATCH_MSG,
     REBUILD_WHEELS_HINT,
+)
+from datafusion_engine.udf.extension_core import (
     _EXPECTED_PLUGIN_ABI_MAJOR,
     _EXPECTED_PLUGIN_ABI_MINOR,
     _extension_module_with_capabilities,
@@ -16,7 +18,7 @@ from datafusion_engine.udf.extension_core import (
 )
 
 
-def validate_runtime_capabilities(
+def validate_extension_capabilities(
     *,
     strict: bool = True,
     ctx: SessionContext | None = None,
@@ -24,11 +26,12 @@ def validate_runtime_capabilities(
     """Validate extension capabilities for the runtime profile.
 
     Returns:
-    -------
-    Mapping[str, object]
-        Capability report payload.
+        Mapping[str, object]: Capability report payload.
+
+    Raises:
+        RuntimeError: If strict validation is enabled and compatibility or probe checks fail.
     """
-    report = capability_report()
+    report = extension_capabilities_report()
     if strict and not report.get("compatible", False):
         msg = report.get("error") or "Extension ABI compatibility check failed."
         raise RuntimeError(msg)
@@ -49,7 +52,7 @@ def validate_runtime_capabilities(
     return report
 
 
-def capability_report() -> Mapping[str, object]:
+def extension_capabilities_report() -> Mapping[str, object]:
     """Return extension capability diagnostics report."""
     expected = {"major": _EXPECTED_PLUGIN_ABI_MAJOR, "minor": _EXPECTED_PLUGIN_ABI_MINOR}
     try:
@@ -86,7 +89,11 @@ def capability_report() -> Mapping[str, object]:
 
 
 def extension_capabilities_snapshot() -> Mapping[str, object]:
-    """Return the Rust extension capabilities snapshot when available."""
+    """Return the Rust extension capabilities snapshot when available.
+
+    Raises:
+        TypeError: If the extension capability snapshot is not a mapping payload.
+    """
     from datafusion_engine.udf.extension_core import (
         EXTENSION_MODULE_LABEL,
     )
@@ -98,8 +105,37 @@ def extension_capabilities_snapshot() -> Mapping[str, object]:
     msg = f"{EXTENSION_MODULE_LABEL}.capabilities_snapshot returned a non-mapping payload."
     raise TypeError(msg)
 
+
+def validate_runtime_capabilities(
+    *,
+    strict: bool = True,
+    ctx: SessionContext | None = None,
+) -> Mapping[str, object]:
+    """Compatibility alias for runtime capability validation.
+
+    Returns:
+    -------
+    Mapping[str, object]
+        Capability report payload.
+    """
+    return validate_extension_capabilities(strict=strict, ctx=ctx)
+
+
+def capability_report() -> Mapping[str, object]:
+    """Compatibility alias for extension capability reports.
+
+    Returns:
+    -------
+    Mapping[str, object]
+        Capability report payload.
+    """
+    return extension_capabilities_report()
+
+
 __all__ = [
     "capability_report",
+    "extension_capabilities_report",
     "extension_capabilities_snapshot",
+    "validate_extension_capabilities",
     "validate_runtime_capabilities",
 ]

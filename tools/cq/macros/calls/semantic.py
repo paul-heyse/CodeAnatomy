@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_builders import FrontDoorInsightV1
+    from tools.cq.core.front_door_assembly import FrontDoorInsightV1
     from tools.cq.core.schema import CqResult
     from tools.cq.query.language import QueryLanguage
 
@@ -38,7 +38,7 @@ def _apply_calls_semantic(
     result: CqResult,
     request: CallsSemanticRequest,
 ) -> tuple[FrontDoorInsightV1, QueryLanguage | None, int, int, int, int, tuple[str, ...]]:
-    from tools.cq.core.front_door_builders import augment_insight_with_semantic
+    from tools.cq.core.front_door_assembly import augment_insight_with_semantic
     from tools.cq.search.semantic.models import (
         LanguageSemanticEnrichmentRequest,
         enrich_with_language_semantics,

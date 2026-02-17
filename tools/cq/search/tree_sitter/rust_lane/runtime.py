@@ -14,13 +14,15 @@ They may affect: containing_scope display (used only for grouping in output).
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import msgspec
 
-from tools.cq.search.rust.extractors_shared import RUST_SCOPE_KINDS
+from tools.cq.search.rust.extractors_shared import RUST_SCOPE_KINDS, find_ancestor
+from tools.cq.search.rust.node_access import TreeSitterRustNodeAccess
 from tools.cq.search.tree_sitter.contracts.core_models import (
     ObjectEvidenceRowV1,
     QueryExecutionSettingsV1,
@@ -53,13 +55,13 @@ from tools.cq.search.tree_sitter.rust_lane.bundle import (
     load_rust_grammar_bundle,
 )
 from tools.cq.search.tree_sitter.rust_lane.enrichment_extractors import (
-    _extract_attributes_dict,
-    _extract_call_target,
-    _extract_enum_shape,
-    _extract_function_signature,
-    _extract_impl_context,
-    _extract_struct_shape,
-    _extract_visibility_dict,
+    extract_attributes_dict,
+    extract_call_target,
+    extract_enum_shape,
+    extract_function_signature,
+    extract_impl_context,
+    extract_struct_shape,
+    extract_visibility_dict,
 )
 from tools.cq.search.tree_sitter.rust_lane.fact_extraction import (
     _extend_rust_fact_lists_from_rows,
@@ -75,7 +77,7 @@ from tools.cq.search.tree_sitter.rust_lane.injections import (
     build_injection_plan_from_matches,
 )
 from tools.cq.search.tree_sitter.rust_lane.query_cache import _pack_sources
-from tools.cq.search.tree_sitter.rust_lane.role_classification import _classify_item_role
+from tools.cq.search.tree_sitter.rust_lane.role_classification import classify_item_role
 from tools.cq.search.tree_sitter.rust_lane.runtime_cache import (
     _parse_with_session,
     _rust_field_ids,
@@ -100,6 +102,11 @@ _DEFAULT_SCOPE_DEPTH = 24
 _MAX_SCOPE_NODES = 256
 MAX_SOURCE_BYTES = 5 * 1024 * 1024  # 5 MB
 logger = logging.getLogger(__name__)
+_REQUIRED_PAYLOAD_KEYS: tuple[str, ...] = (
+    "language",
+    "enrichment_status",
+    "enrichment_sources",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,33 +276,6 @@ def _find_scope(node: Node, *, max_depth: int) -> Node | None:
     return None
 
 
-def _find_ancestor(node: Node, kind: str, *, max_depth: int) -> Node | None:
-    """Walk up from *node* to find the nearest ancestor of the given kind.
-
-    Parameters
-    ----------
-    node
-        Starting node.
-    kind
-        Target node ``type`` string.
-    max_depth
-        Maximum parent levels to inspect.
-
-    Returns:
-    -------
-    Node | None
-        The ancestor node, or ``None`` if not found within *max_depth*.
-    """
-    current: Node | None = node.parent
-    depth = 0
-    while current is not None and depth < max_depth:
-        if current.type == kind:
-            return current
-        current = current.parent
-        depth += 1
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Shared enrichment builder
 # ---------------------------------------------------------------------------
@@ -436,7 +416,7 @@ def _apply_extractors(
         _merge_result(
             payload,
             reasons,
-            _try_extract("signature", _extract_function_signature, sig_target, source_bytes),
+            _try_extract("signature", extract_function_signature, sig_target, source_bytes),
         )
 
     vis_target = _resolve_definition_target(node, scope)
@@ -448,30 +428,30 @@ def _apply_extractors(
         _merge_result(
             payload,
             reasons,
-            _try_extract("impl_context", _extract_impl_context, impl_target, source_bytes),
+            _try_extract("impl_context", extract_impl_context, impl_target, source_bytes),
         )
 
     if scope is not None and scope.type == "struct_item":
         _merge_result(
             payload,
             reasons,
-            _try_extract("struct_shape", _extract_struct_shape, scope, source_bytes),
+            _try_extract("struct_shape", extract_struct_shape, scope, source_bytes),
         )
     if scope is not None and scope.type == "enum_item":
         _merge_result(
-            payload, reasons, _try_extract("enum_shape", _extract_enum_shape, scope, source_bytes)
+            payload, reasons, _try_extract("enum_shape", extract_enum_shape, scope, source_bytes)
         )
 
     if node.type in _CALL_NODE_KINDS:
         _merge_result(
-            payload, reasons, _try_extract("call_target", _extract_call_target, node, source_bytes)
+            payload, reasons, _try_extract("call_target", extract_call_target, node, source_bytes)
         )
 
     # Classify item role using already-extracted attributes
     extracted_attrs = payload.get("attributes")
     attr_list: list[str] = extracted_attrs if isinstance(extracted_attrs, list) else []
     try:
-        payload["item_role"] = _classify_item_role(
+        payload["item_role"] = classify_item_role(
             node, scope, attr_list, max_scope_depth=max_scope_depth
         )
     except ENRICHMENT_ERRORS as exc:
@@ -503,12 +483,12 @@ def _enrich_visibility_and_attrs(
     source_bytes
         Full source bytes.
     """
-    fields, reason = _try_extract("visibility", _extract_visibility_dict, target, source_bytes)
+    fields, reason = _try_extract("visibility", extract_visibility_dict, target, source_bytes)
     payload.update(fields)
     if reason is not None:
         reasons.append(reason)
 
-    fields, reason = _try_extract("attributes", _extract_attributes_dict, target, source_bytes)
+    fields, reason = _try_extract("attributes", extract_attributes_dict, target, source_bytes)
     payload.update(fields)
     if reason is not None:
         reasons.append(reason)
@@ -538,7 +518,14 @@ def _resolve_impl_ancestor(
     """
     if scope is not None and scope.type == "impl_item":
         return scope
-    return _find_ancestor(node, "impl_item", max_depth=max_scope_depth)
+    ancestor = find_ancestor(
+        TreeSitterRustNodeAccess(node, b""),
+        "impl_item",
+        max_depth=max_scope_depth,
+    )
+    if isinstance(ancestor, TreeSitterRustNodeAccess):
+        return ancestor.node
+    return None
 
 
 def _build_enrichment_payload(
@@ -586,6 +573,13 @@ def _build_enrichment_payload(
 
     _apply_extractors(payload, node, scope, source_bytes, max_scope_depth=max_scope_depth)
     return payload
+
+
+def _assert_required_payload_keys(payload: dict[str, object]) -> None:
+    missing = [key for key in _REQUIRED_PAYLOAD_KEYS if key not in payload]
+    if missing:
+        msg = f"Rust enrichment payload missing required keys: {missing}"
+        raise ValueError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -958,6 +952,7 @@ def enrich_rust_context(
             )
         return None
 
+    total_started = time.perf_counter()
     try:
         tree, source_bytes, changed_ranges = _parse_with_session(
             source,
@@ -972,9 +967,12 @@ def enrich_rust_context(
         if node is None:
             return None
         scope = _find_scope(node, max_depth=max_scope_depth)
+        payload_build_started = time.perf_counter()
         payload = _build_enrichment_payload(
             node, scope, source_bytes, max_scope_depth=max_scope_depth
         )
+        payload_build_ms = max(0.0, (time.perf_counter() - payload_build_started) * 1000.0)
+        query_pack_started = time.perf_counter()
         payload.update(
             _collect_query_pack_payload(
                 root=tree.root_node,
@@ -988,11 +986,24 @@ def enrich_rust_context(
                 file_key=cache_key,
             )
         )
+        query_pack_ms = max(0.0, (time.perf_counter() - query_pack_started) * 1000.0)
+        payload["stage_timings_ms"] = {
+            "query_pack": query_pack_ms,
+            "payload_build": payload_build_ms,
+        }
+        _assert_required_payload_keys(payload)
     except ENRICHMENT_ERRORS as exc:
         logger.warning("Rust context enrichment failed: %s", type(exc).__name__)
         return None
     else:
-        return canonicalize_rust_lane_payload(payload)
+        attachment_started = time.perf_counter()
+        canonical = canonicalize_rust_lane_payload(payload)
+        attachment_ms = max(0.0, (time.perf_counter() - attachment_started) * 1000.0)
+        timings = dict(canonical.get("stage_timings_ms", {}))
+        timings["attachment"] = attachment_ms
+        timings["total"] = max(0.0, (time.perf_counter() - total_started) * 1000.0)
+        canonical["stage_timings_ms"] = timings
+        return canonical
 
 
 def enrich_rust_context_by_byte_range(
@@ -1039,6 +1050,7 @@ def enrich_rust_context_by_byte_range(
             )
         return None
 
+    total_started = time.perf_counter()
     try:
         tree, source_bytes, changed_ranges = _parse_with_session(
             source,
@@ -1050,9 +1062,12 @@ def enrich_rust_context_by_byte_range(
         if node is None:
             return None
         scope = _find_scope(node, max_depth=max_scope_depth)
+        payload_build_started = time.perf_counter()
         payload = _build_enrichment_payload(
             node, scope, source_bytes, max_scope_depth=max_scope_depth
         )
+        payload_build_ms = max(0.0, (time.perf_counter() - payload_build_started) * 1000.0)
+        query_pack_started = time.perf_counter()
         payload.update(
             _collect_query_pack_payload(
                 root=tree.root_node,
@@ -1063,11 +1078,24 @@ def enrich_rust_context_by_byte_range(
                 file_key=cache_key,
             )
         )
+        query_pack_ms = max(0.0, (time.perf_counter() - query_pack_started) * 1000.0)
+        payload["stage_timings_ms"] = {
+            "query_pack": query_pack_ms,
+            "payload_build": payload_build_ms,
+        }
+        _assert_required_payload_keys(payload)
     except ENRICHMENT_ERRORS as exc:
         logger.warning("Rust byte-range enrichment failed: %s", type(exc).__name__)
         return None
     else:
-        return canonicalize_rust_lane_payload(payload)
+        attachment_started = time.perf_counter()
+        canonical = canonicalize_rust_lane_payload(payload)
+        attachment_ms = max(0.0, (time.perf_counter() - attachment_started) * 1000.0)
+        timings = dict(canonical.get("stage_timings_ms", {}))
+        timings["attachment"] = attachment_ms
+        timings["total"] = max(0.0, (time.perf_counter() - total_started) * 1000.0)
+        canonical["stage_timings_ms"] = timings
+        return canonical
 
 
 __all__ = [

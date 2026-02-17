@@ -12,7 +12,7 @@ def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     Returns:
         CqResult: Query result produced by the entity executor.
     """
-    from tools.cq.query.executor import _execute_entity_query
+    from tools.cq.query.executor_entity import execute_entity_query as _execute_entity_query
 
     return _execute_entity_query(ctx)
 
@@ -23,7 +23,7 @@ def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     Returns:
         CqResult: Query result produced by the pattern executor.
     """
-    from tools.cq.query.executor import _execute_pattern_query
+    from tools.cq.query.executor_pattern import execute_pattern_query as _execute_pattern_query
 
     return _execute_pattern_query(ctx)
 

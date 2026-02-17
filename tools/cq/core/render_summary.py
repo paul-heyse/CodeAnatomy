@@ -9,6 +9,7 @@ from tools.cq.core.contract_codec import encode_json
 from tools.cq.core.front_door_render import render_insight_card
 from tools.cq.core.front_door_schema import FrontDoorInsightV1
 from tools.cq.core.render_utils import na as _na
+from tools.cq.core.render_utils import summary_value
 from tools.cq.core.serialization import to_builtins
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
@@ -53,12 +54,6 @@ ARTIFACT_ONLY_KEYS: frozenset[str] = frozenset(
 )
 
 RUN_QUERY_ARG_START_INDEX = 2
-
-
-def _summary_value(summary: CqSummary | dict[str, object], key: str) -> object:
-    if isinstance(summary, dict):
-        return summary.get(key)
-    return getattr(summary, key, None)
 
 
 def _derive_query_fallback(result: CqResult) -> str | None:
@@ -122,7 +117,7 @@ def summary_string(
     str
         Formatted summary value or N/A message.
     """
-    value = _summary_value(result.summary, key)
+    value = summary_value(result.summary, key)
     if isinstance(value, str) and value:
         return f"`{value}`"
     fallback: str | None = None
@@ -197,7 +192,7 @@ def render_insight_card_from_summary(summary: CqSummary | dict[str, object]) -> 
     list[str]
         Insight card markdown lines, or empty list if not present.
     """
-    raw = _summary_value(summary, "front_door_insight")
+    raw = summary_value(summary, "front_door_insight")
     if raw is None:
         return []
     if isinstance(raw, FrontDoorInsightV1):
@@ -507,7 +502,7 @@ def render_summary_condensed(result: CqResult) -> str:
     if result.summary:
         # Extract key metrics from summary
         for key in ("total_sites", "call_sites", "total_raises", "total_catches"):
-            value = _summary_value(result.summary, key)
+            value = summary_value(result.summary, key)
             if value is not None:
                 label = key.replace("_", " ")
                 summary_parts.append(f"{value} {label}")

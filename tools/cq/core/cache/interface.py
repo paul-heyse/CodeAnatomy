@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from typing import Protocol
 
@@ -172,6 +173,65 @@ class CqCacheBackend(Protocol):
         """
 
 
+class CqCacheStreamingBackend(CqCacheBackend, Protocol):
+    """Optional streaming/blob cache capability."""
+
+    def read_streaming(self, key: str) -> bytes | None:
+        """Read streaming payload for ``key`` when supported.
+
+        Returns:
+            bytes | None: Streamed payload, if available.
+        """
+        _ = (self, key)
+        return None
+
+    def set_streaming(
+        self,
+        key: str,
+        payload: bytes,
+        *,
+        expire: int | None = None,
+        tag: str | None = None,
+    ) -> bool:
+        """Write streaming payload for ``key`` when supported.
+
+        Returns:
+            bool: ``True`` when the payload is stored.
+        """
+        _ = (self, key, payload, expire, tag)
+        return False
+
+
+class CqCacheCoordinationBackend(CqCacheBackend, Protocol):
+    """Optional coordination capability (lock/rlock/semaphore/barrier)."""
+
+    def lock(self, key: str, *, expire: int | None = None) -> AbstractContextManager[None]:
+        """Return lock context manager for ``key`` when supported."""
+        _ = (self, key, expire)
+        return nullcontext()
+
+    def rlock(self, key: str, *, expire: int | None = None) -> AbstractContextManager[None]:
+        """Return reentrant lock context manager for ``key`` when supported."""
+        _ = (self, key, expire)
+        return nullcontext()
+
+    def semaphore(
+        self,
+        key: str,
+        *,
+        value: int,
+        expire: int | None = None,
+    ) -> AbstractContextManager[None]:
+        """Return semaphore context manager for ``key`` when supported."""
+        _ = (self, key, value, expire)
+        return nullcontext()
+
+    def barrier(self, key: str, publish_fn: Callable[[], None]) -> None:
+        """Run ``publish_fn`` once under a named barrier when supported."""
+        _ = (self, key)
+        publish_fn()
+
+
 class NoopCacheBackend:
     """No-op cache backend used when caching is disabled."""
 
@@ -337,5 +397,73 @@ class NoopCacheBackend:
             None
         """
 
+    def read_streaming(self, key: str) -> bytes | None:
+        """No-op streaming read.
 
-__all__ = ["CqCacheBackend", "NoopCacheBackend"]
+        Returns:
+            bytes | None: Always ``None``.
+        """
+        _ = (self, key)
+        return None
+
+    def set_streaming(
+        self,
+        key: str,
+        payload: bytes,
+        *,
+        expire: int | None = None,
+        tag: str | None = None,
+    ) -> bool:
+        """No-op streaming write.
+
+        Returns:
+            bool: Always ``False``.
+        """
+        _ = (self, key, payload, expire, tag)
+        return False
+
+    def lock(self, key: str, *, expire: int | None = None) -> AbstractContextManager[None]:
+        """No-op lock context.
+
+        Returns:
+            AbstractContextManager[None]: Null context manager.
+        """
+        _ = (self, key, expire)
+        return nullcontext()
+
+    def rlock(self, key: str, *, expire: int | None = None) -> AbstractContextManager[None]:
+        """No-op reentrant lock context.
+
+        Returns:
+            AbstractContextManager[None]: Null context manager.
+        """
+        _ = (self, key, expire)
+        return nullcontext()
+
+    def semaphore(
+        self,
+        key: str,
+        *,
+        value: int,
+        expire: int | None = None,
+    ) -> AbstractContextManager[None]:
+        """No-op semaphore context.
+
+        Returns:
+            AbstractContextManager[None]: Null context manager.
+        """
+        _ = (self, key, value, expire)
+        return nullcontext()
+
+    def barrier(self, key: str, publish_fn: Callable[[], None]) -> None:
+        """No-op barrier: execute publish function immediately."""
+        _ = (self, key)
+        publish_fn()
+
+
+__all__ = [
+    "CqCacheBackend",
+    "CqCacheCoordinationBackend",
+    "CqCacheStreamingBackend",
+    "NoopCacheBackend",
+]

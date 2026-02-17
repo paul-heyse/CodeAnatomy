@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1, SearchArtifactIndexEntryV1
+from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.policy import default_cache_policy
 from tools.cq.core.cache.run_lifecycle import CacheWriteTagRequestV1, resolve_write_cache_tag
 from tools.cq.core.cache.search_artifact_store import (
@@ -168,6 +169,7 @@ def save_search_artifact_bundle_cache(
         return None
 
     root = Path(result.run.root)
+    cache = get_cq_cache_backend(root=root)
     policy = default_cache_policy(root=root)
     run_id = bundle.run_id or result.run.run_id or "no_run_id"
     tag = resolve_write_cache_tag(
@@ -181,6 +183,7 @@ def save_search_artifact_bundle_cache(
     )
     persisted = persist_search_artifact_bundle(
         root=root,
+        backend=cache,
         bundle=bundle,
         tag=tag,
         key_extras={
@@ -222,7 +225,8 @@ def load_search_artifact_bundle(
         tuple[SearchArtifactBundleV1 | None, SearchArtifactIndexEntryV1 | None]:
             Loaded bundle and index entry (either can be ``None``).
     """
-    return load_search_artifact_bundle_from_store(root=root, run_id=run_id)
+    cache = get_cq_cache_backend(root=root)
+    return load_search_artifact_bundle_from_store(root=root, backend=cache, run_id=run_id)
 
 
 __all__ = [

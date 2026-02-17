@@ -10,6 +10,7 @@ from tools.cq.search._shared.core import (
     PythonByteRangeEnrichmentRequest,
     PythonNodeEnrichmentRequest,
 )
+from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.python.extractors import (
     _AST_CACHE,
     _classify_item_role,
@@ -27,7 +28,6 @@ from tools.cq.search.python.extractors import (
     _get_ast,
     _truncate,
     _unwrap_decorated,
-    clear_python_enrichment_cache,
     enrich_python_context,
     enrich_python_context_by_byte_range,
 )
@@ -119,7 +119,7 @@ class Config:
 @pytest.fixture(autouse=True)
 def _clear_caches() -> None:
     """Clear enrichment caches before each test."""
-    clear_python_enrichment_cache()
+    CACHE_REGISTRY.clear_all("python")
 
 
 def _make_sg(source: str = _PYTHON_SAMPLE) -> SgRoot:
@@ -949,7 +949,7 @@ class TestCaching:
         """Test cache clear."""
         _get_ast(b"x = 1\n", cache_key="clear_test")
         assert "clear_test" in _AST_CACHE
-        clear_python_enrichment_cache()
+        CACHE_REGISTRY.clear_all("python")
         assert "clear_test" not in _AST_CACHE
 
 

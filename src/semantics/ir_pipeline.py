@@ -435,7 +435,6 @@ def _build_diagnostic_rows() -> tuple[SemanticDatasetRow, ...]:
     hard_fields = tuple(f"hard_{index}" for index in range(1, max_hard + 1))
     dynamic_fields = {
         "relationship_candidates",
-        "relationship_decisions",
     }
     rows: list[SemanticDatasetRow] = []
     for spec in DIAGNOSTIC_DATASETS:
@@ -803,7 +802,6 @@ def compile_semantics(model: SemanticModel) -> SemanticIR:
         "relationship_quality_metrics": tuple(spec.name for spec in model.relationship_specs),
         "relationship_ambiguity_report": tuple(spec.name for spec in model.relationship_specs),
         "relationship_candidates": tuple(spec.name for spec in model.relationship_specs),
-        "relationship_decisions": tuple(spec.name for spec in model.relationship_specs),
     }
 
     def _emit_output_spec(spec: SemanticOutputSpec) -> None:

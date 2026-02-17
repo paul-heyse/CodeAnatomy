@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from tools.cq.search.enrichment.python_adapter import PythonEnrichmentAdapter
+from tools.cq.search.pipeline.enrichment_contracts import PythonEnrichmentV1
 
 _TIMING_MS = 1.5
 
@@ -18,7 +19,7 @@ class _Match:
 def test_payload_from_match_extracts_python_payload() -> None:
     """Adapter should extract python_enrichment mapping from match object."""
     adapter = PythonEnrichmentAdapter()
-    payload = adapter.payload_from_match(_Match({"meta": {}}))
+    payload = adapter.payload_from_match(_Match(PythonEnrichmentV1(payload={"meta": {}})))
 
     assert payload == {"meta": {}}
 

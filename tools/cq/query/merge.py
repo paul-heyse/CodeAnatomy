@@ -76,7 +76,7 @@ def _merge_semantic_contract_inputs(
 def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
     import msgspec
 
-    from tools.cq.core.front_door_builders import (
+    from tools.cq.core.front_door_assembly import (
         coerce_front_door_insight,
         mark_partial_for_missing_languages,
         to_public_front_door_insight_dict,

@@ -10,7 +10,6 @@ from tools.cq.cli_app.types import (
     ReportPreset,
     SchemaKind,
     SeverityLevel,
-    comma_separated_enum,
     comma_separated_list,
 )
 from tools.cq.core.types import LdmdSliceMode
@@ -163,33 +162,33 @@ class TestCommaSeparatedList:
         assert result == [1, 2, 3]
 
 
-class TestCommaSeparatedEnum:
-    """Tests for comma_separated_enum converter."""
+class TestEnumConversionWithCommaSeparatedList:
+    """Tests enum conversion via comma_separated_list converter."""
 
     @staticmethod
     def test_single_value() -> None:
         """Test converter with single enum value."""
-        convert = comma_separated_enum(ImpactBucket)
+        convert = comma_separated_list(ImpactBucket)
         result = convert("low")
         assert result == [ImpactBucket.low]
 
     @staticmethod
     def test_comma_separated() -> None:
         """Test converter with comma-separated enum values."""
-        convert = comma_separated_enum(ImpactBucket)
+        convert = comma_separated_list(ImpactBucket)
         result = convert("low,med,high")
         assert result == [ImpactBucket.low, ImpactBucket.med, ImpactBucket.high]
 
     @staticmethod
     def test_list_input() -> None:
         """Test converter with list input."""
-        convert = comma_separated_enum(SeverityLevel)
+        convert = comma_separated_list(SeverityLevel)
         result = convert(["info", "warning"])
         assert result == [SeverityLevel.info, SeverityLevel.warning]
 
     @staticmethod
     def test_invalid_value_raises() -> None:
         """Test that invalid enum value raises."""
-        convert = comma_separated_enum(ImpactBucket)
+        convert = comma_separated_list(ImpactBucket)
         with pytest.raises(ValueError, match="invalid"):
             convert("invalid")

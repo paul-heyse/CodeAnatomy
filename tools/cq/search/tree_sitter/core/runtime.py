@@ -111,11 +111,10 @@ def _combined_progress_callback(
     progress_callback: Callable[[object], bool] | None,
 ) -> Callable[[object], bool] | None:
     callback = progress_callback if callable(progress_callback) else None
-    if callback is None:
-        # QueryCursor progress callbacks can be unstable across versions.
-        # Keep the hot path callback-free unless an explicit callback was provided.
+    has_budget = budget_ms is not None and budget_ms > 0
+    if callback is None and not has_budget:
         return None
-    if budget_ms is None or budget_ms <= 0:
+    if not has_budget:
         return callback
 
     deadline = monotonic() + (float(budget_ms) / 1000.0)
@@ -154,7 +153,6 @@ def _autotuned_settings(
             match_limit=tuned_match_limit,
             max_start_depth=settings.max_start_depth,
             budget_ms=tuned_budget,
-            timeout_micros=settings.timeout_micros,
             require_containment=settings.require_containment,
             window_mode=settings.window_mode,
         ),
@@ -183,11 +181,6 @@ def _build_cursor(query: Query, settings: QueryExecutionSettingsV1) -> Any:
     cursor_any = cast("Any", cursor)
     if settings.max_start_depth is not None and hasattr(cursor_any, "set_max_start_depth"):
         cursor_any.set_max_start_depth(settings.max_start_depth)
-    timeout_micros: int | None = settings.timeout_micros
-    if timeout_micros is None and settings.budget_ms is not None and settings.budget_ms > 0:
-        timeout_micros = int(settings.budget_ms) * 1_000
-    if timeout_micros is not None and hasattr(cursor_any, "set_timeout_micros"):
-        cursor_any.set_timeout_micros(timeout_micros)
     return cursor
 
 

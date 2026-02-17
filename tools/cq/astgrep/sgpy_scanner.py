@@ -409,7 +409,14 @@ def _node_to_match_dict(
     }
 
 
-def _node_payload(node: SgNode) -> dict[str, Any]:
+def node_payload(node: SgNode) -> dict[str, Any]:
+    """Serialize an ast-grep node into a stable text/span payload.
+
+    Returns:
+    -------
+    dict[str, Any]
+        Node text with start and end line/column offsets.
+    """
     range_obj = node.range()
     return {
         "text": node.text(),
@@ -418,7 +425,8 @@ def _node_payload(node: SgNode) -> dict[str, Any]:
     }
 
 
-def _is_variadic_separator(node: SgNode) -> bool:
+def is_variadic_separator(node: SgNode) -> bool:
+    """Return whether a node represents list separators in variadic captures."""
     text = node.text().strip()
     return node.kind() in {",", ";"} or text in {",", ";"}
 
@@ -428,7 +436,7 @@ def _extract_metavars(
     *,
     metavar_names: tuple[str, ...],
     variadic_names: frozenset[str],
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, object]:
     """Extract metavariable captures from a match.
 
     Parameters
@@ -441,26 +449,14 @@ def _extract_metavars(
     dict[str, dict[str, Any]]
         Dictionary of metavariable name to capture info.
     """
-    metavars: dict[str, dict[str, Any]] = {}
+    from tools.cq.query.executor_ast_grep import extract_match_metavars
 
-    for name in metavar_names:
-        captured = match.get_match(name)
-        if captured is not None:
-            payload = _node_payload(captured)
-            metavars[name] = payload
-            metavars[f"${name}"] = payload
-
-        if name in variadic_names:
-            captured_multi = match.get_multiple_matches(name)
-            all_nodes: list[SgNode] = list(captured_multi) if captured_multi is not None else []
-            captured_nodes = [node for node in all_nodes if not _is_variadic_separator(node)]
-            if captured_nodes:
-                metavars[f"$$${name}"] = {
-                    "kind": "multi",
-                    "nodes": [_node_payload(node) for node in captured_nodes],
-                }
-
-    return metavars
+    return extract_match_metavars(
+        match,
+        metavar_names=metavar_names,
+        variadic_names=variadic_names,
+        include_multi=True,
+    )
 
 
 def _apply_regex_filters(text: str, rule_config: Mapping[str, Any]) -> bool:

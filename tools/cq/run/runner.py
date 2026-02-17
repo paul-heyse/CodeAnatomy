@@ -4,30 +4,30 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
-from pathlib import Path
-
-import msgspec
 
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.run_context import RunContext, RunExecutionContext
 from tools.cq.core.schema import CqResult, assign_result_finding_ids, mk_result, ms
-from tools.cq.query.ir import Query
-from tools.cq.query.language import QueryLanguage, expand_language_scope
-from tools.cq.query.parser import QueryParseError, has_query_tokens, parse_query
-from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
-from tools.cq.run.helpers import error_result as _error_result
+from tools.cq.query.language import QueryLanguage
+from tools.cq.run.q_execution import (
+    ParsedQStep,
+)
 from tools.cq.run.q_execution import (
     execute_entity_q_steps as _execute_entity_q_steps,
 )
 from tools.cq.run.q_execution import (
     execute_pattern_q_steps as _execute_pattern_q_steps,
 )
+from tools.cq.run.q_execution import (
+    expand_q_step_by_scope as _expand_q_step_by_scope,
+)
+from tools.cq.run.q_execution import (
+    prepare_q_step as _prepare_q_step,
+)
 from tools.cq.run.q_step_collapsing import collapse_parent_q_results
 from tools.cq.run.run_summary import populate_run_summary_metadata
-from tools.cq.run.scope import apply_run_scope as _apply_run_scope
 from tools.cq.run.spec import (
     QStep,
     RunPlan,
@@ -37,21 +37,8 @@ from tools.cq.run.spec import (
 from tools.cq.run.step_executors import (
     execute_non_q_steps_parallel,
     execute_non_q_steps_serial,
-    execute_search_fallback,
 )
 from tools.cq.utils.uuid_factory import uuid7_str
-
-
-@dataclass(frozen=True)
-class ParsedQStep:
-    step_id: str
-    parent_step_id: str
-    step: QStep
-    query: Query
-    plan: ToolPlan
-    scope_paths: list[Path]
-    scope_globs: list[str] | None
-
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +106,7 @@ def execute_run_plan(
 
     populate_run_summary_metadata(merged, executed_results, total_steps=len(steps))
     merged.summary.cache_backend = snapshot_backend_metrics(root=ctx.root)
-    assign_result_finding_ids(merged)
+    merged = assign_result_finding_ids(merged)
     maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=run_id)
     maybe_evict_run_cache_tag(root=ctx.root, language="rust", run_id=run_id)
     logger.debug("Run plan completed steps=%d run_id=%s", len(steps), run_id)
@@ -187,6 +174,12 @@ def _partition_q_steps(
         step_id, outcome, is_error = _prepare_q_step(step, plan, ctx)
         if isinstance(outcome, CqResult):
             immediate_results.append((step_id, outcome))
+            if outcome.summary.error:
+                logger.warning(
+                    "Immediate q-step error step_id=%s error=%s",
+                    step_id,
+                    outcome.summary.error,
+                )
             if stop_on_error and is_error:
                 break
             continue
@@ -216,71 +209,6 @@ def _run_grouped_q_batches(
 
 def _results_have_error(results: list[tuple[str, CqResult]]) -> bool:
     return any(bool(result.summary.error) for _, result in results)
-
-
-def _prepare_q_step(
-    step: QStep,
-    plan: RunPlan,
-    ctx: RunExecutionContext,
-) -> tuple[str, ParsedQStep | CqResult, bool]:
-    step_id = step.id or "q"
-    try:
-        query = parse_query(step.query)
-    except QueryParseError as exc:
-        return _handle_query_parse_error(step, step_id, plan, ctx, exc)
-
-    query = _apply_run_scope(query, plan.in_dir, plan.exclude)
-    tool_plan = compile_query(query)
-    scope_paths = scope_to_paths(tool_plan.scope, ctx.root)
-    if not scope_paths:
-        msg = "No files match scope"
-        return step_id, _error_result(step_id, "q", RuntimeError(msg), ctx), True
-    scope_globs = scope_to_globs(tool_plan.scope)
-    parsed_step = ParsedQStep(
-        step_id=step_id,
-        parent_step_id=step_id,
-        step=step,
-        query=query,
-        plan=tool_plan,
-        scope_paths=scope_paths,
-        scope_globs=scope_globs,
-    )
-    return step_id, parsed_step, False
-
-
-def _expand_q_step_by_scope(step: ParsedQStep, ctx: RunExecutionContext) -> list[ParsedQStep]:
-    if step.query.lang_scope != "auto":
-        return [step]
-
-    expanded: list[ParsedQStep] = []
-    for lang in expand_language_scope(step.query.lang_scope):
-        scoped_query = msgspec.structs.replace(step.query, lang_scope=lang)
-        scoped_plan = compile_query(scoped_query)
-        scoped_paths = scope_to_paths(scoped_plan.scope, ctx.root)
-        expanded.append(
-            ParsedQStep(
-                step_id=f"{step.parent_step_id}:{lang}",
-                parent_step_id=step.parent_step_id,
-                step=step.step,
-                query=scoped_query,
-                plan=scoped_plan,
-                scope_paths=scoped_paths,
-                scope_globs=scope_to_globs(scoped_plan.scope),
-            )
-        )
-    return expanded
-
-
-def _handle_query_parse_error(
-    step: QStep,
-    step_id: str,
-    plan: RunPlan,
-    ctx: RunExecutionContext,
-    exc: QueryParseError,
-) -> tuple[str, CqResult, bool]:
-    if not has_query_tokens(step.query):
-        return step_id, execute_search_fallback(step.query, plan, ctx), False
-    return step_id, _error_result(step_id, "q", exc, ctx), True
 
 
 __all__ = [

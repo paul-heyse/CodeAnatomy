@@ -6,28 +6,29 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, cast
+from typing import TYPE_CHECKING, Annotated
 
 import pyarrow as pa
 from cyclopts import Parameter
 
+from cli.context import RunContext
+from cli.runtime_services import resolve_cli_runtime_services
 from datafusion_engine.delta.control_plane_core import (
     DeltaProviderRequest,
     delta_provider_from_session,
 )
+from datafusion_engine.delta.service_protocol import DeltaServicePort
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema import extract_schema_for
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
+from schema_spec.arrow_types import decode_metadata_map
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
 
     from datafusion import SessionContext
-
-    from datafusion_engine.delta.service import DeltaService
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ def diag_command(
             help="Read Delta tables and validate arrays (slower, more thorough).",
         ),
     ] = False,
+    run_context: Annotated[RunContext | None, Parameter(parse=False)] = None,
 ) -> int:
     """Generate a diagnostic report for pipeline outputs.
 
@@ -91,15 +93,16 @@ def diag_command(
         summary_path=summary_path,
     )
 
-    profile = DataFusionRuntimeProfile()
-    ctx = profile.session_context()
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
+    services = resolve_cli_runtime_services(run_context)
+    ctx = services.runtime_profile.session_context()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=services.runtime_profile)
     read_table = _build_delta_reader(ctx, adapter=adapter)
 
     report = _build_report(
         resolved_output,
         resolved_bundle,
         validate_delta=bool(validate_delta),
+        delta_service=services.delta_service,
         read_table=read_table,
     )
 
@@ -112,11 +115,13 @@ def diag_command(
     return 0 if status == "ok" else 1
 
 
-def _is_delta_table(path: Path) -> bool:
+def _is_delta_table(
+    path: Path,
+    *,
+    delta_service: DeltaServicePort,
+) -> bool:
     try:
-        profile = DataFusionRuntimeProfile()
-        service = cast("DeltaService", profile.delta_ops.delta_service())
-        return service.table_version(path=str(path)) is not None
+        return delta_service.table_version(path=str(path)) is not None
     except (RuntimeError, TypeError, ValueError):
         return False
 
@@ -167,19 +172,13 @@ def _read_json(path: Path) -> dict[str, object]:
     raise ValueError(msg)
 
 
-def _decode_metadata(schema: pa.Schema) -> dict[str, str]:
-    if schema.metadata is None:
-        return {}
-    return {key.decode("utf-8"): value.decode("utf-8") for key, value in schema.metadata.items()}
-
-
 def _delta_summary(path: Path, *, validate: bool, table: pa.Table) -> dict[str, object]:
     summary: dict[str, object] = {"path": str(path)}
     schema = table.schema
     summary["rows"] = int(table.num_rows)
     summary["columns"] = len(schema.names)
     summary["schema_identity_hash"] = schema_identity_hash(schema)
-    summary["schema_metadata"] = _decode_metadata(schema)
+    summary["schema_metadata"] = decode_metadata_map(schema.metadata)
     if validate:
         table.validate(full=True)
     return summary
@@ -237,7 +236,7 @@ def _check_required_non_null(
     issues: list[Issue],
     read_table: Callable[[Path], pa.Table],
 ) -> None:
-    metadata = _decode_metadata(schema)
+    metadata = decode_metadata_map(schema.metadata)
     required = _parse_required_non_null(metadata)
     if not required:
         return
@@ -259,7 +258,7 @@ def _check_contract_schema(
     *,
     issues: list[Issue],
 ) -> None:
-    metadata = _decode_metadata(schema)
+    metadata = decode_metadata_map(schema.metadata)
     schema_name = metadata.get("schema_name")
     if not schema_name:
         return
@@ -639,6 +638,7 @@ def _collect_delta_summaries(
     output_dir: Path,
     *,
     validate_delta: bool,
+    delta_service: DeltaServicePort,
     issues: list[Issue],
     read_table: Callable[[Path], pa.Table],
 ) -> dict[str, dict[str, object]]:
@@ -646,7 +646,7 @@ def _collect_delta_summaries(
     for path in output_dir.iterdir():
         if not path.is_dir():
             continue
-        if not _is_delta_table(path):
+        if not _is_delta_table(path, delta_service=delta_service):
             continue
         table = read_table(path)
         summary = _delta_summary(path, validate=validate_delta, table=table)
@@ -730,6 +730,7 @@ def _build_report(
     run_bundle: Path | None,
     *,
     validate_delta: bool,
+    delta_service: DeltaServicePort,
     read_table: Callable[[Path], pa.Table],
 ) -> dict[str, object]:
     issues: list[Issue] = []
@@ -741,6 +742,7 @@ def _build_report(
     delta_summaries = _collect_delta_summaries(
         output_dir,
         validate_delta=validate_delta,
+        delta_service=delta_service,
         issues=issues,
         read_table=read_table,
     )

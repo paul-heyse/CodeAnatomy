@@ -11,7 +11,7 @@ from tools.cq.core.services import (
     EntityFrontDoorRequest,
     SearchServiceRequest,
 )
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 
 
 class SearchServicePort(Protocol):

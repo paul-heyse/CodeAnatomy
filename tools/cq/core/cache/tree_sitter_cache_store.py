@@ -8,7 +8,12 @@ from typing import Final
 import msgspec
 
 from tools.cq.core.cache.base_contracts import TreeSitterCacheEnvelopeV1
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.blob_store import (
+    encode_blob_pointer,
+    write_blob,
+)
+from tools.cq.core.cache.cache_decode import decode_cached_payload
+from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import build_cache_key
 from tools.cq.core.cache.namespaces import resolve_namespace_ttl_seconds
 from tools.cq.core.cache.policy import default_cache_policy
@@ -17,13 +22,6 @@ from tools.cq.core.cache.telemetry import (
     record_cache_get,
     record_cache_set,
 )
-from tools.cq.core.cache.tree_sitter_blob_store import (
-    decode_blob_pointer,
-    encode_blob_pointer,
-    read_blob,
-    write_blob,
-)
-from tools.cq.core.cache.typed_codecs import convert_mapping_typed, decode_msgpack_typed
 
 _NAMESPACE: Final[str] = "tree_sitter"
 _VERSION: Final[str] = "v3"
@@ -62,6 +60,7 @@ def build_tree_sitter_cache_key(
 def persist_tree_sitter_payload(
     *,
     root: Path,
+    backend: CqCacheBackend,
     cache_key: str,
     envelope: TreeSitterCacheEnvelopeV1,
     tag: str | None = None,
@@ -71,13 +70,12 @@ def persist_tree_sitter_payload(
     Returns:
         bool: ``True`` if the write was accepted by the backend.
     """
-    backend = get_cq_cache_backend(root=root)
     policy = default_cache_policy(root=root)
     ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=_NAMESPACE)
     encoded = _ENCODER.encode(envelope)
     payload: object
     if len(encoded) > _BLOB_THRESHOLD_BYTES:
-        blob_ref = write_blob(root=root, payload=encoded)
+        blob_ref = write_blob(root=root, backend=backend, payload=encoded)
         payload = encode_blob_pointer(blob_ref)
     else:
         payload = encoded
@@ -94,6 +92,7 @@ def persist_tree_sitter_payload(
 def load_tree_sitter_payload(
     *,
     root: Path,
+    backend: CqCacheBackend,
     cache_key: str,
 ) -> TreeSitterCacheEnvelopeV1 | None:
     """Load tree-sitter payload envelope from cache.
@@ -102,11 +101,14 @@ def load_tree_sitter_payload(
         TreeSitterCacheEnvelopeV1 | None: Decoded payload envelope, or ``None``
             when missing or invalid.
     """
-    backend = get_cq_cache_backend(root=root)
     cached = backend.get(cache_key)
     hit = isinstance(cached, (bytes, bytearray, memoryview, dict))
     record_cache_get(namespace=_NAMESPACE, hit=hit, key=cache_key)
-    envelope, attempted_decode = _decode_tree_sitter_payload(root=root, payload=cached)
+    envelope, attempted_decode = _decode_tree_sitter_payload(
+        root=root,
+        backend=backend,
+        payload=cached,
+    )
     if envelope is None and attempted_decode:
         record_cache_decode_failure(namespace=_NAMESPACE)
     return envelope
@@ -115,25 +117,15 @@ def load_tree_sitter_payload(
 def _decode_tree_sitter_payload(
     *,
     root: Path,
+    backend: CqCacheBackend,
     payload: object,
 ) -> tuple[TreeSitterCacheEnvelopeV1 | None, bool]:
-    envelope: TreeSitterCacheEnvelopeV1 | None = None
-    attempted = False
-    if isinstance(payload, (bytes, bytearray, memoryview)):
-        attempted = True
-        envelope = decode_msgpack_typed(payload, type_=TreeSitterCacheEnvelopeV1)
-    elif isinstance(payload, dict):
-        attempted = True
-        blob_ref = decode_blob_pointer(payload)
-        if blob_ref is not None:
-            blob_payload = read_blob(root=root, ref=blob_ref)
-            if isinstance(blob_payload, (bytes, bytearray, memoryview)):
-                envelope = decode_msgpack_typed(blob_payload, type_=TreeSitterCacheEnvelopeV1)
-            else:
-                envelope = None
-        else:
-            envelope = convert_mapping_typed(payload, type_=TreeSitterCacheEnvelopeV1)
-    return envelope, attempted
+    return decode_cached_payload(
+        root=root,
+        backend=backend,
+        payload=payload,
+        type_=TreeSitterCacheEnvelopeV1,
+    )
 
 
 __all__ = [

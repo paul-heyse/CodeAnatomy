@@ -17,6 +17,7 @@ from tools.cq.search._shared.core import RustEnrichmentRequest
 from tools.cq.search._shared.core import sg_node_text as _shared_sg_node_text
 from tools.cq.search._shared.core import source_hash as _shared_source_hash
 from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
+from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.enrichment.core import (
     append_source,
     has_value,
@@ -30,6 +31,7 @@ from tools.cq.search.rust.evidence import attach_rust_evidence
 from tools.cq.search.rust.extensions import expand_macros
 from tools.cq.search.rust.extractors_shared import (
     RUST_TEST_ATTRS,
+    classify_rust_item_role,
 )
 from tools.cq.search.rust.extractors_shared import (
     extract_attributes as _extract_attributes_shared,
@@ -79,6 +81,7 @@ _MAX_AST_CACHE_ENTRIES = 64
 _AST_CACHE: BoundedCache[str, tuple[SgRoot, str]] = BoundedCache(
     max_size=_MAX_AST_CACHE_ENTRIES, policy="fifo"
 )
+CACHE_REGISTRY.register_cache("rust", "rust_enrichment:ast", _AST_CACHE)
 
 _DEFAULT_SCOPE_DEPTH = 24
 _CROSSCHECK_ENV = "CQ_RUST_ENRICHMENT_CROSSCHECK"
@@ -114,6 +117,9 @@ def clear_rust_enrichment_cache() -> None:
     """Clear ast-grep parse cache for Rust enrichment."""
     logger.debug("Clearing Rust ast-grep enrichment cache")
     _AST_CACHE.clear()
+
+
+CACHE_REGISTRY.register_clear_callback("rust", clear_rust_enrichment_cache)
 
 
 def _node_text(node: SgNode | None) -> str | None:
@@ -192,14 +198,10 @@ def _classify_item_role(
     if fn_target is not None:
         return _classify_function_role(fn_target, attrs=attrs, max_scope_depth=max_scope_depth)
 
-    return _NON_FUNCTION_ROLE_BY_KIND.get(kind, kind)
-
-
-_NON_FUNCTION_ROLE_BY_KIND: dict[str, str] = {
-    "use_declaration": "use_import",
-    "field_declaration": "struct_field",
-    "enum_variant": "enum_variant",
-}
+    simple = classify_rust_item_role(SgRustNodeAccess(node))
+    if simple is not None:
+        return simple
+    return kind
 
 
 def _classify_call_like_role(node: SgNode, kind: str) -> str | None:
@@ -293,8 +295,15 @@ def _resolve_rust_node(
     byte_end: int,
     cache_key: str | None,
 ) -> SgNode | None:
+    from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
+
     line, col = byte_offset_to_line_col(source_bytes, byte_start)
-    index = get_node_index(Path(cache_key or "<memory>.rs"), sg_root, lang="rust")
+    index = get_node_index(
+        Path(cache_key or "<memory>.rs"),
+        sg_root,
+        lang="rust",
+        cache_context=ClassifierCacheContext(),
+    )
     node = index.find_containing(line, col)
     if node is not None:
         return node

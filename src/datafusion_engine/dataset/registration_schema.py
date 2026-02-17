@@ -1,7 +1,5 @@
 """Schema-focused helpers for dataset registration."""
 
-# ruff: noqa: SLF001
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -17,10 +15,14 @@ from datafusion_engine.schema.contracts import (
     EvolutionPolicy,
     schema_contract_from_table_schema_contract,
 )
+from datafusion_engine.sql.options import sql_options_for_profile
 from utils.validation import find_missing
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+
+    from datafusion_engine.dataset.registration_core import _PartitionSchemaContext
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
 def _resolve_table_schema_contract(
@@ -44,6 +46,21 @@ def _resolve_table_schema_contract(
     return _core.TableSchemaContract(file_schema=schema, partition_cols=resolved_partitions)
 
 
+def _validate_table_schema_contract(contract: _core.TableSchemaContract | None) -> None:
+    if contract is None:
+        return
+    file_names = set(contract.file_schema.names)
+    seen: set[str] = set()
+    for name, _dtype in contract.partition_cols:
+        if name in seen:
+            msg = f"TableSchema contract has duplicate partition column {name!r}."
+            raise ValueError(msg)
+        if name in file_names:
+            msg = f"Partition column {name!r} duplicates file schema column."
+            raise ValueError(msg)
+        seen.add(name)
+
+
 def _validate_schema_contracts(context: _core.DataFusionRegistrationContext) -> None:
     """Validate schema contracts against introspection snapshots.
 
@@ -63,10 +80,10 @@ def _validate_schema_contracts(context: _core.DataFusionRegistrationContext) -> 
     )
     if contract is None:
         return
-    _core._validate_table_schema_contract(contract)
+    _validate_table_schema_contract(contract)
     cache = introspection_cache_for_ctx(
         context.ctx,
-        sql_options=_core._sql_options.sql_options_for_profile(context.runtime_profile),
+        sql_options=sql_options_for_profile(context.runtime_profile),
     )
     cache.invalidate()
     snapshot = cache.snapshot
@@ -127,7 +144,7 @@ def _table_schema_partition_snapshot(
         return {}, [], []
     table_schema_types = {field.name: str(field.type) for field in table_schema}
     missing = find_missing(expected_names, table_schema_types)
-    mismatches = _core._partition_type_mismatches(
+    mismatches = _partition_type_mismatches(
         expected_types,
         table_schema_types,
         expected_names,
@@ -135,8 +152,71 @@ def _table_schema_partition_snapshot(
     return table_schema_types, missing, mismatches
 
 
+def _partition_column_rows(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+    cache_prefix: str | None = None,
+) -> tuple[list[dict[str, object]] | None, str | None]:
+    try:
+        if runtime_profile is not None:
+            table = _core.schema_introspector_for_profile(
+                runtime_profile,
+                ctx,
+                cache_prefix=cache_prefix,
+            ).table_columns_with_ordinal(table_name)
+        else:
+            sql_options = sql_options_for_profile(runtime_profile)
+            table = _core.SchemaIntrospector(
+                ctx, sql_options=sql_options
+            ).table_columns_with_ordinal(table_name)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return None, str(exc)
+    return table, None
+
+
+def _partition_columns_from_rows(
+    rows: Sequence[Mapping[str, object]],
+) -> tuple[list[str], dict[str, str]]:
+    actual_order: list[str] = []
+    actual_types: dict[str, str] = {}
+    for row in rows:
+        name = row.get("column_name")
+        if name is None:
+            continue
+        name_text = str(name)
+        actual_order.append(name_text)
+        data_type = row.get("data_type")
+        if data_type is not None:
+            actual_types[name_text] = str(data_type)
+    return actual_order, actual_types
+
+
+def _partition_type_mismatches(
+    expected_types: Mapping[str, str],
+    actual_types: Mapping[str, str],
+    expected_names: Sequence[str],
+) -> list[dict[str, str]]:
+    mismatches: list[dict[str, str]] = []
+    for name in expected_names:
+        expected_type = expected_types.get(name)
+        actual_type = actual_types.get(name)
+        if expected_type is None or actual_type is None:
+            continue
+        if expected_type.lower() != actual_type.lower():
+            mismatches.append(
+                {
+                    "name": name,
+                    "expected": expected_type,
+                    "actual": actual_type,
+                }
+            )
+    return mismatches
+
+
 def _partition_schema_validation(
-    context: _core._PartitionSchemaContext,
+    context: _PartitionSchemaContext,
     *,
     expected_partition_cols: Sequence[tuple[str, str]] | None,
 ) -> dict[str, object] | None:
@@ -151,7 +231,7 @@ def _partition_schema_validation(
         return None
     expected_names = [name for name, _ in expected_partition_cols]
     expected_types = {name: str(dtype) for name, dtype in expected_partition_cols}
-    rows, error = _core._partition_column_rows(
+    rows, error = _partition_column_rows(
         context.ctx,
         table_name=context.table_name,
         runtime_profile=context.runtime_profile,
@@ -166,11 +246,11 @@ def _partition_schema_validation(
             "expected_partition_cols": expected_names,
             "error": "Partition schema query returned no rows.",
         }
-    actual_order, actual_types = _core._partition_columns_from_rows(rows)
+    actual_order, actual_types = _partition_columns_from_rows(rows)
     actual_partition_cols = [name for name in actual_order if name in expected_types]
     missing = find_missing(expected_names, actual_types)
     order_matches = actual_partition_cols == expected_names if actual_partition_cols else None
-    type_mismatches = _core._partition_type_mismatches(
+    type_mismatches = _partition_type_mismatches(
         expected_types,
         actual_types,
         expected_names,
@@ -196,9 +276,13 @@ def _partition_schema_validation(
 
 
 __all__ = [
+    "_partition_column_rows",
+    "_partition_columns_from_rows",
     "_partition_schema_validation",
+    "_partition_type_mismatches",
     "_resolve_table_schema_contract",
     "_table_schema_partition_snapshot",
     "_table_schema_snapshot",
     "_validate_schema_contracts",
+    "_validate_table_schema_contract",
 ]

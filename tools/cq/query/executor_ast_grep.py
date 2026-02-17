@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 from ast_grep_py import Config, Rule, SgRoot
 
-from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
+from tools.cq.astgrep.sgpy_scanner import (
+    SgRecord,
+    group_records_by_file,
+    is_variadic_separator,
+    node_payload,
+)
 from tools.cq.core.cache.content_hash import file_content_hash
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import decode_fragment_payload
@@ -329,8 +334,10 @@ def build_pattern_fragment_context(
             "rules_digest": rules_digest,
         }
     )
+    cache = get_cq_cache_backend(root=resolved_root)
     snapshot = build_scope_snapshot_fingerprint(
         root=resolved_root,
+        backend=cache,
         files=paths,
         language=lang,
         scope_globs=globs or [],
@@ -342,7 +349,7 @@ def build_pattern_fragment_context(
         root=resolved_root,
         language=lang,
         paths=sorted(paths, key=lambda item: item.as_posix()),
-        cache=get_cq_cache_backend(root=resolved_root),
+        cache=cache,
         cache_enabled=is_namespace_cache_enabled(policy=policy, namespace=namespace),
         ttl_seconds=resolve_namespace_ttl_seconds(policy=policy, namespace=namespace),
         tag=resolve_write_cache_tag(
@@ -805,30 +812,6 @@ def apply_metavar_details(
     )
     if captures:
         finding.details["metavar_captures"] = captures
-
-
-def node_payload(node: SgNode) -> dict[str, object]:
-    """Build payload from ast-grep node.
-
-    Returns:
-        dict[str, object]: Text and coordinate payload for the provided node.
-    """
-    range_obj = node.range()
-    return {
-        "text": node.text(),
-        "start": {"line": range_obj.start.line, "column": range_obj.start.column},
-        "end": {"line": range_obj.end.line, "column": range_obj.end.column},
-    }
-
-
-def is_variadic_separator(node: SgNode) -> bool:
-    """Check if node is a variadic separator.
-
-    Returns:
-        bool: ``True`` when the node represents a list separator token.
-    """
-    text = node.text().strip()
-    return node.kind() in {",", ";"} or text in {",", ";"}
 
 
 def extract_match_metavars(

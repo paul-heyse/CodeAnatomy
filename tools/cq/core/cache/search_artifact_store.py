@@ -9,8 +9,13 @@ from typing import Final, Protocol, cast
 
 import msgspec
 
+from tools.cq.core.cache.blob_store import (
+    encode_blob_pointer,
+    write_blob,
+)
+from tools.cq.core.cache.cache_decode import decode_cached_payload
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1, SearchArtifactIndexEntryV1
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import build_cache_key
 from tools.cq.core.cache.namespaces import resolve_namespace_ttl_seconds
 from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
@@ -19,15 +24,8 @@ from tools.cq.core.cache.telemetry import (
     record_cache_get,
     record_cache_set,
 )
-from tools.cq.core.cache.tree_sitter_blob_store import (
-    decode_blob_pointer,
-    encode_blob_pointer,
-    read_blob,
-    write_blob,
-)
 from tools.cq.core.cache.typed_codecs import (
     convert_mapping_typed,
-    decode_msgpack_typed,
     encode_msgpack_into,
 )
 
@@ -161,6 +159,7 @@ def _record_index_entry(policy: CqCachePolicyV1, entry: SearchArtifactIndexEntry
 def persist_search_artifact_bundle(
     *,
     root: Path,
+    backend: CqCacheBackend,
     bundle: SearchArtifactBundleV1,
     tag: str | None,
     key_extras: dict[str, object] | None = None,
@@ -172,7 +171,6 @@ def persist_search_artifact_bundle(
             bundle, or ``None`` if the write was not accepted.
     """
     policy = default_cache_policy(root=root)
-    backend = get_cq_cache_backend(root=root)
     ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=_NAMESPACE)
     run_id = bundle.run_id
     cache_key = _bundle_key(
@@ -187,7 +185,7 @@ def persist_search_artifact_bundle(
     payload = bytes(payload_buffer)
     stored_value: object
     if len(payload) > _BLOB_THRESHOLD_BYTES:
-        blob_ref = write_blob(root=root, payload=payload)
+        blob_ref = write_blob(root=root, backend=backend, payload=payload)
         stored_value = encode_blob_pointer(blob_ref)
     else:
         stored_value = payload
@@ -295,15 +293,11 @@ def _rows_from_global_index(
     return rows[:limit]
 
 
-def _touch_cached_entry(*, root: Path, cache_key: str) -> None:
-    backend = get_cq_cache_backend(root=root)
-    cache = getattr(backend, "cache", None)
-    if cache is None:
-        return
+def _touch_cached_entry(*, root: Path, backend: CqCacheBackend, cache_key: str) -> None:
     policy = default_cache_policy(root=root)
     ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=_NAMESPACE)
     try:
-        cache.touch(cache_key, expire=ttl_seconds, retry=True)
+        backend.touch(cache_key, expire=ttl_seconds)
     except (RuntimeError, TypeError, ValueError, OSError):
         return
 
@@ -311,30 +305,21 @@ def _touch_cached_entry(*, root: Path, cache_key: str) -> None:
 def _decode_bundle_payload(
     *,
     root: Path,
+    backend: CqCacheBackend,
     payload: object,
 ) -> tuple[SearchArtifactBundleV1 | None, bool]:
-    bundle: SearchArtifactBundleV1 | None = None
-    attempted = False
-    if isinstance(payload, (bytes, bytearray, memoryview)):
-        attempted = True
-        bundle = decode_msgpack_typed(payload, type_=SearchArtifactBundleV1)
-    elif isinstance(payload, dict):
-        attempted = True
-        blob_ref = decode_blob_pointer(payload)
-        if blob_ref is not None:
-            blob_payload = read_blob(root=root, ref=blob_ref)
-            if isinstance(blob_payload, (bytes, bytearray, memoryview)):
-                bundle = decode_msgpack_typed(blob_payload, type_=SearchArtifactBundleV1)
-            else:
-                bundle = None
-        else:
-            bundle = convert_mapping_typed(payload, type_=SearchArtifactBundleV1)
-    return bundle, attempted
+    return decode_cached_payload(
+        root=root,
+        backend=backend,
+        payload=payload,
+        type_=SearchArtifactBundleV1,
+    )
 
 
 def load_search_artifact_bundle(
     *,
     root: Path,
+    backend: CqCacheBackend,
     run_id: str,
 ) -> tuple[SearchArtifactBundleV1 | None, SearchArtifactIndexEntryV1 | None]:
     """Load newest search artifact bundle for ``run_id``.
@@ -349,16 +334,19 @@ def load_search_artifact_bundle(
         return None, None
 
     entry = entries[0]
-    backend = get_cq_cache_backend(root=root)
     payload = backend.get(entry.cache_key)
     hit = isinstance(payload, (bytes, bytearray, memoryview, dict))
     record_cache_get(namespace=_NAMESPACE, hit=hit, key=entry.cache_key)
-    bundle, attempted_decode = _decode_bundle_payload(root=root, payload=payload)
+    bundle, attempted_decode = _decode_bundle_payload(
+        root=root,
+        backend=backend,
+        payload=payload,
+    )
     if bundle is None:
         if attempted_decode:
             record_cache_decode_failure(namespace=_NAMESPACE)
         return None, entry
-    _touch_cached_entry(root=root, cache_key=entry.cache_key)
+    _touch_cached_entry(root=root, backend=backend, cache_key=entry.cache_key)
     return bundle, entry
 
 

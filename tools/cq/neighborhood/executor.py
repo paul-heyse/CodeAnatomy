@@ -95,7 +95,7 @@ def execute_neighborhood(request: NeighborhoodExecutionRequest) -> CqResult:
         )
     )
     result.summary.target_resolution_kind = resolved.resolution_kind
-    assign_result_finding_ids(result)
+    result = assign_result_finding_ids(result)
     maybe_evict_run_cache_tag(root=request.root, language=resolved_lang, run_id=active_run_id)
     return result
 

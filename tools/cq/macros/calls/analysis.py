@@ -21,6 +21,7 @@ from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.macros.calls.context_snippet import _extract_context_snippet
 from tools.cq.macros.calls.neighborhood import _compute_context_window
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file
+from tools.cq.search.pipeline.context_window import ContextWindow
 from tools.cq.search.rg.adapter import find_def_lines
 
 CallBinding = Literal["ok", "ambiguous", "would_break", "unresolved"]
@@ -46,7 +47,7 @@ class CallAnalysis(msgspec.Struct, frozen=True):
     arg_preview: str
 
 
-class CallSite(msgspec.Struct):
+class CallSite(msgspec.Struct, frozen=True):
     """Information about a call site.
 
     Parameters
@@ -91,7 +92,7 @@ class CallSite(msgspec.Struct):
         Symtable analysis of containing function, if available.
     bytecode_info : dict[str, object] | None
         Bytecode analysis of containing function, if available.
-    context_window : dict[str, int] | None
+    context_window : ContextWindow | None
         Line range for containing definition context.
     context_snippet : str | None
         Source code snippet for the containing context.
@@ -117,7 +118,7 @@ class CallSite(msgspec.Struct):
     hazards: list[str]
     symtable_info: dict[str, object] | None = None
     bytecode_info: dict[str, object] | None = None
-    context_window: dict[str, int] | None = None
+    context_window: ContextWindow | None = None
     context_snippet: str | None = None
 
 
@@ -496,8 +497,8 @@ def _collect_call_sites_for_file(
         context_window = _compute_context_window(site.line, def_lines, total_lines)
         context_snippet = _extract_context_snippet(
             source_lines,
-            context_window["start_line"],
-            context_window["end_line"],
+            context_window.start_line,
+            context_window.end_line,
             match_line=site.line,
         )
         all_sites.append(
@@ -594,7 +595,7 @@ def _build_rust_call_site_from_record(
         return None
     args_preview = _rust_call_preview(record.text)
     num_args = _rust_call_arg_count(record.text)
-    context_window = {"start_line": record.start_line, "end_line": record.start_line}
+    context_window = ContextWindow(start_line=record.start_line, end_line=record.start_line)
     return CallSite(
         file=rel_path,
         line=record.start_line,
@@ -679,8 +680,8 @@ def _build_call_site_from_record(
     context_window = _compute_context_window(record.start_line, ctx.def_lines, ctx.total_lines)
     context_snippet = _extract_context_snippet(
         ctx.source_lines,
-        context_window["start_line"],
-        context_window["end_line"],
+        context_window.start_line,
+        context_window.end_line,
         match_line=record.start_line,
     )
     return CallSite(

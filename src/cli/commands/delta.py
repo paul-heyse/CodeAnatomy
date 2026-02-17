@@ -5,33 +5,35 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import msgspec
 from cyclopts import Parameter
 from deltalake import DeltaTable
 
+from cli.context import RunContext
 from cli.groups import restore_target_group
 from cli.kv_parser import parse_kv_pairs
+from cli.runtime_services import resolve_cli_runtime_services
 from datafusion_engine.delta.control_plane_core import (
     DeltaProviderRequest,
     DeltaRestoreRequest,
     delta_provider_from_session,
     delta_restore,
 )
+from datafusion_engine.delta.service_protocol import DeltaServicePort
 from datafusion_engine.errors import DataFusionEngineError
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
 from serde_msgspec import JSON_ENCODER_SORTED, StructBaseCompat, json_default
 from storage.deltalake import DeltaVacuumOptions
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
-    from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
 class VacuumReport(StructBaseCompat, frozen=True):
@@ -224,11 +226,6 @@ _DEFAULT_EXPORT_OPTIONS = ExportOptions()
 _DEFAULT_RESTORE_OPTIONS = RestoreOptions()
 
 
-def _default_delta_service() -> DeltaService:
-    profile = DataFusionRuntimeProfile()
-    return cast("DeltaService", profile.delta_ops.delta_service())
-
-
 def vacuum_command(
     path: Annotated[
         str,
@@ -239,6 +236,8 @@ def vacuum_command(
         ),
     ],
     options: Annotated[VacuumOptions, Parameter(name="*")] = _DEFAULT_VACUUM_OPTIONS,
+    *,
+    run_context: Annotated[RunContext | None, Parameter(parse=False)] = None,
 ) -> int:
     """Run Delta vacuum to remove expired files.
 
@@ -263,7 +262,7 @@ def vacuum_command(
         keep_versions=keep_versions_list,
         commit_metadata=commit_payload or None,
     )
-    service = _default_delta_service()
+    service = _delta_service_for_command(run_context)
     files = service.vacuum(
         path=path,
         options=vacuum_options,
@@ -293,6 +292,8 @@ def checkpoint_command(
     path: Annotated[str, Parameter(name="--path", required=True)],
     storage_option: Annotated[tuple[str, ...], Parameter(name="--storage-option")] = (),
     report_path: Annotated[str | None, Parameter(name="--report-path")] = None,
+    *,
+    run_context: Annotated[RunContext | None, Parameter(parse=False)] = None,
 ) -> int:
     """Create a Delta checkpoint.
 
@@ -302,7 +303,7 @@ def checkpoint_command(
         Exit status code.
     """
     storage_options: dict[str, str] = parse_kv_pairs(storage_option) if storage_option else {}
-    service = _default_delta_service()
+    service = _delta_service_for_command(run_context)
     service.create_checkpoint(
         path=path,
         storage_options=storage_options or None,
@@ -321,6 +322,8 @@ def cleanup_log_command(
     path: Annotated[str, Parameter(name="--path", required=True)],
     storage_option: Annotated[tuple[str, ...], Parameter(name="--storage-option")] = (),
     report_path: Annotated[str | None, Parameter(name="--report-path")] = None,
+    *,
+    run_context: Annotated[RunContext | None, Parameter(parse=False)] = None,
 ) -> int:
     """Cleanup expired Delta log files.
 
@@ -330,7 +333,7 @@ def cleanup_log_command(
         Exit status code.
     """
     storage_options: dict[str, str] = parse_kv_pairs(storage_option) if storage_option else {}
-    service = _default_delta_service()
+    service = _delta_service_for_command(run_context)
     service.cleanup_log(
         path=path,
         storage_options=storage_options or None,
@@ -352,6 +355,8 @@ def export_command(
         Parameter(name="--target", required=True, help="Target Delta table path."),
     ],
     options: Annotated[ExportOptions, Parameter(name="*")] = _DEFAULT_EXPORT_OPTIONS,
+    *,
+    run_context: Annotated[RunContext | None, Parameter(parse=False)] = None,
 ) -> int:
     """Clone a Delta snapshot into Delta storage.
 
@@ -370,7 +375,13 @@ def export_command(
         mode=options.mode,
         schema_mode=options.schema_mode,
     )
-    report = clone_delta_snapshot(path, target, options=clone_options)
+    services = resolve_cli_runtime_services(run_context)
+    report = clone_delta_snapshot(
+        path,
+        target,
+        options=clone_options,
+        runtime_profile=services.runtime_profile,
+    )
     payload = _encode_pretty_json(_report_payload(report))
     _write_text_payload(payload, options.report_path)
     return 0
@@ -379,6 +390,8 @@ def export_command(
 def restore_command(
     path: Annotated[str, Parameter(name="--path", required=True, help="Delta table path.")],
     options: Annotated[RestoreOptions, Parameter(name="*")] = _DEFAULT_RESTORE_OPTIONS,
+    *,
+    run_context: Annotated[RunContext | None, Parameter(parse=False)] = None,
 ) -> int:
     """Restore a Delta table to a prior version or timestamp.
 
@@ -390,8 +403,8 @@ def restore_command(
     storage_options: dict[str, str] = (
         parse_kv_pairs(options.storage_option) if options.storage_option else {}
     )
-    profile = DataFusionRuntimeProfile()
-    ctx = profile.session_context()
+    services = resolve_cli_runtime_services(run_context)
+    ctx = services.runtime_profile.session_context()
     result = delta_restore(
         ctx,
         request=DeltaRestoreRequest(
@@ -420,6 +433,7 @@ def clone_delta_snapshot(
     target: str,
     *,
     options: DeltaCloneOptions | None = None,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> CloneReport:
     """Clone a Delta snapshot into Delta storage and return a report.
 
@@ -427,6 +441,7 @@ def clone_delta_snapshot(
         path: Source Delta table path.
         target: Destination path for the cloned snapshot.
         options: Optional clone settings.
+        runtime_profile: Runtime profile used to obtain a DataFusion session.
 
     Returns:
         CloneReport: Result.
@@ -438,8 +453,7 @@ def clone_delta_snapshot(
     if resolved.version is not None and resolved.timestamp is not None:
         msg = "Specify only one of version or timestamp."
         raise ValueError(msg)
-    profile = DataFusionRuntimeProfile()
-    ctx = profile.session_context()
+    ctx = runtime_profile.session_context()
     try:
         bundle = delta_provider_from_session(
             ctx,
@@ -452,7 +466,7 @@ def clone_delta_snapshot(
                 gate=None,
             ),
         )
-        adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
         table_name = f"__delta_snapshot_{uuid7_hex()}"
         adapter.register_table(
             table_name,
@@ -486,7 +500,7 @@ def clone_delta_snapshot(
     if resolved.storage_options is not None:
         format_options["storage_options"] = dict(resolved.storage_options)
     df = datafusion_from_arrow(ctx, name=f"__delta_clone_{uuid7_hex()}", value=arrow_table)
-    pipeline = WritePipeline(ctx, runtime_profile=profile)
+    pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
     pipeline.write(
         WriteRequest(
             source=df,
@@ -516,6 +530,11 @@ def _resolve_write_mode(mode: str) -> WriteMode:
         return WriteMode.ERROR
     msg = f"Unsupported write mode: {mode!r}."
     raise ValueError(msg)
+
+
+def _delta_service_for_command(run_context: RunContext | None) -> DeltaServicePort:
+    services = resolve_cli_runtime_services(run_context)
+    return services.delta_service
 
 
 def _parse_int_list(value: str | None) -> list[int] | None:

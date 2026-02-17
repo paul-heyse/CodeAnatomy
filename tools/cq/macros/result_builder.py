@@ -110,7 +110,7 @@ class MacroResultBuilder:
         CqResult
             Final macro result with stable finding identifiers.
         """
-        assign_result_finding_ids(self.result)
+        self.result = assign_result_finding_ids(self.result)
         return self.result
 
 

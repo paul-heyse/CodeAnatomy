@@ -87,6 +87,22 @@ class TaintState(msgspec.Struct):
     tainted_sites: list[TaintedSite] = msgspec.field(default_factory=list)
     visited: set[str] = msgspec.field(default_factory=set)
 
+    def has_visited(self, key: str) -> bool:
+        """Return whether one function key has already been analyzed."""
+        return key in self.visited
+
+    def record_visit(self, key: str) -> None:
+        """Record one analyzed function key."""
+        self.visited.add(key)
+
+    def add_sites(self, sites: list[TaintedSite]) -> None:
+        """Append taint sites collected during one function visit."""
+        self.tainted_sites.extend(sites)
+
+    def mark_tainted(self, symbol: str) -> None:
+        """Record a tainted symbol name."""
+        self.tainted_vars.add(symbol)
+
 
 class ImpactRequest(MacroRequestBase, frozen=True):
     """Inputs required for the impact macro."""
@@ -338,60 +354,23 @@ def _tainted_lambda(_visitor: TaintVisitor, _expr: ast.Lambda) -> bool:
     return False
 
 
-def _tainted_generator(visitor: TaintVisitor, expr: ast.GeneratorExp) -> bool:
-    """Handle generator expressions - tainted if iterating over tainted data.
+def _tainted_comprehension(
+    visitor: TaintVisitor,
+    *,
+    generators: list[ast.comprehension],
+    expressions: tuple[ast.expr, ...],
+) -> bool:
+    """Handle comprehension taint propagation with shared generator logic.
 
     Returns:
     -------
     bool
-        True if any generator source or element is tainted.
+        True if any generator source or expression payload is tainted.
     """
-    for gen in expr.generators:
+    for gen in generators:
         if visitor.expr_tainted(gen.iter):
             return True
-    return visitor.expr_tainted(expr.elt)
-
-
-def _tainted_listcomp(visitor: TaintVisitor, expr: ast.ListComp) -> bool:
-    """Handle list comprehensions - tainted if iterating over tainted data.
-
-    Returns:
-    -------
-    bool
-        True if any generator source or element is tainted.
-    """
-    for gen in expr.generators:
-        if visitor.expr_tainted(gen.iter):
-            return True
-    return visitor.expr_tainted(expr.elt)
-
-
-def _tainted_setcomp(visitor: TaintVisitor, expr: ast.SetComp) -> bool:
-    """Handle set comprehensions - tainted if iterating over tainted data.
-
-    Returns:
-    -------
-    bool
-        True if any generator source or element is tainted.
-    """
-    for gen in expr.generators:
-        if visitor.expr_tainted(gen.iter):
-            return True
-    return visitor.expr_tainted(expr.elt)
-
-
-def _tainted_dictcomp(visitor: TaintVisitor, expr: ast.DictComp) -> bool:
-    """Handle dict comprehensions - tainted if iterating over tainted data.
-
-    Returns:
-    -------
-    bool
-        True if any generator source or key/value is tainted.
-    """
-    for gen in expr.generators:
-        if visitor.expr_tainted(gen.iter):
-            return True
-    return visitor.expr_tainted(expr.key) or visitor.expr_tainted(expr.value)
+    return any(visitor.expr_tainted(expr) for expr in expressions)
 
 
 TaintHandler = Callable[[TaintVisitor, ast.AST], bool]
@@ -410,10 +389,41 @@ _EXPR_TAINT_HANDLERS: dict[type[ast.AST], TaintHandler] = {
     ast.NamedExpr: cast("TaintHandler", _tainted_namedexpr),
     ast.Starred: cast("TaintHandler", _tainted_starred),
     ast.Lambda: cast("TaintHandler", _tainted_lambda),
-    ast.GeneratorExp: cast("TaintHandler", _tainted_generator),
-    ast.ListComp: cast("TaintHandler", _tainted_listcomp),
-    ast.SetComp: cast("TaintHandler", _tainted_setcomp),
-    ast.DictComp: cast("TaintHandler", _tainted_dictcomp),
+    ast.GeneratorExp: cast(
+        "TaintHandler",
+        lambda visitor, expr: _tainted_comprehension(
+            visitor,
+            generators=cast("ast.GeneratorExp", expr).generators,
+            expressions=(cast("ast.GeneratorExp", expr).elt,),
+        ),
+    ),
+    ast.ListComp: cast(
+        "TaintHandler",
+        lambda visitor, expr: _tainted_comprehension(
+            visitor,
+            generators=cast("ast.ListComp", expr).generators,
+            expressions=(cast("ast.ListComp", expr).elt,),
+        ),
+    ),
+    ast.SetComp: cast(
+        "TaintHandler",
+        lambda visitor, expr: _tainted_comprehension(
+            visitor,
+            generators=cast("ast.SetComp", expr).generators,
+            expressions=(cast("ast.SetComp", expr).elt,),
+        ),
+    ),
+    ast.DictComp: cast(
+        "TaintHandler",
+        lambda visitor, expr: _tainted_comprehension(
+            visitor,
+            generators=cast("ast.DictComp", expr).generators,
+            expressions=(
+                cast("ast.DictComp", expr).key,
+                cast("ast.DictComp", expr).value,
+            ),
+        ),
+    ),
 }
 
 
@@ -482,9 +492,9 @@ def _analyze_function(
         return
 
     key = fn.key
-    if key in context.state.visited:
+    if context.state.has_visited(key):
         return
-    context.state.visited.add(key)
+    context.state.record_visit(key)
 
     # Read source
     filepath = context.root / fn.file
@@ -504,7 +514,7 @@ def _analyze_function(
     # Run taint visitor
     visitor = TaintVisitor(fn.file, tainted_params, current_depth)
     visitor.visit(fn_node)
-    context.state.tainted_sites.extend(visitor.sites)
+    context.state.add_sites(visitor.sites)
 
     # Propagate to callees
     for call_info, tainted_args in visitor.calls:

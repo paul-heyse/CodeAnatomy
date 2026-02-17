@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
-from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.macros.calls_target import AttachTargetMetadataRequestV1, attach_target_metadata
+from tools.cq.macros.calls_target import (
+    AttachTargetMetadataRequestV1,
+    resolve_target_metadata,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -21,20 +23,6 @@ def _cache_env(tmp_path: Path) -> Generator[None]:
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_ENABLED", None)
     os.environ.pop("CQ_CACHE_DIR", None)
-
-
-def _empty_result(root: Path) -> CqResult:
-    return CqResult(
-        run=RunMeta(
-            macro="calls",
-            argv=[],
-            root=str(root),
-            started_ms=0.0,
-            elapsed_ms=0.0,
-            run_id="test-run",
-        )
-    )
-
 
 def test_calls_target_cache_revalidates_when_target_file_changes(tmp_path: Path) -> None:
     """Invalidate cached callees when target file body changes."""
@@ -53,9 +41,7 @@ def test_calls_target_cache_revalidates_when_target_file_changes(tmp_path: Path)
         encoding="utf-8",
     )
 
-    first_result = _empty_result(root)
-    _, first_callees, _ = attach_target_metadata(
-        first_result,
+    first_metadata = resolve_target_metadata(
         AttachTargetMetadataRequestV1(
             root=root,
             function_name="target",
@@ -65,8 +51,8 @@ def test_calls_target_cache_revalidates_when_target_file_changes(tmp_path: Path)
         ),
     )
 
-    assert first_callees["helper"] == 1
-    assert first_callees["other"] == 0
+    assert first_metadata.target_callees["helper"] == 1
+    assert first_metadata.target_callees["other"] == 0
 
     file_path.write_text(
         "def helper() -> int:\n"
@@ -80,9 +66,7 @@ def test_calls_target_cache_revalidates_when_target_file_changes(tmp_path: Path)
         encoding="utf-8",
     )
 
-    second_result = _empty_result(root)
-    _, second_callees, _ = attach_target_metadata(
-        second_result,
+    second_metadata = resolve_target_metadata(
         AttachTargetMetadataRequestV1(
             root=root,
             function_name="target",
@@ -92,5 +76,5 @@ def test_calls_target_cache_revalidates_when_target_file_changes(tmp_path: Path)
         ),
     )
 
-    assert second_callees["helper"] == 0
-    assert second_callees["other"] == 1
+    assert second_metadata.target_callees["helper"] == 0
+    assert second_metadata.target_callees["other"] == 1

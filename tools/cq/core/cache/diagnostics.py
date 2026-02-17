@@ -8,6 +8,7 @@ from pathlib import Path
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.policy import default_cache_policy
 from tools.cq.core.cache.telemetry import snapshot_cache_telemetry
+from tools.cq.core.runtime.env_namespace import env_bool
 
 
 def _namespace_metrics_payload() -> dict[str, dict[str, object]]:
@@ -65,8 +66,7 @@ def snapshot_backend_metrics(*, root: Path) -> dict[str, object]:
     volume = backend.volume()
     if isinstance(volume, int) and volume >= 0:
         payload["volume_bytes"] = volume
-    raw_cull = os.getenv("CQ_CACHE_CULL_ON_SNAPSHOT")
-    if raw_cull and raw_cull.strip().lower() in {"1", "true", "yes", "on"}:
+    if env_bool(os.getenv("CQ_CACHE_CULL_ON_SNAPSHOT"), default=False):
         removed = backend.cull()
         if isinstance(removed, int):
             payload["cull_removed"] = max(0, removed)

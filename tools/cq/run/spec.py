@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal, TypeGuard
 
 import msgspec
@@ -128,6 +129,15 @@ RunStep = (
     | NeighborhoodStep
 )
 
+
+class RunLoadInput(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True):
+    """Minimal loader input detached from CLI option structs."""
+
+    plan: Path | None = None
+    step: tuple[RunStep, ...] = ()
+    steps: tuple[RunStep, ...] = ()
+
+
 RUN_STEP_TYPES: tuple[type[RunStep], ...] = (
     QStep,
     SearchStep,
@@ -223,6 +233,7 @@ __all__ = [
     "ImportsStep",
     "NeighborhoodStep",
     "QStep",
+    "RunLoadInput",
     "RunPlan",
     "RunStep",
     "RunStepBase",

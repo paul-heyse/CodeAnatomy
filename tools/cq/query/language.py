@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, cast
 
-QueryLanguage = Literal["python", "rust"]
-QueryLanguageScope = Literal["auto", "python", "rust"]
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+
 RipgrepLanguageType = Literal["py", "rust"]
 
 # Concrete-language defaults for internals that operate on one language.

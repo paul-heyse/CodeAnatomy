@@ -12,7 +12,6 @@ from tools.cq.core.cache.contracts import (
     ScopeFileStatCacheV1,
     ScopeSnapshotCacheV1,
 )
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import (
     build_cache_key,
@@ -247,6 +246,7 @@ def _persist_scope_snapshot(
 def build_scope_snapshot_fingerprint(
     *,
     root: Path,
+    backend: CqCacheBackend,
     files: list[Path],
     language: str,
     scope_globs: list[str] | None = None,
@@ -264,7 +264,6 @@ def build_scope_snapshot_fingerprint(
         key=lambda item: item.path,
     )
     file_signature = tuple((item.path, item.size_bytes, item.mtime_ns) for item in stats)
-    cache = get_cq_cache_backend(root=resolved_root)
     context, policy = _snapshot_cache_context(
         root=resolved_root,
         language=language,
@@ -273,7 +272,7 @@ def build_scope_snapshot_fingerprint(
         inventory_token=inventory_token,
         file_signature=file_signature,
     )
-    cached_snapshot = _cached_scope_snapshot(cache=cache, context=context)
+    cached_snapshot = _cached_scope_snapshot(cache=backend, context=context)
     if cached_snapshot is not None:
         return cached_snapshot
 
@@ -292,7 +291,7 @@ def build_scope_snapshot_fingerprint(
         digest=digest,
     )
     _persist_scope_snapshot(
-        cache=cache,
+        cache=backend,
         policy=policy,
         context=context,
         snapshot=snapshot,

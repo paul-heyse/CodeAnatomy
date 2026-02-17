@@ -92,20 +92,6 @@ class ClassifierCacheContext:
         self.node_index_cache.clear()
 
 
-_DEFAULT_CACHE_CONTEXT = ClassifierCacheContext()
-
-
-def get_default_classifier_cache_context() -> ClassifierCacheContext:
-    """Return the process-level default classifier cache context."""
-    return _DEFAULT_CACHE_CONTEXT
-
-
-def _resolve_cache_context(
-    cache_context: ClassifierCacheContext | None,
-) -> ClassifierCacheContext:
-    return cache_context if cache_context is not None else _DEFAULT_CACHE_CONTEXT
-
-
 def _lang_cache_key(file_path: Path, lang: QueryLanguage) -> tuple[str, QueryLanguage]:
     return str(file_path), lang
 
@@ -115,7 +101,7 @@ def get_record_context(
     root: Path,
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> RecordContext:
     """Get or build ast-grep record context for a file.
 
@@ -126,7 +112,7 @@ def get_record_context(
     RecordContext
         Cached record context for the file.
     """
-    cache = _resolve_cache_context(cache_context)
+    cache = cache_context
     key = _lang_cache_key(file_path, lang)
     if key in cache.record_context_cache:
         return cache.record_context_cache[key]
@@ -180,7 +166,7 @@ def get_node_index(
     sg_root: SgRoot,
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> NodeIntervalIndex:
     """Get or build cached node interval index for a file.
 
@@ -191,7 +177,7 @@ def get_node_index(
     NodeIntervalIndex
         Cached node interval index for the file.
     """
-    cache = _resolve_cache_context(cache_context)
+    cache = cache_context
     key = _lang_cache_key(file_path, lang)
     if key in cache.node_index_cache:
         return cache.node_index_cache[key]
@@ -204,7 +190,7 @@ def get_node_index(
 def _resolve_sg_root_path(
     sg_root: SgRoot,
     *,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> Path | None:
     """Resolve cached file path for a given SgRoot.
 
@@ -215,7 +201,7 @@ def _resolve_sg_root_path(
     Path | None
         Cached path if available.
     """
-    cache = _resolve_cache_context(cache_context)
+    cache = cache_context
     for (path_str, _lang), cached_root in cache.sg_cache.items():
         if cached_root is sg_root:
             return Path(path_str)
@@ -241,7 +227,7 @@ def _find_node_at_position(
     *,
     file_path: Path | None = None,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> SgNode | None:
     """Find the most specific node containing position.
 
@@ -354,7 +340,7 @@ def get_symtable_table(
     file_path: Path,
     source: str,
     *,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> symtable.SymbolTable | None:
     """Get or create cached symtable for a file.
 
@@ -365,7 +351,7 @@ def get_symtable_table(
     symtable.SymbolTable | None
         Cached or newly created symbol table, or None on syntax errors.
     """
-    cache = _resolve_cache_context(cache_context)
+    cache = cache_context
     key = str(file_path)
     if key in cache.symtable_cache:
         return cache.symtable_cache[key]
@@ -381,7 +367,7 @@ def get_def_lines_cached(
     file_path: Path,
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> list[tuple[int, int]]:
     """Get or compute def/async def lines with indentation.
 
@@ -397,7 +383,7 @@ def get_def_lines_cached(
     list[tuple[int, int]]
         (line_number, indent) tuples for def/async def lines.
     """
-    cache = _resolve_cache_context(cache_context)
+    cache = cache_context
     key = _lang_cache_key(file_path, lang)
     if key in cache.def_lines_cache:
         return cache.def_lines_cache[key]
@@ -425,7 +411,7 @@ def get_sg_root(
     file_path: Path,
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> SgRoot | None:
     """Get or create cached SgRoot for a file.
 
@@ -441,7 +427,7 @@ def get_sg_root(
     SgRoot | None
         Parsed AST root, or None on error.
     """
-    cache = _resolve_cache_context(cache_context)
+    cache = cache_context
     key = _lang_cache_key(file_path, lang)
     if key not in cache.sg_cache:
         try:
@@ -459,7 +445,7 @@ def get_sg_root(
 def get_cached_source(
     file_path: Path,
     *,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> str | None:
     """Get cached source for a file.
 
@@ -473,7 +459,7 @@ def get_cached_source(
     str | None
         File source, or None on error.
     """
-    cache = _resolve_cache_context(cache_context)
+    cache = cache_context
     key = str(file_path)
     if key in cache.source_cache:
         return cache.source_cache[key]
@@ -494,7 +480,6 @@ __all__ = [
     "_is_docstring_context",
     "get_cached_source",
     "get_def_lines_cached",
-    "get_default_classifier_cache_context",
     "get_node_index",
     "get_record_context",
     "get_sg_root",

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal
 
 import msgspec
 
+from tools.cq.core.render_utils import summary_value
 from tools.cq.core.semantic_contracts import (
     SemanticContractStateInputV1,
     SemanticStatus,
@@ -32,21 +33,22 @@ NeighborhoodSource = Literal["structural", "semantic", "heuristic", "none"]
 RiskLevel = Literal["low", "med", "high"]
 type SummaryLike = CqSummary | Mapping[str, object]
 
-_DEFAULT_TOP_CANDIDATES = 3
-_DEFAULT_PREVIEW_PER_SLICE = 5
-_HIGH_CALLER_THRESHOLD = 10
-_HIGH_CALLER_STRICT_THRESHOLD = 10
-_MEDIUM_CALLER_THRESHOLD = 4
-_MEDIUM_CALLER_STRICT_THRESHOLD = 3
-_ARG_VARIANCE_THRESHOLD = 3
-_FILES_WITH_CALLS_THRESHOLD = 3
-_DEFAULT_SEMANTIC_TARGETS = 1
+
+class InsightThresholdPolicyV1(CqStruct, frozen=True):
+    """Front-door threshold policy for risk/budget calculations."""
+
+    default_top_candidates: int = 3
+    default_preview_per_slice: int = 5
+    high_caller_threshold: int = 10
+    high_caller_strict_threshold: int = 10
+    medium_caller_threshold: int = 4
+    medium_caller_strict_threshold: int = 3
+    arg_variance_threshold: int = 3
+    files_with_calls_threshold: int = 3
+    default_semantic_targets: int = 1
 
 
-def _summary_value(summary: SummaryLike, key: str) -> object:
-    if isinstance(summary, CqSummary):
-        return getattr(summary, key)
-    return summary.get(key)
+DEFAULT_INSIGHT_THRESHOLDS = InsightThresholdPolicyV1()
 
 
 class InsightLocationV1(CqStruct, frozen=True):
@@ -127,9 +129,9 @@ class InsightDegradationV1(CqStruct, frozen=True):
 class InsightBudgetV1(CqStruct, frozen=True):
     """Budget knobs used to keep front-door output bounded."""
 
-    top_candidates: int = _DEFAULT_TOP_CANDIDATES
-    preview_per_slice: int = _DEFAULT_PREVIEW_PER_SLICE
-    semantic_targets: int = _DEFAULT_SEMANTIC_TARGETS
+    top_candidates: int = DEFAULT_INSIGHT_THRESHOLDS.default_top_candidates
+    preview_per_slice: int = DEFAULT_INSIGHT_THRESHOLDS.default_preview_per_slice
+    semantic_targets: int = DEFAULT_INSIGHT_THRESHOLDS.default_semantic_targets
 
 
 class InsightArtifactRefsV1(CqStruct, frozen=True):
@@ -307,7 +309,7 @@ def _render_artifact_refs_line(artifact_refs: InsightArtifactRefsV1) -> str | No
 def build_neighborhood_from_slices(
     slices: Sequence[NeighborhoodSliceV1],
     *,
-    preview_per_slice: int = _DEFAULT_PREVIEW_PER_SLICE,
+    preview_per_slice: int = DEFAULT_INSIGHT_THRESHOLDS.default_preview_per_slice,
     source: NeighborhoodSource = "structural",
     overflow_artifact_ref: str | None = None,
 ) -> InsightNeighborhoodV1:
@@ -452,8 +454,7 @@ def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsig
     """
     target = _target_from_finding(
         request.primary_target,
-        fallback_symbol=_string_or_none(_summary_value(request.summary, "query"))
-        or "search target",
+        fallback_symbol=_string_or_none(summary_value(request.summary, "query")) or "search target",
         fallback_kind="query",
         selection_reason=(
             "top_definition" if request.primary_target is not None else "fallback_query"
@@ -464,7 +465,7 @@ def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsig
         confidence,
         evidence_kind=confidence.evidence_kind
         if confidence.evidence_kind != "unknown"
-        else _string_or_none(_summary_value(request.summary, "scan_method")) or "resolved_ast",
+        else _string_or_none(summary_value(request.summary, "scan_method")) or "resolved_ast",
     )
 
     neighborhood = request.neighborhood or _empty_neighborhood()
@@ -540,10 +541,10 @@ def build_entity_insight(request: EntityInsightBuildRequestV1) -> FrontDoorInsig
     """
     target = _target_from_finding(
         request.primary_target,
-        fallback_symbol=_string_or_none(_summary_value(request.summary, "query"))
-        or _string_or_none(_summary_value(request.summary, "entity_kind"))
+        fallback_symbol=_string_or_none(summary_value(request.summary, "query"))
+        or _string_or_none(summary_value(request.summary, "entity_kind"))
         or "entity target",
-        fallback_kind=_string_or_none(_summary_value(request.summary, "entity_kind")) or "entity",
+        fallback_kind=_string_or_none(summary_value(request.summary, "entity_kind")) or "entity",
         selection_reason=(
             "top_entity_result" if request.primary_target is not None else "fallback_query"
         ),
@@ -576,29 +577,29 @@ def build_entity_insight(request: EntityInsightBuildRequestV1) -> FrontDoorInsig
 
 def _default_search_budget(*, target_candidate_count: int) -> InsightBudgetV1:
     top_candidates = (
-        min(_DEFAULT_TOP_CANDIDATES, target_candidate_count)
+        min(DEFAULT_INSIGHT_THRESHOLDS.default_top_candidates, target_candidate_count)
         if target_candidate_count > 0
-        else _DEFAULT_TOP_CANDIDATES
+        else DEFAULT_INSIGHT_THRESHOLDS.default_top_candidates
     )
     return InsightBudgetV1(
         top_candidates=top_candidates,
-        preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
+        preview_per_slice=DEFAULT_INSIGHT_THRESHOLDS.default_preview_per_slice,
         semantic_targets=1,
     )
 
 
 def _default_calls_budget() -> InsightBudgetV1:
     return InsightBudgetV1(
-        top_candidates=_DEFAULT_TOP_CANDIDATES,
-        preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
+        top_candidates=DEFAULT_INSIGHT_THRESHOLDS.default_top_candidates,
+        preview_per_slice=DEFAULT_INSIGHT_THRESHOLDS.default_preview_per_slice,
         semantic_targets=1,
     )
 
 
 def _default_entity_budget() -> InsightBudgetV1:
     return InsightBudgetV1(
-        top_candidates=_DEFAULT_TOP_CANDIDATES,
-        preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
+        top_candidates=DEFAULT_INSIGHT_THRESHOLDS.default_top_candidates,
+        preview_per_slice=DEFAULT_INSIGHT_THRESHOLDS.default_preview_per_slice,
         semantic_targets=3,
     )
 
@@ -716,9 +717,9 @@ def risk_from_counters(counters: InsightRiskCountersV1) -> InsightRiskV1:
         Risk payload with level and driver labels.
     """
     drivers: list[str] = []
-    if counters.callers >= _HIGH_CALLER_THRESHOLD:
+    if counters.callers >= DEFAULT_INSIGHT_THRESHOLDS.high_caller_threshold:
         drivers.append("high_call_surface")
-    elif counters.callers >= _MEDIUM_CALLER_THRESHOLD:
+    elif counters.callers >= DEFAULT_INSIGHT_THRESHOLDS.medium_caller_threshold:
         drivers.append("medium_call_surface")
 
     if counters.forwarding_count > 0:
@@ -727,7 +728,7 @@ def risk_from_counters(counters: InsightRiskCountersV1) -> InsightRiskV1:
     if counters.hazard_count > 0:
         drivers.append("dynamic_hazards")
 
-    if counters.arg_shape_count > _ARG_VARIANCE_THRESHOLD:
+    if counters.arg_shape_count > DEFAULT_INSIGHT_THRESHOLDS.arg_variance_threshold:
         drivers.append("arg_shape_variance")
 
     if counters.closure_capture_count > 0:
@@ -739,15 +740,15 @@ def risk_from_counters(counters: InsightRiskCountersV1) -> InsightRiskV1:
 
 def _risk_level_from_counters(counters: InsightRiskCountersV1) -> RiskLevel:
     if (
-        counters.callers > _HIGH_CALLER_STRICT_THRESHOLD
+        counters.callers > DEFAULT_INSIGHT_THRESHOLDS.high_caller_strict_threshold
         or counters.hazard_count > 0
         or (counters.forwarding_count > 0 and counters.callers > 0)
     ):
         return "high"
     if (
-        counters.callers > _MEDIUM_CALLER_STRICT_THRESHOLD
-        or counters.arg_shape_count > _ARG_VARIANCE_THRESHOLD
-        or counters.files_with_calls > _FILES_WITH_CALLS_THRESHOLD
+        counters.callers > DEFAULT_INSIGHT_THRESHOLDS.medium_caller_strict_threshold
+        or counters.arg_shape_count > DEFAULT_INSIGHT_THRESHOLDS.arg_variance_threshold
+        or counters.files_with_calls > DEFAULT_INSIGHT_THRESHOLDS.files_with_calls_threshold
         or counters.closure_capture_count > 0
     ):
         return "med"
@@ -801,13 +802,13 @@ def _degradation_from_summary(summary: SummaryLike) -> InsightDegradationV1:
     )
 
     scan = "ok"
-    if bool(_summary_value(summary, "timed_out")):
+    if bool(summary_value(summary, "timed_out")):
         scan = "timed_out"
-    elif bool(_summary_value(summary, "truncated")):
+    elif bool(summary_value(summary, "truncated")):
         scan = "truncated"
 
     scope_filter = "none"
-    dropped = _summary_value(summary, "dropped_by_scope")
+    dropped = summary_value(summary, "dropped_by_scope")
     if isinstance(dropped, dict) and dropped:
         scope_filter = "dropped"
 
@@ -1034,10 +1035,10 @@ def _semantic_provider_and_availability(
 ) -> tuple[Literal["python_static", "rust_static", "none"], bool]:
     py_attempted = 0
     rust_attempted = 0
-    py_telemetry = coerce_semantic_telemetry(_summary_value(summary, "python_semantic_telemetry"))
+    py_telemetry = coerce_semantic_telemetry(summary_value(summary, "python_semantic_telemetry"))
     if py_telemetry is not None:
         py_attempted = py_telemetry.attempted
-    rust_telemetry = coerce_semantic_telemetry(_summary_value(summary, "rust_semantic_telemetry"))
+    rust_telemetry = coerce_semantic_telemetry(summary_value(summary, "rust_semantic_telemetry"))
     if rust_telemetry is not None:
         rust_attempted = rust_telemetry.attempted
     if rust_attempted > 0 and py_attempted <= 0:
@@ -1045,8 +1046,8 @@ def _semantic_provider_and_availability(
     if py_attempted > 0:
         return "python_static", True
 
-    scope = _string_or_none(_summary_value(summary, "lang_scope")) or "auto"
-    order_raw = _summary_value(summary, "language_order")
+    scope = _string_or_none(summary_value(summary, "lang_scope")) or "auto"
+    order_raw = summary_value(summary, "language_order")
     order: tuple[str, ...]
     if isinstance(order_raw, list):
         order = tuple(str(item) for item in order_raw)
@@ -1068,7 +1069,7 @@ def _read_semantic_telemetry(summary: SummaryLike) -> tuple[int, int, int, int]:
     failed = 0
     timed_out = 0
     for key in ("python_semantic_telemetry", "rust_semantic_telemetry"):
-        telemetry = coerce_semantic_telemetry(_summary_value(summary, key))
+        telemetry = coerce_semantic_telemetry(summary_value(summary, key))
         if telemetry is None:
             continue
         attempted += telemetry.attempted
@@ -1079,6 +1080,7 @@ def _read_semantic_telemetry(summary: SummaryLike) -> tuple[int, int, int, int]:
 
 
 __all__ = [
+    "DEFAULT_INSIGHT_THRESHOLDS",
     "Availability",
     "CallsInsightBuildRequestV1",
     "EntityInsightBuildRequestV1",
@@ -1094,6 +1096,7 @@ __all__ = [
     "InsightSliceV1",
     "InsightSource",
     "InsightTargetV1",
+    "InsightThresholdPolicyV1",
     "NeighborhoodSource",
     "RiskLevel",
     "SearchInsightBuildRequestV1",

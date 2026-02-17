@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tools.cq.core.ports import RenderEnrichmentPort
+from tools.cq.core.render_context import RenderContext
 from tools.cq.core.render_diagnostics import (
     summary_with_render_enrichment_metrics as _summary_with_render_enrichment_metrics,
 )
@@ -48,7 +48,6 @@ MAX_EVIDENCE_DISPLAY = 20
 MAX_SECTION_FINDINGS = 50
 SHOW_CONTEXT_SNIPPETS_ENV = "CQ_RENDER_CONTEXT_SNIPPETS"
 MAX_OBJECT_OCCURRENCE_LINES = 200
-_RENDER_ENRICHMENT_PORT_STATE: dict[str, RenderEnrichmentPort | None] = {"port": None}
 
 # Section ordering per front-door command
 _SECTION_ORDER_MAP: dict[str, tuple[str, ...]] = {
@@ -75,11 +74,6 @@ _SECTION_ORDER_MAP: dict[str, tuple[str, ...]] = {
 }
 
 
-def set_render_enrichment_port(port: RenderEnrichmentPort | None) -> None:
-    """Set render enrichment provider for anchor-based payload generation."""
-    _RENDER_ENRICHMENT_PORT_STATE["port"] = port
-
-
 def _severity_icon(severity: str) -> str:
     """Return icon for severity level.
 
@@ -103,6 +97,7 @@ def _format_finding(
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
+    port: object | None = None,
 ) -> str:
     """Format a single finding as a markdown line.
 
@@ -124,7 +119,7 @@ def _format_finding(
             root=root,
             cache=enrich_cache,
             allowed_files=allowed_enrichment_files,
-            port=_RENDER_ENRICHMENT_PORT_STATE["port"],
+            port=port,
         )
 
     rendered_lines = [_format_finding_base_line(f, show_anchor=show_anchor)]
@@ -171,6 +166,12 @@ def _format_context_block(finding: Finding, *, enabled: bool = True) -> list[str
     if context_window and isinstance(context_window, dict):
         start = context_window.get("start_line", "?")
         end = context_window.get("end_line", "?")
+        header = f"  Context (lines {start}-{end}):"
+    elif context_window and hasattr(context_window, "start_line") and hasattr(
+        context_window, "end_line"
+    ):
+        start = getattr(context_window, "start_line", "?")
+        end = getattr(context_window, "end_line", "?")
         header = f"  Context (lines {start}-{end}):"
     else:
         header = "  Context:"
@@ -229,6 +230,7 @@ def _format_section(
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
+    port: object | None = None,
 ) -> str:
     """Format a section with its findings.
 
@@ -257,6 +259,7 @@ def _format_section(
                 root=root,
                 enrich_cache=enrich_cache,
                 allowed_enrichment_files=allowed_enrichment_files,
+                port=port,
             )
             for finding in displayed
         ]
@@ -276,6 +279,7 @@ def _render_key_findings(
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
+    port: object | None = None,
 ) -> list[str]:
     """Render key findings section lines.
 
@@ -295,6 +299,7 @@ def _render_key_findings(
                 root=root,
                 enrich_cache=enrich_cache,
                 allowed_enrichment_files=allowed_enrichment_files,
+                port=port,
             )
             for finding in findings
         ]
@@ -325,6 +330,7 @@ def _render_sections(
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
     seen_keys: set[tuple[object, ...]] | None = None,
+    port: object | None = None,
 ) -> list[str]:
     """Render section blocks.
 
@@ -354,6 +360,7 @@ def _render_sections(
                 root=root,
                 enrich_cache=enrich_cache,
                 allowed_enrichment_files=allowed_enrichment_files,
+                port=port,
             )
         )
         lines.append("")
@@ -368,6 +375,7 @@ def _render_evidence(
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
     seen_keys: set[tuple[object, ...]] | None = None,
+    port: object | None = None,
 ) -> list[str]:
     """Render evidence section lines.
 
@@ -397,6 +405,7 @@ def _render_evidence(
                 root=root,
                 enrich_cache=enrich_cache,
                 allowed_enrichment_files=allowed_enrichment_files,
+                port=port,
             )
             for finding in displayed
         ]
@@ -463,7 +472,11 @@ def _reorder_sections(sections: list[Section], macro: str) -> list[Section]:
     return known + unknown
 
 
-def render_markdown(result: CqResult) -> str:
+def render_markdown(
+    result: CqResult,
+    *,
+    render_context: RenderContext | None = None,
+) -> str:
     """Render CqResult as markdown for Claude Code context.
 
     Parameters
@@ -476,6 +489,8 @@ def render_markdown(result: CqResult) -> str:
     str
         Markdown-formatted report.
     """
+    resolved_context = render_context or RenderContext.minimal()
+    port = resolved_context.enrichment_port
     root = Path(result.run.root)
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
     allowed_enrichment_files = _select_enrichment_target_files_orchestrator(result)
@@ -489,7 +504,7 @@ def render_markdown(result: CqResult) -> str:
         root=root,
         cache=enrich_cache,
         allowed_files=allowed_enrichment_files,
-        port=_RENDER_ENRICHMENT_PORT_STATE["port"],
+        port=port,
     )
     applied = sum(
         1
@@ -521,6 +536,7 @@ def render_markdown(result: CqResult) -> str:
             root=root,
             enrich_cache=enrich_cache,
             allowed_enrichment_files=allowed_enrichment_files,
+            port=port,
         )
     )
     reordered = _reorder_sections(result.sections, result.run.macro)
@@ -532,6 +548,7 @@ def render_markdown(result: CqResult) -> str:
             enrich_cache=enrich_cache,
             allowed_enrichment_files=allowed_enrichment_files,
             seen_keys=rendered_seen_keys,
+            port=port,
         )
     )
     lines.extend(
@@ -542,6 +559,7 @@ def render_markdown(result: CqResult) -> str:
             enrich_cache=enrich_cache,
             allowed_enrichment_files=allowed_enrichment_files,
             seen_keys=rendered_seen_keys,
+            port=port,
         )
     )
     lines.extend(_render_artifacts(result.artifacts))

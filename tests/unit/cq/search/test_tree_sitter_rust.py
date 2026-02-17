@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.tree_sitter.rust_lane import runtime as tree_sitter_rust
 from tools.cq.search.tree_sitter.rust_lane.enrichment_extractors import _MAX_FIELDS_SHOWN
 from tools.cq.search.tree_sitter.rust_lane.runtime import MAX_SOURCE_BYTES
@@ -31,7 +32,7 @@ EXPECTED_ENUM_VARIANT_COUNT = 3
 @_ts_available
 def test_enrich_rust_context_returns_scope_chain() -> None:
     """Enrichment should return stable context fields for Rust source."""
-    tree_sitter_rust.clear_tree_sitter_rust_cache()
+    CACHE_REGISTRY.clear_all("rust")
     payload = tree_sitter_rust.enrich_rust_context(_RUST_SAMPLE, line=3, col=10, cache_key="sample")
     assert payload is not None
     assert isinstance(payload.get("node_kind"), str)
@@ -47,7 +48,7 @@ def test_enrich_rust_context_fail_open_on_parser_error(monkeypatch: pytest.Monke
         msg = "forced parse failure"
         raise RuntimeError(msg)
 
-    tree_sitter_rust.clear_tree_sitter_rust_cache()
+    CACHE_REGISTRY.clear_all("rust")
     monkeypatch.setattr(tree_sitter_rust, "_parse_with_session", _boom)
     payload = tree_sitter_rust.enrich_rust_context(_RUST_SAMPLE, line=2, col=8, cache_key="boom")
     assert payload is None
@@ -104,7 +105,7 @@ def test_scope_chain_bounded_depth() -> None:
         lines.append(f"{indent}}}")
     deep_source = "\n".join(lines) + "\n"
 
-    tree_sitter_rust.clear_tree_sitter_rust_cache()
+    CACHE_REGISTRY.clear_all("rust")
     # Target the leaf function (line is 1-based; it sits at line nesting+1)
     payload = tree_sitter_rust.enrich_rust_context(
         deep_source,
@@ -272,7 +273,7 @@ def _enrich(source: str, *, line: int, col: int, cache_key: str) -> dict[str, ob
     dict[str, object]
         The enrichment payload (guaranteed non-None).
     """
-    tree_sitter_rust.clear_tree_sitter_rust_cache()
+    CACHE_REGISTRY.clear_all("rust")
     payload = tree_sitter_rust.enrich_rust_context(source, line=line, col=col, cache_key=cache_key)
     assert payload is not None, f"Expected enrichment payload at line={line} col={col}"
     return payload
@@ -460,7 +461,7 @@ def test_unicode_coordinates() -> None:
 @_ts_available
 def test_cache_staleness() -> None:
     """Same cache_key with changed source should produce fresh payload."""
-    tree_sitter_rust.clear_tree_sitter_rust_cache()
+    CACHE_REGISTRY.clear_all("rust")
     source_v1 = "fn alpha() {}\n"
     source_v2 = "fn beta() {}\n"
 
@@ -479,7 +480,7 @@ def test_cache_staleness() -> None:
 @_ts_available
 def test_cache_bounded() -> None:
     """Cache should not grow beyond _MAX_TREE_CACHE_ENTRIES."""
-    tree_sitter_rust.clear_tree_sitter_rust_cache()
+    CACHE_REGISTRY.clear_all("rust")
     limit = _MAX_TREE_CACHE_ENTRIES
 
     for i in range(limit + 20):
@@ -548,7 +549,7 @@ def test_unsafe_function_detection() -> None:
 def test_byte_range_entry_point() -> None:
     """The byte-range entry point should produce equivalent enrichment."""
     source = "fn example() -> bool { true }\n"
-    tree_sitter_rust.clear_tree_sitter_rust_cache()
+    CACHE_REGISTRY.clear_all("rust")
     payload = tree_sitter_rust.enrich_rust_context_by_byte_range(
         source, byte_start=3, byte_end=10, cache_key="byte-range"
     )

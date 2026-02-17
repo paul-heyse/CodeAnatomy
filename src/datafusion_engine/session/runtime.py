@@ -189,7 +189,22 @@ def resolved_schema_hardening(
     return _resolved_schema_hardening_for_profile(profile)
 
 
+class _RuntimeProfileIdentityMixin:
+    """Identity behavior for runtime profile instances."""
+
+    def __hash__(self) -> int:
+        """Use identity hashing for weak-key runtime registries.
+
+        Returns:
+        -------
+        int
+            Identity-based hash value.
+        """
+        return id(self)
+
+
 class DataFusionRuntimeProfile(
+    _RuntimeProfileIdentityMixin,
     _RuntimeProfileIOFacadeMixin,
     _RuntimeProfileCatalogFacadeMixin,
     _RuntimeProfileDeltaFacadeMixin,

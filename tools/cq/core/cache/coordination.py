@@ -3,34 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, nullcontext, suppress
-from typing import TYPE_CHECKING
+from contextlib import contextmanager, nullcontext
 
 from tools.cq.core.cache.interface import CqCacheBackend
-
-if TYPE_CHECKING:
-    from diskcache import FanoutCache
-
-try:
-    from diskcache import BoundedSemaphore, Lock, RLock, barrier
-except ImportError:  # pragma: no cover - optional dependency
-    BoundedSemaphore = None
-    Lock = None
-    RLock = None
-    barrier = None
-
-
-def _fanout_cache(backend: CqCacheBackend) -> FanoutCache | None:
-    cache = getattr(backend, "cache", None)
-    if cache is None:
-        return None
-    try:
-        # Attribute-based check avoids importing FanoutCache at type-check runtime.
-        _ = cache.get
-        _ = cache.set
-    except AttributeError:
-        return None
-    return cache
 
 
 @contextmanager
@@ -43,38 +18,26 @@ def tree_sitter_lane_guard(
     ttl_seconds: int,
 ) -> Iterator[None]:
     """Guard one tree-sitter lane with diskcache semaphore + lock primitives."""
-    cache = _fanout_cache(backend)
-    if (
-        cache is None
-        or BoundedSemaphore is None
-        or Lock is None
-        or RLock is None
-        or lane_limit <= 0
-    ):
+    if lane_limit <= 0:
         with nullcontext():
             yield
         return
 
-    semaphore = BoundedSemaphore(
-        cache,
-        semaphore_key,
-        value=max(1, int(lane_limit)),
-        expire=max(1, int(ttl_seconds)),
-    )
-    lock = Lock(cache, lock_key, expire=max(1, int(ttl_seconds)))
-    rlock = RLock(cache, f"{lock_key}:reentrant", expire=max(1, int(ttl_seconds)))
-    semaphore.acquire()
-    lock.acquire()
-    rlock.acquire()
-    try:
+    lock_fn = getattr(backend, "lock", None)
+    rlock_fn = getattr(backend, "rlock", None)
+    semaphore_fn = getattr(backend, "semaphore", None)
+    if not callable(lock_fn) or not callable(rlock_fn) or not callable(semaphore_fn):
+        with nullcontext():
+            yield
+        return
+
+    expire = max(1, int(ttl_seconds))
+    with (
+        semaphore_fn(semaphore_key, value=max(1, int(lane_limit)), expire=expire),
+        lock_fn(lock_key, expire=expire),
+        rlock_fn(f"{lock_key}:reentrant", expire=expire),
+    ):
         yield
-    finally:
-        with suppress(RuntimeError, TypeError, ValueError):
-            rlock.release()
-        with suppress(RuntimeError, TypeError, ValueError):
-            lock.release()
-        with suppress(RuntimeError, TypeError, ValueError):
-            semaphore.release()
 
 
 def publish_once_per_barrier(
@@ -84,12 +47,11 @@ def publish_once_per_barrier(
     publish_fn: Callable[[], None],
 ) -> None:
     """Run publish function under diskcache `barrier` coordination when available."""
-    cache = _fanout_cache(backend)
-    if cache is None or barrier is None:
+    barrier_fn = getattr(backend, "barrier", None)
+    if not callable(barrier_fn):
         publish_fn()
         return
-    wrapped = barrier(cache, Lock, name=barrier_key)(publish_fn)
-    wrapped()
+    barrier_fn(barrier_key, publish_fn)
 
 
 __all__ = [

@@ -393,7 +393,7 @@ def _execute_engine_phase(
         response: object | None = None
         try:
             response = engine_module.run_build(msgspec.json.encode(request_payload).decode())
-        except Exception as exc:  # noqa: BLE001 - normalize engine boundary errors
+        except (RuntimeError, TypeError, ValueError) as exc:
             _raise_typed_engine_boundary_error(exc)
         if response is None:
             msg = "Rust run_build returned no response payload"

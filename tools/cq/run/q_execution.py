@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+import msgspec
 
 from tools.cq.core.run_context import RunExecutionContext
 from tools.cq.core.schema import CqResult
@@ -17,11 +20,26 @@ from tools.cq.query.executor import (
 )
 from tools.cq.query.ir import Query
 from tools.cq.query.language import QueryLanguage
-from tools.cq.query.planner import ToolPlan
+from tools.cq.query.parser import QueryParseError, has_query_tokens, parse_query
+from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import list_scan_files
 from tools.cq.run.helpers import error_result
-from tools.cq.run.spec import QStep
-from tools.cq.run.step_executors import RUN_STEP_NON_FATAL_EXCEPTIONS
+from tools.cq.run.scope import apply_run_scope
+from tools.cq.run.spec import QStep, RunPlan
+from tools.cq.run.step_executors import RUN_STEP_NON_FATAL_EXCEPTIONS, execute_search_fallback
+
+
+@dataclass(frozen=True)
+class ParsedQStep:
+    """Parsed + planned q-step ready for grouped execution."""
+
+    step_id: str
+    parent_step_id: str
+    step: QStep
+    query: Query
+    plan: ToolPlan
+    scope_paths: list[Path]
+    scope_globs: list[str] | None
 
 
 class ParsedQStepLike(Protocol):
@@ -44,6 +62,81 @@ class ParsedQStepLike(Protocol):
 
     @property
     def scope_globs(self) -> list[str] | None: ...
+
+
+def prepare_q_step(
+    step: QStep,
+    plan: RunPlan,
+    ctx: RunExecutionContext,
+) -> tuple[str, ParsedQStep | CqResult, bool]:
+    """Parse + plan one q step.
+
+    Returns:
+        ``(step_id, parsed_or_error, is_error)``.
+    """
+    step_id = step.id or "q"
+    try:
+        query = parse_query(step.query)
+    except QueryParseError as exc:
+        return _handle_query_parse_error(step, step_id, plan, ctx, exc)
+
+    query = apply_run_scope(query, plan.in_dir, plan.exclude)
+    tool_plan = compile_query(query)
+    scope_paths = scope_to_paths(tool_plan.scope, ctx.root)
+    if not scope_paths:
+        msg = "No files match scope"
+        return step_id, error_result(step_id, "q", RuntimeError(msg), ctx), True
+    scope_globs = scope_to_globs(tool_plan.scope)
+    parsed_step = ParsedQStep(
+        step_id=step_id,
+        parent_step_id=step_id,
+        step=step,
+        query=query,
+        plan=tool_plan,
+        scope_paths=scope_paths,
+        scope_globs=scope_globs,
+    )
+    return step_id, parsed_step, False
+
+
+def expand_q_step_by_scope(step: ParsedQStep, ctx: RunExecutionContext) -> list[ParsedQStep]:
+    """Expand ``lang_scope=auto`` into concrete per-language q-steps.
+
+    Returns:
+        list[ParsedQStep]: One parsed q-step per concrete language scope.
+    """
+    if step.query.lang_scope != "auto":
+        return [step]
+
+    expanded: list[ParsedQStep] = []
+    for lang in ("python", "rust"):
+        scoped_query = msgspec.structs.replace(step.query, lang_scope=lang)
+        scoped_plan = compile_query(scoped_query)
+        scoped_paths = scope_to_paths(scoped_plan.scope, ctx.root)
+        expanded.append(
+            ParsedQStep(
+                step_id=f"{step.parent_step_id}:{lang}",
+                parent_step_id=step.parent_step_id,
+                step=step.step,
+                query=scoped_query,
+                plan=scoped_plan,
+                scope_paths=scoped_paths,
+                scope_globs=scope_to_globs(scoped_plan.scope),
+            )
+        )
+    return expanded
+
+
+def _handle_query_parse_error(
+    step: QStep,
+    step_id: str,
+    plan: RunPlan,
+    ctx: RunExecutionContext,
+    exc: QueryParseError,
+) -> tuple[str, CqResult, bool]:
+    if not has_query_tokens(step.query):
+        return step_id, execute_search_fallback(step.query, plan, ctx), False
+    return step_id, error_result(step_id, "q", exc, ctx), True
 
 
 def execute_entity_q_steps(
@@ -237,4 +330,10 @@ def _tabulate_files(
     )
 
 
-__all__ = ["execute_entity_q_steps", "execute_pattern_q_steps"]
+__all__ = [
+    "ParsedQStep",
+    "execute_entity_q_steps",
+    "execute_pattern_q_steps",
+    "expand_q_step_by_scope",
+    "prepare_q_step",
+]

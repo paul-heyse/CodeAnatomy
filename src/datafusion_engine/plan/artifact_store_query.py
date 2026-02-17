@@ -1,5 +1,4 @@
 """Query-focused helpers for the plan artifact store."""
-# ruff: noqa: SLF001
 
 from __future__ import annotations
 
@@ -7,11 +6,18 @@ from collections.abc import Mapping, Sequence
 
 import msgspec
 import pyarrow as pa
-from datafusion import SessionContext
-from msgspec.convert import convert
+from datafusion import SessionContext, SQLOptions
+from msgspec import convert
 
 from datafusion_engine.plan import artifact_store_core as _core
+from datafusion_engine.plan.artifact_store_core import (
+    _apply_plan_artifact_retention,
+    _comparison_policy_for_profile,
+    _DeterminismRow,
+)
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.sql.options import sql_options_for_profile
+from serde_msgspec import validation_error_payload
 
 DeterminismValidationResult = _core.DeterminismValidationResult
 
@@ -23,7 +29,7 @@ def _latest_plan_snapshot_by_view(
     table_path: str,
     view_names: Sequence[str],
 ) -> dict[str, tuple[str | None, str | None]]:
-    sql_options = _core.planning_sql_options(profile)
+    sql_options = sql_options_for_profile(profile)
     snapshots: dict[str, tuple[str | None, str | None]] = {}
     for view_name in sorted(set(view_names)):
         escaped_view = view_name.replace("'", "''")
@@ -82,7 +88,7 @@ def _collect_determinism_results(
     *,
     view_name: str | None,
     plan_fingerprint: str,
-    sql_options: object,
+    sql_options: SQLOptions,
 ) -> tuple[list[pa.RecordBatch] | None, str | None]:
     identity_error: str | None = None
     identity_query = _determinism_validation_query(
@@ -118,9 +124,9 @@ def _determinism_sets(
         for row in batch.to_pylist():
             row_count += 1
             try:
-                payload = convert(row, target_type=_core._DeterminismRow, strict=True)
+                payload = convert(row, type=_DeterminismRow, strict=True)
             except msgspec.ValidationError as exc:
-                details = _core.validation_error_payload(exc)
+                details = validation_error_payload(exc)
                 msg = f"Determinism row validation failed: {details}"
                 raise ValueError(msg) from exc
             if payload.plan_fingerprint is not None:
@@ -154,7 +160,13 @@ def _determinism_validation_query(
     plan_fingerprint: str,
     include_identity: bool,
 ) -> str:
-    """Build SQL query for determinism validation."""
+    """Build SQL query for determinism validation.
+
+    Returns:
+    -------
+    str
+        SQL query string scoped to the requested fingerprint and optional view.
+    """
     plan_literal = plan_fingerprint.replace("'", "''")
     select_cols = "plan_fingerprint"
     if include_identity:
@@ -183,7 +195,9 @@ def validate_plan_determinism(
     DeterminismValidationResult
         Determinism status and conflict metadata.
     """
-    location = _core._plan_artifacts_location(profile)
+    from datafusion_engine.plan.artifact_store_core import _plan_artifacts_location
+
+    location = _plan_artifacts_location(profile)
     if location is None:
         return DeterminismValidationResult(
             is_deterministic=True,
@@ -199,7 +213,7 @@ def validate_plan_determinism(
         table_path,
         view_name=view_name,
         plan_fingerprint=plan_fingerprint,
-        sql_options=_core.planning_sql_options(profile),
+        sql_options=sql_options_for_profile(profile),
     )
     if results is None:
         return DeterminismValidationResult(
@@ -248,7 +262,7 @@ def persist_plan_artifacts_for_views(
     location = _core.ensure_plan_artifacts_table(ctx, profile)
     if location is None:
         return ()
-    comparison_policy = _core._comparison_policy_for_profile(profile)
+    comparison_policy = _comparison_policy_for_profile(profile)
     if not comparison_policy.retain_p0_artifacts:
         return ()
     previous_by_view: dict[str, tuple[str | None, str | None]] = {}
@@ -280,7 +294,7 @@ def persist_plan_artifacts_for_views(
             ),
         )
         rows.append(
-            _core._apply_plan_artifact_retention(
+            _apply_plan_artifact_retention(
                 row,
                 comparison_policy=comparison_policy,
             )

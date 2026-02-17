@@ -6,6 +6,7 @@ compile option resolution types, and public facade functions for runtime feature
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -45,7 +46,7 @@ _CI_ENV = "CI"
 @lru_cache(maxsize=1)
 def _load_runtime_artifact_specs() -> None:
     """Load artifact specs exactly once to avoid module import cycles."""
-    import serde_artifact_specs  # noqa: F401
+    importlib.import_module("serde_artifact_specs")
 
 
 def _ensure_runtime_artifact_specs_registered() -> None:

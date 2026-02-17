@@ -62,52 +62,6 @@ StopByMode = Literal["neighbor", "end"]
 # Metavariable capture kinds
 MetaVarKind = Literal["single", "multi", "unnamed"]
 
-# Common Python AST field names for field-scoped searches
-PYTHON_AST_FIELDS: frozenset[str] = frozenset(
-    {
-        # Function
-        "name",
-        "args",
-        "body",
-        "decorator_list",
-        "returns",
-        "type_params",
-        # Arguments
-        "posonlyargs",
-        "vararg",
-        "kwonlyargs",
-        "kw_defaults",
-        "kwarg",
-        "defaults",
-        # Class
-        "bases",
-        "keywords",
-        # Dict
-        "keys",
-        "values",
-        # Call
-        "func",
-        # Subscript
-        "value",
-        "slice",
-        # Attribute
-        "attr",
-        # Assign
-        "targets",
-        # If/While/For
-        "test",
-        "orelse",
-        # Try
-        "handlers",
-        "finalbody",
-        # With
-        "items",
-        # Match
-        "subject",
-        "cases",
-    }
-)
-
 
 class Expander(msgspec.Struct, frozen=True):
     """Graph expansion operator.

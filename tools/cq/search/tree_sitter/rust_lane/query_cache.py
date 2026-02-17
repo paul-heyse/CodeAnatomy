@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
 from tools.cq.search.tree_sitter.core.lane_support import ENRICHMENT_ERRORS
 from tools.cq.search.tree_sitter.query.compiler import compile_query
@@ -67,6 +68,9 @@ def _pack_sources() -> tuple[tuple[str, str], ...]:
 def clear_query_cache() -> None:
     """Clear query pack cache."""
     _pack_source_rows.cache_clear()
+
+
+CACHE_REGISTRY.register_clear_callback("rust", clear_query_cache)
 
 
 __all__ = [

@@ -1545,19 +1545,23 @@ class CompileExecutionPolicyRequestV1(msgspec.Struct, frozen=True):
 
 Scope status after in-repo audit (`src/` + relevant `tests/`):
 
-- Complete: `S1`, `S2`, `S3`, `S4`, `S7`, `S8`, `S19`, `S20`, `D1`, `D4`
-- Partial: `S5`, `S6`, `S9`, `S10`, `S11`, `S12`, `S13`, `S14`, `S15`, `S16`, `S17`, `S18`, `S21`, `S22`, `D2`, `D3`, `D5`, `D6`
+- Complete: `S1`, `S2`, `S3`, `S4`, `S5`, `S7`, `S8`, `S11`, `S17`, `S18`, `S19`, `S20`, `S21`, `S22`, `D1`, `D2`, `D4`, `D6`
+- Partial: `S6`, `S9`, `S10`, `S12`, `S13`, `S14`, `S15`, `S16`, `D3`, `D5`
 - Not started: none
 
 Primary evidence for remaining partial scope:
 
-- `S5`: `.resolved.delta_*` chains are eliminated in `src` (`0` matches), but `session.engine_session.*` chains remain (`10` matches in `src`).
-- `S6`: `delta_service_for_profile(...)` is removed, but direct `DeltaService(profile=...)` construction remains at `13` `src` callsites.
-- `S9`-`S16`: legacy monolith files are deleted, but major `*_core.py`/builder modules still retain most logic (`registration_core.py` `3120` LOC, `write_core.py` `2732`, `control_plane_core.py` `1917`, `pipeline_build.py` `1607`, `delta_read.py` `2346`, `artifact_store_core.py` `1534`, `extension_core.py` `1629`, `dataset_spec.py` `1837`, `introspection_core.py` `1278`).
-- `S17`: `DiagnosticBatchBuilder` exists and is used, but adoption is still selective (`issue_batching.py`, `schema_anomalies.py`, `diagnostics_emission.py`) rather than comprehensive across all listed diagnostics modules.
-- `S18`: provider-first registration and predicate overwrite paths exist, but runtime-facing `delta_data_checker` surface remains (`8` matches in `src`).
-- `S21`: `semantics/spec_registry.py` is deleted and diagnostics utils are centralized, but the `relationship_decisions` alias still maps to `build_relationship_candidates_view` in `semantics/diagnostics/__init__.py`.
-- `S22`: metadata decode helper consolidation is complete, but weak fallback typing remains in `relspec/execution_package.py` (`6` `getattr(...)` pathways).
+- `S6`: `delta_service_for_profile(...)` and the factory shim are removed, but hidden service creation remains in fallback composition paths (`src/cli/runtime_services.py:33`, `src/cli/runtime_services.py:53`) plus runtime self-binding (`src/datafusion_engine/session/runtime.py:356`), so DI cutover is not fully strict yet.
+- `S9`: decomposition is landed but not design-complete; `src/datafusion_engine/dataset/registration_core.py` remains `2432` LOC (>800 target), and split modules still import many private helpers from core (`src/datafusion_engine/dataset/registration_delta.py`, `src/datafusion_engine/dataset/registration_listing.py`, `src/datafusion_engine/dataset/registration_schema.py`, `src/datafusion_engine/dataset/registration_cache.py`).
+- `S10`: `src/datafusion_engine/io/write_core.py` remains `2067` LOC; helper modules are still mostly micro-surfaces (`src/datafusion_engine/io/write_formats.py` `13` LOC, `src/datafusion_engine/io/write_planning.py` `13` LOC, `src/datafusion_engine/io/write_execution.py` `19` LOC, `src/datafusion_engine/io/write_validation.py` `17` LOC), and `src/datafusion_engine/io/write_delta.py` still depends on core internals/concrete `DeltaService`.
+- `S12`: `src/semantics/pipeline_build.py` remains `1607` LOC; `src/semantics/pipeline_dispatch.py` still depends on private pipeline-build symbols (`_CONSOLIDATED_BUILDER_HANDLERS`, `_finalize_output_builder`) instead of owning dispatch logic independently.
+- `S13`: read/write split exists, but `src/storage/deltalake/delta_read.py` (`1520` LOC) and `src/storage/deltalake/delta_write.py` (`922` LOC) remain oversized, and `delta_read.py` still re-exports write operations (`enable_delta_features`, `delta_delete_where`, `delta_merge_arrow`, etc.).
+- `S14`: split modules exist, but `src/datafusion_engine/plan/artifact_store_core.py` (`1310` LOC) and `src/datafusion_engine/udf/extension_core.py` (`1535` LOC) remain oversized; extension validation remains aliased through core (`src/datafusion_engine/udf/extension_core.py:499`-`501`).
+- `S15`: extractor package decomposition landed structurally, but core logic remains concentrated in oversized builders (`ast` `1244` LOC, `cst` `1763` LOC, `bytecode` `1741` LOC, `tree_sitter` `1491` LOC), so decomposition quality is still partial.
+- `S16`: split modules exist but remain thin (`src/schema_spec/table_spec.py` `99` LOC, `src/schema_spec/validation.py` `68` LOC, `src/schema_spec/discovery.py` `129` LOC, `src/datafusion_engine/schema/introspection_cache.py` `92` LOC, `src/datafusion_engine/schema/introspection_delta.py` `67` LOC) while core holdouts remain oversized (`src/schema_spec/dataset_spec.py` `1814` LOC, `src/datafusion_engine/schema/introspection_core.py` `1278` LOC).
+- `D3`: blocked only by `S6` strict-DI completion.
+- `D5`: legacy monolith files are deleted, but acceptance remains tied to true logic migration/size contraction across the remaining partial decomposition scopes (`S9`, `S10`, `S12`, `S13`, `S14`, `S15`, `S16`).
+- Plan manifest check: all plan-listed "New Files to Create" currently exist (`84/84`).
 
 ---
 
@@ -1567,27 +1571,27 @@ Primary evidence for remaining partial scope:
 - [x] S2. Consolidate type coercion and boolean parsing helpers
 - [x] S3. Fix dependency direction violations (4 confirmed)
 - [x] S4. Expand and enforce OTel facade (73 bypass import lines across 37 files)
-- [ ] S5. Add convenience properties for Law of Demeter (25+ chain sites) — partial
+- [x] S5. Add convenience properties for Law of Demeter (25+ chain sites)
 - [ ] S6. Inject dependencies to replace hidden service creation (8 sites) — partial
 - [x] S7. Define ExtractorPort protocol and extract shared coordination
 - [x] S8. Decompose session re-export hub (102-entry `__all__`)
 - [ ] S9. Decompose `dataset/registration.py` (3,368 LOC) — partial
 - [ ] S10. Decompose `io/write.py` (2,689 LOC) — partial
-- [ ] S11. Decompose `delta/control_plane.py` (2,070 LOC) — partial
+- [x] S11. Decompose `delta/control_plane.py` (2,070 LOC)
 - [ ] S12. Decompose `semantics/pipeline.py` (1,671 LOC) — partial
 - [ ] S13. Decompose `storage/deltalake/delta.py` (2,824 LOC) — partial
 - [ ] S14. Decompose `artifact_store.py` (1,654 LOC) and `extension_runtime.py` (1,660 LOC) — partial
 - [ ] S15. Decompose extractor files (1,388–1,900 LOC each) — partial
 - [ ] S16. Decompose `schema_spec/contracts.py` (1,858 LOC) and `schema/introspection.py` (1,305 LOC) — partial
-- [ ] S17. Extract diagnostic builder framework — partial
-- [ ] S18. Leverage available DataFusion/Delta capabilities (EXPLAIN ANALYZE capture, runtime extension metrics snapshot, provider-first Delta registration, replaceWhere) — partial
+- [x] S17. Extract diagnostic builder framework
+- [x] S18. Leverage available DataFusion/Delta capabilities (EXPLAIN ANALYZE capture, runtime extension metrics snapshot, provider-first Delta registration, replaceWhere)
 - [x] S19. Collapse positional commit payload indexing in `delta/control_plane.py`
 - [x] S20. Apply schema/introspection quick-win deduplications
-- [ ] S21. Consolidate semantics registry and diagnostics surfaces — partial
-- [ ] S22. Harden relspec/schema_spec boundary typing and metadata decode helpers — partial
+- [x] S21. Consolidate semantics registry and diagnostics surfaces
+- [x] S22. Harden relspec/schema_spec boundary typing and metadata decode helpers
 - [x] D1. Delete re-export hub block from `runtime.py` (after S1 + S8)
-- [ ] D2. Delete private coercion/line_offsets/metadata decode/diagnostic helper duplicates (after S2 + S7 + S21 + S22) — partial
+- [x] D2. Delete private coercion/line_offsets/metadata decode/diagnostic helper duplicates (after S2 + S7 + S21 + S22)
 - [ ] D3. Delete `delta_service_for_profile(None)` pattern, `cli.config_models` reverse import, and factory shim (after S3 + S6) — partial
 - [x] D4. Delete all direct `obs.otel.*` bypass imports and enforce boundary tests (after S4)
 - [ ] D5. Delete original god files after sub-module migration (after S9 + S10 + S11 + S12 + S13 + S14 + S15 + S16 + S19) — partial
-- [ ] D6. Delete quick-win legacy surfaces (`spec_registry.py`, `_schema_from_table`, duplicate normalization helpers, manual metadata copy methods) (after S20 + S21 + S22) — partial
+- [x] D6. Delete quick-win legacy surfaces (`spec_registry.py`, `_schema_from_table`, duplicate normalization helpers, manual metadata copy methods) (after S20 + S21 + S22)

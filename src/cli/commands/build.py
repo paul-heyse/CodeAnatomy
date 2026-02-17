@@ -678,6 +678,8 @@ def _apply_cli_config_overrides(
         incremental_payload = {}
     incremental_payload["enabled"] = overrides.incremental
     resolved_state_dir = resolve_path(repo_root, overrides.incremental_state_dir)
+    if resolved_state_dir is None and overrides.incremental:
+        resolved_state_dir = repo_root / "build" / "state"
     state_dir_value = str(resolved_state_dir) if resolved_state_dir is not None else None
     _apply_optional_value(
         incremental_payload,
@@ -717,6 +719,8 @@ def _build_incremental_config(
     if not overrides.incremental:
         return None
     resolved_state_dir = resolve_path(repo_root, overrides.incremental_state_dir)
+    if resolved_state_dir is None:
+        resolved_state_dir = repo_root / "build" / "state"
     return SemanticIncrementalConfig(
         enabled=True,
         state_dir=resolved_state_dir,

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
+
+QueryLanguage = Literal["python", "rust"]
+QueryLanguageScope = Literal["auto", "python", "rust"]
 
 
 class LdmdSliceMode(StrEnum):
@@ -17,4 +21,4 @@ class LdmdSliceMode(StrEnum):
         return self.value
 
 
-__all__ = ["LdmdSliceMode"]
+__all__ = ["LdmdSliceMode", "QueryLanguage", "QueryLanguageScope"]

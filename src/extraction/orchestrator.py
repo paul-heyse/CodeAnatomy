@@ -228,7 +228,6 @@ def _run_parallel_stage1_extractors(
         repo_root=request.repo_root,
         repo_files=request.repo_files,
         scip_index_config=request.scip_index_config,
-        scip_identity_overrides=request.scip_identity_overrides,
         tree_sitter_enabled=request.tree_sitter_enabled,
     )
     stage_start = time.monotonic()
@@ -508,7 +507,6 @@ def _build_stage1_extractors(
     repo_root: Path,
     repo_files: pa.Table,
     scip_index_config: object | None,
-    scip_identity_overrides: object | None,
     tree_sitter_enabled: bool,
 ) -> dict[str, Callable[[], pa.Table]]:
     """Build Stage 1 extractor callables.
@@ -521,8 +519,6 @@ def _build_stage1_extractors(
         Repo files table from Stage 0.
     scip_index_config
         Optional SCIP indexing configuration.
-    scip_identity_overrides
-        Optional SCIP identity overrides.
     tree_sitter_enabled
         Whether to enable tree-sitter extraction.
 
@@ -556,7 +552,6 @@ def _build_stage1_extractors(
         extractors["scip_index"] = lambda: _extract_scip(
             repo_root,
             scip_index_config,
-            scip_identity_overrides,
             extract_session,
             runtime_spec,
         )
@@ -756,7 +751,6 @@ def _extract_symtable(
 def _extract_scip(
     repo_root: Path,
     scip_index_config: object,
-    scip_identity_overrides: object | None,  # noqa: ARG001
     extract_session: ExtractSession,
     runtime_spec: RuntimeProfileSpec,
 ) -> pa.Table:
@@ -768,8 +762,6 @@ def _extract_scip(
         Repository root.
     scip_index_config
         SCIP indexing configuration.
-    scip_identity_overrides
-        Optional SCIP identity overrides.
     extract_session
         Extract session.
     runtime_spec

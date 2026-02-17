@@ -1,7 +1,5 @@
 """Delta-specialized write helpers."""
 
-# ruff: noqa: DOC201
-
 from __future__ import annotations
 
 import json
@@ -9,11 +7,10 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal, cast
 
 import msgspec
-from msgspec.convert import convert, convert_from_attributes
+from deltalake import CommitProperties
+from msgspec import convert
 
 from datafusion_engine.delta.service import DeltaFeatureMutationRequest, DeltaService
-from datafusion_engine.delta.service_protocol import normalize_storage_options
-from datafusion_engine.delta.write_contracts import CommitProperties
 from datafusion_engine.io.write_core import (
     DeltaWriteOutcome,
     DeltaWritePolicy,
@@ -30,6 +27,7 @@ from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from schema_spec.dataset_spec import DeltaMaintenancePolicy
 from storage.deltalake.delta_write import DeltaFeatureMutationOptions, IdempotentWriteOptions
 from utils.hashing import hash_sha256_hex
+from utils.storage_options import normalize_storage_options
 
 if TYPE_CHECKING:
     from datafusion import DataFrame
@@ -104,7 +102,6 @@ def _delta_feature_mutation_options(
     *,
     delta_service: DeltaService,
 ) -> DeltaFeatureMutationOptions:
-    """Build Delta feature mutation options from a write spec."""
     request = DeltaFeatureMutationRequest(
         path=spec.table_uri,
         storage_options=spec.storage_options,
@@ -279,9 +276,7 @@ def _validate_delta_protocol_support(
         delta_protocol_compatibility,
     )
 
-    service = delta_service or cast(
-        "DeltaService", runtime_profile.delta_ops.delta_service()
-    )
+    service = delta_service or cast("DeltaService", runtime_profile.delta_ops.delta_service())
     snapshot = service.protocol_snapshot(
         path=table_uri,
         storage_options=storage_options,
@@ -355,10 +350,15 @@ def _delta_write_policy_override(options: Mapping[str, object]) -> DeltaWritePol
         return raw
     if isinstance(raw, Mapping):
         payload = dict(raw)
-        return convert(payload, target_type=DeltaWritePolicy, strict=True)
+        return convert(payload, type=DeltaWritePolicy, strict=True)
     if raw is not None:
         try:
-            return convert_from_attributes(raw, target_type=DeltaWritePolicy, strict=True)
+            return convert(
+                raw,
+                type=DeltaWritePolicy,
+                strict=True,
+                from_attributes=True,
+            )
         except msgspec.ValidationError:
             return None
     return None
@@ -526,7 +526,6 @@ def _delta_storage_options(
 
 
 def _base_commit_metadata(request: WriteRequest, *, context: _DeltaCommitContext) -> dict[str, str]:
-    """Build base Delta commit metadata shared across policies."""
     return {
         "codeanatomy_engine": "datafusion",
         "codeanatomy_operation": "write_pipeline",
@@ -540,7 +539,6 @@ def _base_commit_metadata(request: WriteRequest, *, context: _DeltaCommitContext
 def _dataset_location_commit_metadata(
     dataset_location: DatasetLocation | None,
 ) -> dict[str, str]:
-    """Build commit metadata derived from dataset location pins."""
     if dataset_location is None:
         return {}
     metadata: dict[str, str] = {"dataset_path": str(dataset_location.path)}
@@ -593,7 +591,6 @@ def _apply_policy_commit_metadata(
     policy_ctx: _DeltaPolicyContext,
     extra_constraints: tuple[str, ...],
 ) -> dict[str, str]:
-    """Apply policy-derived metadata to commit metadata."""
     metadata = dict(commit_metadata)
     if policy_ctx.partition_by:
         metadata["partition_by"] = ",".join(policy_ctx.partition_by)

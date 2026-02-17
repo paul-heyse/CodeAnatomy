@@ -162,17 +162,6 @@ def relationship_candidates_df_builder(ctx: SessionContext) -> DataFrame:
     return build_relationship_candidates_view(ctx)
 
 
-def relationship_decisions_df_builder(ctx: SessionContext) -> DataFrame:
-    """Build a DataFrame of relationship decisions for diagnostics.
-
-    Returns:
-        DataFrame: Flattened relationship decision diagnostics.
-    """
-    from semantics.diagnostics import build_relationship_candidates_view
-
-    return build_relationship_candidates_view(ctx)
-
-
 def schema_anomalies_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame of schema anomaly diagnostics.
 
@@ -220,7 +209,6 @@ __all__ = [
     "file_quality_df_builder",
     "relationship_ambiguity_report_df_builder",
     "relationship_candidates_df_builder",
-    "relationship_decisions_df_builder",
     "relationship_quality_metrics_df_builder",
     "schema_anomalies_df_builder",
     "span_errors_df_builder",

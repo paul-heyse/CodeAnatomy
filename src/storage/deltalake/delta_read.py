@@ -2,7 +2,6 @@
 # NOTE(size-exception): This module is temporarily >800 LOC during hard-cutover
 # decomposition. Remaining extraction and contraction work is tracked in
 # docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
-# ruff: noqa: DOC201
 
 from __future__ import annotations
 
@@ -30,7 +29,6 @@ from datafusion_engine.arrow.interop import (
 from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.schema.alignment import align_table
-from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from obs.otel import SCOPE_STORAGE, get_query_id, get_run_id, stage_span
 from storage.deltalake.config import DeltaMutationPolicy, DeltaRetryPolicy
 from utils.storage_options import merged_storage_options
@@ -1060,146 +1058,6 @@ def delta_protocol_snapshot(
         return payload
 
 
-def enable_delta_features(
-    options: DeltaFeatureMutationOptions,
-    *,
-    features: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    """Enable Delta table features by setting table properties."""
-    from storage.deltalake.delta_write import enable_delta_features as _delegate
-
-    return _delegate(options, features=features)
-
-
-def delta_add_constraints(
-    options: DeltaFeatureMutationOptions,
-    *,
-    constraints: Mapping[str, str],
-) -> Mapping[str, object]:
-    """Add Delta check constraints via the Rust control plane."""
-    from storage.deltalake.delta_write import delta_add_constraints as _delegate
-
-    return _delegate(options, constraints=constraints)
-
-
-def delta_drop_constraints(
-    options: DeltaFeatureMutationOptions,
-    *,
-    constraints: Sequence[str],
-    raise_if_not_exists: bool = True,
-) -> Mapping[str, object]:
-    """Drop Delta check constraints via the Rust control plane."""
-    from storage.deltalake.delta_write import delta_drop_constraints as _delegate
-
-    return _delegate(
-        options,
-        constraints=constraints,
-        raise_if_not_exists=raise_if_not_exists,
-    )
-
-
-def enable_delta_column_mapping(
-    options: DeltaFeatureMutationOptions,
-    *,
-    mode: str = "name",
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    """Enable Delta column mapping via the Rust control plane."""
-    from storage.deltalake.delta_write import enable_delta_column_mapping as _delegate
-
-    return _delegate(
-        options,
-        mode=mode,
-        allow_protocol_versions_increase=allow_protocol_versions_increase,
-    )
-
-
-def enable_delta_deletion_vectors(
-    options: DeltaFeatureMutationOptions,
-    *,
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    """Enable Delta deletion vectors via the Rust control plane."""
-    from storage.deltalake.delta_write import enable_delta_deletion_vectors as _delegate
-
-    return _delegate(
-        options,
-        allow_protocol_versions_increase=allow_protocol_versions_increase,
-    )
-
-
-def enable_delta_row_tracking(
-    options: DeltaFeatureMutationOptions,
-    *,
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    """Enable Delta row tracking via the Rust control plane."""
-    from storage.deltalake.delta_write import enable_delta_row_tracking as _delegate
-
-    return _delegate(
-        options,
-        allow_protocol_versions_increase=allow_protocol_versions_increase,
-    )
-
-
-def enable_delta_change_data_feed(
-    options: DeltaFeatureMutationOptions,
-    *,
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    """Enable Delta Change Data Feed via the Rust control plane."""
-    from storage.deltalake.delta_write import enable_delta_change_data_feed as _delegate
-
-    return _delegate(
-        options,
-        allow_protocol_versions_increase=allow_protocol_versions_increase,
-    )
-
-
-def enable_delta_check_constraints(
-    options: DeltaFeatureMutationOptions,
-    *,
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    """Enable Delta check constraints via the Rust control plane."""
-    from storage.deltalake.delta_write import enable_delta_check_constraints as _delegate
-
-    return _delegate(
-        options,
-        allow_protocol_versions_increase=allow_protocol_versions_increase,
-    )
-
-
-def enable_delta_in_commit_timestamps(
-    options: DeltaFeatureMutationOptions,
-    *,
-    enablement_version: int | None = None,
-    enablement_timestamp: str | None = None,
-) -> Mapping[str, object]:
-    """Enable Delta in-commit timestamps via the Rust control plane."""
-    from storage.deltalake.delta_write import enable_delta_in_commit_timestamps as _delegate
-
-    return _delegate(
-        options,
-        enablement_version=enablement_version,
-        enablement_timestamp=enablement_timestamp,
-    )
-
-
-def enable_delta_v2_checkpoints(
-    options: DeltaFeatureMutationOptions,
-    *,
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    """Enable Delta v2 checkpoints via the Rust control plane."""
-    from storage.deltalake.delta_write import enable_delta_v2_checkpoints as _delegate
-
-    return _delegate(
-        options,
-        allow_protocol_versions_increase=allow_protocol_versions_increase,
-    )
-
-
 def coerce_delta_table(
     value: TableLike | RecordBatchReaderLike,
     *,
@@ -1373,28 +1231,6 @@ def read_delta_cdf_eager(
         cdf_options=cdf_options,
     )
     return reader.read_all()
-
-
-def delta_delete_where(
-    ctx: SessionContext,
-    *,
-    request: DeltaDeleteWhereRequest,
-) -> Mapping[str, object]:
-    """Delete rows from a Delta table via the Rust control plane."""
-    from storage.deltalake.delta_write import delta_delete_where as _delegate
-
-    return _delegate(ctx, request=request)
-
-
-def delta_merge_arrow(
-    ctx: SessionContext,
-    *,
-    request: DeltaMergeArrowRequest,
-) -> Mapping[str, object]:
-    """Merge Arrow data into a Delta table via the Rust control plane."""
-    from storage.deltalake.delta_write import delta_merge_arrow as _delegate
-
-    return _delegate(ctx, request=request)
 
 
 def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None:
@@ -1629,6 +1465,22 @@ def _delta_cdf_table_provider(
         )
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
+
+
+from storage.deltalake import delta_write as _delta_write
+
+enable_delta_features = _delta_write.enable_delta_features
+delta_add_constraints = _delta_write.delta_add_constraints
+delta_drop_constraints = _delta_write.delta_drop_constraints
+enable_delta_column_mapping = _delta_write.enable_delta_column_mapping
+enable_delta_deletion_vectors = _delta_write.enable_delta_deletion_vectors
+enable_delta_row_tracking = _delta_write.enable_delta_row_tracking
+enable_delta_change_data_feed = _delta_write.enable_delta_change_data_feed
+enable_delta_check_constraints = _delta_write.enable_delta_check_constraints
+enable_delta_in_commit_timestamps = _delta_write.enable_delta_in_commit_timestamps
+enable_delta_v2_checkpoints = _delta_write.enable_delta_v2_checkpoints
+delta_delete_where = _delta_write.delta_delete_where
+delta_merge_arrow = _delta_write.delta_merge_arrow
 
 
 __all__ = [

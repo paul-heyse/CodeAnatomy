@@ -1,5 +1,4 @@
 """Cache-focused helpers for the plan artifact store."""
-# ruff: noqa: SLF001
 
 from __future__ import annotations
 
@@ -8,7 +7,18 @@ from pathlib import Path
 from datafusion import SessionContext
 
 from datafusion_engine.dataset.registry import DatasetLocation
-from datafusion_engine.plan import artifact_store_core as _core
+from datafusion_engine.plan.artifact_store_core import (
+    PIPELINE_EVENTS_TABLE_NAME,
+    PLAN_ARTIFACTS_TABLE_NAME,
+    _bootstrap_pipeline_events_table,
+    _bootstrap_plan_artifacts_table,
+    _delta_schema_available,
+    _pipeline_events_location,
+    _plan_artifacts_location,
+    _refresh_pipeline_events_registration,
+    _refresh_plan_artifacts_registration,
+    _reset_artifacts_table_path,
+)
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
@@ -23,29 +33,29 @@ def ensure_plan_artifacts_table(
     DatasetLocation | None
         Resolved artifacts table location when configured.
     """
-    location = _core._plan_artifacts_location(profile)
+    location = _plan_artifacts_location(profile)
     if location is None:
         return None
     table_path = Path(location.path)
     existing_version = profile.delta_ops.delta_service().table_version(path=str(table_path))
     if existing_version is None:
         if table_path.exists():
-            _core._reset_artifacts_table_path(
+            _reset_artifacts_table_path(
                 profile,
                 table_path,
-                table_name=_core.PLAN_ARTIFACTS_TABLE_NAME,
+                table_name=PLAN_ARTIFACTS_TABLE_NAME,
                 reason="delta_table_version_unavailable",
             )
-        _core._bootstrap_plan_artifacts_table(ctx, profile, table_path)
-    elif not _core._delta_schema_available(location, profile=profile):
-        _core._reset_artifacts_table_path(
+        _bootstrap_plan_artifacts_table(ctx, profile, table_path)
+    elif not _delta_schema_available(location, profile=profile):
+        _reset_artifacts_table_path(
             profile,
             table_path,
-            table_name=_core.PLAN_ARTIFACTS_TABLE_NAME,
+            table_name=PLAN_ARTIFACTS_TABLE_NAME,
             reason="delta_schema_unavailable",
         )
-        _core._bootstrap_plan_artifacts_table(ctx, profile, table_path)
-    _core._refresh_plan_artifacts_registration(ctx, profile, location)
+        _bootstrap_plan_artifacts_table(ctx, profile, table_path)
+    _refresh_plan_artifacts_registration(ctx, profile, location)
     return location
 
 
@@ -60,29 +70,29 @@ def ensure_pipeline_events_table(
     DatasetLocation | None
         Resolved pipeline-events table location when configured.
     """
-    location = _core._pipeline_events_location(profile)
+    location = _pipeline_events_location(profile)
     if location is None:
         return None
     table_path = Path(location.path)
     existing_version = profile.delta_ops.delta_service().table_version(path=str(table_path))
     if existing_version is None:
         if table_path.exists():
-            _core._reset_artifacts_table_path(
+            _reset_artifacts_table_path(
                 profile,
                 table_path,
-                table_name=_core.PIPELINE_EVENTS_TABLE_NAME,
+                table_name=PIPELINE_EVENTS_TABLE_NAME,
                 reason="delta_table_version_unavailable",
             )
-        _core._bootstrap_pipeline_events_table(ctx, profile, table_path)
-    elif not _core._delta_schema_available(location, profile=profile):
-        _core._reset_artifacts_table_path(
+        _bootstrap_pipeline_events_table(ctx, profile, table_path)
+    elif not _delta_schema_available(location, profile=profile):
+        _reset_artifacts_table_path(
             profile,
             table_path,
-            table_name=_core.PIPELINE_EVENTS_TABLE_NAME,
+            table_name=PIPELINE_EVENTS_TABLE_NAME,
             reason="delta_schema_unavailable",
         )
-        _core._bootstrap_pipeline_events_table(ctx, profile, table_path)
-    _core._refresh_pipeline_events_registration(ctx, profile, location)
+        _bootstrap_pipeline_events_table(ctx, profile, table_path)
+    _refresh_pipeline_events_registration(ctx, profile, location)
     return location
 
 

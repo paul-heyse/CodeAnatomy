@@ -14,6 +14,7 @@ from datafusion_engine.arrow.metadata import (
     ordering_metadata_spec,
 )
 from datafusion_engine.schema import SCHEMA_META_NAME, SCHEMA_META_VERSION
+from relspec.compiled_policy import JsonMapping
 from relspec.view_defs import (
     REL_CALLSITE_SYMBOL_OUTPUT,
     REL_DEF_SYMBOL_OUTPUT,
@@ -48,9 +49,9 @@ class TaskGraphLike(Protocol):
 
 class ScanOverrideLike(Protocol):
     dataset_name: str
-    policy: Mapping[str, object]
+    policy: JsonMapping
     reasons: Sequence[str] | str
-    inference_confidence: Mapping[str, object] | None
+    inference_confidence: JsonMapping | None
 
 
 class CompileExecutionPolicyRequestV1(msgspec.Struct, frozen=True):

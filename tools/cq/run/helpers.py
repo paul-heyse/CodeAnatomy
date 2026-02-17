@@ -48,8 +48,7 @@ def error_result(step_id: str, macro: str, exc: Exception, ctx: RunContextLike) 
     result.key_findings.append(
         Finding(category="error", message=f"{step_id}: {exc}", severity="error")
     )
-    assign_result_finding_ids(result)
-    return result
+    return assign_result_finding_ids(result)
 
 
 def merge_in_dir(run_in_dir: str | None, step_in_dir: str | None) -> str | None:

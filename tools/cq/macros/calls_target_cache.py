@@ -61,6 +61,7 @@ class TargetPayloadState:
 def target_scope_snapshot_digest(
     *,
     root: Path,
+    backend: CqCacheBackend,
     target_location: tuple[str, int] | None,
     language: QueryLanguage | None,
 ) -> str | None:
@@ -76,6 +77,7 @@ def target_scope_snapshot_digest(
         return None
     return build_scope_snapshot_fingerprint(
         root=root,
+        backend=backend,
         files=[file_path],
         language=language or "python",
         scope_globs=[],
@@ -86,6 +88,7 @@ def target_scope_snapshot_digest(
 def resolve_target_payload(
     *,
     root: Path,
+    backend: CqCacheBackend,
     function_name: str,
     resolved_language: QueryLanguage | None,
     resolve_target_definition: Callable[..., tuple[str, int] | None],
@@ -109,6 +112,7 @@ def resolve_target_payload(
     )
     resolved_snapshot = target_scope_snapshot_digest(
         root=root,
+        backend=backend,
         target_location=resolved_target,
         language=resolved_language,
     )
@@ -206,6 +210,7 @@ def resolve_target_payload_state(
     snapshot_digest = cached_payload.snapshot_digest
     current_snapshot = target_scope_snapshot_digest(
         root=context.root,
+        backend=context.cache,
         target_location=target_location,
         language=context.resolved_language,
     )

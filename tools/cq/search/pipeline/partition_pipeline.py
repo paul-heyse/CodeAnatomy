@@ -35,6 +35,9 @@ from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.query.language import QueryLanguage, constrain_include_globs_for_language
 from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.cache.contracts import SearchCandidatesCacheV1, SearchEnrichmentAnchorCacheV1
+from tools.cq.search.pipeline.candidate_phase import run_candidate_phase
+from tools.cq.search.pipeline.classification import classify_match
+from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.contracts import SearchPartitionPlanV1
 from tools.cq.search.pipeline.smart_search_types import (
     EnrichedMatch,
@@ -267,7 +270,6 @@ def _candidate_payload_from_cache(
             return raw_matches, stats, payload.pattern, True
     elif is_fragment_cache_payload(cached):
         record_cache_decode_failure(namespace="search_candidates")
-    from tools.cq.search.pipeline.candidate_phase import run_candidate_phase
 
     raw_matches, stats, pattern = run_candidate_phase(ctx, lang=lang, mode=mode)
     return raw_matches, stats, pattern, False
@@ -490,9 +492,8 @@ def _classify_enrichment_misses(
 def _classify_enrichment_miss_batch(
     task: _EnrichmentMissTask,
 ) -> list[_EnrichmentMissResult]:
-    from tools.cq.search.pipeline.smart_search import classify_match
-
     root = Path(task.root)
+    cache_context = ClassifierCacheContext()
     deep_enrichment_seen: set[tuple[str, str]] = set()
     results: list[_EnrichmentMissResult] = []
     for idx, raw, cache_key, file_hash in task.items:
@@ -510,6 +511,7 @@ def _classify_enrichment_miss_batch(
                     raw,
                     root,
                     lang=task.lang,
+                    cache_context=cache_context,
                     enable_deep_enrichment=enable_deep_enrichment,
                 ),
             )

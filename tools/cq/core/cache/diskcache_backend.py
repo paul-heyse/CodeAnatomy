@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import atexit
 import shutil
 import sqlite3
-import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Final
 
@@ -16,7 +16,7 @@ from tools.cq.core.cache.cache_runtime_tuning import (
     resolve_cache_runtime_tuning,
 )
 from tools.cq.core.cache.interface import CqCacheBackend, NoopCacheBackend
-from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
+from tools.cq.core.cache.policy import CqCachePolicyV1
 from tools.cq.core.cache.telemetry import (
     record_cache_abort,
     record_cache_cull,
@@ -70,6 +70,45 @@ class _FailOpenTransaction:
             return False
         except _NON_FATAL_ERRORS:
             self.backend.record_abort(namespace="transaction")
+            return False
+
+
+class _FailOpenCoordinationContext:
+    """Fail-open coordination wrapper for lock/semaphore primitives."""
+
+    def __init__(self, backend: DiskcacheBackend, *, ctx: object, namespace: str) -> None:
+        self.backend = backend
+        self.ctx = ctx
+        self.namespace = namespace
+        self.active = False
+
+    def __enter__(self) -> None:
+        enter = getattr(self.ctx, "__enter__", None)
+        if not callable(enter):
+            return
+        try:
+            enter()
+            self.active = True
+        except Timeout:
+            self.backend.record_timeout(namespace=self.namespace)
+            self.active = False
+        except _NON_FATAL_ERRORS:
+            self.backend.record_abort(namespace=self.namespace)
+            self.active = False
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        if not self.active:
+            return False
+        exit_fn = getattr(self.ctx, "__exit__", None)
+        if not callable(exit_fn):
+            return False
+        try:
+            return bool(exit_fn(exc_type, exc, tb))
+        except Timeout:
+            self.backend.record_timeout(namespace=self.namespace)
+            return False
+        except _NON_FATAL_ERRORS:
+            self.backend.record_abort(namespace=self.namespace)
             return False
 
 
@@ -397,38 +436,181 @@ class DiskcacheBackend:
         except _NON_FATAL_ERRORS:
             return
 
+    def read_streaming(self, key: str) -> bytes | None:
+        """Read byte payload via diskcache streaming API when available.
 
-_BACKEND_LOCK = threading.Lock()
+        Returns:
+            bytes | None: Streamed payload when present.
+        """
+        namespace = self._namespace_from_key(key)
+        read_fn = getattr(self.cache, "read", None)
+        if not callable(read_fn):
+            value = self.get(key)
+            if isinstance(value, (bytes, bytearray, memoryview)):
+                return bytes(value)
+            return None
+        try:
+            reader_cm = read_fn(key, retry=True)
+        except TypeError:
+            try:
+                reader_cm = read_fn(key)
+            except Timeout:
+                self.record_timeout(namespace=namespace)
+                return None
+            except _NON_FATAL_ERRORS:
+                self.record_abort(namespace=namespace)
+                return None
+        except Timeout:
+            self.record_timeout(namespace=namespace)
+            return None
+        except _NON_FATAL_ERRORS:
+            self.record_abort(namespace=namespace)
+            return None
+        try:
+            with reader_cm as reader:
+                read_method = getattr(reader, "read", None)
+                if not callable(read_method):
+                    return None
+                payload = read_method()
+        except Timeout:
+            self.record_timeout(namespace=namespace)
+            return None
+        except _NON_FATAL_ERRORS:
+            self.record_abort(namespace=namespace)
+            return None
+        if isinstance(payload, memoryview):
+            return payload.tobytes()
+        if isinstance(payload, (bytes, bytearray)):
+            return bytes(payload)
+        return None
 
+    def set_streaming(
+        self,
+        key: str,
+        payload: bytes,
+        *,
+        expire: int | None = None,
+        tag: str | None = None,
+    ) -> bool:
+        """Write byte payload via diskcache read=True API when available.
 
-class _BackendState:
-    """Mutable holder for process-global cache backend singleton."""
+        Returns:
+            bool: ``True`` when payload is written.
+        """
+        from tempfile import NamedTemporaryFile
 
-    def __init__(self) -> None:
-        self.backends: dict[str, CqCacheBackend] = {}
+        namespace = self._namespace_from_key(key)
+        ttl = expire if expire is not None else self.default_ttl_seconds
+        try:
+            with NamedTemporaryFile("w+b", delete=True) as tmp:
+                tmp.write(payload)
+                tmp.flush()
+                tmp.seek(0)
+                try:
+                    return bool(
+                        self.cache.set(
+                            key,
+                            tmp,
+                            read=True,
+                            expire=ttl,
+                            tag=tag,
+                            retry=True,
+                        )
+                    )
+                except TypeError:
+                    tmp.seek(0)
+                    return bool(
+                        self.cache.set(
+                            key,
+                            tmp,
+                            read=True,
+                            expire=ttl,
+                            tag=tag,
+                        )
+                    )
+        except Timeout:
+            self.record_timeout(namespace=namespace)
+            return False
+        except _NON_FATAL_ERRORS:
+            self.record_abort(namespace=namespace)
+            return False
 
+    @contextmanager
+    def lock(self, key: str, *, expire: int | None = None) -> Iterator[None]:
+        """Return fail-open lock context for key."""
+        try:
+            from diskcache import Lock
+        except ImportError:
+            with nullcontext():
+                yield
+            return
+        ttl = expire if expire is not None else self.default_ttl_seconds
+        ctx = _FailOpenCoordinationContext(
+            self,
+            ctx=Lock(self.cache, key, expire=ttl),
+            namespace=self._namespace_from_key(key),
+        )
+        with ctx:
+            yield
 
-_BACKEND_STATE = _BackendState()
+    @contextmanager
+    def rlock(self, key: str, *, expire: int | None = None) -> Iterator[None]:
+        """Return fail-open reentrant-lock context for key."""
+        try:
+            from diskcache import RLock
+        except ImportError:
+            with nullcontext():
+                yield
+            return
+        ttl = expire if expire is not None else self.default_ttl_seconds
+        ctx = _FailOpenCoordinationContext(
+            self,
+            ctx=RLock(self.cache, key, expire=ttl),
+            namespace=self._namespace_from_key(key),
+        )
+        with ctx:
+            yield
 
+    @contextmanager
+    def semaphore(
+        self,
+        key: str,
+        *,
+        value: int,
+        expire: int | None = None,
+    ) -> Iterator[None]:
+        """Return fail-open semaphore context for key."""
+        try:
+            from diskcache import BoundedSemaphore
+        except ImportError:
+            with nullcontext():
+                yield
+            return
+        ttl = expire if expire is not None else self.default_ttl_seconds
+        ctx = _FailOpenCoordinationContext(
+            self,
+            ctx=BoundedSemaphore(self.cache, key, value=max(1, int(value)), expire=ttl),
+            namespace=self._namespace_from_key(key),
+        )
+        with ctx:
+            yield
 
-def _close_backends(backends: list[CqCacheBackend]) -> None:
-    """Close backend resources best-effort."""
-    for backend in backends:
-        backend.close()
-
-
-def _collect_stale_backends_locked() -> list[CqCacheBackend]:
-    """Collect and remove workspace backends whose roots no longer exist.
-
-    Returns:
-        list[CqCacheBackend]: Stale backends that should be closed after unlock.
-    """
-    stale: list[CqCacheBackend] = []
-    for workspace, backend in list(_BACKEND_STATE.backends.items()):
-        if not Path(workspace).exists():
-            stale.append(backend)
-            _BACKEND_STATE.backends.pop(workspace, None)
-    return stale
+    def barrier(self, key: str, publish_fn: Callable[[], None]) -> None:
+        """Run publish function once with diskcache barrier when available."""
+        try:
+            from diskcache import Lock, barrier
+        except ImportError:
+            publish_fn()
+            return
+        try:
+            wrapped = barrier(self.cache, Lock, name=key)(publish_fn)
+            wrapped()
+        except Timeout:
+            self.record_timeout(namespace=self._namespace_from_key(key))
+            publish_fn()
+        except _NON_FATAL_ERRORS:
+            self.record_abort(namespace=self._namespace_from_key(key))
+            publish_fn()
 
 
 def _build_diskcache_backend(policy: CqCachePolicyV1) -> CqCacheBackend:
@@ -466,53 +648,11 @@ def _build_diskcache_backend(policy: CqCachePolicyV1) -> CqCacheBackend:
     )
 
 
-def get_cq_cache_backend(*, root: Path) -> CqCacheBackend:
-    """Return workspace-keyed CQ cache backend."""
-    workspace = str(root.resolve())
-    stale: list[CqCacheBackend]
-    with _BACKEND_LOCK:
-        stale = _collect_stale_backends_locked()
-        existing = _BACKEND_STATE.backends.get(workspace)
-        if existing is not None:
-            backend: CqCacheBackend = existing
-        else:
-            policy = default_cache_policy(root=root)
-            backend = NoopCacheBackend() if not policy.enabled else _build_diskcache_backend(policy)
-            _BACKEND_STATE.backends[workspace] = backend
-    _close_backends(stale)
-    return backend
-
-
-def set_cq_cache_backend(*, root: Path, backend: CqCacheBackend) -> None:
-    """Inject a workspace-scoped cache backend (primarily for tests)."""
-    workspace = str(root.resolve())
-    stale: list[CqCacheBackend]
-    with _BACKEND_LOCK:
-        stale = _collect_stale_backends_locked()
-        existing = _BACKEND_STATE.backends.get(workspace)
-        if existing is not None and existing is not backend:
-            stale.append(existing)
-        _BACKEND_STATE.backends[workspace] = backend
-    _close_backends(stale)
-
-
-def close_cq_cache_backend(*, root: Path | None = None) -> None:
-    """Close and clear workspace-backed cache backend(s)."""
-    backends: list[CqCacheBackend]
-    with _BACKEND_LOCK:
-        if root is None:
-            backends = list(_BACKEND_STATE.backends.values())
-            _BACKEND_STATE.backends.clear()
-        else:
-            workspace = str(root.resolve())
-            backend = _BACKEND_STATE.backends.pop(workspace, None)
-            backends = [backend] if backend is not None else []
-    for backend in backends:
-        backend.close()
-
-
-atexit.register(close_cq_cache_backend)
-
+from tools.cq.core.cache.backend_lifecycle import (
+    close_cq_cache_backend,
+    get_cq_cache_backend,
+    set_cq_cache_backend,
+)
 
 __all__ = [
     "DiskcacheBackend",

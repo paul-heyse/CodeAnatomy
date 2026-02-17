@@ -14,9 +14,7 @@ from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import Anchor, CqResult, Finding, Section, assign_result_finding_ids
 from tools.cq.core.summary_contract import CqSummary, summary_from_mapping
-from tools.cq.query.language import QueryLanguage
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime
-from tools.cq.search.pipeline.classifier import get_sg_root
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.python_semantic import merge_matches_and_python_semantic
 from tools.cq.search.pipeline.search_object_view_store import register_search_object_view
@@ -29,7 +27,7 @@ from tools.cq.search.pipeline.smart_search_types import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_builders import (
+    from tools.cq.core.front_door_assembly import (
         FrontDoorInsightV1,
         InsightNeighborhoodV1,
         InsightRiskV1,
@@ -249,37 +247,6 @@ def _resolve_primary_target_match(
     return None
 
 
-def _ast_grep_prefilter_scope_paths(
-    scope_paths: tuple[Path, ...] | None,
-    *,
-    lang: QueryLanguage,
-) -> tuple[Path, ...] | None:
-    """Filter scope paths for ast-grep compatibility.
-
-    Parameters
-    ----------
-    scope_paths
-        Candidate scope paths.
-    lang
-        Language for ast-grep root check.
-
-    Returns:
-    -------
-    tuple[Path, ...] | None
-        Filtered scope paths or original if filtering yields empty.
-    """
-    if not scope_paths:
-        return None
-    filtered: list[Path] = []
-    for path in scope_paths:
-        if path.is_file():
-            if get_sg_root(path, lang=lang) is not None:
-                filtered.append(path)
-            continue
-        filtered.append(path)
-    return tuple(filtered) if filtered else scope_paths
-
-
 def _candidate_scope_paths_for_neighborhood(
     *,
     ctx: SearchConfig,
@@ -333,7 +300,7 @@ def _build_structural_neighborhood_preview(
     tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]
         Neighborhood, findings, and degradation notes.
     """
-    from tools.cq.core.front_door_builders import build_neighborhood_from_slices
+    from tools.cq.core.front_door_assembly import build_neighborhood_from_slices
     from tools.cq.core.schema import DetailPayload
     from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectRequest
     from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
@@ -499,7 +466,7 @@ def _build_search_risk(
     InsightRiskV1 | None
         Risk assessment or None if no neighborhood available.
     """
-    from tools.cq.core.front_door_builders import InsightRiskCountersV1, risk_from_counters
+    from tools.cq.core.front_door_assembly import InsightRiskCountersV1, risk_from_counters
 
     if neighborhood is None:
         return None
@@ -529,7 +496,7 @@ def _assemble_search_insight(
     FrontDoorInsightV1
         Assembled insight card with semantic enrichment.
     """
-    from tools.cq.core.front_door_builders import SearchInsightBuildRequestV1, build_search_insight
+    from tools.cq.core.front_door_assembly import SearchInsightBuildRequestV1, build_search_insight
 
     insight = build_search_insight(
         SearchInsightBuildRequestV1(
@@ -694,8 +661,7 @@ def _assemble_smart_search_result(
     result.summary.cache_maintenance = (
         cache_maintenance_payload if isinstance(cache_maintenance_payload, dict) else {}
     )
-    assign_result_finding_ids(result)
-    return result
+    return assign_result_finding_ids(result)
 
 
 def assemble_smart_search_result(

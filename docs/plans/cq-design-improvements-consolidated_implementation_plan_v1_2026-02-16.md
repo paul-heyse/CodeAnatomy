@@ -3592,80 +3592,93 @@ exceeded = bool(getattr(cursor, "did_exceed_match_limit", False))
 
 ## Implementation Checklist
 
+Status key:
+- `Complete` = `[x]`
+- `Incomplete` = `[ ]`
+- `Partial` = `[ ]` with `(partial)` note
+
 ### Wave 1: Quick Wins
-- [ ] S1 - Fix coordination.py triple-lock
-- [ ] S2 - Consolidate _summary_value
-- [ ] S3 - Consolidate _result_match_count
-- [ ] S4 - Replace inline bool parsing
-- [ ] S5 - Fix touch() bypass
-- [ ] S6 - Consolidate node_payload
-- [ ] S7 - Type ExecutionContext fields
-- [ ] S8 - Unify decorator kind checking
-- [ ] S9 - Move QueryLanguage
-- [ ] S10 - Fix RunOptions import
-- [ ] S11 - Merge comma_separated_enum into comma_separated_list
-- [ ] S12 - Eliminate _find_ancestor duplication
-- [ ] S13 - Remove underscore prefix from exports
-- [ ] S14 - Make CallSite frozen
-- [ ] S15 - Extract comprehension taint handler
-- [ ] S16 - Fix list[object] typing
-- [ ] S17 - CqSummary schema/version groundwork
-- [ ] S18 - Rename tree_sitter_blob_store.py
-- [ ] D1 - Delete _summary_value and _result_match_count duplicates
-- [ ] D2 - Delete _find_ancestor and node_payload duplicates
+- [x] S1 - Fix coordination.py triple-lock
+- [x] S2 - Consolidate _summary_value
+- [x] S3 - Consolidate _result_match_count
+- [x] S4 - Replace inline bool parsing
+- [x] S5 - Fix touch() bypass
+- [x] S6 - Consolidate node_payload
+- [x] S7 - Type ExecutionContext fields
+- [ ] S8 - Unify decorator kind checking (partial: decorator-kinds cutover landed, but D3 decommission still retains `matches_entity()` shim in `tools/cq/query/executor_definitions.py`)
+- [x] S9 - Move QueryLanguage
+- [x] S10 - Fix RunOptions import
+- [x] S11 - Merge comma_separated_enum into comma_separated_list
+- [x] S12 - Eliminate _find_ancestor duplication
+- [x] S13 - Remove underscore prefix from exports
+- [x] S14 - Make CallSite frozen
+- [x] S15 - Extract comprehension taint handler
+- [x] S16 - Fix list[object] typing
+- [x] S17 - CqSummary schema/version groundwork
+- [x] S18 - Rename tree_sitter_blob_store.py
+- [x] D1 - Delete _summary_value and _result_match_count duplicates
+- [x] D2 - Delete _find_ancestor and node_payload duplicates
 
 ### Wave 2: Knowledge Consolidation
-- [ ] S19 - Entity-kind registry consolidation
-- [ ] S20 - Unify Rust role classification
-- [ ] S21 - Metavar extraction unification
-- [ ] S22 - Extract cache decode function
-- [ ] S23 - Consolidate Rust def regex
-- [ ] S24 - Group risk thresholds into struct
-- [ ] D3 - Delete hardcoded entity-kind sets
+- [x] S19 - Entity-kind registry consolidation
+- [x] S20 - Unify Rust role classification
+- [x] S21 - Metavar extraction unification
+- [x] S22 - Extract cache decode function
+- [x] S23 - Consolidate Rust def regex
+- [x] S24 - Group risk thresholds into struct
+- [ ] D3 - Delete hardcoded entity-kind sets (partial: `DECORATOR_KINDS` is removed, but `matches_entity()` wrapper still exists in `tools/cq/query/executor_definitions.py`)
 
 ### Wave 3: God Module Decomposition
-- [ ] S25 - Complete front-door decomposition
-- [ ] S26 - Extract classify_match to classification.py
-- [ ] S27 - Complete search pipeline phase extraction
-- [ ] S28 - Extract query cache ceremony
-- [ ] S29 - Decompose executor.py
-- [ ] S30 - Decompose rust_lane/runtime.py
-- [ ] S31 - Decompose result.py
-- [ ] S32 - Extract Q-step preparation
-- [ ] D4 - Delete smart_search.py duplicates
-- [ ] D5 - Delete cache ceremony code
+- [ ] S25 - Complete front-door decomposition (partial: `front_door_builders.py` removed and `front_door_assembly.py`/`front_door_risk.py` added, but full contract/render/risk assembly split is not complete)
+- [x] S26 - Extract classify_match to classification.py
+- [ ] S27 - Complete search pipeline phase extraction (partial: phase modules exist, but `smart_search.py` remains large and still contains substantial orchestration/render logic)
+- [ ] S28 - Extract query cache ceremony (partial: `query_cache.py` exists, but executor call paths are still primarily fragment-orchestrator based and not fully converged on the new helper)
+- [ ] S29 - Decompose executor.py (partial: `executor_entity.py` and `executor_pattern.py` exist, but `executor.py` remains monolithic and >1k LOC)
+- [ ] S30 - Decompose rust_lane/runtime.py (partial: `query_orchestration.py` and `payload_assembly.py` exist, but `runtime.py` remains monolithic and >1k LOC)
+- [ ] S31 - Decompose result.py (partial: split modules landed, but `result.py` remains as compatibility orchestrator instead of full decommission)
+- [ ] S32 - Extract Q-step preparation (partial: `prepare_q_step`/`expand_q_step_by_scope` moved into `q_execution.py`, but `_partition_q_steps` remains in `runner.py`)
+- [ ] D4 - Delete smart_search.py duplicates (partial)
+- [ ] D5 - Delete cache ceremony code (partial)
 
 ### Wave 4: Protocol & Boundary Improvements
-- [ ] S33 - Extend CqCacheBackend protocol
-- [ ] S34 - Type enrichment payloads
-- [ ] S35 - Thread RenderEnrichmentPort
-- [ ] S36 - Thread ClassifierCacheContext
-- [ ] S37 - Extract backend lifecycle
-- [ ] S38 - Require explicit backend injection
-- [ ] D6 - Delete protocol bypasses
-- [ ] D7 - Delete untyped enrichment handling
+- [x] S33 - Extend CqCacheBackend protocol
+- [x] S34 - Type enrichment payloads
+- [x] S35 - Thread RenderEnrichmentPort
+- [x] S36 - Thread ClassifierCacheContext
+- [x] S37 - Extract backend lifecycle
+- [x] S38 - Require explicit backend injection
+- [x] D6 - Delete protocol bypasses
+- [x] D7 - Delete untyped enrichment handling
 
 ### Wave 5: Structural Type Safety
-- [ ] S39 - Return new Finding instances
-- [ ] S40 - Split attach_target_metadata
-- [ ] S41 - CqSummary typed variant migration
-- [ ] S42 - Define ContextWindow struct
-- [ ] S43 - Consolidate cache lifecycle
+- [x] S39 - Return new Finding instances
+- [x] S40 - Split attach_target_metadata
+- [ ] S41 - CqSummary typed variant migration (incomplete: monolithic `CqSummary` and dict-style mutation helpers remain; variant tests are not present)
+- [x] S42 - Define ContextWindow struct
+- [x] S43 - Consolidate cache lifecycle
 
 ### Wave 6: Review-Driven Additions
-- [ ] S44 - Deduplicate LDMD root alias resolution
-- [ ] S45 - Add warning logging for immediate Q-step errors
-- [ ] S46 - Add CliContext.from_parts constructor
-- [ ] S47 - Move clear_caches side effect to smart_search orchestrator
-- [ ] S48 - Move _ast_grep_prefilter_scope_paths out of assembly layer
-- [ ] S49 - Move PYTHON_AST_FIELDS out of language-agnostic IR
-- [ ] S50 - Make ParamInfo frozen and constructor-complete
-- [ ] S51 - Encapsulate TaintState mutation API
-- [ ] S52 - Add Rust lane stage timing telemetry and payload postconditions
-- [ ] S53 - Canonicalize tree-sitter cancellation on progress_callback
-- [ ] D8 - Delete hidden clear_caches + assembly prefilter legacy
-- [ ] D9 - Delete IR Python field constant + timeout_micros plumbing
-- [ ] D10 - Delete monolithic CqSummary and dict-like mutation helpers
+- [x] S44 - Deduplicate LDMD root alias resolution
+- [x] S45 - Add warning logging for immediate Q-step errors
+- [x] S46 - Add CliContext.from_parts constructor
+- [x] S47 - Move clear_caches side effect to smart_search orchestrator
+- [x] S48 - Move _ast_grep_prefilter_scope_paths out of assembly layer
+- [x] S49 - Move PYTHON_AST_FIELDS out of language-agnostic IR
+- [x] S50 - Make ParamInfo frozen and constructor-complete
+- [x] S51 - Encapsulate TaintState mutation API
+- [x] S52 - Add Rust lane stage timing telemetry and payload postconditions
+- [x] S53 - Canonicalize tree-sitter cancellation on progress_callback
+- [x] D8 - Delete hidden clear_caches + assembly prefilter legacy
+- [x] D9 - Delete IR Python field constant + timeout_micros plumbing
+- [ ] D10 - Delete monolithic CqSummary and dict-like mutation helpers (incomplete)
+
+### Remaining Implementation Focus (Post-Audit)
+1. Complete `S41`/`D10` summary-contract cutover:
+   Replace monolithic `CqSummary`, remove dict-like mutation helpers, migrate all summary writes/readers to mode-tagged summary variants, and add `tests/unit/cq/test_summary_variants.py` plus `tests/unit/cq/test_summary_render_variants.py`.
+2. Finish Wave 3 decomposition hard cutovers (`S25`, `S27`, `S28`, `S29`, `S30`, `S31`, `S32`):
+   Existing extracted modules are present, but core monoliths (`smart_search.py`, `executor.py`, `rust_lane/runtime.py`) still hold substantial logic and decommission goals are not yet fully met.
+3. Close decommission partials (`D3`, `D4`, `D5`):
+   Remove remaining transitional wrappers (notably `matches_entity()`), complete smart-search duplicate removal, and fully converge cache ceremony paths.
 
 ---
 

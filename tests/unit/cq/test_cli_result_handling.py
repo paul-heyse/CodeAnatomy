@@ -12,12 +12,12 @@ from pathlib import Path
 
 from tools.cq.cli_app.app import app
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
-from tools.cq.cli_app.result import render_result
 from tools.cq.cli_app.result_action import (
     CQ_DEFAULT_RESULT_ACTION,
     apply_result_action,
     cq_result_action,
 )
+from tools.cq.cli_app.result_render import render_result
 from tools.cq.cli_app.telemetry import invoke_with_telemetry
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.schema import CqResult, RunMeta

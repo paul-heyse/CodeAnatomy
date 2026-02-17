@@ -30,13 +30,19 @@ def run(
     from tools.cq.core.schema import ms
     from tools.cq.run.loader import RunPlanError, load_run_plan
     from tools.cq.run.runner import execute_run_plan
+    from tools.cq.run.spec import RunLoadInput
 
     ctx = require_context(ctx)
     if opts is None:
         opts = RunParams()
     options = options_from_params(opts, type_=RunOptions)
+    load_input = RunLoadInput(
+        plan=options.plan,
+        step=tuple(options.step),
+        steps=tuple(options.steps),
+    )
     try:
-        plan = load_run_plan(options)
+        plan = load_run_plan(load_input)
     except RunPlanError as exc:
         result = build_error_result(
             macro="run",

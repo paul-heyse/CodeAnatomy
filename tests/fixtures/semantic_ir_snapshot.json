@@ -162,10 +162,6 @@
     },
     {
       "category": "diagnostic",
-      "name": "relationship_decisions"
-    },
-    {
-      "category": "diagnostic",
       "name": "schema_anomalies"
     },
     {
@@ -201,9 +197,9 @@
       "name": "cpg_edges_by_dst"
     }
   ],
-  "ir_hash": "38a3d7efc3bc738b1555f9b4c1ca076da78c15d2e3ad748fbec7db3b1ddbe52b",
+  "ir_hash": "29ddc50e731811afa143423df46bec5983bb02a720f7b2b6defa132325d54346",
   "join_groups": [],
-  "model_hash": "35a01c89c7dd995255acb2559a28dc16af9c35543eb7638e844553c52a9f0bf2",
+  "model_hash": "e154e2f08dc2818b76222bfeeb1652d0719436cad164dcf8af3157a01da80110",
   "views": [
     {
       "inputs": [
@@ -517,19 +513,6 @@
       "name": "relationship_candidates",
       "outputs": [
         "relationship_candidates"
-      ]
-    },
-    {
-      "inputs": [
-        "rel_name_symbol",
-        "rel_def_symbol",
-        "rel_import_symbol",
-        "rel_callsite_symbol"
-      ],
-      "kind": "diagnostic",
-      "name": "relationship_decisions",
-      "outputs": [
-        "relationship_decisions"
       ]
     },
     {

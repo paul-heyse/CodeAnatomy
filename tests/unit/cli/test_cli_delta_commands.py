@@ -44,7 +44,11 @@ def test_clone_delta_snapshot_round_trip(tmp_path: Path) -> None:
     source = _seed_delta_table(tmp_path)
     target = tmp_path / "clone"
 
-    report = clone_delta_snapshot(str(source), str(target))
+    report = clone_delta_snapshot(
+        str(source),
+        str(target),
+        runtime_profile=_PROFILE,
+    )
 
     assert report.rows == EXPECTED_ROW_COUNT
     assert report.schema_identity_hash
@@ -55,7 +59,12 @@ def test_clone_delta_snapshot_rejects_conflicting_targets() -> None:
     """Ensure clone rejects version+timestamp combinations."""
     options = DeltaCloneOptions(version=1, timestamp="2024-01-01T00:00:00Z")
     with pytest.raises(ValueError, match=r"Specify only one of version or timestamp\."):
-        clone_delta_snapshot("src", "dest", options=options)
+        clone_delta_snapshot(
+            "src",
+            "dest",
+            options=options,
+            runtime_profile=_PROFILE,
+        )
 
 
 def test_vacuum_command_writes_report(tmp_path: Path) -> None:

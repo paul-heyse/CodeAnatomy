@@ -7,11 +7,14 @@ RunResult and record them via the OTel metrics registry.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+
+from obs.runtime_capabilities_summary import summarize_runtime_execution_metrics
 
 logger = logging.getLogger(__name__)
 
 
-def record_engine_metrics(run_result: dict[str, object]) -> None:
+def record_engine_metrics(run_result: Mapping[str, object]) -> None:
     """Extract metrics from RunResult and record to OTel instruments.
 
     Parameters
@@ -19,15 +22,17 @@ def record_engine_metrics(run_result: dict[str, object]) -> None:
     run_result
         The raw RunResult envelope from the Rust engine.
     """
+    from obs.otel import emit_diagnostics_event
     from obs.otel.metrics import record_stage_duration, record_task_duration
 
     _record_trace_summary_metrics(run_result, record_stage_duration)
     _record_operator_metrics(run_result, record_task_duration)
+    _record_runtime_execution_metrics(run_result, emit_diagnostics_event)
     _log_run_warnings(run_result)
 
 
 def _record_trace_summary_metrics(
-    run_result: dict[str, object],
+    run_result: Mapping[str, object],
     record_stage_duration: object,
 ) -> None:
     if not callable(record_stage_duration):
@@ -54,7 +59,7 @@ def _record_trace_summary_metrics(
 
 
 def _record_operator_metrics(
-    run_result: dict[str, object],
+    run_result: Mapping[str, object],
     record_task_duration: object,
 ) -> None:
     if not callable(record_task_duration):
@@ -81,7 +86,7 @@ def _record_operator_metrics(
             )
 
 
-def _log_run_warnings(run_result: dict[str, object]) -> None:
+def _log_run_warnings(run_result: Mapping[str, object]) -> None:
     warnings = run_result.get("warnings")
     if not isinstance(warnings, (list, tuple)):
         return
@@ -93,6 +98,52 @@ def _log_run_warnings(run_result: dict[str, object]) -> None:
                 warning.get("stage", "unknown"),
                 warning.get("message", ""),
             )
+
+
+def _record_runtime_execution_metrics(
+    run_result: Mapping[str, object],
+    emit_diagnostics_event: object,
+) -> None:
+    if not callable(emit_diagnostics_event):
+        return
+    payload = _runtime_execution_metrics_payload(run_result)
+    if payload is None:
+        return
+    emit_diagnostics_event(
+        "engine_runtime_execution_metrics_v1",
+        payload=payload,
+        event_kind="event",
+    )
+
+
+def _runtime_execution_metrics_payload(
+    run_result: Mapping[str, object],
+) -> dict[str, object] | None:
+    runtime_caps = run_result.get("runtime_capabilities")
+    execution_metrics = _execution_metrics_mapping(runtime_caps)
+    if execution_metrics is None:
+        execution_metrics = _execution_metrics_mapping(run_result.get("execution_metrics"))
+    if execution_metrics is None:
+        return None
+    summary = summarize_runtime_execution_metrics(execution_metrics)
+    return {
+        "execution_metrics": execution_metrics,
+        "rows": summary.rows,
+        "memory_reserved_bytes": summary.memory_reserved_bytes,
+        "metadata_cache_entries": summary.metadata_cache_entries,
+        "metadata_cache_hits": summary.metadata_cache_hits,
+        "list_files_cache_entries": summary.list_files_cache_entries,
+        "statistics_cache_entries": summary.statistics_cache_entries,
+    }
+
+
+def _execution_metrics_mapping(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    metrics = value.get("execution_metrics") if "execution_metrics" in value else value
+    if isinstance(metrics, Mapping):
+        return dict(metrics)
+    return None
 
 
 __all__ = ["record_engine_metrics"]

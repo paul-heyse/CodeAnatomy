@@ -18,7 +18,7 @@ SELF_CLS_NAMES: set[str] = {"self", "cls"}
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParamInfo:
     """Information about a function parameter.
 
@@ -163,7 +163,12 @@ class ModuleInfo:
     symbol_aliases: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
-def _extract_param_info(arg: ast.arg, default: ast.expr | None) -> ParamInfo:
+def _extract_param_info(
+    arg: ast.arg,
+    default: ast.expr | None,
+    *,
+    kind: str = "POSITIONAL_OR_KEYWORD",
+) -> ParamInfo:
     """Extract parameter info from AST arg node.
 
     Returns:
@@ -178,6 +183,7 @@ def _extract_param_info(arg: ast.arg, default: ast.expr | None) -> ParamInfo:
         name=arg.arg,
         annotation=annotation,
         default=default_str,
+        kind=kind,
     )
 
 
@@ -201,36 +207,26 @@ def _extract_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ParamI
     for i, arg in enumerate(args.posonlyargs):
         idx = i - default_offset
         default = args.defaults[idx] if idx >= 0 else None
-        param = _extract_param_info(arg, default)
-        param.kind = "POSITIONAL_ONLY"
-        params.append(param)
+        params.append(_extract_param_info(arg, default, kind="POSITIONAL_ONLY"))
 
     # Regular positional/keyword parameters
     for i, arg in enumerate(args.args):
         idx = len(args.posonlyargs) + i - default_offset
         default = args.defaults[idx] if idx >= 0 else None
-        param = _extract_param_info(arg, default)
-        param.kind = "POSITIONAL_OR_KEYWORD"
-        params.append(param)
+        params.append(_extract_param_info(arg, default, kind="POSITIONAL_OR_KEYWORD"))
 
     # *args
     if args.vararg:
-        param = _extract_param_info(args.vararg, None)
-        param.kind = "VAR_POSITIONAL"
-        params.append(param)
+        params.append(_extract_param_info(args.vararg, None, kind="VAR_POSITIONAL"))
 
     # Keyword-only parameters
     for i, arg in enumerate(args.kwonlyargs):
         default = args.kw_defaults[i]  # May be None
-        param = _extract_param_info(arg, default)
-        param.kind = "KEYWORD_ONLY"
-        params.append(param)
+        params.append(_extract_param_info(arg, default, kind="KEYWORD_ONLY"))
 
     # **kwargs
     if args.kwarg:
-        param = _extract_param_info(args.kwarg, None)
-        param.kind = "VAR_KEYWORD"
-        params.append(param)
+        params.append(_extract_param_info(args.kwarg, None, kind="VAR_KEYWORD"))
 
     return params
 

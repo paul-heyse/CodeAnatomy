@@ -7,6 +7,10 @@ from collections.abc import Mapping
 from tools.cq.query.language import QueryLanguage
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
 from tools.cq.search.enrichment.core import string_or_none
+from tools.cq.search.pipeline.enrichment_contracts import (
+    RustTreeSitterEnrichmentV1,
+    rust_enrichment_payload,
+)
 
 
 class RustEnrichmentAdapter(LanguageEnrichmentPort):
@@ -24,7 +28,9 @@ class RustEnrichmentAdapter(LanguageEnrichmentPort):
         """
         _ = self
         payload = getattr(match, "rust_tree_sitter", None)
-        return dict(payload) if isinstance(payload, dict) else None
+        if not isinstance(payload, RustTreeSitterEnrichmentV1):
+            return None
+        return rust_enrichment_payload(payload)
 
     def accumulate_telemetry(
         self,
@@ -47,6 +53,10 @@ class RustEnrichmentAdapter(LanguageEnrichmentPort):
         _accumulate_bundle_drift(
             lang_bucket=lang_bucket,
             bundle=payload.get("query_pack_bundle"),
+        )
+        _accumulate_stage_timings(
+            lang_bucket=lang_bucket,
+            timings_payload=payload.get("stage_timings_ms"),
         )
 
     def build_diagnostics(self, payload: Mapping[str, object]) -> list[dict[str, object]]:
@@ -123,6 +133,21 @@ def _accumulate_bundle_drift(*, lang_bucket: dict[str, object], bundle: object) 
         lang_bucket["drift_removed_fields"] = _counter(
             lang_bucket.get("drift_removed_fields")
         ) + len(removed_fields)
+
+
+def _accumulate_stage_timings(*, lang_bucket: dict[str, object], timings_payload: object) -> None:
+    if not isinstance(timings_payload, dict):
+        return
+    stage_bucket = lang_bucket.get("stage_timings_ms")
+    if not isinstance(stage_bucket, dict):
+        stage_bucket = {}
+        lang_bucket["stage_timings_ms"] = stage_bucket
+    for key, value in timings_payload.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        stage_bucket[key] = float(stage_bucket.get(key, 0.0)) + float(value)
 
 
 __all__ = ["RustEnrichmentAdapter"]

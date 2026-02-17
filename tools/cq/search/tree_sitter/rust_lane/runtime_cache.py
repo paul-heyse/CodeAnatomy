@@ -10,6 +10,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, cast
 
 from tools.cq.search._shared.bounded_cache import BoundedCache
+from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.tree_sitter.core.infrastructure import cached_field_ids
 from tools.cq.search.tree_sitter.core.lane_support import make_parser_from_language
 from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
@@ -28,6 +29,7 @@ except ImportError:  # pragma: no cover - exercised via availability checks
 _MAX_TREE_CACHE_ENTRIES = 128
 _TREE_CACHE: BoundedCache[str, None] = BoundedCache(max_size=_MAX_TREE_CACHE_ENTRIES, policy="lru")
 _TREE_CACHE_EVICTIONS = {"value": 0}
+CACHE_REGISTRY.register_cache("rust", "rust_lane:tree_cache", _TREE_CACHE)
 
 
 @lru_cache(maxsize=1)
@@ -122,6 +124,9 @@ def clear_tree_sitter_rust_cache() -> None:
     _rust_language.cache_clear()
     compile_query.cache_clear()
     clear_query_cache()
+
+
+CACHE_REGISTRY.register_clear_callback("rust", clear_tree_sitter_rust_cache)
 
 
 def get_tree_sitter_rust_cache_stats() -> dict[str, int]:

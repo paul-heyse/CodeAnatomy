@@ -8,27 +8,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from tools.cq.search.rust.extractors_shared import RUST_TEST_ATTRS
+from tools.cq.search.rust.extractors_shared import (
+    RUST_TEST_ATTRS,
+    classify_rust_item_role,
+    find_ancestor,
+)
+from tools.cq.search.rust.node_access import TreeSitterRustNodeAccess
 from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
 from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _rust_field_ids
 
 if TYPE_CHECKING:
     from tree_sitter import Node
-
-
-# ---------------------------------------------------------------------------
-# Item role classification
-# ---------------------------------------------------------------------------
-
-_ITEM_ROLE_SIMPLE: dict[str, str] = {
-    "use_declaration": "use_import",
-    "macro_invocation": "macro_call",
-    "field_declaration": "struct_field",
-    "enum_variant": "enum_variant",
-    "const_item": "const_item",
-    "type_item": "type_alias",
-    "static_item": "static_item",
-}
 
 
 def _is_test_function(attributes: list[str]) -> bool:
@@ -46,33 +36,6 @@ def _is_test_function(attributes: list[str]) -> bool:
         True when at least one attribute matches a known test marker.
     """
     return any(attr in RUST_TEST_ATTRS for attr in attributes)
-
-
-def _find_ancestor(node: Node, kind: str, *, max_depth: int) -> Node | None:
-    """Walk up from *node* to find the nearest ancestor of the given kind.
-
-    Parameters
-    ----------
-    node
-        Starting node.
-    kind
-        Target node ``type`` string.
-    max_depth
-        Maximum parent levels to inspect.
-
-    Returns:
-    -------
-    Node | None
-        The ancestor node, or ``None`` if not found within *max_depth*.
-    """
-    current: Node | None = node.parent
-    depth = 0
-    while current is not None and depth < max_depth:
-        if current.type == kind:
-            return current
-        current = current.parent
-        depth += 1
-    return None
 
 
 def _classify_function_role(
@@ -101,7 +64,14 @@ def _classify_function_role(
     """
     if _is_test_function(attributes):
         return "test_function"
-    impl_node = _find_ancestor(node, "impl_item", max_depth=max_scope_depth)
+    impl_candidate = find_ancestor(
+        TreeSitterRustNodeAccess(node, b""),
+        "impl_item",
+        max_depth=max_scope_depth,
+    )
+    impl_node = (
+        impl_candidate.node if isinstance(impl_candidate, TreeSitterRustNodeAccess) else None
+    )
     if impl_node is not None:
         trait_node = child_by_field(impl_node, "trait", _rust_field_ids())
         if trait_node is not None:
@@ -130,7 +100,7 @@ def _classify_call_role(node: Node) -> str:
     return "function_call"
 
 
-def _classify_item_role(
+def classify_item_role(
     node: Node,
     scope: Node | None,
     attributes: list[str],
@@ -156,7 +126,7 @@ def _classify_item_role(
     str
         A semantic role string (e.g. ``"method"``, ``"free_function"``).
     """
-    simple = _ITEM_ROLE_SIMPLE.get(node.type)
+    simple = classify_rust_item_role(TreeSitterRustNodeAccess(node, b""))
     if simple is not None:
         return simple
 
@@ -173,5 +143,5 @@ def _classify_item_role(
 
 
 __all__ = [
-    "_classify_item_role",
+    "classify_item_role",
 ]

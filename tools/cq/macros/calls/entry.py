@@ -51,8 +51,9 @@ from tools.cq.macros.calls.scanning import _group_candidates, _rg_find_candidate
 from tools.cq.macros.calls.semantic import CallsSemanticRequest, _apply_calls_semantic
 from tools.cq.macros.calls_target import (
     AttachTargetMetadataRequestV1,
-    attach_target_metadata,
+    apply_target_metadata,
     infer_target_language,
+    resolve_target_metadata,
 )
 from tools.cq.macros.constants import (
     CALLS_TARGET_CALLEE_PREVIEW,
@@ -311,8 +312,7 @@ def _build_calls_front_door_state(
     from tools.cq.search.semantic.models import infer_language_for_path
 
     resolved_target_language = infer_target_language(ctx.root, ctx.function_name)
-    target_location, target_callees, target_language_hint = attach_target_metadata(
-        result,
+    metadata = resolve_target_metadata(
         AttachTargetMetadataRequestV1(
             root=ctx.root,
             function_name=ctx.function_name,
@@ -322,6 +322,15 @@ def _build_calls_front_door_state(
             run_id=result.run.run_id,
         ),
     )
+    apply_target_metadata(
+        result,
+        metadata,
+        score=score,
+        preview_limit=CALLS_TARGET_CALLEE_PREVIEW,
+    )
+    target_location = metadata.target_location
+    target_callees = metadata.target_callees
+    target_language_hint = metadata.resolved_language
     neighborhood, neighborhood_findings, degradation_notes = _build_calls_neighborhood(
         CallsNeighborhoodRequest(
             root=ctx.root,
@@ -494,7 +503,7 @@ def cmd_calls(request: CallsRequest) -> CqResult:
             fallback_matches_summary_key="total_sites",
         ),
     )
-    assign_result_finding_ids(result)
+    result = assign_result_finding_ids(result)
     if result.run.run_id:
         maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=result.run.run_id)
         maybe_evict_run_cache_tag(root=ctx.root, language="rust", run_id=result.run.run_id)

@@ -445,25 +445,36 @@ def _stable_finding_id(finding: Finding) -> str:
     return stable_digest24(payload)
 
 
-def assign_result_finding_ids(result: CqResult) -> None:
-    """Assign stable and execution-scoped IDs for all findings in a result."""
+def assign_result_finding_ids(result: CqResult) -> CqResult:
+    """Return a result with stable/execution IDs assigned on all findings."""
     run_id = result.run.run_id or ""
 
-    def _assign(finding: Finding) -> None:
+    def _assign(finding: Finding) -> Finding:
         stable_id = _stable_finding_id(finding)
         execution_seed = f"{run_id}:{stable_id}"
         execution_id = hashlib.sha256(execution_seed.encode("utf-8")).hexdigest()[:24]
-        finding.stable_id = stable_id
-        finding.execution_id = execution_id
-        finding.id_taxonomy = "stable_execution"
+        return msgspec.structs.replace(
+            finding,
+            stable_id=stable_id,
+            execution_id=execution_id,
+            id_taxonomy="stable_execution",
+        )
 
-    for finding in result.key_findings:
-        _assign(finding)
-    for finding in result.evidence:
-        _assign(finding)
-    for section in result.sections:
-        for finding in section.findings:
-            _assign(finding)
+    key_findings = [_assign(finding) for finding in result.key_findings]
+    evidence = [_assign(finding) for finding in result.evidence]
+    sections = [
+        msgspec.structs.replace(
+            section,
+            findings=[_assign(finding) for finding in section.findings],
+        )
+        for section in result.sections
+    ]
+    return msgspec.structs.replace(
+        result,
+        key_findings=key_findings,
+        evidence=evidence,
+        sections=sections,
+    )
 
 
 def ms() -> float:

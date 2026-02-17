@@ -26,7 +26,6 @@ from tools.cq.search.pipeline.classifier_runtime import (
     _is_docstring_context,
     get_cached_source,
     get_def_lines_cached,
-    get_default_classifier_cache_context,
     get_node_index,
     get_record_context,
     get_sg_root,
@@ -394,7 +393,7 @@ def classify_from_node(
     col: int,
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> NodeClassification | None:
     """Classify using ast-grep node lookup.
 
@@ -467,7 +466,7 @@ def classify_from_records(
     col: int,
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    cache_context: ClassifierCacheContext | None = None,
+    cache_context: ClassifierCacheContext,
 ) -> NodeClassification | None:
     """Classify using cached ast-grep records.
 
@@ -622,12 +621,9 @@ def enrich_with_symtable_from_table(
 
 def clear_caches() -> None:
     """Clear per-file caches and dependent enrichment caches."""
-    get_default_classifier_cache_context().clear()
-    from tools.cq.search.python.extractors import clear_python_enrichment_cache
-    from tools.cq.search.tree_sitter.rust_lane.runtime import clear_tree_sitter_rust_cache
+    from tools.cq.search.cache.registry import CACHE_REGISTRY
 
-    clear_python_enrichment_cache()
-    clear_tree_sitter_rust_cache()
+    CACHE_REGISTRY.clear_all()
 
 
 __all__ = [

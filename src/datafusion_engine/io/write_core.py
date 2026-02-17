@@ -34,7 +34,7 @@ from __future__ import annotations
 import re
 import shutil
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -87,7 +87,7 @@ from storage.deltalake.config import (
     delta_write_configuration,
     resolve_stats_columns,
 )
-from storage.deltalake.delta_write import DeltaFeatureMutationOptions, IdempotentWriteOptions
+from storage.deltalake.delta_write import IdempotentWriteOptions
 from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
@@ -691,68 +691,6 @@ def _require_runtime_profile(
         msg = f"{operation} requires DataFusionRuntimeProfile."
         raise ValueError(msg)
     return runtime_profile
-
-
-def _replace_where_predicate(options: Mapping[str, object]) -> str | None:
-    from datafusion_engine.io.write_delta import _replace_where_predicate as _delegate
-
-    return _delegate(options)
-
-
-def _delta_feature_mutation_options(
-    spec: DeltaWriteSpec,
-    *,
-    delta_service: DeltaService,
-) -> DeltaFeatureMutationOptions:
-    from datafusion_engine.io.write_delta import _delta_feature_mutation_options as _delegate
-
-    return _delegate(spec, delta_service=delta_service)
-
-
-def _apply_explicit_delta_features(
-    *,
-    spec: DeltaWriteSpec,
-    delta_service: DeltaService,
-) -> None:
-    from datafusion_engine.io.write_delta import _apply_explicit_delta_features as _delegate
-
-    _delegate(spec=spec, delta_service=delta_service)
-
-
-def _delta_constraint_name(expression: str) -> str:
-    from datafusion_engine.io.write_delta import _delta_constraint_name as _delegate
-
-    return _delegate(expression)
-
-
-def _existing_delta_constraints(
-    spec: DeltaWriteSpec,
-    *,
-    delta_service: DeltaService,
-) -> dict[str, str]:
-    from datafusion_engine.io.write_delta import _existing_delta_constraints as _delegate
-
-    return _delegate(spec, delta_service=delta_service)
-
-
-def _delta_constraints_to_add(
-    constraints: Sequence[str],
-    *,
-    existing: Mapping[str, str],
-) -> dict[str, str]:
-    from datafusion_engine.io.write_delta import _delta_constraints_to_add as _delegate
-
-    return _delegate(constraints, existing=existing)
-
-
-def _apply_delta_check_constraints(
-    *,
-    spec: DeltaWriteSpec,
-    delta_service: DeltaService,
-) -> str:
-    from datafusion_engine.io.write_delta import _apply_delta_check_constraints as _delegate
-
-    return _delegate(spec=spec, delta_service=delta_service)
 
 
 class WritePipeline:
@@ -2086,81 +2024,6 @@ class WritePipeline:
         return target
 
 
-def _delta_table_properties(options: Mapping[str, object]) -> dict[str, str]:
-    from datafusion_engine.io.write_delta import _delta_table_properties as _delegate
-
-    return _delegate(options)
-
-
-def _schema_columns(df: DataFrame) -> tuple[str, ...]:
-    from datafusion_engine.io.write_delta import _schema_columns as _delegate
-
-    return _delegate(df)
-
-
-def _strip_qualifier(name: str) -> str:
-    from datafusion_engine.io.write_delta import _strip_qualifier as _delegate
-
-    return _delegate(name)
-
-
-def _delta_lineage_columns(df: DataFrame) -> tuple[str, ...]:
-    from datafusion_engine.io.write_delta import _delta_lineage_columns as _delegate
-
-    return _delegate(df)
-
-
-def _safe_optimized_plan(df: DataFrame) -> object | None:
-    from datafusion_engine.io.write_delta import _safe_optimized_plan as _delegate
-
-    return _delegate(df)
-
-
-def _validate_delta_protocol_support(
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None,
-    delta_service: DeltaService | None,
-    table_uri: str,
-    storage_options: Mapping[str, str] | None,
-    log_storage_options: Mapping[str, str] | None,
-    gate: DeltaFeatureGate | None,
-) -> None:
-    from datafusion_engine.io.write_delta import _validate_delta_protocol_support as _delegate
-
-    _delegate(
-        runtime_profile=runtime_profile,
-        delta_service=delta_service,
-        table_uri=table_uri,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
-        gate=gate,
-    )
-
-
-def _delta_stats_columns_override(options: Mapping[str, object]) -> tuple[str, ...] | None:
-    from datafusion_engine.io.write_delta import _delta_stats_columns_override as _delegate
-
-    return _delegate(options)
-
-
-def _delta_zorder_by(options: Mapping[str, object]) -> tuple[str, ...]:
-    from datafusion_engine.io.write_delta import _delta_zorder_by as _delegate
-
-    return _delegate(options)
-
-
-def _delta_enable_features(options: Mapping[str, object]) -> tuple[str, ...]:
-    from datafusion_engine.io.write_delta import _delta_enable_features as _delegate
-
-    return _delegate(options)
-
-
-def _delta_write_policy_override(options: Mapping[str, object]) -> DeltaWritePolicy | None:
-    from datafusion_engine.io.write_delta import _delta_write_policy_override as _delegate
-
-    return _delegate(options)
-
-
 def _delta_schema_policy_override(options: Mapping[str, object]) -> DeltaSchemaPolicy | None:
     raw = options.get("delta_schema_policy")
     if raw is None:
@@ -2177,175 +2040,28 @@ def _delta_schema_policy_override(options: Mapping[str, object]) -> DeltaSchemaP
     return None
 
 
-def _delta_maintenance_policy_override(
-    options: Mapping[str, object],
-) -> DeltaMaintenancePolicy | None:
-    from datafusion_engine.io.write_delta import (
-        _delta_maintenance_policy_override as _override,
-    )
-
-    return _override(options)
-
-
-def _delta_feature_gate_override(options: Mapping[str, object]) -> DeltaFeatureGate | None:
-    from datafusion_engine.io.write_delta import _delta_feature_gate_override as _delegate
-
-    return _delegate(options)
-
-
-def _delta_writer_properties(
-    options: Mapping[str, object],
-    *,
-    write_policy: object | None,
-) -> WriterProperties | None:
-    from datafusion_engine.io.write_delta import _delta_writer_properties as _delegate
-
-    return _delegate(options, write_policy=write_policy)
-
-
-def _writer_properties_from_policy(policy: object) -> WriterProperties | None:
-    from datafusion_engine.io.write_delta import _writer_properties_from_policy as _delegate
-
-    return _delegate(policy)
-
-
-def _delta_target_file_size(
-    options: Mapping[str, object],
-    *,
-    fallback: int | None = None,
-) -> int | None:
-    from datafusion_engine.io.write_delta import _delta_target_file_size as _delegate
-
-    return _delegate(options, fallback=fallback)
-
-
-def _resolve_delta_schema_policy(
-    options: Mapping[str, object],
-    *,
-    dataset_location: DatasetLocation | None,
-) -> object | None:
-    """Resolve Delta schema policy with override precedence.
-
-    Parameters
-    ----------
-    options
-        Format options to inspect for overrides.
-    dataset_location
-        Dataset location for default policy lookup.
-
-    Returns:
-    -------
-    object | None
-        Resolved schema policy instance when available.
-    """
-    from datafusion_engine.io.write_delta import _resolve_delta_schema_policy as _resolve
-
-    return _resolve(options, dataset_location=dataset_location)
-
-
-def _delta_schema_mode(
-    options: Mapping[str, object],
-    *,
-    schema_policy: object | None = None,
-) -> Literal["merge", "overwrite"] | None:
-    from datafusion_engine.io.write_delta import _delta_schema_mode as _delegate
-
-    return _delegate(options, schema_policy=schema_policy)
-
-
-def _delta_storage_options(
-    options: Mapping[str, object],
-    *,
-    dataset_location: DatasetLocation | None,
-) -> tuple[dict[str, str] | None, dict[str, str] | None]:
-    from datafusion_engine.io.write_delta import _delta_storage_options as _delegate
-
-    return _delegate(options, dataset_location=dataset_location)
-
-
-def _base_commit_metadata(request: WriteRequest, *, context: _DeltaCommitContext) -> dict[str, str]:
-    from datafusion_engine.io.write_delta import _base_commit_metadata as _delegate
-
-    return _delegate(request, context=context)
-
-
-def _dataset_location_commit_metadata(
-    dataset_location: DatasetLocation | None,
-) -> dict[str, str]:
-    from datafusion_engine.io.write_delta import _dataset_location_commit_metadata as _delegate
-
-    return _delegate(dataset_location)
-
-
-def _optional_commit_metadata(
-    request: WriteRequest,
-    *,
-    context: _DeltaCommitContext,
-) -> dict[str, str | None]:
-    from datafusion_engine.io.write_delta import _optional_commit_metadata as _delegate
-
-    return _delegate(request, context=context)
-
-
-def _delta_commit_metadata(
-    request: WriteRequest,
-    options: Mapping[str, object],
-    *,
-    context: _DeltaCommitContext,
-) -> dict[str, str]:
-    from datafusion_engine.io.write_delta import _delta_commit_metadata as _delegate
-
-    return _delegate(request, options, context=context)
-
-
-def _apply_policy_commit_metadata(
-    commit_metadata: dict[str, str],
-    *,
-    policy_ctx: _DeltaPolicyContext,
-    extra_constraints: tuple[str, ...],
-) -> dict[str, str]:
-    from datafusion_engine.io.write_delta import _apply_policy_commit_metadata as _delegate
-
-    return _delegate(
-        commit_metadata,
-        policy_ctx=policy_ctx,
-        extra_constraints=extra_constraints,
-    )
-
-
-def _delta_idempotent_options(options: Mapping[str, object]) -> IdempotentWriteOptions | None:
-    from datafusion_engine.io.write_delta import _delta_idempotent_options as _delegate
-
-    return _delegate(options)
-
-
-def _commit_metadata_from_properties(commit_properties: CommitProperties) -> dict[str, str]:
-    from datafusion_engine.io.write_delta import _commit_metadata_from_properties as _delegate
-
-    return _delegate(commit_properties)
-
-
-def _string_mapping(value: object | None) -> dict[str, str] | None:
-    from datafusion_engine.io.write_delta import _string_mapping as _delegate
-
-    return _delegate(value)
-
-
-def _delta_mode(mode: WriteMode) -> Literal["append", "overwrite"]:
-    from datafusion_engine.io.write_delta import _delta_mode as _delegate
-
-    return _delegate(mode)
-
-
-def _delta_configuration(
-    options: Mapping[str, object] | None,
-) -> Mapping[str, str | None] | None:
-    from datafusion_engine.io.write_delta import _delta_configuration as _delegate
-
-    return _delegate(options)
-
-
-def _statistics_flag(value: str) -> bool | None:
-    from datafusion_engine.io.write_delta import _statistics_flag as _delegate
-
-    return _delegate(value)
+from datafusion_engine.io.write_delta import (
+    _apply_delta_check_constraints,
+    _apply_explicit_delta_features,
+    _apply_policy_commit_metadata,
+    _commit_metadata_from_properties,
+    _delta_commit_metadata,
+    _delta_enable_features,
+    _delta_feature_gate_override,
+    _delta_idempotent_options,
+    _delta_lineage_columns,
+    _delta_maintenance_policy_override,
+    _delta_mode,
+    _delta_schema_mode,
+    _delta_stats_columns_override,
+    _delta_storage_options,
+    _delta_table_properties,
+    _delta_target_file_size,
+    _delta_write_policy_override,
+    _delta_writer_properties,
+    _delta_zorder_by,
+    _replace_where_predicate,
+    _resolve_delta_schema_policy,
+    _schema_columns,
+    _validate_delta_protocol_support,
+)

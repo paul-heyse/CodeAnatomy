@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from cli.config_source import ConfigWithSources
+    from cli.runtime_services import CliRuntimeServices
     from obs.otel import OtelBootstrapOptions
 
 
@@ -33,6 +34,8 @@ class RunContext:
         Optional root span for telemetry.
     otel_options
         Optional OpenTelemetry bootstrap options.
+    runtime_services
+        Optional pre-composed runtime services injected for Delta-aware commands.
     """
 
     run_id: str
@@ -41,6 +44,7 @@ class RunContext:
     config_sources: ConfigWithSources | None = None
     span: Span | None = None
     otel_options: OtelBootstrapOptions | None = None
+    runtime_services: CliRuntimeServices | None = None
 
 
 __all__ = ["RunContext"]

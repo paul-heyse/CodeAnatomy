@@ -18,6 +18,7 @@ from tools.cq.search.pipeline.classifier import (
     get_sg_root,
     get_symtable_table,
 )
+from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 
 HIGH_CONFIDENCE_HEURISTIC = 0.9
 MEDIUM_CONFIDENCE_HEURISTIC = 0.8
@@ -200,10 +201,13 @@ import os
     def test_classify_function_definition(python_source: Path) -> None:
         """Test classification of function definition."""
         clear_caches()
-        sg_root = get_sg_root(python_source)
+        cache_context = ClassifierCacheContext()
+        sg_root = get_sg_root(python_source, cache_context=cache_context)
         assert sg_root is not None
 
-        result = classify_from_node(sg_root, 1, 4)  # 'build_graph' in def
+        result = classify_from_node(
+            sg_root, 1, 4, cache_context=cache_context
+        )  # 'build_graph' in def
         assert result is not None
         assert result.category in {"definition", "reference"}
 
@@ -211,10 +215,13 @@ import os
     def test_classify_class_definition(python_source: Path) -> None:
         """Test classification of class definition."""
         clear_caches()
-        sg_root = get_sg_root(python_source)
+        cache_context = ClassifierCacheContext()
+        sg_root = get_sg_root(python_source, cache_context=cache_context)
         assert sg_root is not None
 
-        result = classify_from_node(sg_root, 5, 6)  # 'GraphBuilder' in class
+        result = classify_from_node(
+            sg_root, 5, 6, cache_context=cache_context
+        )  # 'GraphBuilder' in class
         assert result is not None
         assert result.category in {"definition", "reference"}
 
@@ -222,10 +229,13 @@ import os
     def test_classify_call(python_source: Path) -> None:
         """Test classification of function call."""
         clear_caches()
-        sg_root = get_sg_root(python_source)
+        cache_context = ClassifierCacheContext()
+        sg_root = get_sg_root(python_source, cache_context=cache_context)
         assert sg_root is not None
 
-        result = classify_from_node(sg_root, 12, 4)  # 'build_graph(data)' call
+        result = classify_from_node(
+            sg_root, 12, 4, cache_context=cache_context
+        )  # 'build_graph(data)' call
         assert result is not None
         # Could be callsite or reference depending on exact position
         assert result.category in {"callsite", "reference", "assignment"}
@@ -234,10 +244,13 @@ import os
     def test_classify_import(python_source: Path) -> None:
         """Test classification of import."""
         clear_caches()
-        sg_root = get_sg_root(python_source)
+        cache_context = ClassifierCacheContext()
+        sg_root = get_sg_root(python_source, cache_context=cache_context)
         assert sg_root is not None
 
-        result = classify_from_node(sg_root, 13, 0)  # from import line
+        result = classify_from_node(
+            sg_root, 13, 0, cache_context=cache_context
+        )  # from import line
         assert result is not None
         assert result.category in {"from_import", "reference"}
 
@@ -245,10 +258,13 @@ import os
     def test_containing_scope_detected(python_source: Path) -> None:
         """Test that containing scope is detected."""
         clear_caches()
-        sg_root = get_sg_root(python_source)
+        cache_context = ClassifierCacheContext()
+        sg_root = get_sg_root(python_source, cache_context=cache_context)
         assert sg_root is not None
 
-        result = classify_from_node(sg_root, 10, 8)  # inside add_node method
+        result = classify_from_node(
+            sg_root, 10, 8, cache_context=cache_context
+        )  # inside add_node method
         # If found, should have containing_scope
         if result is not None:
             # Scope could be the method or class
@@ -259,7 +275,13 @@ import os
         """Record-based classification should detect imports."""
         clear_caches()
         root = python_source.parent
-        result = classify_from_records(python_source, root, 13, 0)
+        result = classify_from_records(
+            python_source,
+            root,
+            13,
+            0,
+            cache_context=ClassifierCacheContext(),
+        )
         assert result is not None
         assert result.category in {"from_import", "import"}
 
@@ -272,7 +294,13 @@ import os
             encoding="utf-8",
         )
         clear_caches()
-        result = classify_from_records(source, tmp_path, 2, 4)
+        result = classify_from_records(
+            source,
+            tmp_path,
+            2,
+            4,
+            cache_context=ClassifierCacheContext(),
+        )
         assert result is None or result.category != "definition"
 
 
@@ -285,8 +313,9 @@ class TestCacheHelpers:
         source = tmp_path / "sample.py"
         source.write_text("def foo():\n    return 1\n\nasync def bar():\n    pass\n")
         clear_caches()
-        first = get_def_lines_cached(source)
-        second = get_def_lines_cached(source)
+        cache_context = ClassifierCacheContext()
+        first = get_def_lines_cached(source, cache_context=cache_context)
+        second = get_def_lines_cached(source, cache_context=cache_context)
         assert first is second
         assert any(line == 1 for line, _ in first)
 
@@ -297,8 +326,9 @@ class TestCacheHelpers:
         source.write_text("def foo(x):\n    return x\n")
         clear_caches()
         text = source.read_text()
-        table1 = get_symtable_table(source, text)
-        table2 = get_symtable_table(source, text)
+        cache_context = ClassifierCacheContext()
+        table1 = get_symtable_table(source, text, cache_context=cache_context)
+        table2 = get_symtable_table(source, text, cache_context=cache_context)
         assert table1 is not None
         assert table1 is table2
 
@@ -312,10 +342,11 @@ class TestNodeIndex:
         source = tmp_path / "nodes.py"
         source.write_text("def foo():\n    return 1\n")
         clear_caches()
-        sg_root = get_sg_root(source)
+        cache_context = ClassifierCacheContext()
+        sg_root = get_sg_root(source, cache_context=cache_context)
         assert sg_root is not None
-        index1 = get_node_index(source, sg_root)
-        index2 = get_node_index(source, sg_root)
+        index1 = get_node_index(source, sg_root, cache_context=cache_context)
+        index2 = get_node_index(source, sg_root, cache_context=cache_context)
         assert index1 is index2
 
     @staticmethod
@@ -328,9 +359,10 @@ class TestNodeIndex:
             lines.append(f"    return {i}\n\n")
         source.write_text("".join(lines))
         clear_caches()
-        sg_root = get_sg_root(source)
+        cache_context = ClassifierCacheContext()
+        sg_root = get_sg_root(source, cache_context=cache_context)
         assert sg_root is not None
-        index = get_node_index(source, sg_root)
+        index = get_node_index(source, sg_root, cache_context=cache_context)
         node = index.find_containing(2, 4)
         assert node is not None
 
@@ -447,10 +479,11 @@ class TestCacheManagement:
         source.write_text("def foo(): pass")
 
         # Populate cache
-        sg_root = get_sg_root(source)
+        cache_context = ClassifierCacheContext()
+        sg_root = get_sg_root(source, cache_context=cache_context)
         assert sg_root is not None
 
         # Clear and verify it's repopulated
         clear_caches()
-        sg_root2 = get_sg_root(source)
+        sg_root2 = get_sg_root(source, cache_context=ClassifierCacheContext())
         assert sg_root2 is not None

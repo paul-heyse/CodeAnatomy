@@ -11,7 +11,7 @@ from tools.cq.macros.contracts import CallsRequest
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.query.language import QueryLanguageScope
+    from tools.cq.core.types import QueryLanguageScope
     from tools.cq.search._shared.types import QueryMode, SearchLimits
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50

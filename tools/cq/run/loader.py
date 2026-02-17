@@ -8,16 +8,22 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.cli_app.options import RunOptions
 from tools.cq.core.typed_boundary import BoundaryDecodeError, decode_toml_strict
-from tools.cq.run.spec import RunPlan, RunStep, coerce_run_step, is_run_step, normalize_step_ids
+from tools.cq.run.spec import (
+    RunLoadInput,
+    RunPlan,
+    RunStep,
+    coerce_run_step,
+    is_run_step,
+    normalize_step_ids,
+)
 
 
 class RunPlanError(RuntimeError):
     """Raised when a run plan cannot be loaded or validated."""
 
 
-def load_run_plan(options: RunOptions) -> RunPlan:
+def load_run_plan(options: RunLoadInput) -> RunPlan:
     """Load a RunPlan from a plan file and inline steps.
 
     Args:

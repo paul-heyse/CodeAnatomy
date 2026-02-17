@@ -7,7 +7,7 @@ from typing import Any
 
 import msgspec
 from tools.cq.core.bootstrap import resolve_runtime_services
-from tools.cq.core.front_door_builders import FrontDoorInsightV1, InsightTargetV1
+from tools.cq.core.front_door_assembly import FrontDoorInsightV1, InsightTargetV1
 from tools.cq.core.summary_contract import SemanticTelemetryV1, summary_from_mapping
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import (

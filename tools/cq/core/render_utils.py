@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from tools.cq.core.schema import CqResult, Finding
+from tools.cq.core.summary_contract import CqSummary
 
 
 def na(reason: str) -> str:
@@ -97,6 +100,17 @@ def iter_result_findings(result: CqResult) -> list[Finding]:
     return findings
 
 
+def summary_value(summary: CqSummary | Mapping[str, object], key: str) -> object:
+    """Extract one summary field from struct or mapping forms.
+
+    Returns:
+        object: Field value or ``None`` when absent.
+    """
+    if isinstance(summary, CqSummary):
+        return getattr(summary, key, None)
+    return summary.get(key)
+
+
 __all__ = [
     "clean_scalar",
     "extract_symbol_hint",
@@ -104,4 +118,5 @@ __all__ = [
     "iter_result_findings",
     "na",
     "safe_int",
+    "summary_value",
 ]

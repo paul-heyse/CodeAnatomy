@@ -3,8 +3,6 @@
 # decomposition. Remaining extraction and contraction work is tracked in
 # docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
 
-# ruff: noqa: DOC201, DOC501
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -29,8 +27,14 @@ from storage.deltalake.delta_read import (
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+    from opentelemetry.trace import Span
 
     from datafusion_engine.delta.control_plane_core import DeltaFeatureEnableRequest
+    from storage.deltalake.delta_read import (
+        DeltaInput,
+        _DeltaMergeExecutionResult,
+        _DeltaMergeExecutionState,
+    )
 
 
 def build_commit_properties(
@@ -99,7 +103,14 @@ def enable_delta_features(
     *,
     features: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Enable Delta table features by setting table properties."""
+    """Enable Delta table features by setting table properties.
+
+    Returns:
+        dict[str, str]: Properties applied to the target table.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     from storage.deltalake.delta_read import delta_table_version
     from utils.storage_options import merged_storage_options
 
@@ -186,7 +197,14 @@ def delta_add_constraints(
     *,
     constraints: Mapping[str, str],
 ) -> Mapping[str, object]:
-    """Add Delta check constraints via the Rust control plane."""
+    """Add Delta check constraints via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Constraint mutation report payload.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     from utils.storage_options import merged_storage_options
 
     if not constraints:
@@ -240,7 +258,14 @@ def delta_drop_constraints(
     constraints: Sequence[str],
     raise_if_not_exists: bool = True,
 ) -> Mapping[str, object]:
-    """Drop Delta check constraints via the Rust control plane."""
+    """Drop Delta check constraints via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Constraint mutation report payload.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     from utils.storage_options import merged_storage_options
 
     if not constraints:
@@ -295,7 +320,14 @@ def enable_delta_column_mapping(
     mode: str = "name",
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta column mapping via the Rust control plane."""
+    """Enable Delta column mapping via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Feature mutation report payload.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     with _feature_control_span(options, operation="enable_column_mapping"):
         ctx, request = _feature_enable_request(options)
         try:
@@ -330,7 +362,14 @@ def enable_delta_deletion_vectors(
     *,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta deletion vectors via the Rust control plane."""
+    """Enable Delta deletion vectors via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Feature mutation report payload.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     with _feature_control_span(options, operation="enable_deletion_vectors"):
         ctx, request = _feature_enable_request(options)
         try:
@@ -364,7 +403,14 @@ def enable_delta_row_tracking(
     *,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta row tracking via the Rust control plane."""
+    """Enable Delta row tracking via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Feature mutation report payload.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     with _feature_control_span(options, operation="enable_row_tracking"):
         ctx, request = _feature_enable_request(options)
         try:
@@ -398,7 +444,14 @@ def enable_delta_change_data_feed(
     *,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta Change Data Feed via the Rust control plane."""
+    """Enable Delta change data feed via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Feature mutation report payload.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     with _feature_control_span(options, operation="enable_change_data_feed"):
         ctx, request = _feature_enable_request(options)
         try:
@@ -432,7 +485,14 @@ def enable_delta_check_constraints(
     *,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta check constraints via the Rust control plane."""
+    """Enable Delta check constraints via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Feature mutation report payload.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     with _feature_control_span(options, operation="enable_check_constraints"):
         ctx, request = _feature_enable_request(options)
         try:
@@ -467,7 +527,14 @@ def enable_delta_in_commit_timestamps(
     enablement_version: int | None = None,
     enablement_timestamp: str | None = None,
 ) -> Mapping[str, object]:
-    """Enable Delta in-commit timestamps via the Rust control plane."""
+    """Enable Delta in-commit timestamps via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Feature mutation report payload.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     with _feature_control_span(options, operation="enable_in_commit_timestamps"):
         ctx, request = _feature_enable_request(options)
         try:
@@ -502,7 +569,14 @@ def enable_delta_v2_checkpoints(
     *,
     allow_protocol_versions_increase: bool = True,
 ) -> Mapping[str, object]:
-    """Enable Delta v2 checkpoints via the Rust control plane."""
+    """Enable Delta v2 checkpoints via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Feature mutation report payload.
+
+    Raises:
+        RuntimeError: If the Rust control-plane call fails.
+    """
     with _feature_control_span(options, operation="enable_v2_checkpoints"):
         ctx, request = _feature_enable_request(options)
         try:
@@ -536,7 +610,11 @@ def delta_delete_where(
     *,
     request: DeltaDeleteWhereRequest,
 ) -> Mapping[str, object]:
-    """Delete rows from a Delta table via the Rust control plane."""
+    """Delete rows from a Delta table via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Delete mutation report payload.
+    """
     import time
 
     from obs.otel import SCOPE_STORAGE, stage_span
@@ -642,32 +720,138 @@ def delta_delete_where(
         return report
 
 
-def delta_merge_arrow(  # noqa: PLR0914
+def _build_delta_merge_state(
+    ctx: SessionContext,
+    *,
+    request: DeltaMergeArrowRequest,
+    delta_input: DeltaInput,
+) -> _DeltaMergeExecutionState:
+    from datafusion_engine.delta.control_plane_core import DeltaMergeRequest
+    from storage.deltalake.delta_read import (
+        _delta_commit_options,
+        _DeltaMergeExecutionState,
+        _enforce_append_only_policy,
+        _enforce_locking_provider,
+        _resolve_delta_mutation_policy,
+        _resolve_merge_actions,
+    )
+    from utils.storage_options import merged_storage_options
+
+    mutation_policy = _resolve_delta_mutation_policy(request.runtime_profile)
+    storage = merged_storage_options(request.storage_options, request.log_storage_options)
+    _enforce_locking_provider(request.path, storage, policy=mutation_policy)
+    source_alias, target_alias, matched_updates, not_matched_inserts, updates_present = (
+        _resolve_merge_actions(request)
+    )
+    _enforce_append_only_policy(
+        policy=mutation_policy,
+        operation="merge",
+        updates_present=updates_present,
+    )
+    source_table = register_temp_table(ctx, delta_input.data)
+    try:
+        commit_options = _delta_commit_options(
+            commit_properties=request.commit_properties,
+            commit_metadata=request.commit_metadata,
+            app_id=None,
+            app_version=None,
+        )
+        merge_request = DeltaMergeRequest(
+            table_uri=request.path,
+            storage_options=storage or None,
+            version=None,
+            timestamp=None,
+            source_table=source_table,
+            predicate=request.predicate,
+            source_alias=source_alias,
+            target_alias=target_alias,
+            matched_predicate=request.matched_predicate,
+            matched_updates=dict(matched_updates),
+            not_matched_predicate=request.not_matched_predicate,
+            not_matched_inserts=dict(not_matched_inserts),
+            not_matched_by_source_predicate=request.not_matched_by_source_predicate,
+            delete_not_matched_by_source=request.delete_not_matched_by_source,
+            extra_constraints=request.extra_constraints,
+            commit_options=commit_options,
+        )
+    except (RuntimeError, TypeError, ValueError):
+        deregister_table(ctx, source_table)
+        raise
+    return _DeltaMergeExecutionState(
+        ctx=ctx,
+        request=request,
+        delta_input=delta_input,
+        mutation_policy=mutation_policy,
+        storage=storage,
+        source_alias=source_alias,
+        target_alias=target_alias,
+        matched_updates=matched_updates,
+        not_matched_inserts=not_matched_inserts,
+        source_table=source_table,
+        merge_request=merge_request,
+    )
+
+
+def _execute_delta_merge_state(
+    *,
+    state: _DeltaMergeExecutionState,
+    span: Span,
+) -> _DeltaMergeExecutionResult:
+    from storage.deltalake.delta_read import (
+        _DeltaMergeExecutionResult,
+        _DeltaMergeFallbackInput,
+        _execute_delta_merge,
+        _execute_delta_merge_fallback,
+        _should_fallback_delta_merge,
+    )
+
+    retry_policy = state.mutation_policy.retry_policy
+    try:
+        report, attempts = _execute_delta_merge(
+            ctx=state.ctx,
+            request=state.merge_request,
+            retry_policy=retry_policy,
+            span=span,
+        )
+    except Exception as exc:
+        if not _should_fallback_delta_merge(exc):
+            raise
+        merge_fallback = True
+        span.set_attribute("codeanatomy.merge_fallback", merge_fallback)
+        span.set_attribute("codeanatomy.merge_fallback_error", str(exc))
+        report = _execute_delta_merge_fallback(
+            _DeltaMergeFallbackInput(
+                source=state.delta_input.data,
+                request=state.request,
+                storage_options=state.storage,
+                source_alias=state.source_alias,
+                target_alias=state.target_alias,
+                matched_updates=state.matched_updates,
+                not_matched_inserts=state.not_matched_inserts,
+            )
+        )
+        attempts = 0
+    return _DeltaMergeExecutionResult(report=report, attempts=attempts)
+
+
+def delta_merge_arrow(
     ctx: SessionContext,
     *,
     request: DeltaMergeArrowRequest,
 ) -> Mapping[str, object]:
-    """Merge Arrow data into a Delta table via the Rust control plane."""
+    """Merge Arrow data into a Delta table via the Rust control plane.
+
+    Returns:
+        Mapping[str, object]: Merge mutation report payload.
+    """
     from obs.otel import SCOPE_STORAGE, stage_span
     from storage.deltalake.delta_read import (
         _constraint_status,
-        _delta_commit_options,
-        _DeltaMergeExecutionResult,
-        _DeltaMergeExecutionState,
-        _DeltaMergeFallbackInput,
-        _enforce_append_only_policy,
-        _enforce_locking_provider,
-        _execute_delta_merge,
-        _execute_delta_merge_fallback,
         _merge_rows_affected,
         _MutationArtifactRequest,
         _record_mutation_artifact,
-        _resolve_delta_mutation_policy,
-        _resolve_merge_actions,
-        _should_fallback_delta_merge,
         _storage_span_attributes,
     )
-    from utils.storage_options import merged_storage_options
 
     delta_input = coerce_delta_input(request.source, prefer_reader=True)
     attrs = _storage_span_attributes(
@@ -685,100 +869,14 @@ def delta_merge_arrow(  # noqa: PLR0914
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ) as span:
-        mutation_policy = _resolve_delta_mutation_policy(request.runtime_profile)
-        storage = merged_storage_options(request.storage_options, request.log_storage_options)
-        _enforce_locking_provider(request.path, storage, policy=mutation_policy)
-        (
-            source_alias,
-            target_alias,
-            matched_updates,
-            not_matched_inserts,
-            updates_present,
-        ) = _resolve_merge_actions(request)
-        _enforce_append_only_policy(
-            policy=mutation_policy,
-            operation="merge",
-            updates_present=updates_present,
-        )
-        source_table = register_temp_table(ctx, delta_input.data)
-        from datafusion_engine.delta.control_plane_core import DeltaMergeRequest
-
+        state = _build_delta_merge_state(ctx, request=request, delta_input=delta_input)
         try:
-            commit_options = _delta_commit_options(
-                commit_properties=request.commit_properties,
-                commit_metadata=request.commit_metadata,
-                app_id=None,
-                app_version=None,
-            )
-            merge_request = DeltaMergeRequest(
-                table_uri=request.path,
-                storage_options=storage or None,
-                version=None,
-                timestamp=None,
-                source_table=source_table,
-                predicate=request.predicate,
-                source_alias=source_alias,
-                target_alias=target_alias,
-                matched_predicate=request.matched_predicate,
-                matched_updates=dict(matched_updates),
-                not_matched_predicate=request.not_matched_predicate,
-                not_matched_inserts=dict(not_matched_inserts),
-                not_matched_by_source_predicate=request.not_matched_by_source_predicate,
-                delete_not_matched_by_source=request.delete_not_matched_by_source,
-                extra_constraints=request.extra_constraints,
-                commit_options=commit_options,
-            )
-        except (RuntimeError, TypeError, ValueError):
-            deregister_table(ctx, source_table)
-            raise
-
-        state = _DeltaMergeExecutionState(
-            ctx=ctx,
-            request=request,
-            delta_input=delta_input,
-            mutation_policy=mutation_policy,
-            storage=storage,
-            source_alias=source_alias,
-            target_alias=target_alias,
-            matched_updates=matched_updates,
-            not_matched_inserts=not_matched_inserts,
-            source_table=source_table,
-            merge_request=merge_request,
-        )
-        try:
-            retry_policy = state.mutation_policy.retry_policy
-            try:
-                report, attempts = _execute_delta_merge(
-                    ctx=state.ctx,
-                    request=state.merge_request,
-                    retry_policy=retry_policy,
-                    span=span,
-                )
-            except Exception as exc:
-                if not _should_fallback_delta_merge(exc):
-                    raise
-                merge_fallback = True
-                span.set_attribute("codeanatomy.merge_fallback", merge_fallback)
-                span.set_attribute("codeanatomy.merge_fallback_error", str(exc))
-                report = _execute_delta_merge_fallback(
-                    _DeltaMergeFallbackInput(
-                        source=state.delta_input.data,
-                        request=state.request,
-                        storage_options=state.storage,
-                        source_alias=state.source_alias,
-                        target_alias=state.target_alias,
-                        matched_updates=state.matched_updates,
-                        not_matched_inserts=state.not_matched_inserts,
-                    )
-                )
-                attempts = 0
-            result = _DeltaMergeExecutionResult(report=report, attempts=attempts)
-
+            result = _execute_delta_merge_state(state=state, span=span)
             metrics: Mapping[str, object] | None = None
             if isinstance(result.report, Mapping):
                 candidate = result.report.get("metrics")
                 if isinstance(candidate, Mapping):
-                    metrics = candidate
+                    metrics = {str(key): value for key, value in candidate.items()}
             rows = _merge_rows_affected(metrics)
             if rows is not None:
                 span.set_attribute("codeanatomy.rows_affected", rows)

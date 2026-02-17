@@ -199,8 +199,10 @@ def _tabulate_scan_files(
         globs=tuple(globs or ()),
         language=lang,
     )
+    cache = get_cq_cache_backend(root=resolved_root)
     scope = resolve_scope(
         scope_plan,
+        backend=cache,
         list_files=_list_files_for_inventory,
         inventory_token_fn=_inventory_token_for_root,
     )
@@ -216,7 +218,6 @@ def _tabulate_scan_files(
         },
     )
     policy = default_cache_policy(root=resolved_root)
-    cache = get_cq_cache_backend(root=resolved_root)
     cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
     if cache_enabled:
         cached_files = _read_cached_file_inventory(

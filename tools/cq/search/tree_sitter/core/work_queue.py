@@ -1,44 +1,27 @@
-"""Diskcache-backed changed-range work queue helpers."""
+"""Cache-backed changed-range work queue helpers."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
 
 import msgspec
 
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.search.tree_sitter.contracts.core_models import QueryWindowV1, TreeSitterWorkItemV1
 
-
-def _cache() -> Any | None:
-    backend = get_cq_cache_backend(root=Path.cwd())
-    return getattr(backend, "cache", None)
+_QUEUE_TTL_SECONDS = 900
 
 
-def _has_queue_ops(cache: Any) -> bool:
-    members = dir(cache)
-    return "push" in members and "pull" in members
+def _queue_index_key(language: str) -> str:
+    return f"cq:tree_sitter_work_queue:v1:{language}:next"
 
 
-def _queue_store(cache: Any, language: str) -> Any | None:
-    if _has_queue_ops(cache):
-        return cache
-    cache_method = getattr(type(cache), "cache", None)
-    if not callable(cache_method):
-        return None
-    cache_obj = cast("Any", cache)
-    try:
-        scoped_cache = cache_obj.cache(f"ts_work_queue:{language}")
-    except (RuntimeError, TypeError, ValueError, AttributeError):
-        return None
-    if _has_queue_ops(scoped_cache):
-        return scoped_cache
-    return None
+def _queue_head_key(language: str) -> str:
+    return f"cq:tree_sitter_work_queue:v1:{language}:head"
 
 
-def _queue_prefix(language: str) -> str:
-    return f"ts_work_queue:{language}:"
+def _queue_item_key(language: str, idx: int) -> str:
+    return f"cq:tree_sitter_work_queue:v1:{language}:item:{idx}"
 
 
 def enqueue_windows(
@@ -50,20 +33,14 @@ def enqueue_windows(
     """Enqueue changed-range windows for follow-up processing.
 
     Returns:
-        int: Number of windows pushed into the queue.
+        int: Number of windows enqueued.
     """
-    cache = _cache()
-    if cache is None:
-        return 0
-    queue = _queue_store(cache, language)
-    if queue is None:
-        return 0
+    backend = get_cq_cache_backend(root=Path.cwd())
     pushed = 0
-    push_fn = getattr(queue, "push", None)
-    if not callable(push_fn):
-        return 0
-    prefix = _queue_prefix(language)
     for window in windows:
+        idx = backend.incr(_queue_index_key(language), delta=1, default=0)
+        if idx is None:
+            continue
         payload = msgspec.json.encode(
             TreeSitterWorkItemV1(
                 language=language,
@@ -72,11 +49,13 @@ def enqueue_windows(
                 end_byte=int(window.end_byte),
             )
         )
-        try:
-            push_fn(payload, prefix=prefix)
-            pushed += 1
-        except TypeError:
-            push_fn(payload)
+        ok = backend.set(
+            _queue_item_key(language, int(idx)),
+            payload,
+            expire=_QUEUE_TTL_SECONDS,
+            tag="ns:tree_sitter|kind:work_queue",
+        )
+        if ok:
             pushed += 1
     return pushed
 
@@ -85,25 +64,18 @@ def dequeue_window(language: str) -> TreeSitterWorkItemV1 | None:
     """Dequeue one changed-range work item for a language lane.
 
     Returns:
-        TreeSitterWorkItemV1 | None: Dequeued work item when available.
+        TreeSitterWorkItemV1 | None: Next queued work item when available.
     """
-    cache = _cache()
-    if cache is None:
+    backend = get_cq_cache_backend(root=Path.cwd())
+    idx = backend.incr(_queue_head_key(language), delta=1, default=0)
+    if idx is None:
         return None
-    queue = _queue_store(cache, language)
-    if queue is None:
-        return None
-    pull_fn = getattr(queue, "pull", None)
-    if not callable(pull_fn):
-        return None
-    prefix = _queue_prefix(language)
-    try:
-        payload = pull_fn(prefix=prefix)
-    except TypeError:
-        payload = pull_fn()
-    if isinstance(payload, tuple) and payload:
-        payload = payload[-1]
-    if not isinstance(payload, (bytes, bytearray)):
+    payload = backend.get(_queue_item_key(language, int(idx)))
+    if isinstance(payload, memoryview):
+        payload = payload.tobytes()
+    elif isinstance(payload, bytearray):
+        payload = bytes(payload)
+    if not isinstance(payload, bytes):
         return None
     try:
         return msgspec.json.decode(payload, type=TreeSitterWorkItemV1)

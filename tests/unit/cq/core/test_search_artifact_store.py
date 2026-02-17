@@ -32,15 +32,16 @@ def test_search_artifact_store_roundtrip(tmp_path: Path) -> None:
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
 
     bundle = _sample_bundle("run-1")
+    backend = get_cq_cache_backend(root=tmp_path)
     entry = persist_search_artifact_bundle(
         root=tmp_path,
+        backend=backend,
         bundle=bundle,
         tag="ns:search_artifacts|lang:auto",
         key_extras={"scope_hash": "abc"},
     )
     assert entry is not None
 
-    backend = get_cq_cache_backend(root=tmp_path)
     raw = backend.get(entry.cache_key)
     assert isinstance(raw, (bytes, bytearray, memoryview))
 
@@ -48,7 +49,11 @@ def test_search_artifact_store_roundtrip(tmp_path: Path) -> None:
     assert listed
     assert listed[0].cache_key == entry.cache_key
 
-    loaded, loaded_entry = load_search_artifact_bundle(root=tmp_path, run_id="run-1")
+    loaded, loaded_entry = load_search_artifact_bundle(
+        root=tmp_path,
+        backend=backend,
+        run_id="run-1",
+    )
     assert loaded_entry is not None
     assert loaded is not None
     assert loaded.query == "stable_id"
@@ -72,15 +77,21 @@ def test_search_artifact_store_large_bundle_roundtrip(tmp_path: Path) -> None:
         diagnostics={"timed_out": False},
         created_ms=11.0,
     )
+    backend = get_cq_cache_backend(root=tmp_path)
     entry = persist_search_artifact_bundle(
         root=tmp_path,
+        backend=backend,
         bundle=bundle,
         tag="ns:search_artifacts|lang:auto",
         key_extras={"scope_hash": "xyz"},
     )
     assert entry is not None
 
-    loaded, loaded_entry = load_search_artifact_bundle(root=tmp_path, run_id="run-large")
+    loaded, loaded_entry = load_search_artifact_bundle(
+        root=tmp_path,
+        backend=backend,
+        run_id="run-large",
+    )
     assert loaded_entry is not None
     assert loaded is not None
     assert loaded.summary.get("blob") == "x" * (128 * 1024)

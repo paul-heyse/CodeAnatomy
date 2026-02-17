@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from tools.cq.search._shared.bounded_cache import BoundedCache
 from tools.cq.search._shared.core import source_hash
+from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.python.ast_utils import ast_node_priority, node_byte_span
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ class PythonAnalysisSession:
     source: str
     source_bytes: bytes
     content_hash: str
+    classifier_cache: ClassifierCacheContext = field(default_factory=ClassifierCacheContext)
     sg_root: SgRoot | None = None
     node_index: Any | None = None
     ast_tree: ast.Module | None = None
@@ -85,7 +87,11 @@ class PythonAnalysisSession:
         try:
             from tools.cq.search.pipeline.classifier import get_sg_root
 
-            self.sg_root = get_sg_root(self.file_path, lang="python")
+            self.sg_root = get_sg_root(
+                self.file_path,
+                lang="python",
+                cache_context=self.classifier_cache,
+            )
         except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
             self.stage_errors["ast_grep"] = type(exc).__name__
             self.sg_root = None
@@ -110,7 +116,12 @@ class PythonAnalysisSession:
         try:
             from tools.cq.search.pipeline.classifier import get_node_index
 
-            self.node_index = get_node_index(self.file_path, sg_root, lang="python")
+            self.node_index = get_node_index(
+                self.file_path,
+                sg_root,
+                lang="python",
+                cache_context=self.classifier_cache,
+            )
         except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
             self.stage_errors["ast_grep_index"] = type(exc).__name__
             self.node_index = None

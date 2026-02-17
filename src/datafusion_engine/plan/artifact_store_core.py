@@ -24,24 +24,21 @@ from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.plan.perf_policy import PlanBundleComparisonPolicy
 from datafusion_engine.plan.signals import extract_plan_signals, plan_signals_payload
-from datafusion_engine.sql.options import planning_sql_options
 from schema_spec.dataset_spec import dataset_spec_from_schema
 from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow
 from serde_msgspec import (
     StructBaseCompat,
-    convert,
     decode_json_lines,
     dumps_msgpack,
     ensure_raw,
     to_builtins,
-    validation_error_payload,
 )
 from serde_msgspec_ext import SubstraitBytes
 from storage.deltalake import DeltaSchemaRequest
 from utils.hashing import hash_json_default, hash_sha256_hex
 
 if TYPE_CHECKING:
-    from datafusion import SessionContext, SQLOptions
+    from datafusion import SessionContext
 
     from datafusion_engine.lineage.reporting import LineageReport
     from datafusion_engine.lineage.scheduling import ScanUnit
@@ -262,167 +259,10 @@ def _apply_plan_artifact_retention(
     return retained
 
 
-def _latest_plan_snapshot_by_view(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    *,
-    table_path: str,
-    view_names: Sequence[str],
-) -> dict[str, tuple[str | None, str | None]]:
-    from datafusion_engine.plan.artifact_store_query import (
-        _latest_plan_snapshot_by_view as _delegate,
-    )
-
-    return _delegate(
-        ctx,
-        profile,
-        table_path=table_path,
-        view_names=view_names,
-    )
-
-
-def _plan_diff_gate_violations(
-    rows: Sequence[PlanArtifactRow],
-    *,
-    previous_by_view: Mapping[str, tuple[str | None, str | None]],
-) -> tuple[dict[str, object], ...]:
-    from datafusion_engine.plan.artifact_store_query import (
-        _plan_diff_gate_violations as _delegate,
-    )
-
-    return _delegate(rows, previous_by_view=previous_by_view)
-
-
-def persist_plan_artifacts_for_views(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    *,
-    request: PlanArtifactsForViewsRequest,
-) -> tuple[PlanArtifactRow, ...]:
-    """Persist plan artifacts for view nodes with plan bundles.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context used for artifact persistence.
-    profile
-        Runtime profile for artifact storage configuration.
-    request
-        Plan artifact persistence request payload.
-
-    Returns:
-        tuple[PlanArtifactRow, ...]: Persisted plan artifact rows.
-
-    """
-    from datafusion_engine.plan.artifact_store_query import (
-        persist_plan_artifacts_for_views as _persist_plan_artifacts_for_views,
-    )
-
-    return _persist_plan_artifacts_for_views(ctx, profile, request=request)
-
-
-def validate_plan_determinism(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    *,
-    plan_fingerprint: str,
-    view_name: str | None = None,
-) -> DeterminismValidationResult:
-    """Validate that a plan fingerprint is deterministic via artifact queries.
-
-    Queries the plan artifact table to check if the same logical plan
-    consistently produces the same fingerprint across executions.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion SessionContext for artifact queries.
-    profile
-        Runtime profile for artifact table configuration.
-    plan_fingerprint
-        Plan fingerprint to validate.
-    view_name
-        Optional view name to scope the validation query.
-
-    Returns:
-    -------
-    DeterminismValidationResult
-        Result indicating whether the plan is deterministic.
-    """
-    from datafusion_engine.plan.artifact_store_query import (
-        validate_plan_determinism as _validate_plan_determinism,
-    )
-
-    return _validate_plan_determinism(
-        ctx,
-        profile,
-        plan_fingerprint=plan_fingerprint,
-        view_name=view_name,
-    )
-
-
-def _collect_determinism_results(
-    ctx: SessionContext,
-    table_path: str,
-    *,
-    view_name: str | None,
-    plan_fingerprint: str,
-    sql_options: SQLOptions,
-) -> tuple[list[pa.RecordBatch] | None, str | None]:
-    from datafusion_engine.plan.artifact_store_query import (
-        _collect_determinism_results as _delegate,
-    )
-
-    return _delegate(
-        ctx,
-        table_path,
-        view_name=view_name,
-        plan_fingerprint=plan_fingerprint,
-        sql_options=sql_options,
-    )
-
-
-def _determinism_sets(
-    results: Sequence[pa.RecordBatch],
-) -> tuple[int, set[str], set[str]]:
-    from datafusion_engine.plan.artifact_store_query import _determinism_sets as _delegate
-
-    return _delegate(results)
-
-
-def _determinism_outcome(
-    *,
-    plan_fingerprint: str,
-    fingerprints: set[str],
-    identities: set[str],
-) -> tuple[bool, tuple[str, ...], tuple[str, ...]]:
-    from datafusion_engine.plan.artifact_store_query import _determinism_outcome as _delegate
-
-    return _delegate(
-        plan_fingerprint=plan_fingerprint,
-        fingerprints=fingerprints,
-        identities=identities,
-    )
-
-
-def _determinism_validation_query(
-    table_path: str,
-    *,
-    view_name: str | None,
-    plan_fingerprint: str,
-    include_identity: bool,
-) -> str:
-    """Build SQL query for determinism validation."""
-    from datafusion_engine.plan.artifact_store_query import (
-        _determinism_validation_query as _delegate,
-    )
-
-    return _delegate(
-        table_path,
-        view_name=view_name,
-        plan_fingerprint=plan_fingerprint,
-        include_identity=include_identity,
-    )
+from datafusion_engine.plan.artifact_store_query import (
+    persist_plan_artifacts_for_views,
+    validate_plan_determinism,
+)
 
 
 @dataclass(frozen=True)

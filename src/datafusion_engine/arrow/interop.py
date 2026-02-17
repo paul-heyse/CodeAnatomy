@@ -226,24 +226,28 @@ class RecordBatchReaderLike(Protocol):
         """Iterate over record batches."""
         ...
 
-    def __arrow_c_stream__(  # noqa: PLW3201 - pyarrow protocol surface
+    def arrow_c_stream(
         self,
         requested_schema: pa.Schema | None = None,
     ) -> object:
         """Export record batches via Arrow C stream."""
         ...
 
+    __arrow_c_stream__ = arrow_c_stream
+
 
 @runtime_checkable
 class ArrowStreamExportable(Protocol):
     """Protocol for objects exposing the Arrow C stream export surface."""
 
-    def __arrow_c_stream__(  # noqa: PLW3201 - pyarrow protocol surface
+    def arrow_c_stream(
         self,
         requested_schema: pa.Schema | None = None,
     ) -> object:
         """Return an Arrow C stream capsule."""
         ...
+
+    __arrow_c_stream__ = arrow_c_stream
 
 
 @runtime_checkable

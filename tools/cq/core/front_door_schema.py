@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.core.front_door_builders import (
+from tools.cq.core.front_door_assembly import (
     Availability,
     CallsInsightBuildRequestV1,
     EntityInsightBuildRequestV1,

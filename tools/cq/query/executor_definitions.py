@@ -305,29 +305,11 @@ def matches_entity(record: SgRecord, entity: str | None) -> bool:
     bool
         True if the record matches the entity type
     """
-    if entity is None:
-        return False
-
-    if entity == "function":
-        is_match = record.kind in ENTITY_KINDS.function_kinds
-    elif entity == "class":
-        is_match = record.kind in ENTITY_KINDS.class_kinds
-    elif entity == "method":
-        # Methods are functions inside classes - would need context analysis
-        is_match = record.kind in {"function", "async_function"}
-    elif entity == "module":
-        is_match = False  # Module-level would need different handling
-    elif entity == "callsite":
-        is_match = record.record == "call"
-    elif entity == "import":
-        is_match = record.kind in ENTITY_KINDS.import_kinds
-    elif entity == "decorator":
-        # Decorators are applied to functions/classes - check for decorated definitions
-        is_match = record.kind in ENTITY_KINDS.decorator_kinds
-    else:
-        is_match = False
-
-    return is_match
+    return ENTITY_KINDS.matches(
+        entity_type=entity,
+        record_kind=record.kind,
+        record_type=record.record,
+    )
 
 
 def matches_name(record: SgRecord, name: str) -> bool:

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar
 
 from tools.cq.core.schema import CqResult, Finding, Section
 from tools.cq.search.pipeline.contracts import SearchConfig
 
 if TYPE_CHECKING:
-    from tools.cq.search.pipeline.smart_search_types import SearchResultAssembly
+    from tools.cq.search.pipeline.smart_search_types import (
+        LanguageSearchResult,
+        SearchResultAssembly,
+    )
 
 TPartition = TypeVar("TPartition")
 
@@ -26,9 +29,8 @@ def assemble_result(assembly: SearchResultAssembly) -> CqResult:
     from tools.cq.search.pipeline.smart_search import assemble_smart_search_result
 
     pipeline = SearchPipeline(assembly.context)
-    assembler = cast(
-        "Callable[[SearchConfig, list[object]], CqResult]",
-        assemble_smart_search_result,
+    assembler: Callable[[SearchConfig, list[LanguageSearchResult]], CqResult] = (
+        assemble_smart_search_result
     )
     return pipeline.assemble(assembly.partition_results, assembler)
 

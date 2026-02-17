@@ -46,13 +46,19 @@ from storage.deltalake.delta_read import (
     DeltaSchemaRequest,
     DeltaVacuumOptions,
     StorageOptions,
-    delta_add_constraints,
     delta_cdf_enabled,
-    delta_delete_where,
     delta_history_snapshot,
-    delta_merge_arrow,
     delta_protocol_snapshot,
     delta_table_version,
+    read_delta_cdf,
+    read_delta_cdf_eager,
+    read_delta_table,
+    read_delta_table_eager,
+)
+from storage.deltalake.delta_write import (
+    delta_add_constraints,
+    delta_delete_where,
+    delta_merge_arrow,
     enable_delta_change_data_feed,
     enable_delta_check_constraints,
     enable_delta_column_mapping,
@@ -61,10 +67,6 @@ from storage.deltalake.delta_read import (
     enable_delta_in_commit_timestamps,
     enable_delta_row_tracking,
     enable_delta_v2_checkpoints,
-    read_delta_cdf,
-    read_delta_cdf_eager,
-    read_delta_table,
-    read_delta_table_eager,
 )
 
 if TYPE_CHECKING:
@@ -582,6 +584,7 @@ class DeltaService:
             storage_options=resolved_storage or None,
             log_storage_options=resolved_log or None,
             cdf_options=cdf_options,
+            runtime_profile=self.profile,
         )
 
     def read_cdf_eager(
@@ -609,6 +612,7 @@ class DeltaService:
             storage_options=resolved_storage or None,
             log_storage_options=resolved_log or None,
             cdf_options=cdf_options,
+            runtime_profile=self.profile,
         )
 
     def cdf_enabled(
@@ -717,6 +721,7 @@ class DeltaService:
             options=options,
             storage_options=resolved_storage or None,
             log_storage_options=resolved_log or None,
+            runtime_profile=self.profile,
         )
 
     def create_checkpoint(

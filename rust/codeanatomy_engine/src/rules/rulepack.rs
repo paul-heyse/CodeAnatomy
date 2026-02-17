@@ -117,21 +117,21 @@ impl RulepackFactory {
         crate::compliance::capture::RulepackSnapshot {
             profile: format!("{profile:?}"),
             analyzer_rules: ruleset
-                .analyzer_rules
+                .analyzer_rules()
                 .iter()
                 .map(|r| r.name().to_string())
                 .collect(),
             optimizer_rules: ruleset
-                .optimizer_rules
+                .optimizer_rules()
                 .iter()
                 .map(|r| r.name().to_string())
                 .collect(),
             physical_rules: ruleset
-                .physical_rules
+                .physical_rules()
                 .iter()
                 .map(|r| r.name().to_string())
                 .collect(),
-            fingerprint: ruleset.fingerprint,
+            fingerprint: ruleset.fingerprint(),
         }
     }
 }
@@ -167,7 +167,7 @@ mod tests {
         let env_profile = EnvironmentProfile::from_class(EnvironmentClass::Small);
         let ruleset = RulepackFactory::build_ruleset(&profile, &[], &env_profile);
         assert_eq!(ruleset.total_count(), 1);
-        assert_eq!(ruleset.analyzer_rules[0].name(), "codeanatomy_policy_rule");
+        assert_eq!(ruleset.analyzer_rules()[0].name(), "codeanatomy_policy_rule");
     }
 
     #[test]
@@ -191,7 +191,7 @@ mod tests {
         let ruleset = RulepackFactory::build_ruleset(&profile, &intents, &env_profile);
         assert!(ruleset.total_count() >= 1);
         assert!(ruleset
-            .analyzer_rules
+            .analyzer_rules()
             .iter()
             .any(|rule| rule.name() == "codeanatomy_policy_rule"));
     }
@@ -209,7 +209,7 @@ mod tests {
         }];
         let ruleset = RulepackFactory::build_ruleset(&profile, &intents, &env_profile);
         assert!(ruleset
-            .analyzer_rules
+            .analyzer_rules()
             .iter()
             .any(|rule| rule.name() == "strict_safety_rule"));
     }
@@ -228,7 +228,7 @@ mod tests {
         let ruleset = RulepackFactory::build_ruleset(&profile, &intents, &env_profile);
         // Default profile should not include safety rules
         assert!(!ruleset
-            .analyzer_rules
+            .analyzer_rules()
             .iter()
             .any(|rule| rule.name() == "strict_safety_rule"));
     }
@@ -249,7 +249,10 @@ mod tests {
         let strict_ruleset =
             RulepackFactory::build_ruleset(&RulepackProfile::Strict, &intents, &env_profile);
 
-        assert_ne!(default_ruleset.fingerprint, strict_ruleset.fingerprint);
+        assert_ne!(
+            default_ruleset.fingerprint(),
+            strict_ruleset.fingerprint()
+        );
     }
 
     #[test]
@@ -275,7 +278,7 @@ mod tests {
         let snapshot = RulepackFactory::build_snapshot(&ruleset, &profile);
 
         assert_eq!(snapshot.profile, "Strict");
-        assert_eq!(snapshot.fingerprint, ruleset.fingerprint);
+        assert_eq!(snapshot.fingerprint, ruleset.fingerprint());
         assert!(!snapshot.analyzer_rules.is_empty());
         // Verify the snapshot contains the policy rule
         assert!(snapshot

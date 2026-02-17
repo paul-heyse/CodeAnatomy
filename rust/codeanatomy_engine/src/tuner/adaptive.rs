@@ -77,6 +77,7 @@ pub struct AdaptiveTuner {
     batch_size_floor: u32,
     batch_size_ceiling: u32,
     last_metrics: Option<ExecutionMetrics>,
+    pending_rollback: bool,
 }
 
 impl AdaptiveTuner {
@@ -101,6 +102,7 @@ impl AdaptiveTuner {
             batch_size_floor,
             batch_size_ceiling,
             last_metrics: None,
+            pending_rollback: false,
         }
     }
 
@@ -111,23 +113,34 @@ impl AdaptiveTuner {
         tuner
     }
 
-    /// Observe execution metrics and optionally propose adjusted configuration.
+    /// Record execution metrics and update tuner state.
     ///
-    /// Returns `Some(TunerConfig)` if an adjustment is proposed, `None` otherwise.
-    ///
-    /// Regression check: any proposed change that regresses by >2x is rolled back
-    /// to the stable configuration.
-    pub fn observe(&mut self, metrics: &ExecutionMetrics) -> Option<TunerConfig> {
+    /// This mutates internal observation state but does not propose configuration
+    /// changes directly. Call `propose_adjustment()` after recording to obtain a
+    /// bounded candidate configuration.
+    pub fn record_metrics(&mut self, metrics: &ExecutionMetrics) {
         self.observation_count += 1;
 
-        // Check for regression first
+        // Check for regression first.
         if self.is_regression(metrics) {
             self.current_config = self.stable_config.clone();
+            self.pending_rollback = true;
             self.last_metrics = Some(metrics.clone());
-            return Some(self.stable_config.clone());
+            return;
         }
 
+        self.pending_rollback = false;
         self.last_metrics = Some(metrics.clone());
+    }
+
+    /// Propose a bounded configuration adjustment based on recorded metrics.
+    ///
+    /// This method is side-effect free; callers must commit accepted proposals
+    /// through `apply_adjustment`.
+    pub fn propose_adjustment(&self) -> Option<TunerConfig> {
+        if self.pending_rollback {
+            return Some(self.stable_config.clone());
+        }
 
         // ObserveOnly mode never proposes adjustments
         if self.mode == TunerMode::ObserveOnly {
@@ -138,6 +151,7 @@ impl AdaptiveTuner {
         if self.observation_count <= self.stability_window {
             return None;
         }
+        let metrics = self.last_metrics.as_ref()?;
 
         // Propose bounded adjustments based on metrics
         let mut proposed = self.current_config.clone();
@@ -198,13 +212,14 @@ impl AdaptiveTuner {
             }
         }
 
-        if changed {
-            self.current_config = proposed.clone();
-            self.stable_config = proposed.clone(); // Update stable config on successful adjustment
-            Some(proposed)
-        } else {
-            None
-        }
+        changed.then_some(proposed)
+    }
+
+    /// Accept a proposed adjustment as the new current/stable configuration.
+    pub fn apply_adjustment(&mut self, proposed: TunerConfig) {
+        self.current_config = proposed.clone();
+        self.stable_config = proposed;
+        self.pending_rollback = false;
     }
 
     /// Check if the current metrics represent a regression from the last observation.
@@ -259,12 +274,29 @@ impl AdaptiveTuner {
         self.batch_size_floor = batch_size_floor;
         self.batch_size_ceiling = batch_size_ceiling;
         self.last_metrics = None;
+        self.pending_rollback = false;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn observe_cycle(tuner: &mut AdaptiveTuner, metrics: &ExecutionMetrics) -> Option<TunerConfig> {
+        tuner.record_metrics(metrics);
+        tuner.propose_adjustment()
+    }
+
+    fn observe_and_apply(
+        tuner: &mut AdaptiveTuner,
+        metrics: &ExecutionMetrics,
+    ) -> Option<TunerConfig> {
+        let proposal = observe_cycle(tuner, metrics);
+        if let Some(next) = proposal.clone() {
+            tuner.apply_adjustment(next);
+        }
+        proposal
+    }
 
     #[test]
     fn test_tuner_creation() {
@@ -296,7 +328,7 @@ mod tests {
             rows_processed: 1000,
         };
 
-        let result = tuner.observe(&metrics);
+        let result = observe_cycle(&mut tuner, &metrics);
         assert!(
             result.is_none(),
             "ObserveOnly mode should not propose adjustments"
@@ -318,15 +350,15 @@ mod tests {
         };
 
         // First observation - within stability window
-        assert!(tuner.observe(&metrics).is_none());
+        assert!(observe_cycle(&mut tuner, &metrics).is_none());
         assert_eq!(tuner.observation_count(), 1);
 
         // Second observation - still within window
-        assert!(tuner.observe(&metrics).is_none());
+        assert!(observe_cycle(&mut tuner, &metrics).is_none());
         assert_eq!(tuner.observation_count(), 2);
 
         // Third observation - still within window
-        assert!(tuner.observe(&metrics).is_none());
+        assert!(observe_cycle(&mut tuner, &metrics).is_none());
         assert_eq!(tuner.observation_count(), 3);
     }
 
@@ -342,7 +374,7 @@ mod tests {
             peak_memory_bytes: 1_000_000,
             rows_processed: 1000,
         };
-        tuner.observe(&baseline_metrics);
+        observe_and_apply(&mut tuner, &baseline_metrics);
 
         let regression_metrics = ExecutionMetrics {
             elapsed_ms: 250, // >2x of 100ms
@@ -352,7 +384,7 @@ mod tests {
             rows_processed: 1000,
         };
 
-        let result = tuner.observe(&regression_metrics);
+        let result = observe_cycle(&mut tuner, &regression_metrics);
         assert!(result.is_some(), "Should rollback on regression");
         assert_eq!(
             tuner.current_config(),
@@ -380,7 +412,7 @@ mod tests {
                 peak_memory_bytes: 1_000_000,
                 rows_processed: 1000,
             };
-            tuner.observe(&metrics);
+            observe_and_apply(&mut tuner, &metrics);
         }
 
         let spill_metrics = ExecutionMetrics {
@@ -391,7 +423,7 @@ mod tests {
             rows_processed: 1000,
         };
 
-        let result = tuner.observe(&spill_metrics);
+        let result = observe_cycle(&mut tuner, &spill_metrics);
         assert!(result.is_some(), "Should propose adjustment on spills");
         let new_config = result.unwrap();
         assert!(
@@ -418,7 +450,7 @@ mod tests {
                 peak_memory_bytes: 1_000_000,
                 rows_processed: 1000,
             };
-            tuner.observe(&metrics);
+            observe_and_apply(&mut tuner, &metrics);
         }
 
         let selective_metrics = ExecutionMetrics {
@@ -429,7 +461,7 @@ mod tests {
             rows_processed: 1000,
         };
 
-        let result = tuner.observe(&selective_metrics);
+        let result = observe_cycle(&mut tuner, &selective_metrics);
         assert!(
             result.is_some(),
             "Should propose adjustment on selective scans"
@@ -459,7 +491,7 @@ mod tests {
                 peak_memory_bytes: 1_000_000,
                 rows_processed: 50_000,
             };
-            tuner.observe(&metrics);
+            observe_and_apply(&mut tuner, &metrics);
         }
 
         let small_metrics = ExecutionMetrics {
@@ -470,7 +502,7 @@ mod tests {
             rows_processed: 500, // Small result
         };
 
-        let result = tuner.observe(&small_metrics);
+        let result = observe_cycle(&mut tuner, &small_metrics);
         assert!(
             result.is_some(),
             "Should propose adjustment for small results"
@@ -496,7 +528,7 @@ mod tests {
                 peak_memory_bytes: 1_000_000,
                 rows_processed: 1000,
             };
-            tuner.observe(&metrics);
+            observe_and_apply(&mut tuner, &metrics);
         }
 
         assert_eq!(tuner.observation_count(), 3);

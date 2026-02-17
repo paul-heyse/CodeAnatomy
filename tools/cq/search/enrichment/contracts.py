@@ -8,7 +8,7 @@ from typing import Literal, Protocol
 import msgspec
 
 from tools.cq.core.structs import CqOutputStruct
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 
 EnrichmentStatus = Literal["applied", "degraded", "skipped"]
 

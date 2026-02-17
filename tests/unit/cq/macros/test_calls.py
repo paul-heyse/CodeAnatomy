@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -12,8 +13,14 @@ from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
 from tools.cq.macros.calls.context_snippet import _extract_context_snippet
 from tools.cq.macros.calls.insight import _find_function_signature
+from tools.cq.macros.calls.neighborhood import (
+    CallAnalysisSummary,
+    CallsNeighborhoodRequest,
+    _build_calls_neighborhood,
+)
 from tools.cq.macros.calls.semantic import _calls_payload_reason
 from tools.cq.macros.contracts import CallsRequest
+from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectResult
 
 MAX_TARGET_CALLEE_FINDINGS = 10
 
@@ -313,3 +320,77 @@ def test_calls_payload_reason_uses_fallback_for_rust() -> None:
     assert (
         _calls_payload_reason("rust", payload, fallback_reason="request_failed") == "request_failed"
     )
+
+
+def test_build_calls_neighborhood_uses_rust_language_for_rs_targets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Calls neighborhood collector should use rust parser for .rs targets."""
+    captured_language: str | None = None
+
+    def _fake_collect(request: object) -> TreeSitterNeighborhoodCollectResult:
+        nonlocal captured_language
+        captured_language = getattr(request, "language", None)
+        return TreeSitterNeighborhoodCollectResult()
+
+    monkeypatch.setattr(
+        "tools.cq.neighborhood.tree_sitter_collector.collect_tree_sitter_neighborhood",
+        _fake_collect,
+    )
+
+    _build_calls_neighborhood(
+        CallsNeighborhoodRequest(
+            root=tmp_path,
+            function_name="compile_target",
+            target_location=("src/lib.rs", 6),
+            target_callees=Counter(),
+            analysis=CallAnalysisSummary(
+                arg_shapes=Counter(),
+                kwarg_usage=Counter(),
+                forwarding_count=0,
+                contexts=Counter(),
+                hazard_counts=Counter(),
+            ),
+            score=None,
+            target_language=None,
+            preview_per_slice=3,
+        )
+    )
+    assert captured_language == "rust"
+
+
+def test_build_calls_neighborhood_defaults_to_python_for_py_targets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Calls neighborhood collector should default to python for .py targets."""
+    captured_language: str | None = None
+
+    def _fake_collect(request: object) -> TreeSitterNeighborhoodCollectResult:
+        nonlocal captured_language
+        captured_language = getattr(request, "language", None)
+        return TreeSitterNeighborhoodCollectResult()
+
+    monkeypatch.setattr(
+        "tools.cq.neighborhood.tree_sitter_collector.collect_tree_sitter_neighborhood",
+        _fake_collect,
+    )
+
+    _build_calls_neighborhood(
+        CallsNeighborhoodRequest(
+            root=tmp_path,
+            function_name="foo",
+            target_location=("src/mod.py", 3),
+            target_callees=Counter(),
+            analysis=CallAnalysisSummary(
+                arg_shapes=Counter(),
+                kwarg_usage=Counter(),
+                forwarding_count=0,
+                contexts=Counter(),
+                hazard_counts=Counter(),
+            ),
+            score=None,
+            target_language=None,
+            preview_per_slice=3,
+        )
+    )
+    assert captured_language == "python"

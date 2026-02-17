@@ -1,18 +1,17 @@
 //! Delta output table creation and schema enforcement.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 
 use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef,
 };
 use arrow::record_batch::RecordBatch;
-use datafusion::datasource::TableProvider;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_ext::delta_control_plane::{
     delta_provider_from_session_request, DeltaProviderFromSessionRequest, DeltaScanOverrides,
 };
+use datafusion_ext::delta_protocol::TableVersion;
 use datafusion_ext::DeltaFeatureGate;
 use deltalake::delta_datafusion::DeltaScanConfig;
 use deltalake::kernel::{
@@ -171,8 +170,10 @@ pub async fn ensure_output_table(
             session_ctx: ctx,
             table_uri: delta_location,
             storage_options: None,
-            version: table.version(),
-            timestamp: None,
+            table_version: table
+                .version()
+                .map(TableVersion::Version)
+                .unwrap_or(TableVersion::Latest),
             predicate: None,
             overrides: scan_overrides,
             gate: Some(DeltaFeatureGate::default()),
@@ -185,7 +186,7 @@ pub async fn ensure_output_table(
         )));
     }
     validate_output_schema(provider.schema().as_ref(), expected_schema.as_ref())?;
-    ctx.register_table(table_name, Arc::new(provider))?;
+    ctx.register_table(table_name, provider)?;
     Ok(())
 }
 

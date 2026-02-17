@@ -20,10 +20,7 @@ Key introspection surfaces:
 
 from __future__ import annotations
 
-import contextlib
 import gc
-import importlib
-import re
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -35,11 +32,10 @@ from datafusion import SessionContext, SQLOptions
 from datafusion_engine.arrow.interop import coerce_arrow_schema
 from datafusion_engine.sql.options import (
     sql_options_for_profile,
-    statement_sql_options_for_profile,
 )
 from datafusion_engine.tables.metadata import table_provider_metadata
 from serde_msgspec import to_builtins
-from utils.hashing import CacheKeyBuilder, hash_sha256_hex
+from utils.hashing import CacheKeyBuilder
 
 SchemaMapping = dict[str, dict[str, dict[str, dict[str, str]]]]
 
@@ -114,10 +110,6 @@ def _read_only_sql_options() -> SQLOptions:
     return sql_options_for_profile(None)
 
 
-def _statement_sql_options() -> SQLOptions:
-    return statement_sql_options_for_profile(None)
-
-
 def _introspection_cache_for_ctx(
     ctx: SessionContext,
     *,
@@ -162,158 +154,6 @@ def _sortable_int(value: object) -> int:
 
 def _row_sort_key(row: Mapping[str, object], keys: Sequence[str]) -> tuple[str, ...]:
     return tuple(_sortable_text(row.get(key)) for key in keys)
-
-
-def _constraint_rows_from_snapshot(
-    snapshot: IntrospectionSnapshot,
-    *,
-    table_name: str | None = None,
-    catalog: str | None = None,
-    schema: str | None = None,
-) -> list[dict[str, object]]:
-    if snapshot.table_constraints is None or snapshot.key_column_usage is None:
-        return []
-    constraints = _normalized_rows(snapshot.table_constraints)
-    usage_rows = _normalized_rows(snapshot.key_column_usage)
-    usage_map: dict[
-        tuple[str | None, str | None, str | None, str | None], list[dict[str, object]]
-    ] = {}
-    for row in usage_rows:
-        key = (
-            str(row.get("table_catalog")) if row.get("table_catalog") is not None else None,
-            str(row.get("table_schema")) if row.get("table_schema") is not None else None,
-            str(row.get("table_name")) if row.get("table_name") is not None else None,
-            str(row.get("constraint_name")) if row.get("constraint_name") is not None else None,
-        )
-        usage_map.setdefault(key, []).append(row)
-    rows: list[dict[str, object]] = []
-    for constraint in constraints:
-        table_catalog = (
-            str(constraint.get("table_catalog"))
-            if constraint.get("table_catalog") is not None
-            else None
-        )
-        table_schema = (
-            str(constraint.get("table_schema"))
-            if constraint.get("table_schema") is not None
-            else None
-        )
-        table_value = (
-            str(constraint.get("table_name")) if constraint.get("table_name") is not None else None
-        )
-        if table_name is not None and table_value != table_name:
-            continue
-        if catalog is not None and table_catalog != catalog:
-            continue
-        if schema is not None and table_schema != schema:
-            continue
-        constraint_name = (
-            str(constraint.get("constraint_name"))
-            if constraint.get("constraint_name") is not None
-            else None
-        )
-        key = (table_catalog, table_schema, table_value, constraint_name)
-        usage = usage_map.get(key)
-        if not usage:
-            rows.append(
-                {
-                    "table_catalog": constraint.get("table_catalog"),
-                    "table_schema": constraint.get("table_schema"),
-                    "table_name": constraint.get("table_name"),
-                    "constraint_name": constraint.get("constraint_name"),
-                    "constraint_type": constraint.get("constraint_type"),
-                    "column_name": None,
-                    "ordinal_position": None,
-                }
-            )
-            continue
-        rows.extend(
-            [
-                {
-                    "table_catalog": constraint.get("table_catalog"),
-                    "table_schema": constraint.get("table_schema"),
-                    "table_name": constraint.get("table_name"),
-                    "constraint_name": constraint.get("constraint_name"),
-                    "constraint_type": constraint.get("constraint_type"),
-                    "column_name": entry.get("column_name"),
-                    "ordinal_position": entry.get("ordinal_position"),
-                }
-                for entry in usage
-            ]
-        )
-    return rows
-
-
-def _constraint_name(
-    table_name: str,
-    *,
-    constraint: str,
-    index: int,
-) -> str:
-    digest = hash_sha256_hex(constraint.encode("utf-8"))[:8]
-    return f"{table_name}_constraint_{index}_{digest}"
-
-
-def _parse_constraint_columns(constraint: str) -> tuple[str, ...]:
-    match = re.search(r"\((.*?)\)", constraint)
-    if match is None:
-        return ()
-    raw = match.group(1)
-    return tuple(token.strip().strip('"') for token in raw.split(",") if token.strip().strip('"'))
-
-
-def _constraint_type_and_columns(constraint: str) -> tuple[str, tuple[str, ...]]:
-    normalized = constraint.strip()
-    if not normalized:
-        return "CHECK", ()
-    upper = normalized.upper()
-    if upper.startswith("PRIMARY KEY"):
-        return "PRIMARY KEY", _parse_constraint_columns(normalized)
-    if upper.startswith("UNIQUE"):
-        return "UNIQUE", _parse_constraint_columns(normalized)
-    if upper.startswith("CHECK"):
-        return "CHECK", ()
-    return "CHECK", ()
-
-
-def _constraint_rows_from_metadata(
-    *,
-    table_name: str,
-    metadata_constraints: Sequence[str],
-) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    for index, constraint in enumerate(metadata_constraints):
-        normalized = constraint.strip()
-        if not normalized:
-            continue
-        constraint_type, columns = _constraint_type_and_columns(normalized)
-        constraint_name = _constraint_name(table_name, constraint=normalized, index=index)
-        if columns:
-            for position, column in enumerate(columns, start=1):
-                rows.append(
-                    {
-                        "table_catalog": None,
-                        "table_schema": None,
-                        "table_name": table_name,
-                        "constraint_name": constraint_name,
-                        "constraint_type": constraint_type,
-                        "column_name": column,
-                        "ordinal_position": position,
-                    }
-                )
-        else:
-            rows.append(
-                {
-                    "table_catalog": None,
-                    "table_schema": None,
-                    "table_name": table_name,
-                    "constraint_name": constraint_name,
-                    "constraint_type": constraint_type,
-                    "column_name": None,
-                    "ordinal_position": None,
-                }
-            )
-    return rows
 
 
 def table_names_snapshot(
@@ -379,208 +219,6 @@ def tables_snapshot_table(
     return snapshot.tables
 
 
-def _empty_routines_table() -> pa.Table:
-    return pa.Table.from_arrays(
-        [
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-        ],
-        names=[
-            "specific_catalog",
-            "specific_schema",
-            "specific_name",
-            "routine_catalog",
-            "routine_schema",
-            "routine_name",
-            "routine_type",
-            "data_type",
-        ],
-    )
-
-
-def _empty_parameters_table() -> pa.Table:
-    return pa.Table.from_arrays(
-        [
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.int32()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-        ],
-        names=[
-            "specific_catalog",
-            "specific_schema",
-            "specific_name",
-            "routine_catalog",
-            "routine_schema",
-            "routine_name",
-            "ordinal_position",
-            "parameter_name",
-            "data_type",
-            "parameter_mode",
-        ],
-    )
-
-
-def _registry_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:
-    try:
-        from datafusion_engine.udf.extension_core import rust_udf_snapshot
-    except ImportError:
-        return None
-    try:
-        snapshot = rust_udf_snapshot(ctx)
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    if not isinstance(snapshot, Mapping):
-        return None
-    return snapshot
-
-
-def _registry_names(snapshot: Mapping[str, object], key: str) -> list[str]:
-    value = snapshot.get(key, [])
-    if isinstance(value, str):
-        return []
-    if isinstance(value, Iterable):
-        return [str(name) for name in value if name is not None]
-    return []
-
-
-def _routine_name_from_row(row: Mapping[str, object]) -> str | None:
-    for key in ("routine_name", "function_name", "name"):
-        value = row.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _normalized_name_map(value: object) -> Mapping[str, Sequence[str]]:
-    if isinstance(value, Mapping):
-        resolved: dict[str, Sequence[str]] = {}
-        for key, names in value.items():
-            if names is None or isinstance(names, str):
-                resolved[str(key)] = ()
-            elif isinstance(names, Iterable):
-                resolved[str(key)] = tuple(str(name) for name in names if name is not None)
-            else:
-                resolved[str(key)] = ()
-        return resolved
-    return {}
-
-
-def _deterministic_flag(volatility: str | None) -> bool | None:
-    if volatility is None:
-        return None
-    lowered = volatility.lower()
-    if lowered in {"immutable", "stable"}:
-        return True
-    if lowered == "volatile":
-        return False
-    return None
-
-
-def _routine_row(
-    *,
-    name: str,
-    routine_type: str,
-    specific_name: str,
-    volatility: str | None,
-    schema_names: Sequence[str],
-) -> dict[str, object]:
-    row: dict[str, object] = {
-        "specific_catalog": "datafusion",
-        "specific_schema": "public",
-        "specific_name": specific_name,
-        "routine_catalog": "datafusion",
-        "routine_schema": "public",
-        "routine_name": name,
-        "routine_type": routine_type,
-        "data_type": None,
-    }
-    if "function_name" in schema_names:
-        row["function_name"] = name
-    if "function_type" in schema_names:
-        row["function_type"] = routine_type
-    if "volatility" in schema_names:
-        row["volatility"] = volatility
-    if "is_deterministic" in schema_names:
-        row["is_deterministic"] = _deterministic_flag(volatility)
-    return row
-
-
-def _parameter_row(
-    *,
-    name: str,
-    specific_name: str,
-    ordinal: int,
-    param_name: str,
-    schema_names: Sequence[str],
-) -> dict[str, object]:
-    row: dict[str, object] = {
-        "specific_catalog": "datafusion",
-        "specific_schema": "public",
-        "specific_name": specific_name,
-        "routine_catalog": "datafusion",
-        "routine_schema": "public",
-        "routine_name": name,
-        "ordinal_position": ordinal,
-        "parameter_name": param_name,
-        "data_type": "unknown",
-        "parameter_mode": "IN",
-    }
-    if "function_name" in schema_names:
-        row["function_name"] = name
-    return row
-
-
-def _aligned_rows(
-    rows: Sequence[Mapping[str, object]],
-    schema_names: Sequence[str],
-) -> list[dict[str, object]]:
-    return [{name: row.get(name) for name in schema_names} for row in rows]
-
-
-def _merge_registry_routines(ctx: SessionContext, base: pa.Table) -> pa.Table:
-    _ = ctx
-    return base
-
-
-def _merge_registry_parameters(ctx: SessionContext, base: pa.Table | None) -> pa.Table:
-    _ = ctx
-    return base or _empty_parameters_table()
-
-
-def _information_schema_table(
-    ctx: SessionContext,
-    *,
-    name: str,
-    sql_options: SQLOptions | None,
-) -> pa.Table | None:
-    panic_exception_type: type[Exception] = RuntimeError
-    with contextlib.suppress(ImportError):  # pragma: no cover - optional dependency
-        module = importlib.import_module("pyo3_runtime")
-        candidate = getattr(module, "PanicException", RuntimeError)
-        if isinstance(candidate, type) and issubclass(candidate, Exception):
-            panic_exception_type = candidate
-    query = f"select * from information_schema.{name}"
-    resolved_options = sql_options or _read_only_sql_options()
-    try:
-        df = ctx.sql_with_options(query, resolved_options)
-        return df.to_arrow_table()
-    except (RuntimeError, TypeError, ValueError, AttributeError, panic_exception_type):
-        return None
-
-
 def routines_snapshot_table(
     ctx: SessionContext,
     *,
@@ -593,129 +231,11 @@ def routines_snapshot_table(
     pyarrow.Table
         Routine inventory from information_schema.routines.
     """
-    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
-    base = snapshot.routines if snapshot.routines is not None else _empty_routines_table()
-    if base.num_rows == 0:
-        fallback = _information_schema_table(ctx, name="routines", sql_options=sql_options)
-        if fallback is not None:
-            base = fallback
-    return _merge_registry_routines(ctx, base)
-
-
-def parameters_snapshot_table(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None = None,
-) -> pa.Table | None:
-    """Return information_schema.parameters as a pyarrow.Table when available.
-
-    Returns:
-    -------
-    pyarrow.Table | None
-        Parameter inventory from information_schema.parameters, or None if unavailable.
-    """
-    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
-    base = getattr(snapshot, "parameters", None)
-    if base is None or base.num_rows == 0:
-        fallback = _information_schema_table(ctx, name="parameters", sql_options=sql_options)
-        if fallback is not None:
-            base = fallback
-    merged = _merge_registry_parameters(ctx, base)
-    if base is None and merged.num_rows == 0:
-        return None
-    return merged
-
-
-def table_constraint_rows(
-    ctx: SessionContext,
-    *,
-    table_name: str,
-    sql_options: SQLOptions | None = None,
-) -> list[dict[str, object]]:
-    """Return constraint metadata rows for a table when available.
-
-    Returns:
-    -------
-    list[dict[str, object]]
-        Rows including constraint type and column names where available.
-    """
-    from datafusion_engine.schema.introspection_delta import (
-        table_constraint_rows as _table_constraint_rows,
+    from datafusion_engine.schema.introspection_routines import (
+        routines_snapshot_table as _routines_snapshot_table,
     )
 
-    return _table_constraint_rows(
-        ctx,
-        table_name=table_name,
-        sql_options=sql_options,
-    )
-
-
-def constraint_rows(
-    ctx: SessionContext,
-    *,
-    catalog: str | None = None,
-    schema: str | None = None,
-    sql_options: SQLOptions | None = None,
-) -> list[dict[str, object]]:
-    """Return constraint metadata rows across tables.
-
-    Returns:
-    -------
-    list[dict[str, object]]
-        Rows including constraint type and column names where available.
-    """
-    from datafusion_engine.schema.introspection_delta import constraint_rows as _constraint_rows
-
-    return _constraint_rows(
-        ctx,
-        catalog=catalog,
-        schema=schema,
-        sql_options=sql_options,
-    )
-
-
-def schema_from_table(ctx: SessionContext, name: str) -> pa.Schema:
-    """Return Arrow schema from DataFusion catalog for a table.
-
-    Args:
-        ctx: Description.
-        name: Description.
-
-    Raises:
-        TypeError: If the operation cannot be completed.
-    """
-    df = ctx.table(name)
-    schema = coerce_arrow_schema(df.schema())
-    if schema is not None:
-        return schema
-    msg = "Unable to resolve DataFusion schema to Arrow schema."
-    raise TypeError(msg)
-
-
-def _table_name_from_ddl(ddl: str) -> str:
-    """Extract table name from CREATE EXTERNAL TABLE DDL.
-
-    Args:
-        ddl: Description.
-
-    Returns:
-        str: Result.
-
-    Raises:
-        ValueError: If the operation cannot be completed.
-    """
-    lines = ddl.split("\n")
-    for line in lines:
-        if line.strip().upper().startswith("CREATE EXTERNAL TABLE"):
-            parts = line.split()
-            for i, part in enumerate(parts):
-                if part.upper() == "TABLE" and i + 1 < len(parts):
-                    table_name = parts[i + 1].strip()
-                    if table_name.endswith("("):
-                        table_name = table_name[:-1].strip()
-                    return table_name
-    msg = f"Could not extract table name from DDL: {ddl[:100]}"
-    raise ValueError(msg)
+    return _routines_snapshot_table(ctx, sql_options=sql_options)
 
 
 @dataclass(frozen=True)
@@ -1187,92 +707,25 @@ class SchemaIntrospector:
         return snapshot.schema_map()
 
 
-def find_struct_field_keys(
-    schema: pa.Schema,
-    *,
-    field_names: Sequence[str],
-) -> tuple[str, ...]:
-    """Return struct field keys for the first matching nested field.
-
-    Args:
-        schema: Description.
-        field_names: Description.
-
-    Raises:
-        KeyError: If the operation cannot be completed.
-    """
-    for schema_field in schema:
-        keys = _find_struct_keys_in_type(schema_field.type, field_names=field_names)
-        if keys is not None:
-            return keys
-    msg = f"Schema missing struct fields for {tuple(field_names)!r}."
-    raise KeyError(msg)
-
-
-def _find_struct_keys_in_type(
-    dtype: pa.DataType,
-    *,
-    field_names: Iterable[str],
-) -> tuple[str, ...] | None:
-    if pa.types.is_struct(dtype):
-        result: tuple[str, ...] | None = None
-        for struct_field in dtype:
-            if struct_field.name in field_names:
-                result = _extract_struct_keys(struct_field.type)
-                break
-            result = _find_struct_keys_in_type(struct_field.type, field_names=field_names)
-            if result is not None:
-                break
-        return result
-    if (
-        pa.types.is_list(dtype)
-        or pa.types.is_large_list(dtype)
-        or pa.types.is_list_view(dtype)
-        or pa.types.is_large_list_view(dtype)
-    ):
-        return _find_struct_keys_in_type(dtype.value_type, field_names=field_names)
-    if pa.types.is_map(dtype):
-        return _find_struct_keys_in_type(dtype.item_type, field_names=field_names)
-    return None
-
-
-def _extract_struct_keys(dtype: pa.DataType) -> tuple[str, ...] | None:
-    if pa.types.is_struct(dtype):
-        return tuple(struct_field.name for struct_field in dtype)
-    if pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
-        return _extract_struct_keys(dtype.value_type)
-    if pa.types.is_list_view(dtype) or pa.types.is_large_list_view(dtype):
-        return _extract_struct_keys(dtype.value_type)
-    return None
-
-
-def _function_catalog_sort_key(row: Mapping[str, object]) -> tuple[str, str]:
-    name = row.get("function_name")
-    func_name = str(name) if name is not None else ""
-    func_type = row.get("function_type")
-    return func_name, str(func_type) if func_type is not None else ""
-
-
-def catalogs_snapshot(introspector: SchemaIntrospector) -> list[dict[str, object]]:
-    """Return catalog inventory rows from information_schema.
-
-    Returns:
-    -------
-    list[dict[str, object]]
-        Catalog inventory rows.
-    """
-    from datafusion_engine.schema.introspection_cache import catalogs_snapshot as _catalogs_snapshot
-
-    return _catalogs_snapshot(introspector)
-
-
 __all__ = [
     "SchemaIntrospector",
     "catalogs_snapshot",
+    "constraint_rows",
     "find_struct_field_keys",
     "parameters_snapshot_table",
     "routines_snapshot_table",
     "schema_contract_from_table",
     "schema_from_table",
+    "table_constraint_rows",
     "tables_snapshot_table",
 ]
+
+from datafusion_engine.schema.introspection_helpers import (
+    _function_catalog_sort_key,
+    catalogs_snapshot,
+    constraint_rows,
+    find_struct_field_keys,
+    parameters_snapshot_table,
+    schema_from_table,
+    table_constraint_rows,
+)

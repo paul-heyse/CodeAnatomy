@@ -146,7 +146,7 @@ class DataFusionExecutionFacade:
 
         """
         from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
-        from datafusion_engine.udf.extension_core import extension_capabilities_report
+        from datafusion_engine.udf.extension_validation import extension_capabilities_report
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,

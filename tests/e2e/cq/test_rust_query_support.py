@@ -5,8 +5,8 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Callable
 
-import msgspec
 from tools.cq.core.schema import CqResult
+from tools.cq.core.serialization import loads_json
 
 
 def test_rust_query_available_without_feature_gate(run_query: Callable[[str], CqResult]) -> None:
@@ -49,5 +49,5 @@ def test_run_step_rust_query(
         ]
     )
     assert proc.returncode == 0, proc.stderr
-    result = msgspec.json.decode(proc.stdout.encode("utf-8"), type=CqResult)
+    result = loads_json(proc.stdout)
     assert any("helper" in finding.message for finding in result.key_findings)

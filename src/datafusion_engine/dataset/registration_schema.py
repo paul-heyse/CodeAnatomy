@@ -10,31 +10,36 @@ import pyarrow as pa
 from datafusion_engine.arrow.abi import schema_to_dict
 from datafusion_engine.arrow.interop import SchemaLike, arrow_schema_from_df
 from datafusion_engine.catalog.introspection import introspection_cache_for_ctx
-from datafusion_engine.dataset import registration_core as _core
 from datafusion_engine.schema.contracts import (
     EvolutionPolicy,
     schema_contract_from_table_schema_contract,
 )
+from datafusion_engine.schema.introspection_core import SchemaIntrospector
+from datafusion_engine.session.introspection import schema_introspector_for_profile
 from datafusion_engine.sql.options import sql_options_for_profile
+from schema_spec.dataset_spec import DataFusionScanOptions, TableSchemaContract
 from utils.validation import find_missing
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.dataset.registration_core import _PartitionSchemaContext
+    from datafusion_engine.dataset.registration_core import DataFusionRegistrationContext
+    from datafusion_engine.dataset.registration_delta_helpers import (
+        _PartitionSchemaContext,
+    )
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
 def _resolve_table_schema_contract(
     *,
     schema: pa.Schema | None,
-    scan: _core.DataFusionScanOptions | None,
+    scan: DataFusionScanOptions | None,
     partition_cols: Sequence[tuple[str, pa.DataType]] | None,
-) -> _core.TableSchemaContract | None:
+) -> TableSchemaContract | None:
     """Resolve table-schema contract from file schema + scan options.
 
     Returns:
-        _core.TableSchemaContract | None: Effective contract for schema validation.
+        TableSchemaContract | None: Effective contract for schema validation.
     """
     if scan is not None and scan.table_schema_contract is not None:
         return scan.table_schema_contract
@@ -43,10 +48,10 @@ def _resolve_table_schema_contract(
     resolved_partitions = tuple(partition_cols or ())
     if scan is not None and scan.partition_cols:
         resolved_partitions = scan.partition_cols
-    return _core.TableSchemaContract(file_schema=schema, partition_cols=resolved_partitions)
+    return TableSchemaContract(file_schema=schema, partition_cols=resolved_partitions)
 
 
-def _validate_table_schema_contract(contract: _core.TableSchemaContract | None) -> None:
+def _validate_table_schema_contract(contract: TableSchemaContract | None) -> None:
     if contract is None:
         return
     file_names = set(contract.file_schema.names)
@@ -61,7 +66,7 @@ def _validate_table_schema_contract(contract: _core.TableSchemaContract | None) 
         seen.add(name)
 
 
-def _validate_schema_contracts(context: _core.DataFusionRegistrationContext) -> None:
+def _validate_schema_contracts(context: DataFusionRegistrationContext) -> None:
     """Validate schema contracts against introspection snapshots.
 
     Raises:
@@ -161,16 +166,16 @@ def _partition_column_rows(
 ) -> tuple[list[dict[str, object]] | None, str | None]:
     try:
         if runtime_profile is not None:
-            table = _core.schema_introspector_for_profile(
+            table = schema_introspector_for_profile(
                 runtime_profile,
                 ctx,
                 cache_prefix=cache_prefix,
             ).table_columns_with_ordinal(table_name)
         else:
             sql_options = sql_options_for_profile(runtime_profile)
-            table = _core.SchemaIntrospector(
-                ctx, sql_options=sql_options
-            ).table_columns_with_ordinal(table_name)
+            table = SchemaIntrospector(ctx, sql_options=sql_options).table_columns_with_ordinal(
+                table_name
+            )
     except (RuntimeError, TypeError, ValueError) as exc:
         return None, str(exc)
     return table, None

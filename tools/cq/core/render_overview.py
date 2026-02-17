@@ -12,7 +12,7 @@ from tools.cq.core.render_utils import na as _na
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding
-    from tools.cq.core.summary_contract import CqSummary
+    from tools.cq.core.summary_contract import SummaryEnvelopeV1
 
 
 MAX_CODE_OVERVIEW_ITEMS = 5
@@ -106,7 +106,7 @@ def _summarize_categories(findings: list[Finding]) -> str:
     return f"`{category_summary}`"
 
 
-def _format_python_semantic_overview(summary: CqSummary) -> str:
+def _format_python_semantic_overview(summary: SummaryEnvelopeV1) -> str:
     """Format Python semantic overview from summary.
 
     Parameters
@@ -187,7 +187,7 @@ def _scope_from_step_summaries(step_summaries: Mapping[str, object]) -> str | No
     return None
 
 
-def _format_language_scope(summary: CqSummary) -> str:
+def _format_language_scope(summary: SummaryEnvelopeV1) -> str:
     """Format language scope from summary.
 
     Parameters

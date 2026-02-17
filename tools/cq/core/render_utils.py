@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from tools.cq.core.schema import CqResult, Finding
-from tools.cq.core.summary_contract import CqSummary
+from tools.cq.core.summary_contract import SummaryEnvelopeV1
 
 
 def na(reason: str) -> str:
@@ -100,13 +100,13 @@ def iter_result_findings(result: CqResult) -> list[Finding]:
     return findings
 
 
-def summary_value(summary: CqSummary | Mapping[str, object], key: str) -> object:
+def summary_value(summary: SummaryEnvelopeV1 | Mapping[str, object], key: str) -> object:
     """Extract one summary field from struct or mapping forms.
 
     Returns:
         object: Field value or ``None`` when absent.
     """
-    if isinstance(summary, CqSummary):
+    if isinstance(summary, SummaryEnvelopeV1):
         return getattr(summary, key, None)
     return summary.get(key)
 

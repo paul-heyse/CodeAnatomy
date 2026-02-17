@@ -37,9 +37,38 @@ impl ConfigParseable for i32 {
     }
 }
 
+impl ConfigParseable for usize {
+    fn parse_config(value: &str, key: &str) -> Result<Self> {
+        value.trim().parse::<usize>().map_err(|err| {
+            DataFusionError::Plan(format!("Invalid usize for {key}: {value} ({err})"))
+        })
+    }
+}
+
+impl ConfigParseable for u64 {
+    fn parse_config(value: &str, key: &str) -> Result<Self> {
+        value.trim().parse::<u64>().map_err(|err| {
+            DataFusionError::Plan(format!("Invalid u64 for {key}: {value} ({err})"))
+        })
+    }
+}
+
 impl ConfigParseable for String {
     fn parse_config(value: &str, _key: &str) -> Result<Self> {
         Ok(value.trim().to_string())
+    }
+}
+
+impl<T: ConfigParseable> ConfigParseable for Option<T> {
+    fn parse_config(value: &str, key: &str) -> Result<Self> {
+        let trimmed = value.trim();
+        if trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("none")
+            || trimmed.eq_ignore_ascii_case("null")
+        {
+            return Ok(None);
+        }
+        T::parse_config(trimmed, key).map(Some)
     }
 }
 
@@ -55,9 +84,29 @@ impl ConfigValueFormat for i32 {
     }
 }
 
+impl ConfigValueFormat for usize {
+    fn format_value(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl ConfigValueFormat for u64 {
+    fn format_value(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl ConfigValueFormat for String {
     fn format_value(&self) -> String {
         self.clone()
+    }
+}
+
+impl<T: ConfigValueFormat> ConfigValueFormat for Option<T> {
+    fn format_value(&self) -> String {
+        self.as_ref()
+            .map(ConfigValueFormat::format_value)
+            .unwrap_or_default()
     }
 }
 

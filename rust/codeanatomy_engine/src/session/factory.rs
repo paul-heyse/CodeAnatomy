@@ -22,14 +22,12 @@ use crate::compiler::plan_codec;
 use crate::executor::tracing as engine_tracing;
 use crate::executor::warnings::RunWarning;
 use crate::rules::registry::CpgRuleSet;
+use crate::session::capture::{planning_config_snapshot, GovernancePolicy};
 use crate::spec::runtime::TracingConfig;
 
 use super::format_policy::{build_table_options, default_file_formats, FormatPolicySpec};
 use super::planning_manifest::{manifest_from_surface_with_context, PlanningSurfaceManifest};
-use super::planning_surface::{
-    apply_to_builder, install_rewrites, ExtensionGovernancePolicy, PlanningSurfaceSpec,
-    TableFactoryEntry,
-};
+use super::planning_surface::{apply_to_builder, install_rewrites, PlanningSurfaceSpec, TableFactoryEntry};
 use super::profile_coverage::reserved_profile_warnings;
 use super::profiles::EnvironmentProfile;
 use super::runtime_profiles::RuntimeProfileSpec;
@@ -58,7 +56,7 @@ pub struct SessionBuildOverrides {
     pub enable_function_factory: bool,
     pub enable_domain_planner: bool,
     pub enable_delta_codec: bool,
-    pub extension_governance_policy: ExtensionGovernancePolicy,
+    pub extension_governance_policy: GovernancePolicy,
 }
 
 impl SessionFactory {
@@ -256,12 +254,12 @@ impl SessionFactory {
         engine_tracing::init_otel_tracing(&tracing_config)?;
         let trace_ctx = engine_tracing::TraceRuleContext::from_hashes(
             &spec_hash,
-            &ruleset.fingerprint,
+            &ruleset.fingerprint(),
             &profile_name,
             &tracing_config,
         );
         let physical_rules = engine_tracing::append_execution_instrumentation_rule(
-            ruleset.physical_rules.clone(),
+            ruleset.physical_rules().to_vec(),
             &tracing_config,
             &trace_ctx,
         );
@@ -271,8 +269,8 @@ impl SessionFactory {
         let builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
-            .with_analyzer_rules(ruleset.analyzer_rules.clone())
-            .with_optimizer_rules(ruleset.optimizer_rules.clone())
+            .with_analyzer_rules(ruleset.analyzer_rules().to_vec())
+            .with_optimizer_rules(ruleset.optimizer_rules().to_vec())
             .with_physical_optimizer_rules(physical_rules);
         let builder = apply_to_builder(builder, &planning_surface);
         let state = builder.build();
@@ -333,7 +331,7 @@ impl SessionFactory {
 
         if overrides.enable_function_factory {
             planning_surface.function_factory = Some(Arc::new(
-                datafusion_ext::function_factory::SqlMacroFunctionFactory,
+                datafusion_ext::sql_macro_factory::SqlMacroFunctionFactory,
             ));
         }
         if overrides.enable_domain_planner {
@@ -357,56 +355,13 @@ impl SessionFactory {
     }
 }
 
-fn planning_config_snapshot(config: &SessionConfig) -> BTreeMap<String, String> {
-    let options = config.options();
-    let mut snapshot = BTreeMap::new();
-    snapshot.insert(
-        "datafusion.catalog.default_catalog".to_string(),
-        "codeanatomy".to_string(),
-    );
-    snapshot.insert(
-        "datafusion.catalog.default_schema".to_string(),
-        "public".to_string(),
-    );
-    snapshot.insert(
-        "datafusion.sql_parser.enable_ident_normalization".to_string(),
-        options.sql_parser.enable_ident_normalization.to_string(),
-    );
-    snapshot.insert(
-        "datafusion.optimizer.max_passes".to_string(),
-        options.optimizer.max_passes.to_string(),
-    );
-    snapshot.insert(
-        "datafusion.optimizer.skip_failed_rules".to_string(),
-        options.optimizer.skip_failed_rules.to_string(),
-    );
-    snapshot.insert(
-        "datafusion.execution.target_partitions".to_string(),
-        config.target_partitions().to_string(),
-    );
-    snapshot.insert(
-        "datafusion.execution.parquet.pushdown_filters".to_string(),
-        options.execution.parquet.pushdown_filters.to_string(),
-    );
-    snapshot.insert(
-        "datafusion.execution.parquet.enable_page_index".to_string(),
-        options.execution.parquet.enable_page_index.to_string(),
-    );
-    snapshot.insert(
-        "datafusion.execution.collect_statistics".to_string(),
-        options.execution.collect_statistics.to_string(),
-    );
-    snapshot
-}
-
 fn enforce_extension_governance(
     surface: &PlanningSurfaceSpec,
     warnings: &mut Vec<RunWarning>,
 ) -> Result<()> {
     match surface.extension_policy {
-        ExtensionGovernancePolicy::Permissive => {}
-        ExtensionGovernancePolicy::WarnOnUnregistered
-        | ExtensionGovernancePolicy::StrictAllowlist => {
+        GovernancePolicy::Permissive => {}
+        GovernancePolicy::WarnOnUnregistered | GovernancePolicy::StrictAllowlist => {
             let allowlist: BTreeMap<&str, [u8; 32]> = surface
                 .table_factory_allowlist
                 .iter()
@@ -420,10 +375,7 @@ fn enforce_extension_governance(
                     .map(|hash| *hash == identity)
                     .unwrap_or(false);
                 if !allowed {
-                    if matches!(
-                        surface.extension_policy,
-                        ExtensionGovernancePolicy::StrictAllowlist
-                    ) {
+                    if matches!(surface.extension_policy, GovernancePolicy::StrictAllowlist) {
                         return Err(datafusion_common::DataFusionError::Plan(format!(
                             "Table factory '{factory_type}' is not present in strict allowlist"
                         )));
@@ -438,12 +390,7 @@ fn enforce_extension_governance(
                         )
                         .with_context(
                             "extension_policy",
-                            match surface.extension_policy {
-                                ExtensionGovernancePolicy::StrictAllowlist => "strict_allowlist",
-                                ExtensionGovernancePolicy::WarnOnUnregistered =>
-                                    "warn_on_unregistered",
-                                ExtensionGovernancePolicy::Permissive => "permissive",
-                            },
+                            surface.extension_policy.as_str(),
                         ),
                     );
                 }

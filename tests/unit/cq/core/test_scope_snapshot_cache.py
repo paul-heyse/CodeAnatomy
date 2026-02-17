@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
-from tools.cq.core.cache.snapshot_fingerprint import build_scope_snapshot_fingerprint
+from tools.cq.core.cache.snapshot_fingerprint import (
+    ScopeSnapshotBuildRequestV1,
+    build_scope_snapshot_fingerprint,
+)
 from tools.cq.core.cache.telemetry import reset_cache_telemetry, snapshot_cache_telemetry
 
 
@@ -35,22 +38,26 @@ def test_scope_snapshot_digest_is_deterministic_and_cacheable(tmp_path: Path) ->
     backend = get_cq_cache_backend(root=root)
 
     snapshot_a = build_scope_snapshot_fingerprint(
-        root=root,
+        request=ScopeSnapshotBuildRequestV1(
+            root=root,
+            files=(b_file, a_file),
+            language="python",
+            scope_globs=("*.py",),
+            scope_roots=(root,),
+        ),
         backend=backend,
-        files=[b_file, a_file],
-        language="python",
-        scope_globs=["*.py"],
-        scope_roots=[root],
     )
     telemetry_after_first = snapshot_cache_telemetry().get("scope_snapshot")
 
     snapshot_b = build_scope_snapshot_fingerprint(
-        root=root,
+        request=ScopeSnapshotBuildRequestV1(
+            root=root,
+            files=(a_file, b_file),
+            language="python",
+            scope_globs=("*.py",),
+            scope_roots=(root,),
+        ),
         backend=backend,
-        files=[a_file, b_file],
-        language="python",
-        scope_globs=["*.py"],
-        scope_roots=[root],
     )
     telemetry_after_second = snapshot_cache_telemetry().get("scope_snapshot")
 

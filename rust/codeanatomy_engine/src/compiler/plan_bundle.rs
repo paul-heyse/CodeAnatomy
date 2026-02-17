@@ -20,6 +20,7 @@ use std::sync::Arc;
 use crate::compiler::optimizer_pipeline::OptimizerPassTrace;
 use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use crate::providers::pushdown_contract::PushdownContractReport;
+use crate::schema::introspection::hash_arrow_schema;
 
 use super::substrait::try_substrait_encode;
 
@@ -627,13 +628,9 @@ fn blake3_hash_bytes(bytes: &[u8]) -> [u8; 32] {
 
 /// Compute a blake3 hash over an Arrow schema.
 ///
-/// Serializes the schema to its canonical JSON representation before hashing.
-/// This ensures schema comparisons are format-independent and stable.
+/// Delegates to the authoritative schema hashing implementation.
 fn hash_schema(schema: &ArrowSchema) -> [u8; 32] {
-    // Use serde_json for a canonical representation of the Arrow schema.
-    // Arrow's Schema implements Serialize via serde.
-    let schema_json = serde_json::to_string(schema).unwrap_or_default();
-    blake3_hash_bytes(schema_json.as_bytes())
+    hash_arrow_schema(schema)
 }
 
 fn codec_digest_summary(bytes: Option<&[u8]>) -> Option<CodecDigestSummary> {

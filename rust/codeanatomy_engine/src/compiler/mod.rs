@@ -20,6 +20,7 @@ pub mod plan_compiler;
 pub mod pushdown_probe_extract;
 pub mod scheduling;
 pub mod semantic_validator;
+pub mod spec_helpers;
 pub mod substrait;
 pub mod table_registration;
 pub mod udtf_builder;

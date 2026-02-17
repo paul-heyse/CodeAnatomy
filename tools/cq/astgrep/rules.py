@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tools.cq.astgrep.rulepack_loader import load_default_rulepacks
 from tools.cq.astgrep.sgpy_scanner import RecordType, RuleSpec
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 
 
 def _filter_rules_for_types(

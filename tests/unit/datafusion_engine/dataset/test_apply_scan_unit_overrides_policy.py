@@ -1,4 +1,3 @@
-# ruff: noqa: INP001
 """Tests for scan policy-aware scan unit overrides."""
 
 from __future__ import annotations

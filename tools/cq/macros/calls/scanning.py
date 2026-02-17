@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from tools.cq.query.language import QueryLanguageScope
+from tools.cq.core.types import QueryLanguageScope
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import find_call_candidates
 

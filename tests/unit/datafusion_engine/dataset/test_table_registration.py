@@ -1,4 +1,4 @@
-# ruff: noqa: D100, D103, ANN001, INP001, ARG005
+# ruff: noqa: D100, D103, ANN001, ARG005
 from __future__ import annotations
 
 from datafusion import SessionContext

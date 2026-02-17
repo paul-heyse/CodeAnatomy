@@ -705,6 +705,8 @@ def _build_not_found_result(request: ImpactRequest, *, started_ms: float) -> CqR
     result = builder.result
     result.summary = summary_from_mapping(
         {
+            "mode": "impact",
+            "query": request.function_name,
             "status": "not_found",
             "function": request.function_name,
         }
@@ -781,6 +783,8 @@ def _build_impact_summary(
     caller_sites: list[tuple[str, int]],
 ) -> dict[str, object]:
     return {
+        "query": f"{request.function_name} --param {request.param_name}",
+        "mode": "impact",
         "function": request.function_name,
         "parameter": request.param_name,
         "taint_sites": len(all_sites),

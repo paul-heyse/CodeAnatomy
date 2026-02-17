@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tools.cq.core.render_context import RenderContext
 from tools.cq.core.render_diagnostics import (
@@ -42,6 +44,10 @@ from tools.cq.core.render_utils import clean_scalar as _clean_scalar
 from tools.cq.core.render_utils import format_location as _format_location
 from tools.cq.core.render_utils import safe_int as _safe_int
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
+from tools.cq.core.summary_contract import SummaryV1
+
+if TYPE_CHECKING:
+    from tools.cq.core.ports import RenderEnrichmentPort
 
 # Maximum evidence items to show before truncating
 MAX_EVIDENCE_DISPLAY = 20
@@ -74,6 +80,27 @@ _SECTION_ORDER_MAP: dict[str, tuple[str, ...]] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class _RenderPassContext:
+    """Per-pass rendering dependencies and controls."""
+
+    show_context: bool
+    root: Path | None = None
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None
+    allowed_enrichment_files: set[str] | None = None
+    port: RenderEnrichmentPort | None = None
+    seen_keys: set[tuple[object, ...]] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _RenderEnrichmentSession:
+    """Prepared enrichment session payload for one report render."""
+
+    cache: dict[tuple[str, int, int, str], dict[str, object]]
+    allowed_files: set[str]
+    summary_with_metrics: SummaryV1 | dict[str, object]
+
+
 def _severity_icon(severity: str) -> str:
     """Return icon for severity level.
 
@@ -92,12 +119,8 @@ def _severity_icon(severity: str) -> str:
 def _format_finding(
     f: Finding,
     *,
+    context: _RenderPassContext,
     show_anchor: bool = True,
-    show_context: bool = True,
-    root: Path | None = None,
-    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
-    allowed_enrichment_files: set[str] | None = None,
-    port: object | None = None,
 ) -> str:
     """Format a single finding as a markdown line.
 
@@ -113,13 +136,13 @@ def _format_finding(
     str
         Markdown-formatted line(s), including context snippet if available.
     """
-    if root is not None:
+    if context.root is not None:
         _maybe_attach_render_enrichment_orchestrator(
             f,
-            root=root,
-            cache=enrich_cache,
-            allowed_files=allowed_enrichment_files,
-            port=port,
+            root=context.root,
+            cache=context.enrich_cache,
+            allowed_files=context.allowed_enrichment_files,
+            port=context.port,
         )
 
     rendered_lines = [_format_finding_base_line(f, show_anchor=show_anchor)]
@@ -129,7 +152,7 @@ def _format_finding(
         rendered_lines.extend(_format_enrichment_facts(enrichment_payload))
     rendered_lines.extend(_format_resolved_object_occurrences(f))
 
-    rendered_lines.extend(_format_context_block(f, enabled=show_context))
+    rendered_lines.extend(_format_context_block(f, enabled=context.show_context))
 
     return "\n".join(rendered_lines)
 
@@ -167,8 +190,10 @@ def _format_context_block(finding: Finding, *, enabled: bool = True) -> list[str
         start = context_window.get("start_line", "?")
         end = context_window.get("end_line", "?")
         header = f"  Context (lines {start}-{end}):"
-    elif context_window and hasattr(context_window, "start_line") and hasattr(
-        context_window, "end_line"
+    elif (
+        context_window
+        and hasattr(context_window, "start_line")
+        and hasattr(context_window, "end_line")
     ):
         start = getattr(context_window, "start_line", "?")
         end = getattr(context_window, "end_line", "?")
@@ -226,11 +251,7 @@ def _format_resolved_object_occurrences(finding: Finding) -> list[str]:
 def _format_section(
     s: Section,
     *,
-    show_context: bool = True,
-    root: Path | None = None,
-    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
-    allowed_enrichment_files: set[str] | None = None,
-    port: object | None = None,
+    context: _RenderPassContext,
 ) -> str:
     """Format a section with its findings.
 
@@ -255,11 +276,7 @@ def _format_section(
         [
             _format_finding(
                 finding,
-                show_context=show_context,
-                root=root,
-                enrich_cache=enrich_cache,
-                allowed_enrichment_files=allowed_enrichment_files,
-                port=port,
+                context=context,
             )
             for finding in displayed
         ]
@@ -275,11 +292,7 @@ def _format_section(
 def _render_key_findings(
     findings: list[Finding],
     *,
-    show_context: bool = True,
-    root: Path | None = None,
-    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
-    allowed_enrichment_files: set[str] | None = None,
-    port: object | None = None,
+    context: _RenderPassContext,
 ) -> list[str]:
     """Render key findings section lines.
 
@@ -295,11 +308,7 @@ def _render_key_findings(
         [
             _format_finding(
                 finding,
-                show_context=show_context,
-                root=root,
-                enrich_cache=enrich_cache,
-                allowed_enrichment_files=allowed_enrichment_files,
-                port=port,
+                context=context,
             )
             for finding in findings
         ]
@@ -322,15 +331,27 @@ def _finding_dedupe_key(finding: Finding) -> tuple[object, ...]:
     )
 
 
+def _dedupe_findings(
+    findings: list[Finding],
+    *,
+    seen_keys: set[tuple[object, ...]] | None,
+) -> list[Finding]:
+    if seen_keys is None:
+        return findings
+    deduped: list[Finding] = []
+    for finding in findings:
+        key = _finding_dedupe_key(finding)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(finding)
+    return deduped
+
+
 def _render_sections(
     sections: list[Section],
     *,
-    show_context: bool = True,
-    root: Path | None = None,
-    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
-    allowed_enrichment_files: set[str] | None = None,
-    seen_keys: set[tuple[object, ...]] | None = None,
-    port: object | None = None,
+    context: _RenderPassContext,
 ) -> list[str]:
     """Render section blocks.
 
@@ -341,26 +362,13 @@ def _render_sections(
     """
     lines: list[str] = []
     for section in sections:
-        findings = section.findings
-        if seen_keys is not None:
-            deduped: list[Finding] = []
-            for finding in findings:
-                key = _finding_dedupe_key(finding)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                deduped.append(finding)
-            findings = deduped
+        findings = _dedupe_findings(section.findings, seen_keys=context.seen_keys)
         if not findings:
             continue
         lines.append(
             _format_section(
                 Section(title=section.title, findings=findings, collapsed=section.collapsed),
-                show_context=show_context,
-                root=root,
-                enrich_cache=enrich_cache,
-                allowed_enrichment_files=allowed_enrichment_files,
-                port=port,
+                context=context,
             )
         )
         lines.append("")
@@ -370,12 +378,7 @@ def _render_sections(
 def _render_evidence(
     findings: list[Finding],
     *,
-    show_context: bool = True,
-    root: Path | None = None,
-    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
-    allowed_enrichment_files: set[str] | None = None,
-    seen_keys: set[tuple[object, ...]] | None = None,
-    port: object | None = None,
+    context: _RenderPassContext,
 ) -> list[str]:
     """Render evidence section lines.
 
@@ -387,25 +390,13 @@ def _render_evidence(
     if not findings:
         return []
     lines = ["## Evidence"]
-    if seen_keys is not None:
-        deduped: list[Finding] = []
-        for finding in findings:
-            key = _finding_dedupe_key(finding)
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            deduped.append(finding)
-        findings = deduped
+    findings = _dedupe_findings(findings, seen_keys=context.seen_keys)
     displayed = findings[:MAX_EVIDENCE_DISPLAY]
     lines.extend(
         [
             _format_finding(
                 finding,
-                show_context=show_context,
-                root=root,
-                enrich_cache=enrich_cache,
-                allowed_enrichment_files=allowed_enrichment_files,
-                port=port,
+                context=context,
             )
             for finding in displayed
         ]
@@ -472,6 +463,68 @@ def _reorder_sections(sections: list[Section], macro: str) -> list[Section]:
     return known + unknown
 
 
+def _prepare_render_enrichment_session(
+    *,
+    result: CqResult,
+    root: Path,
+    port: RenderEnrichmentPort | None,
+) -> _RenderEnrichmentSession:
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
+    allowed_files = set(_select_enrichment_target_files_orchestrator(result))
+    all_task_count = _count_render_enrichment_tasks_orchestrator(
+        result=result,
+        root=root,
+        allowed_files=None,
+    )
+    rendered_tasks = _precompute_render_enrichment_cache_orchestrator(
+        result=result,
+        root=root,
+        cache=enrich_cache,
+        allowed_files=allowed_files,
+        port=port,
+    )
+    applied = sum(
+        1
+        for task in rendered_tasks
+        if enrich_cache.get((task.file, task.line, task.col, task.language))
+    )
+    attempted = len(rendered_tasks)
+    failed = max(0, attempted - applied)
+    skipped = max(0, all_task_count - attempted)
+    summary_with_metrics = _summary_with_render_enrichment_metrics(
+        result.summary,
+        attempted=attempted,
+        applied=applied,
+        failed=failed,
+        skipped=skipped,
+    )
+    return _RenderEnrichmentSession(
+        cache=enrich_cache,
+        allowed_files=allowed_files,
+        summary_with_metrics=summary_with_metrics,
+    )
+
+
+def _assemble_report_body(
+    *,
+    result: CqResult,
+    compact_summary: SummaryV1 | dict[str, object],
+    finding_context: _RenderPassContext,
+    dedupe_context: _RenderPassContext,
+) -> list[str]:
+    lines = [f"# cq {result.run.macro}", ""]
+    lines.extend(_render_insight_card_from_summary(result.summary))
+    lines.extend(_render_code_overview(result))
+    lines.extend(_render_key_findings(result.key_findings, context=finding_context))
+    reordered = _reorder_sections(result.sections, result.run.macro)
+    lines.extend(_render_sections(reordered, context=dedupe_context))
+    lines.extend(_render_evidence(result.evidence, context=dedupe_context))
+    lines.extend(_render_artifacts(result.artifacts))
+    if result.run.macro != "search":
+        lines.extend(_render_summary(compact_summary))
+    return lines
+
+
 def render_markdown(
     result: CqResult,
     *,
@@ -490,81 +543,36 @@ def render_markdown(
         Markdown-formatted report.
     """
     resolved_context = render_context or RenderContext.minimal()
-    port = resolved_context.enrichment_port
     root = Path(result.run.root)
-    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
-    allowed_enrichment_files = _select_enrichment_target_files_orchestrator(result)
-    all_task_count = _count_render_enrichment_tasks_orchestrator(
+    session = _prepare_render_enrichment_session(
         result=result,
         root=root,
-        allowed_files=None,
+        port=resolved_context.enrichment_port,
     )
-    rendered_tasks = _precompute_render_enrichment_cache_orchestrator(
-        result=result,
+    compact_summary, _offloaded = compact_summary_for_rendering(session.summary_with_metrics)
+
+    show_context = result.run.macro != "search"
+    base_context = _RenderPassContext(
+        show_context=show_context,
         root=root,
-        cache=enrich_cache,
-        allowed_files=allowed_enrichment_files,
-        port=port,
+        enrich_cache=session.cache,
+        allowed_enrichment_files=session.allowed_files,
+        port=resolved_context.enrichment_port,
     )
-    applied = sum(
-        1
-        for task in rendered_tasks
-        if enrich_cache.get((task.file, task.line, task.col, task.language))
+    dedupe_context = _RenderPassContext(
+        show_context=show_context,
+        root=root,
+        enrich_cache=session.cache,
+        allowed_enrichment_files=session.allowed_files,
+        port=resolved_context.enrichment_port,
+        seen_keys={_finding_dedupe_key(finding) for finding in result.key_findings},
     )
-    attempted = len(rendered_tasks)
-    failed = max(0, attempted - applied)
-    skipped = max(0, all_task_count - attempted)
-    summary_with_metrics = _summary_with_render_enrichment_metrics(
-        result.summary,
-        attempted=attempted,
-        applied=applied,
-        failed=failed,
-        skipped=skipped,
+    lines = _assemble_report_body(
+        result=result,
+        compact_summary=compact_summary,
+        finding_context=base_context,
+        dedupe_context=dedupe_context,
     )
-    rendered_seen_keys = {_finding_dedupe_key(finding) for finding in result.key_findings}
-
-    # Apply compact diagnostics
-    compact_summary, _offloaded = compact_summary_for_rendering(summary_with_metrics)
-
-    lines = [f"# cq {result.run.macro}", ""]
-    lines.extend(_render_insight_card_from_summary(result.summary))
-    lines.extend(_render_code_overview(result))
-    lines.extend(
-        _render_key_findings(
-            result.key_findings,
-            show_context=result.run.macro != "search",
-            root=root,
-            enrich_cache=enrich_cache,
-            allowed_enrichment_files=allowed_enrichment_files,
-            port=port,
-        )
-    )
-    reordered = _reorder_sections(result.sections, result.run.macro)
-    lines.extend(
-        _render_sections(
-            reordered,
-            show_context=result.run.macro != "search",
-            root=root,
-            enrich_cache=enrich_cache,
-            allowed_enrichment_files=allowed_enrichment_files,
-            seen_keys=rendered_seen_keys,
-            port=port,
-        )
-    )
-    lines.extend(
-        _render_evidence(
-            result.evidence,
-            show_context=result.run.macro != "search",
-            root=root,
-            enrich_cache=enrich_cache,
-            allowed_enrichment_files=allowed_enrichment_files,
-            seen_keys=rendered_seen_keys,
-            port=port,
-        )
-    )
-    lines.extend(_render_artifacts(result.artifacts))
-    if result.run.macro != "search":
-        lines.extend(_render_summary(compact_summary))
     lines.extend(_render_footer(result))
     return "\n".join(lines)
 

@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tree_sitter import Node
 
-    from tools.cq.search.tree_sitter.contracts.core_models import QueryExecutionSettingsV1
-    from tools.cq.search.tree_sitter.core.windowing import QueryWindowV1
+    from tools.cq.search.tree_sitter.contracts.core_models import (
+        QueryExecutionSettingsV1,
+        QueryWindowV1,
+    )
 
 
 def orchestrate_query_packs(
@@ -29,10 +31,15 @@ def orchestrate_query_packs(
     tuple[object, ...],
     tuple[object, ...],
 ]:
-    """Execute all Rust query packs and return raw orchestration outputs."""
-    from tools.cq.search.tree_sitter.rust_lane import runtime as _runtime
+    """Execute all Rust query packs and return raw orchestration outputs.
 
-    return _runtime._collect_query_pack_captures(
+    Returns:
+        Raw query-pack captures, diagnostics, telemetry, and contract tuples.
+    """
+    from tools.cq.search.tree_sitter.rust_lane import runtime_core as _runtime_core
+
+    collect_query_pack_captures = _runtime_core.__dict__["_collect_query_pack_captures"]
+    return collect_query_pack_captures(
         root=root,
         source_bytes=source_bytes,
         windows=windows,

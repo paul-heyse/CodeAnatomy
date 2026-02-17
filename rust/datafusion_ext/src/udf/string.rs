@@ -328,9 +328,9 @@ impl ScalarUDFImpl for Utf8NullIfBlankUdf {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.is_empty() || arg_types.len() > 3 {
+        if arg_types.len() != 1 {
             return Err(DataFusionError::Plan(
-                "qname_normalize expects between one and three arguments".into(),
+                "utf8_null_if_blank expects exactly one argument".into(),
             ));
         }
         Ok(vec![DataType::Utf8; arg_types.len()])
@@ -534,7 +534,7 @@ pub fn semantic_tag_udf() -> ScalarUDF {
 }
 
 pub fn utf8_normalize_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(1, 4, Volatility::Immutable);
+    let signature = variadic_any_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(Utf8NormalizeUdf {
         signature: SignatureEqHash::new(signature),
         policy: CodeAnatomyUdfConfig::default(),
@@ -555,7 +555,7 @@ pub fn utf8_null_if_blank_udf() -> ScalarUDF {
 }
 
 pub fn qname_normalize_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(1, 3, Volatility::Immutable);
+    let signature = variadic_any_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(QNameNormalizeUdf {
         signature: SignatureEqHash::new(signature),
     }))

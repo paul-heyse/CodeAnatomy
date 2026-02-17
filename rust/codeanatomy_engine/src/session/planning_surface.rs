@@ -21,6 +21,8 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::FunctionRegistry;
 
+use crate::session::capture::GovernancePolicy;
+
 /// Typed specification of everything that configures the planning surface
 /// of a DataFusion session.
 ///
@@ -50,7 +52,7 @@ pub struct PlanningSurfaceSpec {
     /// Planning-affecting config key snapshots (captured at session build).
     pub planning_config_keys: BTreeMap<String, String>,
     /// Extension governance policy for planning-surface registrations.
-    pub extension_policy: ExtensionGovernancePolicy,
+    pub extension_policy: GovernancePolicy,
     /// Function rewrites that must be installed post-build (no builder API).
     pub function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,
 }
@@ -59,14 +61,6 @@ pub struct PlanningSurfaceSpec {
 pub struct TableFactoryEntry {
     pub factory_type: String,
     pub identity_hash: [u8; 32],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ExtensionGovernancePolicy {
-    StrictAllowlist,
-    WarnOnUnregistered,
-    #[default]
-    Permissive,
 }
 
 /// Apply a `PlanningSurfaceSpec` to a `SessionStateBuilder`.
@@ -140,10 +134,7 @@ mod tests {
         assert!(spec.query_planner.is_none());
         assert!(!spec.delta_codec_enabled);
         assert!(spec.planning_config_keys.is_empty());
-        assert!(matches!(
-            spec.extension_policy,
-            ExtensionGovernancePolicy::Permissive
-        ));
+        assert!(matches!(spec.extension_policy, GovernancePolicy::Permissive));
         assert!(spec.function_rewrites.is_empty());
     }
 }

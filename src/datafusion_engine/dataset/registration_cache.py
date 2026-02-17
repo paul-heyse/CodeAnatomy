@@ -11,17 +11,32 @@ import pyarrow as pa
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.arrow.interop import arrow_schema_from_df
-from datafusion_engine.dataset import registration_core as _core
 from datafusion_engine.dataset.registration_core import (
-    _DataFusionCacheSettings,
-    _resolve_dataset_caches,
+    DataFusionCacheSettings as _DataFusionCacheSettings,
 )
+from datafusion_engine.dataset.registration_scan import DEFAULT_CACHE_MAX_COLUMNS
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+
+    from datafusion_engine.dataset.registration_core import (
+        DataFusionCachePolicy,
+        DataFusionRegistrationContext,
+        DataFusionRegistryOptions,
+        DatasetCaches,
+    )
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+
+def _resolve_dataset_caches(caches: DatasetCaches | None) -> DatasetCaches:
+    if caches is not None:
+        return caches
+    from datafusion_engine.dataset.registration_core import DatasetCaches as _DatasetCaches
+
+    return _DatasetCaches()
 
 
 def _should_cache_df(df: DataFrame, *, cache_max_columns: int | None) -> bool:
@@ -32,10 +47,10 @@ def _should_cache_df(df: DataFrame, *, cache_max_columns: int | None) -> bool:
 
 
 def _resolve_cache_policy(
-    options: _core.DataFusionRegistryOptions,
+    options: DataFusionRegistryOptions,
     *,
-    cache_policy: _core.DataFusionCachePolicy | None,
-    runtime_profile: _core.DataFusionRuntimeProfile | None,
+    cache_policy: DataFusionCachePolicy | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> _DataFusionCacheSettings:
     enabled = cache_policy.enabled if cache_policy is not None else None
     max_columns = cache_policy.max_columns if cache_policy is not None else None
@@ -49,7 +64,7 @@ def _resolve_cache_policy(
     if enabled is None:
         enabled = True
     if max_columns is None:
-        max_columns = _core.DEFAULT_CACHE_MAX_COLUMNS
+        max_columns = DEFAULT_CACHE_MAX_COLUMNS
     return _DataFusionCacheSettings(
         enabled=base_cache_enabled and enabled,
         max_columns=max_columns,
@@ -57,7 +72,7 @@ def _resolve_cache_policy(
     )
 
 
-def _maybe_cache(context: _core.DataFusionRegistrationContext, df: DataFrame) -> DataFrame:
+def _maybe_cache(context: DataFusionRegistrationContext, df: DataFrame) -> DataFrame:
     if not context.cache.enabled or not _should_cache_df(
         df,
         cache_max_columns=context.cache.max_columns,
@@ -69,7 +84,7 @@ def _maybe_cache(context: _core.DataFusionRegistrationContext, df: DataFrame) ->
 
 
 def _register_memory_cache(
-    context: _core.DataFusionRegistrationContext,
+    context: DataFusionRegistrationContext,
     df: DataFrame,
 ) -> DataFrame:
     cached = df.cache()
@@ -86,7 +101,7 @@ def _register_memory_cache(
 
 
 def _register_delta_cache_for_dataset(
-    context: _core.DataFusionRegistrationContext,
+    context: DataFusionRegistrationContext,
     df: DataFrame,
 ) -> DataFrame:
     runtime_profile = context.runtime_profile
@@ -225,7 +240,7 @@ def _dataset_cache_partition_by(
 def cached_dataset_names(
     ctx: SessionContext,
     *,
-    caches: _core.DatasetCaches | None = None,
+    caches: DatasetCaches | None = None,
 ) -> tuple[str, ...]:
     """Return cached dataset names for a SessionContext."""
     resolved_caches = _resolve_dataset_caches(caches)

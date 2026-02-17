@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 from tools.cq.core.summary_contract import (
-    CqSummary,
     SemanticTelemetryV1,
+    SummaryEnvelopeV1,
+    apply_summary_mapping,
     build_semantic_telemetry,
     summary_from_mapping,
 )
@@ -53,7 +54,7 @@ def test_summary_from_mapping_coerces_semantic_telemetry() -> None:
 
 def test_summary_rejects_unknown_keys() -> None:
     """Summary update rejects unknown keys."""
-    summary = CqSummary()
+    summary = SummaryEnvelopeV1()
 
     with pytest.raises(KeyError, match="Unknown summary key"):
-        summary.update({"unknown_key": 1})
+        apply_summary_mapping(summary, {"unknown_key": 1})

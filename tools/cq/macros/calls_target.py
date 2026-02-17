@@ -13,6 +13,7 @@ from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding, ScoreDetails, Section
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.types import QueryLanguage
 from tools.cq.macros.calls_target_cache import (
     TargetPayloadState,
     build_target_metadata_cache_context,
@@ -22,7 +23,6 @@ from tools.cq.macros.calls_target_cache import (
     target_scope_snapshot_digest,
 )
 from tools.cq.macros.constants import CALLS_TARGET_CALLEE_PREVIEW
-from tools.cq.query.language import QueryLanguage
 from tools.cq.query.sg_parser import SgRecord, sg_scan
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern

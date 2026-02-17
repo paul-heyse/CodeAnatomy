@@ -7,7 +7,7 @@ from pathlib import Path
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.ports import RenderEnrichmentPort
 from tools.cq.core.serialization import to_builtins
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 from tools.cq.search.pipeline.classification import classify_match
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.smart_search_sections import build_finding

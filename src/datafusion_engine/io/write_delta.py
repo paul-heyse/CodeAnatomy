@@ -10,7 +10,8 @@ import msgspec
 from deltalake import CommitProperties
 from msgspec import convert
 
-from datafusion_engine.delta.service import DeltaFeatureMutationRequest, DeltaService
+from datafusion_engine.delta.service import DeltaFeatureMutationRequest
+from datafusion_engine.delta.service_protocol import DeltaServicePort
 from datafusion_engine.io.write_core import (
     DeltaWriteOutcome,
     DeltaWritePolicy,
@@ -18,23 +19,50 @@ from datafusion_engine.io.write_core import (
     WriteMode,
     WritePipeline,
     WriteRequest,
-    _delta_schema_policy_override,
-    _DeltaCommitContext,
-    _DeltaPolicyContext,
 )
 from datafusion_engine.lineage.reporting import extract_lineage
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from schema_spec.dataset_spec import DeltaMaintenancePolicy
+from serde_msgspec import convert_from_attributes
+from storage.deltalake.config import DeltaSchemaPolicy
 from storage.deltalake.delta_write import DeltaFeatureMutationOptions, IdempotentWriteOptions
 from utils.hashing import hash_sha256_hex
 from utils.storage_options import normalize_storage_options
 
 if TYPE_CHECKING:
+    from typing import Protocol
+
     from datafusion import DataFrame
     from deltalake import WriterProperties
 
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.delta.protocol import DeltaFeatureGate
+
+    class DeltaCommitContextLike(Protocol):
+        @property
+        def method_label(self) -> str: ...
+
+        @property
+        def mode(self) -> str: ...
+
+        @property
+        def dataset_name(self) -> str | None: ...
+
+        @property
+        def dataset_location(self) -> DatasetLocation | None: ...
+
+    class DeltaPolicyContextLike(Protocol):
+        @property
+        def table_properties(self) -> Mapping[str, str]: ...
+
+        @property
+        def partition_by(self) -> Sequence[str]: ...
+
+        @property
+        def zorder_by(self) -> Sequence[str]: ...
+
+        @property
+        def enable_features(self) -> Sequence[str]: ...
 
 
 def _resolve_delta_schema_policy(
@@ -55,6 +83,22 @@ def _resolve_delta_schema_policy(
     if dataset_location is None:
         return None
     return dataset_location.delta_schema_policy
+
+
+def _delta_schema_policy_override(options: Mapping[str, object]) -> DeltaSchemaPolicy | None:
+    raw = options.get("delta_schema_policy")
+    if raw is None:
+        raw = options.get("schema_policy")
+    if isinstance(raw, DeltaSchemaPolicy):
+        return raw
+    if isinstance(raw, Mapping):
+        return convert(dict(raw), type=DeltaSchemaPolicy, strict=True)
+    if raw is not None:
+        try:
+            return convert_from_attributes(raw, target_type=DeltaSchemaPolicy, strict=True)
+        except msgspec.ValidationError:
+            return None
+    return None
 
 
 def _delta_maintenance_policy_override(
@@ -100,7 +144,7 @@ def _replace_where_predicate(options: Mapping[str, object]) -> str | None:
 def _delta_feature_mutation_options(
     spec: DeltaWriteSpec,
     *,
-    delta_service: DeltaService,
+    delta_service: DeltaServicePort,
 ) -> DeltaFeatureMutationOptions:
     request = DeltaFeatureMutationRequest(
         path=spec.table_uri,
@@ -116,7 +160,7 @@ def _delta_feature_mutation_options(
 def _apply_explicit_delta_features(
     *,
     spec: DeltaWriteSpec,
-    delta_service: DeltaService,
+    delta_service: DeltaServicePort,
 ) -> None:
     """Enable explicitly requested Delta features."""
     if not spec.enable_features:
@@ -148,7 +192,7 @@ def _delta_constraint_name(expression: str) -> str:
 def _existing_delta_constraints(
     spec: DeltaWriteSpec,
     *,
-    delta_service: DeltaService,
+    delta_service: DeltaServicePort,
 ) -> dict[str, str]:
     snapshot = delta_service.history_snapshot(
         path=spec.table_uri,
@@ -194,7 +238,7 @@ def _delta_constraints_to_add(
 def _apply_delta_check_constraints(
     *,
     spec: DeltaWriteSpec,
-    delta_service: DeltaService,
+    delta_service: DeltaServicePort,
 ) -> str:
     if not spec.extra_constraints:
         return "skipped"
@@ -263,7 +307,7 @@ def _delta_lineage_columns(df: DataFrame) -> tuple[str, ...]:
 def _validate_delta_protocol_support(
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
-    delta_service: DeltaService | None,
+    delta_service: DeltaServicePort | None,
     table_uri: str,
     storage_options: Mapping[str, str] | None,
     log_storage_options: Mapping[str, str] | None,
@@ -276,7 +320,7 @@ def _validate_delta_protocol_support(
         delta_protocol_compatibility,
     )
 
-    service = delta_service or cast("DeltaService", runtime_profile.delta_ops.delta_service())
+    service = delta_service or runtime_profile.delta_ops.delta_service()
     snapshot = service.protocol_snapshot(
         path=table_uri,
         storage_options=storage_options,
@@ -525,7 +569,11 @@ def _delta_storage_options(
     )
 
 
-def _base_commit_metadata(request: WriteRequest, *, context: _DeltaCommitContext) -> dict[str, str]:
+def _base_commit_metadata(
+    request: WriteRequest,
+    *,
+    context: DeltaCommitContextLike,
+) -> dict[str, str]:
     return {
         "codeanatomy_engine": "datafusion",
         "codeanatomy_operation": "write_pipeline",
@@ -552,7 +600,7 @@ def _dataset_location_commit_metadata(
 def _optional_commit_metadata(
     request: WriteRequest,
     *,
-    context: _DeltaCommitContext,
+    context: DeltaCommitContextLike,
 ) -> dict[str, str | None]:
     """Return optional commit metadata values that may be omitted."""
     delta_inputs = json.dumps(list(request.delta_inputs)) if request.delta_inputs else None
@@ -571,7 +619,7 @@ def _delta_commit_metadata(
     request: WriteRequest,
     options: Mapping[str, object],
     *,
-    context: _DeltaCommitContext,
+    context: DeltaCommitContextLike,
 ) -> dict[str, str]:
     metadata = _base_commit_metadata(request, context=context)
     metadata.update(_dataset_location_commit_metadata(context.dataset_location))
@@ -588,7 +636,7 @@ def _delta_commit_metadata(
 def _apply_policy_commit_metadata(
     commit_metadata: dict[str, str],
     *,
-    policy_ctx: _DeltaPolicyContext,
+    policy_ctx: DeltaPolicyContextLike,
     extra_constraints: tuple[str, ...],
 ) -> dict[str, str]:
     metadata = dict(commit_metadata)

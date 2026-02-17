@@ -336,6 +336,8 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
 
     result.summary = summary_from_mapping(
         {
+            "query": request.symbol,
+            "mode": "sig-impact",
             "symbol": request.symbol,
             "new_signature": request.to,
             "call_sites": len(all_sites),

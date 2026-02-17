@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ import msgspec
 
 from tools.cq.core.run_context import RunExecutionContext
 from tools.cq.core.schema import CqResult
+from tools.cq.core.types import QueryLanguage
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
 from tools.cq.query.batch_spans import collect_span_filters
 from tools.cq.query.execution_requests import EntityQueryRequest, PatternQueryRequest
@@ -19,7 +21,6 @@ from tools.cq.query.executor import (
     execute_pattern_query_with_files,
 )
 from tools.cq.query.ir import Query
-from tools.cq.query.language import QueryLanguage
 from tools.cq.query.parser import QueryParseError, has_query_tokens, parse_query
 from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import list_scan_files
@@ -27,6 +28,8 @@ from tools.cq.run.helpers import error_result
 from tools.cq.run.scope import apply_run_scope
 from tools.cq.run.spec import QStep, RunPlan
 from tools.cq.run.step_executors import RUN_STEP_NON_FATAL_EXCEPTIONS, execute_search_fallback
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,43 @@ def expand_q_step_by_scope(step: ParsedQStep, ctx: RunExecutionContext) -> list[
             )
         )
     return expanded
+
+
+def partition_q_steps(
+    *,
+    steps: list[QStep],
+    plan: RunPlan,
+    ctx: RunExecutionContext,
+    stop_on_error: bool,
+    immediate_results: list[tuple[str, CqResult]],
+) -> tuple[dict[QueryLanguage, list[ParsedQStep]], dict[QueryLanguage, list[ParsedQStep]]]:
+    """Partition q-steps into entity vs pattern groups keyed by language.
+
+    Returns:
+        tuple[dict[QueryLanguage, list[ParsedQStep]], dict[QueryLanguage, list[ParsedQStep]]]:
+        Entity and pattern grouped q-steps.
+    """
+    parsed_by_lang: dict[QueryLanguage, list[ParsedQStep]] = {}
+    pattern_by_lang: dict[QueryLanguage, list[ParsedQStep]] = {}
+
+    for step in steps:
+        step_id, outcome, is_error = prepare_q_step(step, plan, ctx)
+        if isinstance(outcome, CqResult):
+            immediate_results.append((step_id, outcome))
+            if outcome.summary.error:
+                logger.warning(
+                    "Immediate q-step error step_id=%s error=%s",
+                    step_id,
+                    outcome.summary.error,
+                )
+            if stop_on_error and is_error:
+                break
+            continue
+        expanded = expand_q_step_by_scope(outcome, ctx)
+        for parsed in expanded:
+            target = pattern_by_lang if parsed.plan.is_pattern_query else parsed_by_lang
+            target.setdefault(parsed.plan.lang, []).append(parsed)
+    return parsed_by_lang, pattern_by_lang
 
 
 def _handle_query_parse_error(
@@ -335,5 +375,6 @@ __all__ = [
     "execute_entity_q_steps",
     "execute_pattern_q_steps",
     "expand_q_step_by_scope",
+    "partition_q_steps",
     "prepare_q_step",
 ]

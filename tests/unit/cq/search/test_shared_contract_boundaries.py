@@ -9,8 +9,14 @@ from tools.cq.search._shared.core import (
     assert_no_runtime_only_keys,
     has_runtime_only_keys,
 )
+from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 
 QUERY_BUDGET_MS = 25
+
+
+class _SessionStub:
+    def __init__(self) -> None:
+        self.classifier_cache = ClassifierCacheContext()
 
 
 def test_python_node_request_splits_settings_and_runtime() -> None:
@@ -23,7 +29,7 @@ def test_python_node_request_splits_settings_and_runtime() -> None:
         col=0,
         cache_key="k",
         query_budget_ms=QUERY_BUDGET_MS,
-        session=object(),
+        session=_SessionStub(),
     )
 
     settings = request.to_settings()

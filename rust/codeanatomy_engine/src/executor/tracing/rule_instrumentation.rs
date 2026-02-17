@@ -183,6 +183,101 @@ fn detect_and_record_modification(
 type RuleSpanCreateFn = dyn Fn(&str) -> Span + Send + Sync;
 type PhaseSpanCreateFn = dyn Fn(&str) -> Span + Send + Sync;
 
+#[derive(Clone)]
+struct TraceSpanFields {
+    spec_hash: String,
+    rulepack: String,
+    profile: String,
+    custom_fields_json: String,
+}
+
+impl From<&TraceRuleContext> for TraceSpanFields {
+    fn from(value: &TraceRuleContext) -> Self {
+        Self {
+            spec_hash: value.spec_hash.clone(),
+            rulepack: value.rulepack_fingerprint.clone(),
+            profile: value.profile_name.clone(),
+            custom_fields_json: value.custom_fields_json.clone(),
+        }
+    }
+}
+
+fn record_trace_fields(span: &Span, trace_fields: &TraceSpanFields) {
+    span.record("trace.spec_hash", trace_fields.spec_hash.as_str());
+    span.record("trace.rulepack", trace_fields.rulepack.as_str());
+    span.record("trace.profile", trace_fields.profile.as_str());
+    span.record(
+        "trace.custom_fields_json",
+        trace_fields.custom_fields_json.as_str(),
+    );
+}
+
+fn make_rule_span(rule_name: &str, trace_fields: &TraceSpanFields) -> Span {
+    let span = tracing::info_span!(
+        "datafusion.rule",
+        otel.name = tracing::field::Empty,
+        datafusion.rule = tracing::field::Empty,
+        datafusion.plan_diff = tracing::field::Empty,
+        trace.spec_hash = tracing::field::Empty,
+        trace.rulepack = tracing::field::Empty,
+        trace.profile = tracing::field::Empty,
+        trace.custom_fields_json = tracing::field::Empty,
+    );
+    span.record("otel.name", rule_name);
+    span.record("datafusion.rule", rule_name);
+    record_trace_fields(&span, trace_fields);
+    span
+}
+
+fn make_phase_span(phase_name: &str, trace_fields: &TraceSpanFields) -> Span {
+    let span = tracing::info_span!(
+        "datafusion.phase",
+        otel.name = tracing::field::Empty,
+        datafusion.phase = tracing::field::Empty,
+        datafusion.plan_diff = tracing::field::Empty,
+        datafusion.effective_rules = tracing::field::Empty,
+        trace.spec_hash = tracing::field::Empty,
+        trace.rulepack = tracing::field::Empty,
+        trace.profile = tracing::field::Empty,
+        trace.custom_fields_json = tracing::field::Empty,
+    );
+    span.record("otel.name", phase_name);
+    span.record("datafusion.phase", phase_name);
+    record_trace_fields(&span, trace_fields);
+    span
+}
+
+fn make_span_creators(
+    trace_ctx: &TraceRuleContext,
+) -> (Arc<RuleSpanCreateFn>, Arc<PhaseSpanCreateFn>) {
+    let trace_fields = TraceSpanFields::from(trace_ctx);
+    let rule_fields = trace_fields.clone();
+    let phase_fields = trace_fields;
+
+    let rule_span_create_fn =
+        Arc::new(move |rule_name: &str| make_rule_span(rule_name, &rule_fields))
+            as Arc<RuleSpanCreateFn>;
+    let phase_span_create_fn =
+        Arc::new(move |phase_name: &str| make_phase_span(phase_name, &phase_fields))
+            as Arc<PhaseSpanCreateFn>;
+    (rule_span_create_fn, phase_span_create_fn)
+}
+
+fn options_from_tracing_config(config: &TracingConfig) -> Option<RuleInstrumentationOptions> {
+    if !config.enabled || config.rule_mode == RuleTraceMode::Disabled {
+        return None;
+    }
+    let mut options = match config.rule_mode {
+        RuleTraceMode::Disabled => return None,
+        RuleTraceMode::PhaseOnly => RuleInstrumentationOptions::phase_only(),
+        RuleTraceMode::Full => RuleInstrumentationOptions::full(),
+    };
+    if config.plan_diff {
+        options = options.with_plan_diff();
+    }
+    Some(options)
+}
+
 struct AnalyzerPhaseSentinel {
     phase_span_create_fn: Arc<PhaseSpanCreateFn>,
     plan_diff: bool,
@@ -618,175 +713,84 @@ impl PhysicalOptimizerRule for InstrumentedPhysicalOptimizerRule {
     }
 }
 
-fn instrument_analyzer_rules(
-    rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
-    options: &RuleInstrumentationOptions,
-    span_create_fn: &Arc<RuleSpanCreateFn>,
-    phase_span_create_fn: &Arc<PhaseSpanCreateFn>,
-) -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
-    let level = options.analyzer;
-    if !level.phase_span_enabled() || rules.is_empty() {
-        return rules;
-    }
+macro_rules! instrument_phase_rules {
+    (
+        $fn_name:ident,
+        $rule_trait:ty,
+        $level_field:ident,
+        $sentinel_ty:ty,
+        $wrapper_ty:ty
+    ) => {
+        fn $fn_name(
+            rules: Vec<Arc<$rule_trait>>,
+            options: &RuleInstrumentationOptions,
+            span_create_fn: &Arc<RuleSpanCreateFn>,
+            phase_span_create_fn: &Arc<PhaseSpanCreateFn>,
+        ) -> Vec<Arc<$rule_trait>> {
+            let level = options.$level_field;
+            if !level.phase_span_enabled() || rules.is_empty() {
+                return rules;
+            }
 
-    let mut result = Vec::with_capacity(rules.len() + 2);
-    result.push(Arc::new(AnalyzerPhaseSentinel {
-        phase_span_create_fn: Arc::clone(phase_span_create_fn),
-        plan_diff: options.plan_diff,
-    }) as Arc<dyn AnalyzerRule + Send + Sync>);
-    for rule in rules {
-        if level.rule_spans_enabled() {
-            result.push(Arc::new(InstrumentedAnalyzerRule::new(
-                rule,
-                options.clone(),
-                Arc::clone(span_create_fn),
-            )) as Arc<dyn AnalyzerRule + Send + Sync>);
-        } else {
-            result.push(rule);
+            let mut result = Vec::with_capacity(rules.len() + 2);
+            result.push(Arc::new(<$sentinel_ty> {
+                phase_span_create_fn: Arc::clone(phase_span_create_fn),
+                plan_diff: options.plan_diff,
+            }) as Arc<$rule_trait>);
+            for rule in rules {
+                if level.rule_spans_enabled() {
+                    result.push(Arc::new(<$wrapper_ty>::new(
+                        rule,
+                        options.clone(),
+                        Arc::clone(span_create_fn),
+                    )) as Arc<$rule_trait>);
+                } else {
+                    result.push(rule);
+                }
+            }
+            result.push(Arc::new(<$sentinel_ty> {
+                phase_span_create_fn: Arc::clone(phase_span_create_fn),
+                plan_diff: options.plan_diff,
+            }) as Arc<$rule_trait>);
+            result
         }
-    }
-    result.push(Arc::new(AnalyzerPhaseSentinel {
-        phase_span_create_fn: Arc::clone(phase_span_create_fn),
-        plan_diff: options.plan_diff,
-    }) as Arc<dyn AnalyzerRule + Send + Sync>);
-    result
+    };
 }
 
-fn instrument_optimizer_rules(
-    rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
-    options: &RuleInstrumentationOptions,
-    span_create_fn: &Arc<RuleSpanCreateFn>,
-    phase_span_create_fn: &Arc<PhaseSpanCreateFn>,
-) -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
-    let level = options.optimizer;
-    if !level.phase_span_enabled() || rules.is_empty() {
-        return rules;
-    }
+instrument_phase_rules!(
+    instrument_analyzer_rules,
+    dyn AnalyzerRule + Send + Sync,
+    analyzer,
+    AnalyzerPhaseSentinel,
+    InstrumentedAnalyzerRule
+);
 
-    let mut result = Vec::with_capacity(rules.len() + 2);
-    result.push(Arc::new(OptimizerPhaseSentinel {
-        phase_span_create_fn: Arc::clone(phase_span_create_fn),
-        plan_diff: options.plan_diff,
-    }) as Arc<dyn OptimizerRule + Send + Sync>);
-    for rule in rules {
-        if level.rule_spans_enabled() {
-            result.push(Arc::new(InstrumentedOptimizerRule::new(
-                rule,
-                options.clone(),
-                Arc::clone(span_create_fn),
-            )) as Arc<dyn OptimizerRule + Send + Sync>);
-        } else {
-            result.push(rule);
-        }
-    }
-    result.push(Arc::new(OptimizerPhaseSentinel {
-        phase_span_create_fn: Arc::clone(phase_span_create_fn),
-        plan_diff: options.plan_diff,
-    }) as Arc<dyn OptimizerRule + Send + Sync>);
-    result
-}
+instrument_phase_rules!(
+    instrument_optimizer_rules,
+    dyn OptimizerRule + Send + Sync,
+    optimizer,
+    OptimizerPhaseSentinel,
+    InstrumentedOptimizerRule
+);
 
-fn instrument_physical_optimizer_rules(
-    rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
-    options: &RuleInstrumentationOptions,
-    span_create_fn: &Arc<RuleSpanCreateFn>,
-    phase_span_create_fn: &Arc<PhaseSpanCreateFn>,
-) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
-    let level = options.physical_optimizer;
-    if !level.phase_span_enabled() || rules.is_empty() {
-        return rules;
-    }
-
-    let mut result = Vec::with_capacity(rules.len() + 2);
-    result.push(Arc::new(PhysicalOptimizerPhaseSentinel {
-        phase_span_create_fn: Arc::clone(phase_span_create_fn),
-        plan_diff: options.plan_diff,
-    }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>);
-    for rule in rules {
-        if level.rule_spans_enabled() {
-            result.push(Arc::new(InstrumentedPhysicalOptimizerRule::new(
-                rule,
-                options.clone(),
-                Arc::clone(span_create_fn),
-            ))
-                as Arc<dyn PhysicalOptimizerRule + Send + Sync>);
-        } else {
-            result.push(rule);
-        }
-    }
-    result.push(Arc::new(PhysicalOptimizerPhaseSentinel {
-        phase_span_create_fn: Arc::clone(phase_span_create_fn),
-        plan_diff: options.plan_diff,
-    }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>);
-    result
-}
+instrument_phase_rules!(
+    instrument_physical_optimizer_rules,
+    dyn PhysicalOptimizerRule + Send + Sync,
+    physical_optimizer,
+    PhysicalOptimizerPhaseSentinel,
+    InstrumentedPhysicalOptimizerRule
+);
 
 pub fn instrument_session_state(
     state: SessionState,
     config: &TracingConfig,
     trace_ctx: &TraceRuleContext,
 ) -> SessionState {
-    if !config.enabled || config.rule_mode == RuleTraceMode::Disabled {
+    let Some(options) = options_from_tracing_config(config) else {
         return state;
-    }
-
-    let mut options = match config.rule_mode {
-        RuleTraceMode::Disabled => return state,
-        RuleTraceMode::PhaseOnly => RuleInstrumentationOptions::phase_only(),
-        RuleTraceMode::Full => RuleInstrumentationOptions::full(),
     };
-    if config.plan_diff {
-        options = options.with_plan_diff();
-    }
 
-    let trace_spec_hash = trace_ctx.spec_hash.clone();
-    let trace_rulepack = trace_ctx.rulepack_fingerprint.clone();
-    let trace_profile = trace_ctx.profile_name.clone();
-    let trace_custom_fields = trace_ctx.custom_fields_json.clone();
-    let rule_span_create_fn = Arc::new(move |rule_name: &str| {
-        let span = tracing::info_span!(
-            "datafusion.rule",
-            otel.name = tracing::field::Empty,
-            datafusion.rule = tracing::field::Empty,
-            datafusion.plan_diff = tracing::field::Empty,
-            trace.spec_hash = tracing::field::Empty,
-            trace.rulepack = tracing::field::Empty,
-            trace.profile = tracing::field::Empty,
-            trace.custom_fields_json = tracing::field::Empty,
-        );
-        span.record("otel.name", rule_name);
-        span.record("datafusion.rule", rule_name);
-        span.record("trace.spec_hash", trace_spec_hash.as_str());
-        span.record("trace.rulepack", trace_rulepack.as_str());
-        span.record("trace.profile", trace_profile.as_str());
-        span.record("trace.custom_fields_json", trace_custom_fields.as_str());
-        span
-    }) as Arc<RuleSpanCreateFn>;
-
-    let trace_spec_hash = trace_ctx.spec_hash.clone();
-    let trace_rulepack = trace_ctx.rulepack_fingerprint.clone();
-    let trace_profile = trace_ctx.profile_name.clone();
-    let trace_custom_fields = trace_ctx.custom_fields_json.clone();
-    let phase_span_create_fn = Arc::new(move |phase_name: &str| {
-        let span = tracing::info_span!(
-            "datafusion.phase",
-            otel.name = tracing::field::Empty,
-            datafusion.phase = tracing::field::Empty,
-            datafusion.plan_diff = tracing::field::Empty,
-            datafusion.effective_rules = tracing::field::Empty,
-            trace.spec_hash = tracing::field::Empty,
-            trace.rulepack = tracing::field::Empty,
-            trace.profile = tracing::field::Empty,
-            trace.custom_fields_json = tracing::field::Empty,
-        );
-        span.record("otel.name", phase_name);
-        span.record("datafusion.phase", phase_name);
-        span.record("trace.spec_hash", trace_spec_hash.as_str());
-        span.record("trace.rulepack", trace_rulepack.as_str());
-        span.record("trace.profile", trace_profile.as_str());
-        span.record("trace.custom_fields_json", trace_custom_fields.as_str());
-        span
-    }) as Arc<PhaseSpanCreateFn>;
+    let (rule_span_create_fn, phase_span_create_fn) = make_span_creators(trace_ctx);
 
     let analyzers = instrument_analyzer_rules(
         state.analyzer().rules.clone(),

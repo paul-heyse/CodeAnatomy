@@ -15,8 +15,9 @@ use deltalake::operations::write::SchemaMode;
 use deltalake::protocol::SaveMode;
 use deltalake::table::Constraint;
 
+use crate::delta_common::{eager_snapshot, latest_operation_metrics, snapshot_with_gate};
 use crate::delta_control_plane::load_delta_table;
-use crate::delta_protocol::{delta_snapshot_info, protocol_gate, DeltaSnapshotInfo};
+use crate::delta_protocol::{delta_snapshot_info, DeltaSnapshotInfo, TableVersion};
 use crate::{DeltaCommitOptions, DeltaFeatureGate};
 
 #[derive(Debug, Clone)]
@@ -32,8 +33,7 @@ pub struct DeltaDataCheckRequest<'a> {
     pub session_ctx: &'a SessionContext,
     pub table_uri: &'a str,
     pub storage_options: Option<HashMap<String, String>>,
-    pub version: Option<i64>,
-    pub timestamp: Option<String>,
+    pub table_version: TableVersion,
     pub gate: Option<DeltaFeatureGate>,
     pub data_ipc: &'a [u8],
     pub extra_constraints: Option<Vec<String>>,
@@ -44,8 +44,7 @@ pub struct DeltaWriteIpcRequest<'a> {
     pub session_ctx: &'a SessionContext,
     pub table_uri: &'a str,
     pub storage_options: Option<HashMap<String, String>>,
-    pub version: Option<i64>,
-    pub timestamp: Option<String>,
+    pub table_version: TableVersion,
     pub data_ipc: &'a [u8],
     pub save_mode: SaveMode,
     pub schema_mode_label: Option<String>,
@@ -61,8 +60,7 @@ pub struct DeltaWriteBatchesRequest<'a> {
     pub session_ctx: &'a SessionContext,
     pub table_uri: &'a str,
     pub storage_options: Option<HashMap<String, String>>,
-    pub version: Option<i64>,
-    pub timestamp: Option<String>,
+    pub table_version: TableVersion,
     pub batches: Vec<RecordBatch>,
     pub save_mode: SaveMode,
     pub schema_mode_label: Option<String>,
@@ -78,8 +76,7 @@ pub struct DeltaDeleteRequest<'a> {
     pub session_ctx: &'a SessionContext,
     pub table_uri: &'a str,
     pub storage_options: Option<HashMap<String, String>>,
-    pub version: Option<i64>,
-    pub timestamp: Option<String>,
+    pub table_version: TableVersion,
     pub predicate: Option<String>,
     pub gate: Option<DeltaFeatureGate>,
     pub commit_options: Option<DeltaCommitOptions>,
@@ -90,8 +87,7 @@ pub struct DeltaUpdateRequest<'a> {
     pub session_ctx: &'a SessionContext,
     pub table_uri: &'a str,
     pub storage_options: Option<HashMap<String, String>>,
-    pub version: Option<i64>,
-    pub timestamp: Option<String>,
+    pub table_version: TableVersion,
     pub predicate: Option<String>,
     pub updates: HashMap<String, String>,
     pub gate: Option<DeltaFeatureGate>,
@@ -103,8 +99,7 @@ pub struct DeltaMergeRequest<'a> {
     pub session_ctx: &'a SessionContext,
     pub table_uri: &'a str,
     pub storage_options: Option<HashMap<String, String>>,
-    pub version: Option<i64>,
-    pub timestamp: Option<String>,
+    pub table_version: TableVersion,
     pub source_table: &'a str,
     pub predicate: String,
     pub source_alias: Option<String>,
@@ -180,24 +175,6 @@ fn batches_from_ipc(data_ipc: &[u8]) -> Result<Vec<RecordBatch>, DeltaTableError
     Ok(batches)
 }
 
-async fn latest_operation_metrics(table: &deltalake::DeltaTable) -> serde_json::Value {
-    let mut history = match table.history(Some(1)).await {
-        Ok(history) => history,
-        Err(err) => {
-            return serde_json::Value::String(format!(
-                "Failed to fetch Delta history for metrics: {err}"
-            ));
-        }
-    };
-    match history
-        .next()
-        .and_then(|commit| commit.info.get("operationMetrics").cloned())
-    {
-        Some(metrics) => metrics,
-        None => serde_json::Value::Null,
-    }
-}
-
 async fn run_constraint_check(
     session_ctx: &SessionContext,
     snapshot: &EagerSnapshot,
@@ -244,18 +221,6 @@ fn schema_mode_from_label(label: Option<String>) -> Result<Option<SchemaMode>, D
     }
 }
 
-async fn snapshot_with_gate(
-    table_uri: &str,
-    table: &deltalake::DeltaTable,
-    gate: Option<DeltaFeatureGate>,
-) -> Result<DeltaSnapshotInfo, DeltaTableError> {
-    let snapshot = delta_snapshot_info(table_uri, table).await?;
-    if let Some(gate) = gate {
-        protocol_gate(&snapshot, &gate)?;
-    }
-    Ok(snapshot)
-}
-
 pub async fn delta_data_check_request(
     request: DeltaDataCheckRequest<'_>,
 ) -> Result<Vec<String>, DeltaTableError> {
@@ -263,8 +228,7 @@ pub async fn delta_data_check_request(
         session_ctx,
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         gate,
         data_ipc,
         extra_constraints,
@@ -272,40 +236,14 @@ pub async fn delta_data_check_request(
     let table = load_delta_table(
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         Some(session_ctx),
     )
     .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
-    let snapshot = table.snapshot()?.snapshot().clone();
+    let snapshot = eager_snapshot(&table)?;
     let batches = batches_from_ipc(data_ipc)?;
     run_constraint_check(session_ctx, &snapshot, &batches, extra_constraints).await
-}
-
-#[deprecated(note = "use delta_data_check_request")]
-#[allow(clippy::too_many_arguments)]
-pub async fn delta_data_check(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    gate: Option<DeltaFeatureGate>,
-    data_ipc: &[u8],
-    extra_constraints: Option<Vec<String>>,
-) -> Result<Vec<String>, DeltaTableError> {
-    delta_data_check_request(DeltaDataCheckRequest {
-        session_ctx,
-        table_uri,
-        storage_options,
-        version,
-        timestamp,
-        gate,
-        data_ipc,
-        extra_constraints,
-    })
-    .await
 }
 
 pub async fn delta_write_ipc_request(
@@ -315,8 +253,7 @@ pub async fn delta_write_ipc_request(
         session_ctx,
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         data_ipc,
         save_mode,
         schema_mode_label,
@@ -331,44 +268,8 @@ pub async fn delta_write_ipc_request(
         session_ctx,
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         batches,
-        save_mode,
-        schema_mode_label,
-        partition_columns,
-        target_file_size,
-        gate,
-        commit_options,
-        extra_constraints,
-    })
-    .await
-}
-
-#[deprecated(note = "use delta_write_ipc_request")]
-#[allow(clippy::too_many_arguments)]
-pub async fn delta_write_ipc(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    data_ipc: &[u8],
-    save_mode: SaveMode,
-    schema_mode_label: Option<String>,
-    partition_columns: Option<Vec<String>>,
-    target_file_size: Option<usize>,
-    gate: Option<DeltaFeatureGate>,
-    commit_options: Option<DeltaCommitOptions>,
-    extra_constraints: Option<Vec<String>>,
-) -> Result<DeltaMutationReport, DeltaTableError> {
-    delta_write_ipc_request(DeltaWriteIpcRequest {
-        session_ctx,
-        table_uri,
-        storage_options,
-        version,
-        timestamp,
-        data_ipc,
         save_mode,
         schema_mode_label,
         partition_columns,
@@ -387,8 +288,7 @@ pub async fn delta_write_batches_request(
         session_ctx,
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         batches,
         save_mode,
         schema_mode_label,
@@ -401,13 +301,12 @@ pub async fn delta_write_batches_request(
     let table = load_delta_table(
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         Some(session_ctx),
     )
     .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
-    let eager_snapshot = table.snapshot()?.snapshot().clone();
+    let eager_snapshot = eager_snapshot(&table)?;
     let violations =
         run_constraint_check(session_ctx, &eager_snapshot, &batches, extra_constraints).await?;
     ensure_no_violations(violations)?;
@@ -435,41 +334,6 @@ pub async fn delta_write_batches_request(
     })
 }
 
-#[deprecated(note = "use delta_write_batches_request")]
-#[allow(clippy::too_many_arguments)]
-pub async fn delta_write_batches(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    batches: Vec<RecordBatch>,
-    save_mode: SaveMode,
-    schema_mode_label: Option<String>,
-    partition_columns: Option<Vec<String>>,
-    target_file_size: Option<usize>,
-    gate: Option<DeltaFeatureGate>,
-    commit_options: Option<DeltaCommitOptions>,
-    extra_constraints: Option<Vec<String>>,
-) -> Result<DeltaMutationReport, DeltaTableError> {
-    delta_write_batches_request(DeltaWriteBatchesRequest {
-        session_ctx,
-        table_uri,
-        storage_options,
-        version,
-        timestamp,
-        batches,
-        save_mode,
-        schema_mode_label,
-        partition_columns,
-        target_file_size,
-        gate,
-        commit_options,
-        extra_constraints,
-    })
-    .await
-}
-
 pub async fn delta_delete_request(
     request: DeltaDeleteRequest<'_>,
 ) -> Result<DeltaMutationReport, DeltaTableError> {
@@ -477,8 +341,7 @@ pub async fn delta_delete_request(
         session_ctx,
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         predicate,
         gate,
         commit_options,
@@ -486,8 +349,7 @@ pub async fn delta_delete_request(
     let table = load_delta_table(
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         Some(session_ctx),
     )
     .await?;
@@ -509,31 +371,6 @@ pub async fn delta_delete_request(
     })
 }
 
-#[deprecated(note = "use delta_delete_request")]
-#[allow(clippy::too_many_arguments)]
-pub async fn delta_delete(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    predicate: Option<String>,
-    gate: Option<DeltaFeatureGate>,
-    commit_options: Option<DeltaCommitOptions>,
-) -> Result<DeltaMutationReport, DeltaTableError> {
-    delta_delete_request(DeltaDeleteRequest {
-        session_ctx,
-        table_uri,
-        storage_options,
-        version,
-        timestamp,
-        predicate,
-        gate,
-        commit_options,
-    })
-    .await
-}
-
 pub async fn delta_update_request(
     request: DeltaUpdateRequest<'_>,
 ) -> Result<DeltaMutationReport, DeltaTableError> {
@@ -541,8 +378,7 @@ pub async fn delta_update_request(
         session_ctx,
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         predicate,
         updates,
         gate,
@@ -551,8 +387,7 @@ pub async fn delta_update_request(
     let table = load_delta_table(
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         Some(session_ctx),
     )
     .await?;
@@ -578,33 +413,6 @@ pub async fn delta_update_request(
     })
 }
 
-#[deprecated(note = "use delta_update_request")]
-#[allow(clippy::too_many_arguments)]
-pub async fn delta_update(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    predicate: Option<String>,
-    updates: HashMap<String, String>,
-    gate: Option<DeltaFeatureGate>,
-    commit_options: Option<DeltaCommitOptions>,
-) -> Result<DeltaMutationReport, DeltaTableError> {
-    delta_update_request(DeltaUpdateRequest {
-        session_ctx,
-        table_uri,
-        storage_options,
-        version,
-        timestamp,
-        predicate,
-        updates,
-        gate,
-        commit_options,
-    })
-    .await
-}
-
 pub async fn delta_merge_request(
     request: DeltaMergeRequest<'_>,
 ) -> Result<DeltaMutationReport, DeltaTableError> {
@@ -612,8 +420,7 @@ pub async fn delta_merge_request(
         session_ctx,
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         source_table,
         predicate,
         source_alias,
@@ -631,13 +438,12 @@ pub async fn delta_merge_request(
     let table = load_delta_table(
         table_uri,
         storage_options,
-        version,
-        timestamp,
+        table_version,
         Some(session_ctx),
     )
     .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
-    let eager_snapshot = table.snapshot()?.snapshot().clone();
+    let eager_snapshot = eager_snapshot(&table)?;
     let source_df = session_ctx.table(source_table).await.map_err(|err| {
         DeltaTableError::Generic(format!("Delta merge source table resolution failed: {err}"))
     })?;
@@ -711,49 +517,4 @@ pub async fn delta_merge_request(
         snapshot,
         metrics,
     })
-}
-
-#[deprecated(note = "use delta_merge_request")]
-#[allow(clippy::too_many_arguments)]
-pub async fn delta_merge(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    source_table: &str,
-    predicate: String,
-    source_alias: Option<String>,
-    target_alias: Option<String>,
-    matched_predicate: Option<String>,
-    matched_updates: HashMap<String, String>,
-    not_matched_predicate: Option<String>,
-    not_matched_inserts: HashMap<String, String>,
-    not_matched_by_source_predicate: Option<String>,
-    delete_not_matched_by_source: bool,
-    gate: Option<DeltaFeatureGate>,
-    commit_options: Option<DeltaCommitOptions>,
-    extra_constraints: Option<Vec<String>>,
-) -> Result<DeltaMutationReport, DeltaTableError> {
-    delta_merge_request(DeltaMergeRequest {
-        session_ctx,
-        table_uri,
-        storage_options,
-        version,
-        timestamp,
-        source_table,
-        predicate,
-        source_alias,
-        target_alias,
-        matched_predicate,
-        matched_updates,
-        not_matched_predicate,
-        not_matched_inserts,
-        not_matched_by_source_predicate,
-        delete_not_matched_by_source,
-        gate,
-        commit_options,
-        extra_constraints,
-    })
-    .await
 }

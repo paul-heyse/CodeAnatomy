@@ -12,7 +12,7 @@ The engine enforces **determinism through immutability**: sessions are built onc
 3. **Rules-as-policy** - All DataFusion rules configured via rulepack profiles
 4. **Delta-native providers** - No Arrow Dataset fallback
 5. **Builder-first construction** - SessionStateBuilder before any execution
-6. **Two-layer determinism** - `spec_hash` (input contract) + `envelope_hash` (session state)
+6. **Three-layer determinism** - `spec_hash` + `envelope_hash` + `rulepack_fingerprint` (see `docs/architecture/07_determinism_contract.md`)
 
 ## Architecture Overview
 

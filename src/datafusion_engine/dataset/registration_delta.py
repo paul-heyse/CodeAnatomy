@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from datafusion_engine.dataset.registration_core import (
-    DataFrame,
-    DeltaCdfArtifact,
+from datafusion.dataframe import DataFrame
+
+from datafusion_engine.dataset.registration_cache import _maybe_cache
+from datafusion_engine.dataset.registration_core import DeltaCdfArtifact
+from datafusion_engine.dataset.registration_delta_helpers import (
     _cache_prefix_for_registration,
     _delta_cdf_artifact_payload,
     _delta_provider_artifact_payload,
@@ -17,17 +19,28 @@ from datafusion_engine.dataset.registration_core import (
     _DeltaRegistrationResult,
     _DeltaRegistrationState,
     _enforce_delta_native_provider_policy,
-    _maybe_cache,
     _provider_for_registration,
     _record_delta_cdf_artifact,
     _record_delta_log_health,
     _record_delta_snapshot_if_applicable,
-    _record_table_provider_artifact,
-    _table_provider_capsule,
-    _TableProviderArtifact,
-    _update_table_provider_capabilities,
-    _update_table_provider_fingerprints,
-    _update_table_provider_scan_config,
+)
+from datafusion_engine.dataset.registration_provider import (
+    TableProviderArtifact as _TableProviderArtifact,
+)
+from datafusion_engine.dataset.registration_provider import (
+    record_table_provider_artifact as _record_table_provider_artifact,
+)
+from datafusion_engine.dataset.registration_provider import (
+    table_provider_capsule as _table_provider_capsule,
+)
+from datafusion_engine.dataset.registration_provider import (
+    update_table_provider_capabilities as _update_table_provider_capabilities,
+)
+from datafusion_engine.dataset.registration_provider import (
+    update_table_provider_fingerprints as _update_table_provider_fingerprints,
+)
+from datafusion_engine.dataset.registration_provider import (
+    update_table_provider_scan_config as _update_table_provider_scan_config,
 )
 from datafusion_engine.dataset.resolution import (
     DatasetResolutionRequest,

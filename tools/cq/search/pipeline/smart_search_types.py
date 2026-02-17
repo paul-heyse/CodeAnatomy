@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.structs import CqStruct
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 from tools.cq.search.pipeline.classifier import MatchCategory, SymtableEnrichment
 from tools.cq.search.pipeline.context_window import ContextWindow
 from tools.cq.search.pipeline.enrichment_contracts import (
@@ -23,10 +23,10 @@ from tools.cq.search.pipeline.enrichment_contracts import (
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
 
-    from tools.cq.core.front_door_assembly import InsightNeighborhoodV1
+    from tools.cq.core.front_door_contracts import InsightNeighborhoodV1
     from tools.cq.core.schema import Finding, Section
     from tools.cq.core.semantic_contracts import SemanticProvider
-    from tools.cq.core.summary_contract import CqSummary
+    from tools.cq.core.summary_contract import SearchSummaryV1
     from tools.cq.search.objects.resolve import ObjectResolutionRuntime
     from tools.cq.search.pipeline.contracts import SearchConfig
 
@@ -316,7 +316,7 @@ class _SearchAssemblyInputs:
 
     enriched_matches: list[EnrichedMatch]
     object_runtime: ObjectResolutionRuntime
-    summary: CqSummary
+    summary: SearchSummaryV1
     sections: list[Section]
     all_diagnostics: list[Finding]
     definition_matches: list[EnrichedMatch]

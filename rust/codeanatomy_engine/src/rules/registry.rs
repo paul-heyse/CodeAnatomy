@@ -19,13 +19,13 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 #[derive(Clone)]
 pub struct CpgRuleSet {
     /// Analyzer rules (semantic validation phase)
-    pub analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
+    pub(crate) analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
     /// Optimizer rules (logical plan optimization phase)
-    pub optimizer_rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    pub(crate) optimizer_rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     /// Physical optimizer rules (execution optimization phase)
-    pub physical_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    pub(crate) physical_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     /// BLAKE3 fingerprint of the rule set configuration
-    pub fingerprint: [u8; 32],
+    pub(crate) fingerprint: [u8; 32],
 }
 
 impl CpgRuleSet {
@@ -76,6 +76,22 @@ impl CpgRuleSet {
     /// Returns the total number of rules.
     pub fn total_count(&self) -> usize {
         self.analyzer_count() + self.optimizer_count() + self.physical_count()
+    }
+
+    pub fn analyzer_rules(&self) -> &[Arc<dyn AnalyzerRule + Send + Sync>] {
+        &self.analyzer_rules
+    }
+
+    pub fn optimizer_rules(&self) -> &[Arc<dyn OptimizerRule + Send + Sync>] {
+        &self.optimizer_rules
+    }
+
+    pub fn physical_rules(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &self.physical_rules
+    }
+
+    pub fn fingerprint(&self) -> [u8; 32] {
+        self.fingerprint
     }
 }
 

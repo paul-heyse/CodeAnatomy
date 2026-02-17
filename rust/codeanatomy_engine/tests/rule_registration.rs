@@ -9,7 +9,7 @@ fn test_rulepack_factory_always_includes_policy_rule() {
     let env_profile = common::test_environment_profile();
     let ruleset = RulepackFactory::build_ruleset(&RulepackProfile::Default, &[], &env_profile);
     assert!(ruleset
-        .analyzer_rules
+        .analyzer_rules()
         .iter()
         .any(|rule| rule.name() == "codeanatomy_policy_rule"));
 }
@@ -25,7 +25,7 @@ fn test_rulepack_factory_strict_profile_includes_strict_safety() {
 
     let ruleset = RulepackFactory::build_ruleset(&RulepackProfile::Strict, &intents, &env_profile);
     assert!(ruleset
-        .analyzer_rules
+        .analyzer_rules()
         .iter()
         .any(|rule| rule.name() == "strict_safety_rule"));
 }
@@ -50,7 +50,7 @@ fn test_compliance_capture_populated() {
 
     assert!(!capture.is_empty());
     assert_eq!(capture.rulepack_snapshot.profile, "Default");
-    assert_eq!(capture.rulepack_snapshot.fingerprint, ruleset.fingerprint);
+    assert_eq!(capture.rulepack_snapshot.fingerprint, ruleset.fingerprint());
 
     let json = capture.to_json().unwrap();
     assert!(json.contains("rulepack_snapshot"));

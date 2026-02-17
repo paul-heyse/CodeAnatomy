@@ -259,7 +259,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 span_columns,
                 text_columns,
             } => {
-                let source = self.resolve_source_name(source, inline_cache).await?;
+                let source = self.ensure_source_registered(source, inline_cache).await?;
                 view_builder::build_normalize(
                     self.ctx,
                     &view_def.name,
@@ -277,8 +277,8 @@ impl<'a> SemanticPlanCompiler<'a> {
                 join_type,
                 join_keys,
             } => {
-                let left = self.resolve_source_name(left, inline_cache).await?;
-                let right = self.resolve_source_name(right, inline_cache).await?;
+                let left = self.ensure_source_registered(left, inline_cache).await?;
+                let right = self.ensure_source_registered(right, inline_cache).await?;
                 join_builder::build_join(self.ctx, &left, &right, join_type, join_keys).await
             }
 
@@ -289,7 +289,9 @@ impl<'a> SemanticPlanCompiler<'a> {
             } => {
                 let mut resolved_sources = Vec::with_capacity(sources.len());
                 for source in sources {
-                    resolved_sources.push(self.resolve_source_name(source, inline_cache).await?);
+                    resolved_sources.push(
+                        self.ensure_source_registered(source, inline_cache).await?,
+                    );
                 }
                 union_builder::build_union(
                     self.ctx,
@@ -301,12 +303,12 @@ impl<'a> SemanticPlanCompiler<'a> {
             }
 
             ViewTransform::Project { source, columns } => {
-                let source = self.resolve_source_name(source, inline_cache).await?;
+                let source = self.ensure_source_registered(source, inline_cache).await?;
                 view_builder::build_project(self.ctx, &source, columns).await
             }
 
             ViewTransform::Filter { source, predicate } => {
-                let source = self.resolve_source_name(source, inline_cache).await?;
+                let source = self.ensure_source_registered(source, inline_cache).await?;
                 view_builder::build_filter(self.ctx, &source, predicate).await
             }
 
@@ -315,7 +317,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 group_by,
                 aggregations,
             } => {
-                let source = self.resolve_source_name(source, inline_cache).await?;
+                let source = self.ensure_source_registered(source, inline_cache).await?;
                 view_builder::build_aggregate(self.ctx, &source, group_by, aggregations).await
             }
 
@@ -351,7 +353,9 @@ impl<'a> SemanticPlanCompiler<'a> {
             } => {
                 let mut resolved_sources = Vec::with_capacity(sources.len());
                 for source in sources {
-                    resolved_sources.push(self.resolve_source_name(source, inline_cache).await?);
+                    resolved_sources.push(
+                        self.ensure_source_registered(source, inline_cache).await?,
+                    );
                 }
                 cpg_builder::build_cpg_emit(self.ctx, *output_kind, resolved_sources.as_slice())
                     .await
@@ -359,7 +363,11 @@ impl<'a> SemanticPlanCompiler<'a> {
         }
     }
 
-    async fn resolve_source_name(
+    /// Ensure the source exists as a registered table when it is present in the
+    /// inline cache.
+    ///
+    /// This method is intentionally side-effecting.
+    async fn ensure_source_registered(
         &self,
         source: &str,
         inline_cache: &HashMap<String, DataFrame>,

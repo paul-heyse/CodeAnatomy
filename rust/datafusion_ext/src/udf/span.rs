@@ -762,7 +762,7 @@ impl ScalarUDFImpl for SpanIdUdf {
 }
 
 pub fn span_make_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(2, 5, Volatility::Immutable);
+    let signature = variadic_any_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(SpanMakeUdf {
         signature: SignatureEqHash::new(signature),
         policy: CodeAnatomyUdfConfig::default(),
@@ -801,7 +801,7 @@ pub fn span_contains_udf() -> ScalarUDF {
 }
 
 pub fn span_id_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(4, 5, Volatility::Immutable);
+    let signature = variadic_any_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(SpanIdUdf {
         signature: SignatureEqHash::new(signature),
     }))

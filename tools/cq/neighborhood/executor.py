@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING, cast
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.schema import CqResult, assign_result_finding_ids, mk_runmeta, ms
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.summary_contract import NeighborhoodSummaryV1, summary_for_variant
 from tools.cq.core.target_specs import parse_target_spec
+from tools.cq.core.types import QueryLanguage
 from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
 from tools.cq.neighborhood.semantic_env import semantic_env_from_bundle
 from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
 from tools.cq.neighborhood.target_resolution import resolve_target
-from tools.cq.query.language import QueryLanguage
 from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
@@ -34,6 +35,17 @@ class NeighborhoodExecutionRequest(CqStruct, frozen=True):
     artifact_dir: Path | None = None
     run_id: str | None = None
     services: CqRuntimeServices | None = None
+
+
+def _coerce_neighborhood_summary(result: CqResult) -> None:
+    summary = result.summary
+    if isinstance(summary, NeighborhoodSummaryV1):
+        return
+    coerced = summary_for_variant("neighborhood")
+    for field in coerced.__struct_fields__:
+        if field in summary.__struct_fields__:
+            setattr(coerced, field, getattr(summary, field))
+    result.summary = coerced
 
 
 def execute_neighborhood(request: NeighborhoodExecutionRequest) -> CqResult:
@@ -94,7 +106,9 @@ def execute_neighborhood(request: NeighborhoodExecutionRequest) -> CqResult:
             semantic_env=semantic_env_from_bundle(bundle),
         )
     )
-    result.summary.target_resolution_kind = resolved.resolution_kind
+    _coerce_neighborhood_summary(result)
+    neighborhood_summary = cast("NeighborhoodSummaryV1", result.summary)
+    neighborhood_summary.target_resolution_kind = resolved.resolution_kind
     result = assign_result_finding_ids(result)
     maybe_evict_run_cache_tag(root=request.root, language=resolved_lang, run_id=active_run_id)
     return result

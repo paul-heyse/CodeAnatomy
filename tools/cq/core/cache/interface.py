@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
-class CqCacheBackend(Protocol):
-    """Cache adapter contract used by CQ runtime services."""
+class CqCacheReadWriteBackend(Protocol):
+    """Core key/value cache capability."""
 
     def get(self, key: str) -> object | None:
         """Fetch cached value for key.
@@ -102,6 +102,10 @@ class CqCacheBackend(Protocol):
         _ = (self, tag)
         return False
 
+
+class CqCacheMaintenanceBackend(Protocol):
+    """Maintenance and lifecycle cache capability."""
+
     def transact(self) -> AbstractContextManager[None]:
         """Return transaction context manager when supported.
 
@@ -173,6 +177,15 @@ class CqCacheBackend(Protocol):
         """
 
 
+class CqCacheBackend(
+    CqCacheReadWriteBackend,
+    CqCacheMaintenanceBackend,
+    Protocol,
+):
+    """Composed cache adapter contract used by CQ runtime services."""
+
+
+@runtime_checkable
 class CqCacheStreamingBackend(CqCacheBackend, Protocol):
     """Optional streaming/blob cache capability."""
 
@@ -202,6 +215,7 @@ class CqCacheStreamingBackend(CqCacheBackend, Protocol):
         return False
 
 
+@runtime_checkable
 class CqCacheCoordinationBackend(CqCacheBackend, Protocol):
     """Optional coordination capability (lock/rlock/semaphore/barrier)."""
 
@@ -232,15 +246,10 @@ class CqCacheCoordinationBackend(CqCacheBackend, Protocol):
         publish_fn()
 
 
-class NoopCacheBackend:
-    """No-op cache backend used when caching is disabled."""
+class _NoopReadWriteMixin:
+    """No-op key/value behavior."""
 
     def get(self, key: str) -> object | None:
-        """Return no value.
-
-        Returns:
-            object | None: Always `None` in no-op backend.
-        """
         _ = (self, key)
         return None
 
@@ -252,11 +261,6 @@ class NoopCacheBackend:
         expire: int | None = None,
         tag: str | None = None,
     ) -> bool:
-        """Ignore writes.
-
-        Returns:
-            bool: Always `False` in no-op backend.
-        """
         _ = (self, key, value, expire, tag)
         return False
 
@@ -268,11 +272,6 @@ class NoopCacheBackend:
         expire: int | None = None,
         tag: str | None = None,
     ) -> bool:
-        """Ignore add operations.
-
-        Returns:
-            bool: Always `False` in no-op backend.
-        """
         _ = (self, key, value, expire, tag)
         return False
 
@@ -283,126 +282,65 @@ class NoopCacheBackend:
         expire: int | None = None,
         tag: str | None = None,
     ) -> int:
-        """Ignore bulk writes.
-
-        Returns:
-            int: Always ``0`` in no-op backend.
-        """
         _ = (self, items, expire, tag)
         return 0
 
     def incr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
-        """Ignore increments.
-
-        Returns:
-            int | None: Always `None` in no-op backend.
-        """
         _ = (self, key, delta, default)
         return None
 
     def decr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
-        """Ignore decrements.
-
-        Returns:
-            int | None: Always `None` in no-op backend.
-        """
         _ = (self, key, delta, default)
         return None
 
     def delete(self, key: str) -> bool:
-        """Ignore deletes.
-
-        Returns:
-            bool: Always `False` in no-op backend.
-        """
         _ = (self, key)
         return False
 
     def evict_tag(self, tag: str) -> bool:
-        """Ignore tag evictions.
-
-        Returns:
-            bool: Always `False` in no-op backend.
-        """
         _ = (self, tag)
         return False
 
-    def transact(self) -> AbstractContextManager[None]:
-        """Return no-op transaction context manager.
 
-        Returns:
-            ContextManager[None]: Null context manager.
-        """
+class _NoopMaintenanceMixin:
+    """No-op maintenance and lifecycle behavior."""
+
+    def transact(self) -> AbstractContextManager[None]:
         _ = self
         return nullcontext()
 
     def stats(self) -> dict[str, object]:
-        """Return empty stats payload.
-
-        Returns:
-            dict[str, object]: Empty stats payload.
-        """
         _ = self
         return {}
 
     def volume(self) -> int | None:
-        """Return no volume payload.
-
-        Returns:
-            int | None: Always `None` in no-op backend.
-        """
         _ = self
         return None
 
     def cull(self) -> int | None:
-        """No-op cull.
-
-        Returns:
-            int | None: Always `None` in no-op backend.
-        """
         _ = self
         return None
 
     def touch(self, key: str, *, expire: int | None = None) -> bool:
-        """No-op touch.
-
-        Returns:
-            bool: Always ``False`` in no-op backend.
-        """
         _ = (self, key, expire)
         return False
 
     def expire(self) -> int | None:
-        """No-op expiry sweep.
-
-        Returns:
-            int | None: Always ``None`` in no-op backend.
-        """
         _ = self
         return None
 
     def check(self, *, fix: bool = False) -> int | None:
-        """No-op integrity check.
-
-        Returns:
-            int | None: Always ``None`` in no-op backend.
-        """
         _ = (self, fix)
         return None
 
     def close(self) -> None:
-        """No resources to close.
+        """No resources to close."""
 
-        Returns:
-            None
-        """
+
+class _NoopStreamingMixin:
+    """No-op streaming behavior."""
 
     def read_streaming(self, key: str) -> bytes | None:
-        """No-op streaming read.
-
-        Returns:
-            bytes | None: Always ``None``.
-        """
         _ = (self, key)
         return None
 
@@ -414,29 +352,18 @@ class NoopCacheBackend:
         expire: int | None = None,
         tag: str | None = None,
     ) -> bool:
-        """No-op streaming write.
-
-        Returns:
-            bool: Always ``False``.
-        """
         _ = (self, key, payload, expire, tag)
         return False
 
-    def lock(self, key: str, *, expire: int | None = None) -> AbstractContextManager[None]:
-        """No-op lock context.
 
-        Returns:
-            AbstractContextManager[None]: Null context manager.
-        """
+class _NoopCoordinationMixin:
+    """No-op coordination behavior."""
+
+    def lock(self, key: str, *, expire: int | None = None) -> AbstractContextManager[None]:
         _ = (self, key, expire)
         return nullcontext()
 
     def rlock(self, key: str, *, expire: int | None = None) -> AbstractContextManager[None]:
-        """No-op reentrant lock context.
-
-        Returns:
-            AbstractContextManager[None]: Null context manager.
-        """
         _ = (self, key, expire)
         return nullcontext()
 
@@ -447,18 +374,21 @@ class NoopCacheBackend:
         value: int,
         expire: int | None = None,
     ) -> AbstractContextManager[None]:
-        """No-op semaphore context.
-
-        Returns:
-            AbstractContextManager[None]: Null context manager.
-        """
         _ = (self, key, value, expire)
         return nullcontext()
 
     def barrier(self, key: str, publish_fn: Callable[[], None]) -> None:
-        """No-op barrier: execute publish function immediately."""
         _ = (self, key)
         publish_fn()
+
+
+class NoopCacheBackend(
+    _NoopReadWriteMixin,
+    _NoopMaintenanceMixin,
+    _NoopStreamingMixin,
+    _NoopCoordinationMixin,
+):
+    """No-op cache backend used when caching is disabled."""
 
 
 __all__ = [

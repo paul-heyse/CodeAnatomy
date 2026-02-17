@@ -210,10 +210,7 @@ pub async fn compile_request(request: CompileRequest<'_>) -> Result<CompileRespo
                         provider_identities: prepared.provider_identities.clone(),
                         optimizer_traces,
                         pushdown_report,
-                        deterministic_inputs: spec
-                            .input_relations
-                            .iter()
-                            .all(|relation| relation.version_pin.is_some()),
+                        deterministic_inputs: spec.are_inputs_deterministic(),
                         no_volatile_udfs: true,
                         deterministic_optimizer: true,
                         stats_quality: stats_quality.map(|value| format!("{value:?}")),

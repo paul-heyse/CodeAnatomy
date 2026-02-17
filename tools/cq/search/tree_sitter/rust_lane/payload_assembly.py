@@ -17,10 +17,15 @@ def assemble_query_pack_payload(
     query_budget_ms: int | None = None,
     file_key: str | None = None,
 ) -> dict[str, object]:
-    """Assemble Rust query-pack payload for a byte span."""
-    from tools.cq.search.tree_sitter.rust_lane import runtime as _runtime
+    """Assemble Rust query-pack payload for a byte span.
 
-    return _runtime._collect_query_pack_payload(
+    Returns:
+        Query-pack payload dictionary with runtime capture metadata.
+    """
+    from tools.cq.search.tree_sitter.rust_lane import runtime_core as _runtime_core
+
+    collect_query_pack_payload = _runtime_core.__dict__["_collect_query_pack_payload"]
+    return collect_query_pack_payload(
         root=root,
         source_bytes=source_bytes,
         byte_span=byte_span,

@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import shutil
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -18,23 +16,57 @@ import pyarrow as pa
 
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
-    DatasetLocationOverrides,
 )
-from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
+from datafusion_engine.plan.artifact_serialization import (
+    delta_inputs_payload as _delta_inputs_payload,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    event_payload_msgpack as _event_payload_msgpack,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    event_time_unix_ms as _event_time_unix_ms,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    lineage_payload as _lineage_payload,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    msgpack_or_none as _msgpack_or_none,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    msgpack_payload as _msgpack_payload,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    msgpack_payload_raw as _msgpack_payload_raw,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    normalized_event_payload as _normalized_event_payload,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    plan_details_payload as _plan_details_payload,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    plan_identity_payload as _plan_identity_payload,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    proto_msgpack as _proto_msgpack,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    scan_units_payload as _scan_units_payload,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    substrait_msgpack as _substrait_msgpack,
+)
+from datafusion_engine.plan.artifact_serialization import (
+    udf_compatibility as _udf_compatibility,
+)
 from datafusion_engine.plan.perf_policy import PlanBundleComparisonPolicy
 from datafusion_engine.plan.signals import extract_plan_signals, plan_signals_payload
-from schema_spec.dataset_spec import dataset_spec_from_schema
 from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow
 from serde_msgspec import (
     StructBaseCompat,
     decode_json_lines,
-    dumps_msgpack,
-    ensure_raw,
-    to_builtins,
 )
-from serde_msgspec_ext import SubstraitBytes
-from storage.deltalake import DeltaSchemaRequest
 from utils.hashing import hash_json_default, hash_sha256_hex
 
 if TYPE_CHECKING:
@@ -423,7 +455,8 @@ def _write_artifact_table(
     Raises:
         ValueError: If the artifact write mode is unsupported.
     """
-    from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
+    from datafusion_engine.io.write_core import WriteFormat, WriteMode, WriteRequest
+    from datafusion_engine.io.write_pipeline import WritePipeline
     from datafusion_engine.lineage.diagnostics import recorder_for_profile
 
     if request.mode == "append":
@@ -709,583 +742,23 @@ def build_plan_artifact_row(
     )
 
 
-def _plan_artifacts_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
-    root = _plan_artifacts_root(profile)
-    if root is None:
-        return None
-    dataset_spec = dataset_spec_from_schema(
-        PLAN_ARTIFACTS_TABLE_NAME,
-        _plan_artifacts_schema(),
-    )
-    location = DatasetLocation(
-        path=str(root / _ARTIFACTS_DIRNAME),
-        format="delta",
-        storage_options={},
-        delta_log_storage_options={},
-        dataset_spec=dataset_spec,
-    )
-    return _with_delta_settings(location)
-
-
-def _pipeline_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
-    root = _plan_artifacts_root(profile)
-    if root is None:
-        return None
-    dataset_spec = dataset_spec_from_schema(
-        PIPELINE_EVENTS_TABLE_NAME,
-        _pipeline_events_schema(),
-    )
-    location = DatasetLocation(
-        path=str(root / _PIPELINE_EVENTS_DIRNAME),
-        format="delta",
-        storage_options={},
-        delta_log_storage_options={},
-        dataset_spec=dataset_spec,
-    )
-    return _with_delta_settings(location)
-
-
-def _with_delta_settings(location: DatasetLocation) -> DatasetLocation:
-    resolved_scan = resolve_delta_scan_options(location)
-    resolved_log = location.resolved_delta_log_storage_options
-    overrides = location.overrides
-    if resolved_scan is not None:
-        from schema_spec.dataset_spec import DeltaPolicyBundle
-
-        delta_bundle = DeltaPolicyBundle(scan=resolved_scan)
-        if overrides is None:
-            overrides = DatasetLocationOverrides(delta=delta_bundle)
-        else:
-            overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
-    return msgspec.structs.replace(
-        location,
-        overrides=overrides,
-        delta_log_storage_options=dict(resolved_log or {}),
-    )
-
-
-def _delta_schema_available(
-    location: DatasetLocation,
-    *,
-    profile: DataFusionRuntimeProfile,
-) -> bool:
-    schema = profile.delta_ops.delta_service().table_schema(
-        DeltaSchemaRequest(
-            path=str(location.path),
-            storage_options=location.storage_options or None,
-            log_storage_options=location.delta_log_storage_options or None,
-            version=location.delta_version,
-            timestamp=location.delta_timestamp,
-            gate=location.delta_feature_gate,
-        )
-    )
-    return schema is not None
-
-
-def _reset_artifacts_table_path(
-    profile: DataFusionRuntimeProfile,
-    table_path: Path,
-    *,
-    table_name: str,
-    reason: str,
-) -> None:
-    if table_path.exists():
-        shutil.rmtree(table_path)
-    table_path.mkdir(parents=True, exist_ok=True)
-    from serde_artifact_specs import ARTIFACT_STORE_RESET_SPEC
-
-    record_artifact(
-        profile,
-        ARTIFACT_STORE_RESET_SPEC,
-        {
-            "event_time_unix_ms": int(time.time() * 1000),
-            "table": table_name,
-            "path": str(table_path),
-            "reason": reason,
-        },
-    )
-
-
-def _plan_artifacts_root(profile: DataFusionRuntimeProfile) -> Path | None:
-    root_value = profile.policies.plan_artifacts_root
-    if root_value is None:
-        if profile.policies.local_filesystem_root is not None:
-            root_value = str(
-                Path(profile.policies.local_filesystem_root) / _LOCAL_ARTIFACTS_DIRNAME
-            )
-        else:
-            root_value = str(_DEFAULT_ARTIFACTS_ROOT)
-    if "://" in root_value:
-        from serde_artifact_specs import PLAN_ARTIFACTS_STORE_UNAVAILABLE_SPEC
-
-        record_artifact(
-            profile,
-            PLAN_ARTIFACTS_STORE_UNAVAILABLE_SPEC,
-            {
-                "reason": "non_local_root",
-                "root": root_value,
-            },
-        )
-        return None
-    root_path = Path(root_value)
-    root_path.mkdir(parents=True, exist_ok=True)
-    return root_path
-
-
-def _profile_name(profile: DataFusionRuntimeProfile) -> str | None:
-    return profile.policies.config_policy_name
-
-
-def _plan_artifacts_schema() -> pa.Schema:
-    from datafusion_engine.schema import DATAFUSION_PLAN_ARTIFACTS_SCHEMA
-
-    schema = DATAFUSION_PLAN_ARTIFACTS_SCHEMA
-    if isinstance(schema, pa.Schema):
-        return schema
-    return pa.schema(schema)
-
-
-def _bootstrap_plan_artifacts_table(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    table_path: Path,
-    *,
-    schema: pa.Schema | None = None,
-    table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
-) -> None:
-    resolved_schema = schema or _plan_artifacts_schema()
-    empty_table = pa.Table.from_pylist([], schema=resolved_schema)
-    commit_metadata = {
-        "codeanatomy_operation": "plan_artifacts_bootstrap",
-        "codeanatomy_mode": "overwrite",
-        "codeanatomy_table": table_name,
-    }
-    _write_artifact_table(
-        ctx,
-        profile,
-        request=_ArtifactTableWriteRequest(
-            table_path=table_path,
-            arrow_table=empty_table,
-            commit_metadata=commit_metadata,
-            mode="overwrite",
-            schema_mode="overwrite",
-            operation_id="plan_artifacts_bootstrap",
-        ),
-    )
-
-
-def _refresh_plan_artifacts_registration(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    location: DatasetLocation,
-    *,
-    table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
-) -> None:
-    from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
-    from datafusion_engine.io.adapter import DataFusionIOAdapter
-    from datafusion_engine.session.facade import DataFusionExecutionFacade
-
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
-    if ctx.table_exist(table_name):
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            adapter.deregister_table(table_name)
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
-    facade.register_dataset(
-        name=table_name,
-        location=location,
-        cache_policy=DataFusionCachePolicy(enabled=False, max_columns=None),
-    )
-
-
-def _record_plan_artifact_summary(
-    profile: DataFusionRuntimeProfile,
-    *,
-    rows: Sequence[PlanArtifactRow],
-    path: str,
-    version: int,
-    table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
-) -> None:
-    kinds = sorted({row.event_kind for row in rows})
-    payload = {
-        "table": table_name,
-        "path": path,
-        "row_count": len(rows),
-        "event_kinds": kinds,
-        "view_names": sorted({row.view_name for row in rows}),
-        "delta_version": version,
-    }
-    from serde_artifact_specs import DATAFUSION_PLAN_ARTIFACTS_SPEC, PLAN_ARTIFACTS_STORE_SPEC
-
-    record_artifact(profile, PLAN_ARTIFACTS_STORE_SPEC, payload)
-    for row in rows:
-        record_artifact(profile, DATAFUSION_PLAN_ARTIFACTS_SPEC, row.to_row())
-
-
-def _pipeline_events_schema() -> pa.Schema:
-    from datafusion_engine.schema import DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA
-
-    schema = DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA
-    if isinstance(schema, pa.Schema):
-        return schema
-    return pa.schema(schema)
-
-
-def _bootstrap_pipeline_events_table(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    table_path: Path,
-) -> None:
-    schema = _pipeline_events_schema()
-    empty_table = pa.Table.from_pylist([], schema=schema)
-    commit_metadata = {
-        "codeanatomy_operation": "pipeline_events_bootstrap",
-        "codeanatomy_mode": "overwrite",
-        "codeanatomy_table": PIPELINE_EVENTS_TABLE_NAME,
-    }
-    _write_artifact_table(
-        ctx,
-        profile,
-        request=_ArtifactTableWriteRequest(
-            table_path=table_path,
-            arrow_table=empty_table,
-            commit_metadata=commit_metadata,
-            mode="overwrite",
-            schema_mode="overwrite",
-            operation_id="pipeline_events_bootstrap",
-        ),
-    )
-
-
-def _refresh_pipeline_events_registration(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    location: DatasetLocation,
-) -> None:
-    from datafusion_engine.dataset.registration_core import DataFusionCachePolicy
-    from datafusion_engine.io.adapter import DataFusionIOAdapter
-    from datafusion_engine.session.facade import DataFusionExecutionFacade
-
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
-    if ctx.table_exist(PIPELINE_EVENTS_TABLE_NAME):
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            adapter.deregister_table(PIPELINE_EVENTS_TABLE_NAME)
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
-    facade.register_dataset(
-        name=PIPELINE_EVENTS_TABLE_NAME,
-        location=location,
-        cache_policy=DataFusionCachePolicy(enabled=False, max_columns=None),
-    )
-
-
-def _record_pipeline_events_summary(
-    profile: DataFusionRuntimeProfile,
-    *,
-    rows: Sequence[PipelineEventRow],
-    path: str,
-    version: int,
-) -> None:
-    payload = {
-        "table": PIPELINE_EVENTS_TABLE_NAME,
-        "path": path,
-        "row_count": len(rows),
-        "event_names": sorted({row.event_name for row in rows}),
-        "run_ids": sorted({row.run_id for row in rows}),
-        "delta_version": version,
-    }
-    from serde_artifact_specs import DATAFUSION_PIPELINE_EVENTS_SPEC, PIPELINE_EVENTS_STORE_SPEC
-
-    record_artifact(profile, PIPELINE_EVENTS_STORE_SPEC, payload)
-    for row in rows:
-        record_artifact(profile, DATAFUSION_PIPELINE_EVENTS_SPEC, row.to_row())
-
-
-def _commit_metadata_for_rows(rows: Sequence[PlanArtifactRow]) -> dict[str, str]:
-    event_kinds = sorted({row.event_kind for row in rows})
-    view_names = sorted({row.view_name for row in rows})
-    metadata: dict[str, str] = {
-        "codeanatomy_operation": "plan_artifacts_store",
-        "codeanatomy_mode": "append",
-        "codeanatomy_row_count": str(len(rows)),
-        "codeanatomy_event_kinds": ",".join(event_kinds),
-    }
-    if view_names:
-        metadata["codeanatomy_first_view_name"] = view_names[0]
-        metadata["codeanatomy_view_count"] = str(len(view_names))
-    return metadata
-
-
-def _commit_metadata_for_pipeline_events(rows: Sequence[PipelineEventRow]) -> dict[str, str]:
-    event_names = sorted({row.event_name for row in rows})
-    run_ids = sorted({row.run_id for row in rows})
-    metadata: dict[str, str] = {
-        "codeanatomy_operation": "pipeline_events_store",
-        "codeanatomy_mode": "append",
-        "codeanatomy_row_count": str(len(rows)),
-        "codeanatomy_event_name_count": str(len(event_names)),
-    }
-    if event_names:
-        metadata["codeanatomy_first_event_name"] = event_names[0]
-    if run_ids:
-        metadata["codeanatomy_first_run_id"] = run_ids[0]
-        metadata["codeanatomy_run_id_count"] = str(len(run_ids))
-    return metadata
-
-
-def _normalized_event_payload(payload: object) -> object:
-    if isinstance(payload, Mapping):
-        try:
-            return msgspec.convert(payload, type=dict[str, object], strict=False, str_keys=True)
-        except msgspec.ValidationError:
-            return {str(key): value for key, value in payload.items()}
-    return payload
-
-
-def _event_time_unix_ms(payload: object) -> int:
-    if isinstance(payload, Mapping):
-        value = payload.get("event_time_unix_ms")
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-        if isinstance(value, str) and value.isdigit():
-            return int(value)
-    return int(time.time() * 1000)
-
-
-def _event_payload_msgpack(payload: object) -> bytes:
-    if isinstance(payload, msgspec.Struct):
-        return dumps_msgpack(payload)
-    if isinstance(payload, Mapping):
-        return dumps_msgpack(to_builtins(payload, str_keys=True))
-    return dumps_msgpack(to_builtins(payload, str_keys=True))
-
-
-def _lineage_payload(report: LineageReport) -> dict[str, object]:
-    scans = [
-        {
-            "dataset_name": scan.dataset_name,
-            "projected_columns": list(scan.projected_columns),
-            "pushed_filters": list(scan.pushed_filters),
-        }
-        for scan in report.scans
-    ]
-    joins = [
-        {
-            "join_type": join.join_type,
-            "left_keys": list(join.left_keys),
-            "right_keys": list(join.right_keys),
-        }
-        for join in report.joins
-    ]
-    exprs = [
-        {
-            "kind": expr.kind,
-            "referenced_columns": [list(pair) for pair in expr.referenced_columns],
-            "referenced_udfs": list(expr.referenced_udfs),
-            "text": expr.text,
-        }
-        for expr in report.exprs
-    ]
-    required_columns = {
-        dataset: list(columns) for dataset, columns in report.required_columns_by_dataset.items()
-    }
-    return {
-        "scans": scans,
-        "joins": joins,
-        "exprs": exprs,
-        "required_udfs": list(report.required_udfs),
-        "required_rewrite_tags": list(report.required_rewrite_tags),
-        "required_columns_by_dataset": required_columns,
-        "filters": list(report.filters),
-        "aggregations": list(report.aggregations),
-        "window_functions": list(report.window_functions),
-        "subqueries": list(report.subqueries),
-        "referenced_udfs": list(report.referenced_udfs),
-        "referenced_tables": list(report.referenced_tables),
-        "all_required_columns": [list(pair) for pair in report.all_required_columns],
-    }
-
-
-def _scan_units_payload(
-    scan_units: Sequence[ScanUnit],
-    *,
-    scan_keys: Sequence[str],
-) -> tuple[dict[str, object], ...]:
-    scan_key_set = set(scan_keys)
-    payloads: list[dict[str, object]] = []
-    for unit in scan_units:
-        if scan_key_set and unit.key not in scan_key_set:
-            continue
-        payloads.append(
-            {
-                "key": unit.key,
-                "dataset_name": unit.dataset_name,
-                "delta_version": unit.delta_version,
-                "delta_timestamp": unit.delta_timestamp,
-                "snapshot_timestamp": unit.snapshot_timestamp,
-                "delta_protocol": (
-                    to_builtins(unit.delta_protocol) if unit.delta_protocol is not None else None
-                ),
-                "delta_scan_config": (
-                    to_builtins(unit.delta_scan_config)
-                    if unit.delta_scan_config is not None
-                    else None
-                ),
-                "delta_scan_config_hash": unit.delta_scan_config_hash,
-                "datafusion_provider": unit.datafusion_provider,
-                "protocol_compatible": unit.protocol_compatible,
-                "protocol_compatibility": (
-                    to_builtins(unit.protocol_compatibility)
-                    if unit.protocol_compatibility is not None
-                    else None
-                ),
-                "total_files": unit.total_files,
-                "candidate_file_count": unit.candidate_file_count,
-                "pruned_file_count": unit.pruned_file_count,
-                "candidate_files": [str(path) for path in unit.candidate_files],
-                "pushed_filters": list(unit.pushed_filters),
-                "projected_columns": list(unit.projected_columns),
-            }
-        )
-    payloads.sort(key=lambda item: str(item["key"]))
-    return tuple(payloads)
-
-
-def _delta_inputs_payload(bundle: DataFusionPlanArtifact) -> tuple[dict[str, object], ...]:
-    payloads: list[dict[str, object]] = [
-        {
-            "dataset_name": pin.dataset_name,
-            "version": pin.version,
-            "timestamp": pin.timestamp,
-            "protocol": (
-                to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
-            ),
-            "delta_scan_config": (
-                to_builtins(pin.delta_scan_config) if pin.delta_scan_config is not None else None
-            ),
-            "delta_scan_config_hash": pin.delta_scan_config_hash,
-            "datafusion_provider": pin.datafusion_provider,
-            "protocol_compatible": pin.protocol_compatible,
-            "protocol_compatibility": (
-                to_builtins(pin.protocol_compatibility)
-                if pin.protocol_compatibility is not None
-                else None
-            ),
-        }
-        for pin in bundle.delta_inputs
-    ]
-    payloads.sort(key=lambda item: str(item["dataset_name"]))
-    return tuple(payloads)
-
-
-def _delta_protocol_payload(protocol: object | None) -> dict[str, object] | None:
-    if protocol is None:
-        return None
-    if isinstance(protocol, Mapping):
-        payload = {str(key): value for key, value in protocol.items()}
-        return payload or None
-    if isinstance(protocol, msgspec.Struct):
-        resolved = to_builtins(protocol, str_keys=True)
-        if isinstance(resolved, Mapping):
-            return {str(key): value for key, value in resolved.items()} or None
-    return None
-
-
-def _plan_identity_payload(
-    *,
-    bundle: DataFusionPlanArtifact,
-    profile: DataFusionRuntimeProfile,
-    delta_inputs_payload: Sequence[Mapping[str, object]],
-    scan_payload: Sequence[Mapping[str, object]],
-    scan_keys_payload: Sequence[str],
-) -> Mapping[str, object]:
-    df_settings_entries = tuple(
-        sorted((str(key), str(value)) for key, value in bundle.artifacts.df_settings.items())
-    )
-    return {
-        "version": 4,
-        "plan_fingerprint": bundle.plan_fingerprint,
-        "udf_snapshot_hash": bundle.artifacts.udf_snapshot_hash,
-        "function_registry_hash": bundle.artifacts.function_registry_hash,
-        "required_udfs": tuple(sorted(bundle.required_udfs)),
-        "required_rewrite_tags": tuple(sorted(bundle.required_rewrite_tags)),
-        "domain_planner_names": tuple(sorted(bundle.artifacts.domain_planner_names)),
-        "df_settings_entries": df_settings_entries,
-        "planning_env_hash": bundle.artifacts.planning_env_hash,
-        "rulepack_hash": bundle.artifacts.rulepack_hash,
-        "information_schema_hash": bundle.artifacts.information_schema_hash,
-        "delta_inputs": tuple(delta_inputs_payload),
-        "scan_units": tuple(scan_payload),
-        "scan_keys": tuple(sorted(set(scan_keys_payload))),
-        "profile_settings_hash": profile.settings_hash(),
-        "profile_context_key": profile.context_cache_key(),
-    }
-
-
-def _plan_details_payload(
-    bundle: DataFusionPlanArtifact,
-    *,
-    delta_inputs_payload: Sequence[Mapping[str, object]],
-    scan_payload: Sequence[Mapping[str, object]],
-    plan_identity_hash: str,
-) -> Mapping[str, object]:
-    base_details = dict(bundle.plan_details)
-    base_details["delta_inputs_hash"] = hash_json_default(delta_inputs_payload)
-    base_details["scan_units_hash"] = hash_json_default(scan_payload)
-    base_details["df_settings_hash"] = hash_json_default(bundle.artifacts.df_settings)
-    base_details["plan_identity_hash"] = plan_identity_hash
-    return base_details
-
-
-def _udf_compatibility(
-    ctx: SessionContext,
-    bundle: DataFusionPlanArtifact,
-) -> tuple[bool, Mapping[str, object]]:
-    from datafusion_engine.udf.extension_core import (
-        rust_udf_snapshot,
-        rust_udf_snapshot_hash,
-        udf_names_from_snapshot,
-    )
-
-    snapshot = rust_udf_snapshot(ctx)
-    snapshot_hash = rust_udf_snapshot_hash(snapshot)
-    planned_hash = bundle.artifacts.udf_snapshot_hash
-    snapshot_match = snapshot_hash == planned_hash
-    snapshot_udfs = set(udf_names_from_snapshot(snapshot))
-    missing_udfs = sorted(set(bundle.required_udfs) - snapshot_udfs)
-    compatibility_ok = snapshot_match and not missing_udfs
-    detail = {
-        "planned_snapshot_hash": planned_hash,
-        "execution_snapshot_hash": snapshot_hash,
-        "snapshot_match": snapshot_match,
-        "required_udf_count": len(bundle.required_udfs),
-        "snapshot_udf_count": len(snapshot_udfs),
-        "missing_udfs": missing_udfs,
-    }
-    return compatibility_ok, detail
-
-
-def _substrait_msgpack(payload: bytes) -> bytes:
-    return dumps_msgpack(SubstraitBytes(payload))
-
-
-def _proto_msgpack(payload: object | None) -> bytes | None:
-    if payload is None:
-        return None
-    return dumps_msgpack(payload)
-
-
-def _msgpack_payload(payload: object) -> bytes:
-    return dumps_msgpack(to_builtins(payload, str_keys=True))
-
-
-def _msgpack_payload_raw(payload: object) -> msgspec.Raw:
-    return ensure_raw(dumps_msgpack(to_builtins(payload, str_keys=True)))
-
-
-def _msgpack_or_none(payload: object | None) -> bytes | None:
-    if payload is None:
-        return None
-    return dumps_msgpack(to_builtins(payload, str_keys=True))
-
+from datafusion_engine.plan.artifact_store_tables import (
+    _bootstrap_pipeline_events_table,
+    _bootstrap_plan_artifacts_table,
+    _commit_metadata_for_pipeline_events,
+    _commit_metadata_for_rows,
+    _delta_schema_available,
+    _pipeline_events_location,
+    _pipeline_events_schema,
+    _plan_artifacts_location,
+    _plan_artifacts_schema,
+    _profile_name,
+    _record_pipeline_events_summary,
+    _record_plan_artifact_summary,
+    _refresh_pipeline_events_registration,
+    _refresh_plan_artifacts_registration,
+    _reset_artifacts_table_path,
+)
 
 __all__ = [
     "PIPELINE_EVENTS_TABLE_NAME",
@@ -1297,6 +770,12 @@ __all__ = [
     "PlanArtifactRow",
     "PlanArtifactsForViewsRequest",
     "WriteArtifactRow",
+    "_bootstrap_pipeline_events_table",
+    "_bootstrap_plan_artifacts_table",
+    "_delta_schema_available",
+    "_pipeline_events_location",
+    "_plan_artifacts_location",
+    "_reset_artifacts_table_path",
     "build_plan_artifact_row",
     "ensure_pipeline_events_table",
     "ensure_plan_artifacts_table",

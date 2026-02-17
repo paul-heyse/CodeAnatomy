@@ -21,6 +21,7 @@ def _search_result(run_id: str | None = "run-1") -> CqResult:
 
 
 def test_persist_result_artifacts_no_save_pops_search_view() -> None:
+    """Pop persisted search view when no-save mode is enabled."""
     result = _search_result("rid")
     popped: list[str] = []
 
@@ -40,15 +41,20 @@ def test_persist_result_artifacts_no_save_pops_search_view() -> None:
 
 
 def test_persist_result_artifacts_no_save_ignores_non_search() -> None:
+    """Skip pop callback when result macro is not search."""
     result = _search_result("rid")
     result.run.macro = "q"
     popped: list[str] = []
+
+    def _pop(run_id: str) -> object | None:
+        popped.append(run_id)
+        return None
 
     persist_result_artifacts(
         result=result,
         artifact_dir=None,
         no_save=True,
-        pop_search_object_view_for_run=lambda run_id: popped.append(run_id),
+        pop_search_object_view_for_run=_pop,
     )
 
     assert popped == []

@@ -15,6 +15,7 @@ from tools.cq.core.schema import (
 )
 from tools.cq.core.snb_schema import DegradeEventV1, SemanticNeighborhoodBundleV1
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.summary_contract import as_neighborhood_summary
 from tools.cq.neighborhood.section_layout import materialize_section_layout
 
 
@@ -58,24 +59,25 @@ def _populate_summary(
     request: RenderSnbRequest,
 ) -> None:
     bundle = request.bundle
-    result.summary.target = request.target
-    result.summary.language = request.language
-    result.summary.top_k = request.top_k
-    result.summary.enable_semantic_enrichment = request.enable_semantic_enrichment
-    result.summary.bundle_id = bundle.bundle_id
-    result.summary.total_slices = len(bundle.slices)
-    result.summary.total_diagnostics = len(bundle.diagnostics)
+    summary = as_neighborhood_summary(result.summary)
+    summary.target = request.target
+    summary.language = request.language
+    summary.top_k = request.top_k
+    summary.enable_semantic_enrichment = request.enable_semantic_enrichment
+    summary.bundle_id = bundle.bundle_id
+    summary.total_slices = len(bundle.slices)
+    summary.total_diagnostics = len(bundle.diagnostics)
     if bundle.subject is not None:
-        result.summary.target_file = bundle.subject.file_path
-        result.summary.target_name = bundle.subject.name
+        summary.target_file = bundle.subject.file_path
+        summary.target_name = bundle.subject.name
     if bundle.graph is not None:
-        result.summary.total_nodes = bundle.graph.node_count
-        result.summary.total_edges = bundle.graph.edge_count
+        summary.total_nodes = bundle.graph.node_count
+        summary.total_edges = bundle.graph.edge_count
     if request.semantic_env:
         for key in ("semantic_health", "semantic_quiescent", "semantic_position_encoding"):
             value = request.semantic_env.get(key)
             if value is not None:
-                setattr(result.summary, key, value)
+                setattr(summary, key, value)
 
 
 def _populate_findings(

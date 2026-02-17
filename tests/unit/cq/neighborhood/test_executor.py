@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_contract import as_neighborhood_summary, summary_from_mapping
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.neighborhood.executor import NeighborhoodExecutionRequest, execute_neighborhood
 from tools.cq.neighborhood.snb_renderer import RenderSnbRequest
@@ -89,7 +89,7 @@ def test_execute_neighborhood_sets_resolution_and_evicts(
         )
     )
 
-    assert result.summary.target_resolution_kind == "symbol"
+    assert as_neighborhood_summary(result.summary).target_resolution_kind == "symbol"
     assert captured["target"] == "build_graph"
     assert captured["language"] == "python"
     assert evicted["language"] == "python"

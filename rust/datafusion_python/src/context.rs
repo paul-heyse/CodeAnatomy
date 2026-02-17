@@ -296,7 +296,7 @@ impl PySQLOptions {
 #[pyclass(frozen, name = "SessionContext", module = "datafusion", subclass)]
 #[derive(Clone)]
 pub struct PySessionContext {
-    pub ctx: SessionContext,
+    pub(crate) ctx: SessionContext,
 }
 
 #[pymethods]
@@ -628,7 +628,7 @@ impl PySessionContext {
         Ok(())
     }
 
-    /// Construct datafusion dataframe from Arrow Table
+    /// Register a table provider under the given table name.
     pub fn register_table_provider(
         &self,
         name: &str,
@@ -1108,6 +1108,10 @@ impl PySessionContext {
 }
 
 impl PySessionContext {
+    pub(crate) fn ctx(&self) -> &SessionContext {
+        &self.ctx
+    }
+
     async fn _table(&self, name: &str) -> datafusion::common::Result<DataFrame> {
         self.ctx.table(name).await
     }

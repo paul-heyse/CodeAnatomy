@@ -388,7 +388,7 @@ def install_rust_udf_platform(
         if isinstance(request.options, dict)
         else RustUdfPlatformOptions()
     )
-    from datafusion_engine.udf.extension_core import validate_extension_capabilities
+    from datafusion_engine.udf.extension_validation import validate_extension_capabilities
 
     _ = validate_extension_capabilities(strict=resolved.strict, ctx=ctx)
     resolved_registries = registries or RustUdfPlatformRegistries()

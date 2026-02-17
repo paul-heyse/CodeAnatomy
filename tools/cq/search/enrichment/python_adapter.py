@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
 from tools.cq.search.enrichment.core import string_or_none
 from tools.cq.search.pipeline.enrichment_contracts import (

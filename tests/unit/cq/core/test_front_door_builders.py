@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from tools.cq.core.front_door_assembly import (
+    build_calls_insight,
+    build_search_insight,
+)
+from tools.cq.core.front_door_contracts import (
     CallsInsightBuildRequestV1,
     InsightConfidenceV1,
     InsightLocationV1,
     InsightNeighborhoodV1,
     SearchInsightBuildRequestV1,
-    build_calls_insight,
-    build_search_insight,
 )
 
 

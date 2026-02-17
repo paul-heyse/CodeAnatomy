@@ -15,7 +15,7 @@ from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
-    from tools.cq.core.summary_contract import CqSummary
+    from tools.cq.core.summary_contract import SummaryEnvelopeV1
 
 
 def _attach_insight_artifact_refs(
@@ -28,6 +28,8 @@ def _attach_insight_artifact_refs(
     from tools.cq.core.front_door_assembly import (
         attach_artifact_refs,
         attach_neighborhood_overflow_ref,
+    )
+    from tools.cq.core.front_door_render import (
         coerce_front_door_insight,
         to_public_front_door_insight_dict,
     )
@@ -137,14 +139,14 @@ def _build_search_artifact_bundle(
     )
 
 
-def _search_query(summary: CqSummary) -> str:
+def _search_query(summary: SummaryEnvelopeV1) -> str:
     raw = summary.query
     if isinstance(raw, str) and raw:
         return raw
     return "<unknown>"
 
 
-def _search_artifact_summary(summary: CqSummary) -> dict[str, object]:
+def _search_artifact_summary(summary: SummaryEnvelopeV1) -> dict[str, object]:
     keys = (
         "query",
         "mode",
@@ -164,7 +166,7 @@ def _search_artifact_summary(summary: CqSummary) -> dict[str, object]:
     return payload
 
 
-def _search_artifact_diagnostics(summary: CqSummary) -> dict[str, object]:
+def _search_artifact_diagnostics(summary: SummaryEnvelopeV1) -> dict[str, object]:
     keys = (
         "enrichment_telemetry",
         "python_semantic_overview",

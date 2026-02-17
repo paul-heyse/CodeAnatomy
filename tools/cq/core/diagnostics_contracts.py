@@ -49,13 +49,17 @@ def build_diagnostics_artifact_payload(result: CqResult) -> DiagnosticsArtifactP
             root=result.run.root,
             run_id=result.run.run_id,
         ),
-        enrichment_telemetry=_safe_dict(summary.enrichment_telemetry),
-        python_semantic_telemetry=_safe_dict(summary.python_semantic_telemetry),
-        rust_semantic_telemetry=_safe_dict(summary.rust_semantic_telemetry),
-        semantic_planes=_safe_dict(summary.semantic_planes),
-        python_semantic_diagnostics=_safe_list_of_dict(summary.python_semantic_diagnostics),
-        language_capabilities=_safe_dict(summary.language_capabilities),
-        cross_language_diagnostics=_safe_list_of_dict(summary.cross_language_diagnostics),
+        enrichment_telemetry=_safe_dict(getattr(summary, "enrichment_telemetry", None)),
+        python_semantic_telemetry=_safe_dict(getattr(summary, "python_semantic_telemetry", None)),
+        rust_semantic_telemetry=_safe_dict(getattr(summary, "rust_semantic_telemetry", None)),
+        semantic_planes=_safe_dict(getattr(summary, "semantic_planes", None)),
+        python_semantic_diagnostics=_safe_list_of_dict(
+            getattr(summary, "python_semantic_diagnostics", None)
+        ),
+        language_capabilities=_safe_dict(getattr(summary, "language_capabilities", None)),
+        cross_language_diagnostics=_safe_list_of_dict(
+            getattr(summary, "cross_language_diagnostics", None)
+        ),
     )
     has_data = any(
         (

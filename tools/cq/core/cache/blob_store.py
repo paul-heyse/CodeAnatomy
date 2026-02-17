@@ -6,7 +6,7 @@ from hashlib import blake2b
 from pathlib import Path
 
 from tools.cq.core.cache.base_contracts import TreeSitterBlobRefV1
-from tools.cq.core.cache.interface import CqCacheBackend
+from tools.cq.core.cache.interface import CqCacheBackend, CqCacheStreamingBackend
 from tools.cq.core.cache.namespaces import resolve_namespace_ttl_seconds
 from tools.cq.core.cache.policy import default_cache_policy
 
@@ -46,9 +46,8 @@ def _persist_to_cache(
     policy = default_cache_policy(root=root)
     ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=_BLOB_NAMESPACE)
 
-    set_streaming = getattr(backend, "set_streaming", None)
-    if callable(set_streaming):
-        ok = set_streaming(
+    if isinstance(backend, CqCacheStreamingBackend):
+        ok = backend.set_streaming(
             storage_key,
             payload,
             expire=ttl_seconds,
@@ -66,9 +65,8 @@ def _persist_to_cache(
 
 
 def _read_from_cache(*, backend: CqCacheBackend, storage_key: str) -> bytes | None:
-    read_streaming = getattr(backend, "read_streaming", None)
-    if callable(read_streaming):
-        payload = read_streaming(storage_key)
+    if isinstance(backend, CqCacheStreamingBackend):
+        payload = backend.read_streaming(storage_key)
         if payload is not None:
             return payload
 

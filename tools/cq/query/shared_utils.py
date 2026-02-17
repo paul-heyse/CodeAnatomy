@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tools.cq.astgrep.sgpy_scanner import SgRecord
     from tools.cq.core.schema import CqResult
-    from tools.cq.core.summary_contract import CqSummary
+    from tools.cq.core.summary_contract import SummaryEnvelopeV1
 
 
 def count_result_matches(result: CqResult | None) -> int:
@@ -35,12 +35,12 @@ def count_result_matches(result: CqResult | None) -> int:
     return len(result.key_findings)
 
 
-def extract_missing_languages(summary: CqSummary) -> list[str]:
+def extract_missing_languages(summary: SummaryEnvelopeV1) -> list[str]:
     """Extract missing_languages list from typed summary.
 
     Parameters
     ----------
-    summary : CqSummary
+    summary : SummaryEnvelopeV1
         Result summary containing language partition payload.
 
     Returns:

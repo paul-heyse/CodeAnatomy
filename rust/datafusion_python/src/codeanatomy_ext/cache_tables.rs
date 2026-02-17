@@ -1,0 +1,1 @@
+//! Cache-table registration surface.

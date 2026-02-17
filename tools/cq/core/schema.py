@@ -13,7 +13,7 @@ import msgspec
 from tools.cq import SCHEMA_VERSION
 from tools.cq.core.id import stable_digest24
 from tools.cq.core.locations import SourceSpan
-from tools.cq.core.summary_contract import CqSummary
+from tools.cq.core.summary_contract import SearchSummaryV1, SummaryV1, summary_for_macro
 from tools.cq.core.type_coercion import coerce_float_optional
 
 # Schema evolution notes:
@@ -341,7 +341,7 @@ class CqResult(msgspec.Struct):
     ----------
     run : RunMeta
         Invocation metadata.
-    summary : CqSummary
+    summary : SummaryV1
         Typed summary metrics and counts.
     key_findings : list[Finding]
         Top-level actionable findings.
@@ -354,7 +354,7 @@ class CqResult(msgspec.Struct):
     """
 
     run: RunMeta
-    summary: CqSummary = msgspec.field(default_factory=CqSummary)
+    summary: SummaryV1 = msgspec.field(default_factory=SearchSummaryV1)
     key_findings: list[Finding] = msgspec.field(default_factory=list)
     evidence: list[Finding] = msgspec.field(default_factory=list)
     sections: list[Section] = msgspec.field(default_factory=list)
@@ -421,7 +421,7 @@ def mk_result(run: RunMeta) -> CqResult:
     CqResult
         Empty result ready to populate.
     """
-    return CqResult(run=run)
+    return CqResult(run=run, summary=summary_for_macro(run.macro))
 
 
 def _stable_finding_id(finding: Finding) -> str:

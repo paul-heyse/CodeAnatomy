@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING
 from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_assembly import FrontDoorInsightV1
+    from tools.cq.core.front_door_contracts import FrontDoorInsightV1
     from tools.cq.core.schema import CqResult
-    from tools.cq.query.language import QueryLanguage
+    from tools.cq.core.types import QueryLanguage
 
 
 @dataclass(frozen=True)

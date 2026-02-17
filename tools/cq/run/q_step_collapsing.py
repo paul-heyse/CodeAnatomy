@@ -8,16 +8,12 @@ from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.run_context import RunExecutionContext
 from tools.cq.core.schema import CqResult, Finding
 from tools.cq.core.summary_contract import extract_match_count
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 from tools.cq.orchestration.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
-from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE_SCOPE,
-    QueryLanguage,
-    QueryLanguageScope,
-    expand_language_scope,
-)
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, expand_language_scope
 from tools.cq.search.semantic.diagnostics import (
     build_capability_diagnostics,
     build_cross_language_diagnostics,
@@ -69,7 +65,7 @@ def _result_query_mode(result: CqResult) -> str | None:
     mode = result.summary.mode
     if isinstance(mode, str) and mode:
         return mode
-    plan_summary = result.summary.plan
+    plan_summary = getattr(result.summary, "plan", None)
     if isinstance(plan_summary, dict):
         is_pattern_query = plan_summary.get("is_pattern_query")
         if isinstance(is_pattern_query, bool):

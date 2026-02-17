@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from tools.cq.core.summary_contract import CqSummary
+from tools.cq.core.summary_contract import SummaryEnvelopeV1
 
 
 def summary_with_render_enrichment_metrics(
-    summary: CqSummary,
+    summary: SummaryEnvelopeV1,
     *,
     attempted: int,
     applied: int,
@@ -17,7 +17,7 @@ def summary_with_render_enrichment_metrics(
 
     Parameters
     ----------
-    summary : CqSummary
+    summary : SummaryEnvelopeV1
         Original summary payload.
     attempted : int
         Number of enrichment tasks attempted.

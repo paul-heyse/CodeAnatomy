@@ -9,6 +9,8 @@ use datafusion::execution::context::SessionContext;
 use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::session::capture::capture_df_settings;
+
 /// Complete deterministic session state snapshot.
 ///
 /// Captures all configuration, registered functions, and version metadata
@@ -77,39 +79,7 @@ impl SessionEnvelope {
         let delta_rs_version = deltalake::crate_version().to_string();
         let codeanatomy_version = env!("CARGO_PKG_VERSION").to_string();
 
-        // Query configuration snapshot from information_schema.df_settings
-        let config_df = ctx
-            .sql("SELECT name, value FROM information_schema.df_settings ORDER BY name")
-            .await?;
-        let config_batches = config_df.collect().await?;
-
-        let mut config_snapshot = BTreeMap::new();
-        for batch in config_batches {
-            let names = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<arrow::array::StringArray>()
-                .ok_or_else(|| {
-                    datafusion_common::DataFusionError::Internal(
-                        "Expected StringArray for config names".into(),
-                    )
-                })?;
-            let values = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<arrow::array::StringArray>()
-                .ok_or_else(|| {
-                    datafusion_common::DataFusionError::Internal(
-                        "Expected StringArray for config values".into(),
-                    )
-                })?;
-
-            for i in 0..batch.num_rows() {
-                if !names.is_null(i) && !values.is_null(i) {
-                    config_snapshot.insert(names.value(i).to_string(), values.value(i).to_string());
-                }
-            }
-        }
+        let config_snapshot = capture_df_settings(ctx).await?;
 
         // Extract session config values
         let state = ctx.state();

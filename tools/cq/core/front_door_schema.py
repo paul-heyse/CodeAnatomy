@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-from tools.cq.core.front_door_assembly import (
+from tools.cq.core.front_door_contracts import (
     Availability,
     CallsInsightBuildRequestV1,
     EntityInsightBuildRequestV1,
-    InsightSource,
-    NeighborhoodSource,
-    RiskLevel,
-    SearchInsightBuildRequestV1,
-)
-from tools.cq.core.front_door_contracts import (
     FrontDoorInsightV1,
     InsightArtifactRefsV1,
     InsightBudgetV1,
@@ -22,7 +16,11 @@ from tools.cq.core.front_door_contracts import (
     InsightRiskCountersV1,
     InsightRiskV1,
     InsightSliceV1,
+    InsightSource,
     InsightTargetV1,
+    NeighborhoodSource,
+    RiskLevel,
+    SearchInsightBuildRequestV1,
 )
 
 __all__ = [

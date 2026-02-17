@@ -10,9 +10,8 @@ use crate::providers::registration::register_extraction_inputs;
 use crate::rules::registry::CpgRuleSet;
 use crate::session::envelope::SessionEnvelope;
 use crate::session::factory::{SessionBuildOverrides, SessionFactory};
-use crate::session::planning_surface::ExtensionGovernancePolicy;
 use crate::spec::execution_spec::SemanticExecutionSpec;
-use crate::spec::runtime::{ExtensionGovernanceMode, TracingConfig};
+use crate::spec::runtime::TracingConfig;
 
 /// Canonical pre-pipeline context shared by all execution entrypoints.
 pub struct PreparedExecutionContext {
@@ -33,9 +32,7 @@ pub async fn prepare_execution_context(
         enable_function_factory: spec.runtime.enable_function_factory,
         enable_domain_planner: spec.runtime.enable_domain_planner,
         enable_delta_codec: spec.runtime.capture_delta_codec,
-        extension_governance_policy: map_extension_governance(
-            spec.runtime.extension_governance_mode,
-        ),
+        extension_governance_policy: spec.runtime.extension_governance_mode,
     };
 
     let mut state = if let Some(profile) = &spec.runtime_profile {
@@ -105,14 +102,4 @@ pub async fn prepare_execution_context(
         provider_identities,
         preflight_warnings: std::mem::take(&mut state.build_warnings),
     })
-}
-
-fn map_extension_governance(mode: ExtensionGovernanceMode) -> ExtensionGovernancePolicy {
-    match mode {
-        ExtensionGovernanceMode::StrictAllowlist => ExtensionGovernancePolicy::StrictAllowlist,
-        ExtensionGovernanceMode::WarnOnUnregistered => {
-            ExtensionGovernancePolicy::WarnOnUnregistered
-        }
-        ExtensionGovernanceMode::Permissive => ExtensionGovernancePolicy::Permissive,
-    }
 }

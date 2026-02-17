@@ -14,6 +14,7 @@ from tools.cq.core.toolchain import Toolchain
 
 if TYPE_CHECKING:
     from tools.cq.core.services import CallsServiceRequest, SearchServiceRequest
+    from tools.cq.core.types import QueryLanguageScope
     from tools.cq.macros.bytecode import BytecodeSurfaceRequest
     from tools.cq.macros.exceptions import ExceptionsRequest
     from tools.cq.macros.impact import ImpactRequest
@@ -21,7 +22,6 @@ if TYPE_CHECKING:
     from tools.cq.macros.scopes import ScopeRequest
     from tools.cq.macros.side_effects import SideEffectsRequest
     from tools.cq.macros.sig_impact import SigImpactRequest
-    from tools.cq.query.language import QueryLanguageScope
     from tools.cq.search._shared.types import QueryMode, SearchLimits
 
 

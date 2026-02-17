@@ -19,7 +19,8 @@ from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
 from tools.cq.search.pipeline.context_window import ContextWindow
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_assembly import InsightNeighborhoodV1
+    from tools.cq.core.front_door_contracts import InsightNeighborhoodV1
+    from tools.cq.core.types import QueryLanguage
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class CallsNeighborhoodRequest:
     target_callees: Counter[str]
     analysis: CallAnalysisSummary
     score: ScoreDetails | None
+    target_language: QueryLanguage | None = None
     preview_per_slice: int = FRONT_DOOR_PREVIEW_PER_SLICE
 
 
@@ -109,10 +111,9 @@ def _build_calls_neighborhood(
     request: CallsNeighborhoodRequest,
 ) -> tuple[InsightNeighborhoodV1, list[Finding], list[str]]:
     from tools.cq.core.front_door_assembly import (
-        InsightNeighborhoodV1,
-        InsightSliceV1,
         build_neighborhood_from_slices,
     )
+    from tools.cq.core.front_door_contracts import InsightNeighborhoodV1, InsightSliceV1
     from tools.cq.core.snb_schema import SemanticNodeRefV1
     from tools.cq.neighborhood.contracts import (
         TreeSitterNeighborhoodCollectRequest,
@@ -126,13 +127,17 @@ def _build_calls_neighborhood(
         degradation_notes.append("target_definition_unresolved")
     else:
         target_file, target_line = request.target_location
+        collect_language = _resolve_neighborhood_language(
+            target_file=target_file,
+            target_language=request.target_language,
+        )
         try:
             collect_result = collect_tree_sitter_neighborhood(
                 TreeSitterNeighborhoodCollectRequest(
                     root=str(request.root),
                     target_name=request.function_name.rsplit(".", maxsplit=1)[-1],
                     target_file=target_file,
-                    language="python",
+                    language=collect_language,
                     target_line=target_line,
                     target_col=0,
                     max_per_slice=request.preview_per_slice,
@@ -217,6 +222,19 @@ def _build_calls_neighborhood(
             ),
         )
     return neighborhood, neighborhood_findings, degradation_notes
+
+
+def _resolve_neighborhood_language(
+    *,
+    target_file: str,
+    target_language: QueryLanguage | None,
+) -> str:
+    if target_language in {"python", "rust"}:
+        return target_language
+    suffix = Path(target_file).suffix.lower()
+    if suffix == ".rs":
+        return "rust"
+    return "python"
 
 
 __all__ = [

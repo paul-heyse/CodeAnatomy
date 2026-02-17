@@ -1383,7 +1383,10 @@ class TestSmartSearchFiltersAndEnrichment:
             msg = "forced enrichment failure"
             raise RuntimeError(msg)
 
-        monkeypatch.setattr(smart_search_module, "enrich_rust_context_by_byte_range", _boom)
+        monkeypatch.setattr(
+            "tools.cq.search.pipeline.classification.enrich_rust_context_by_byte_range",
+            _boom,
+        )
         result = smart_search_module.smart_search(tmp_path, "build_graph", lang_scope="rust")
         assert result.summary["query"] == "build_graph"
         assert result.evidence

@@ -574,7 +574,7 @@ pub fn map_get_default_udf() -> ScalarUDF {
 }
 
 pub fn map_normalize_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(1, 3, Volatility::Immutable);
+    let signature = variadic_any_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(MapNormalizeUdf {
         signature: SignatureEqHash::new(signature),
         policy: CodeAnatomyUdfConfig::default(),

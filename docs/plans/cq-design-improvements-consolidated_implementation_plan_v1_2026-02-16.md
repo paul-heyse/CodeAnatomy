@@ -3605,7 +3605,7 @@ Status key:
 - [x] S5 - Fix touch() bypass
 - [x] S6 - Consolidate node_payload
 - [x] S7 - Type ExecutionContext fields
-- [ ] S8 - Unify decorator kind checking (partial: decorator-kinds cutover landed, but D3 decommission still retains `matches_entity()` shim in `tools/cq/query/executor_definitions.py`)
+- [x] S8 - Unify decorator kind checking
 - [x] S9 - Move QueryLanguage
 - [x] S10 - Fix RunOptions import
 - [x] S11 - Merge comma_separated_enum into comma_separated_list
@@ -3626,19 +3626,19 @@ Status key:
 - [x] S22 - Extract cache decode function
 - [x] S23 - Consolidate Rust def regex
 - [x] S24 - Group risk thresholds into struct
-- [ ] D3 - Delete hardcoded entity-kind sets (partial: `DECORATOR_KINDS` is removed, but `matches_entity()` wrapper still exists in `tools/cq/query/executor_definitions.py`)
+- [x] D3 - Delete hardcoded entity-kind sets
 
 ### Wave 3: God Module Decomposition
-- [ ] S25 - Complete front-door decomposition (partial: `front_door_builders.py` removed and `front_door_assembly.py`/`front_door_risk.py` added, but full contract/render/risk assembly split is not complete)
+- [x] S25 - Complete front-door decomposition
 - [x] S26 - Extract classify_match to classification.py
-- [ ] S27 - Complete search pipeline phase extraction (partial: phase modules exist, but `smart_search.py` remains large and still contains substantial orchestration/render logic)
-- [ ] S28 - Extract query cache ceremony (partial: `query_cache.py` exists, but executor call paths are still primarily fragment-orchestrator based and not fully converged on the new helper)
-- [ ] S29 - Decompose executor.py (partial: `executor_entity.py` and `executor_pattern.py` exist, but `executor.py` remains monolithic and >1k LOC)
-- [ ] S30 - Decompose rust_lane/runtime.py (partial: `query_orchestration.py` and `payload_assembly.py` exist, but `runtime.py` remains monolithic and >1k LOC)
-- [ ] S31 - Decompose result.py (partial: split modules landed, but `result.py` remains as compatibility orchestrator instead of full decommission)
-- [ ] S32 - Extract Q-step preparation (partial: `prepare_q_step`/`expand_q_step_by_scope` moved into `q_execution.py`, but `_partition_q_steps` remains in `runner.py`)
-- [ ] D4 - Delete smart_search.py duplicates (partial)
-- [ ] D5 - Delete cache ceremony code (partial)
+- [x] S27 - Complete search pipeline phase extraction
+- [x] S28 - Extract query cache ceremony
+- [x] S29 - Decompose executor.py
+- [x] S30 - Decompose rust_lane/runtime.py
+- [x] S31 - Decompose result.py
+- [x] S32 - Extract Q-step preparation
+- [x] D4 - Delete smart_search.py duplicates
+- [x] D5 - Delete cache ceremony code
 
 ### Wave 4: Protocol & Boundary Improvements
 - [x] S33 - Extend CqCacheBackend protocol
@@ -3653,7 +3653,7 @@ Status key:
 ### Wave 5: Structural Type Safety
 - [x] S39 - Return new Finding instances
 - [x] S40 - Split attach_target_metadata
-- [ ] S41 - CqSummary typed variant migration (incomplete: monolithic `CqSummary` and dict-style mutation helpers remain; variant tests are not present)
+- [x] S41 - CqSummary typed variant migration
 - [x] S42 - Define ContextWindow struct
 - [x] S43 - Consolidate cache lifecycle
 
@@ -3670,15 +3670,12 @@ Status key:
 - [x] S53 - Canonicalize tree-sitter cancellation on progress_callback
 - [x] D8 - Delete hidden clear_caches + assembly prefilter legacy
 - [x] D9 - Delete IR Python field constant + timeout_micros plumbing
-- [ ] D10 - Delete monolithic CqSummary and dict-like mutation helpers (incomplete)
+- [x] D10 - Delete monolithic CqSummary and dict-like mutation helpers
 
 ### Remaining Implementation Focus (Post-Audit)
-1. Complete `S41`/`D10` summary-contract cutover:
-   Replace monolithic `CqSummary`, remove dict-like mutation helpers, migrate all summary writes/readers to mode-tagged summary variants, and add `tests/unit/cq/test_summary_variants.py` plus `tests/unit/cq/test_summary_render_variants.py`.
-2. Finish Wave 3 decomposition hard cutovers (`S25`, `S27`, `S28`, `S29`, `S30`, `S31`, `S32`):
-   Existing extracted modules are present, but core monoliths (`smart_search.py`, `executor.py`, `rust_lane/runtime.py`) still hold substantial logic and decommission goals are not yet fully met.
-3. Close decommission partials (`D3`, `D4`, `D5`):
-   Remove remaining transitional wrappers (notably `matches_entity()`), complete smart-search duplicate removal, and fully converge cache ceremony paths.
+Audit update (2026-02-17):
+
+- No remaining scope items. S9, S28, and D5 are complete.
 
 ---
 
@@ -3702,9 +3699,9 @@ Status key:
 
 **Wave 3 (God Module Decomposition)**:
 - 8 scope items complete
-- smart_search.py: 1981 LOC → ~400 LOC orchestrator
-- executor.py: 1223 LOC → ~220 LOC facade
-- runtime.py: 1080 LOC → ~350 LOC entrypoint
+- smart_search.py: 1981 LOC → 749 LOC orchestrator/support module
+- executor.py: 1223 LOC → 37 LOC facade
+- runtime.py: 1080 LOC → 21 LOC entrypoint (+ split `runtime_core.py` and helper modules)
 - result.py: 382 LOC → 3 focused modules
 
 **Wave 4 (Protocol & Boundary Improvements)**:

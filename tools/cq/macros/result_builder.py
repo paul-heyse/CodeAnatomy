@@ -14,6 +14,7 @@ from tools.cq.core.schema import (
     mk_result,
     ms,
 )
+from tools.cq.core.summary_contract import apply_summary_mapping
 from tools.cq.macros.contracts import ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 
@@ -55,7 +56,7 @@ class MacroResultBuilder:
         MacroResultBuilder
             Current builder for fluent chaining.
         """
-        self.result.summary.update(kwargs)
+        apply_summary_mapping(self.result.summary, kwargs)
         return self
 
     def set_scoring(self, details: ScoringDetailsV1 | None) -> MacroResultBuilder:

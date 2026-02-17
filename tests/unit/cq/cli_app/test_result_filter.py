@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from tools.cq.cli_app.context import FilterConfig
 from tools.cq.cli_app.result_filter import apply_result_filters
 from tools.cq.core.schema import CqResult, RunMeta
@@ -21,6 +22,7 @@ def _result() -> CqResult:
 
 
 def test_apply_result_filters_returns_same_result_without_filters() -> None:
+    """Return the original result object when no filters are configured."""
     result = _result()
 
     filtered = apply_result_filters(result, FilterConfig())
@@ -28,7 +30,10 @@ def test_apply_result_filters_returns_same_result_without_filters() -> None:
     assert filtered is result
 
 
-def test_apply_result_filters_uses_findings_table_pipeline(monkeypatch) -> None:
+def test_apply_result_filters_uses_findings_table_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run through flatten/apply/rehydrate steps when filters are present."""
     result = _result()
     filters = FilterConfig(include=["callsite"])
 

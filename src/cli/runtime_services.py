@@ -22,35 +22,42 @@ class CliRuntimeServices:
 
 def build_cli_runtime_services(
     *,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
+    runtime_profile: DataFusionRuntimeProfile,
+    delta_service: DeltaServicePort,
 ) -> CliRuntimeServices:
     """Build concrete runtime services for CLI command execution.
 
     Returns:
     -------
     CliRuntimeServices
-        Runtime services bound to the provided or default profile.
+        Runtime services bound to explicit runtime dependencies.
     """
-    profile = runtime_profile or DataFusionRuntimeProfile()
     return CliRuntimeServices(
-        runtime_profile=profile,
-        delta_service=profile.delta_ops.delta_service(),
+        runtime_profile=runtime_profile,
+        delta_service=delta_service,
     )
 
 
 def resolve_cli_runtime_services(
     run_context: RunContext | None,
 ) -> CliRuntimeServices:
-    """Resolve runtime services from run context or create command-local defaults.
+    """Resolve runtime services from run context.
 
     Returns:
     -------
     CliRuntimeServices
-        Runtime services from context when available, otherwise local defaults.
+        Runtime services from run context.
+
+    Raises:
+        RuntimeError: If runtime services are not composed on the run context.
     """
     if run_context is not None and run_context.runtime_services is not None:
         return run_context.runtime_services
-    return build_cli_runtime_services()
+    msg = (
+        "CliRuntimeServices missing from RunContext. "
+        "Delta-aware CLI commands require explicit runtime service composition."
+    )
+    raise RuntimeError(msg)
 
 
 __all__ = [

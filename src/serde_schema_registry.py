@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import logging
 import threading
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
@@ -583,6 +584,8 @@ for _schema_type in _SCHEMA_TYPES:
     )
 
 SCHEMA_TYPES = tuple(spec.schema_type for spec in _SCHEMA_REGISTRY.snapshot().values())
+_UNSUPPORTED_SCHEMA_UNION_MSG = "Type unions may not contain more than one custom type"
+logger = logging.getLogger(__name__)
 
 
 def schema_type_registry() -> SchemaTypeRegistry:
@@ -598,6 +601,28 @@ def schema_type_registry() -> SchemaTypeRegistry:
 
 def _schema_registry_types() -> tuple[type[msgspec.Struct], ...]:
     return tuple(spec.schema_type for spec in _SCHEMA_REGISTRY.snapshot().values())
+
+
+def _supported_schema_types(
+    schema_types: tuple[type[msgspec.Struct], ...],
+) -> tuple[type[msgspec.Struct], ...]:
+    supported: list[type[msgspec.Struct]] = []
+    skipped: list[str] = []
+    for schema_type in schema_types:
+        try:
+            msgspec.json.schema(schema_type, schema_hook=_schema_hook)
+        except TypeError as exc:
+            if _UNSUPPORTED_SCHEMA_UNION_MSG in str(exc):
+                skipped.append(schema_type.__name__)
+                continue
+            raise
+        supported.append(schema_type)
+    if skipped:
+        logger.warning(
+            "Skipping unsupported schema types during msgspec schema export: %s",
+            ", ".join(sorted(skipped)),
+        )
+    return tuple(supported)
 
 
 def _schema_hook(obj: type[msgspec.Struct]) -> dict[str, object]:
@@ -618,7 +643,7 @@ def schema_components() -> tuple[dict[str, object], dict[str, object]]:
     tuple[dict[str, object], dict[str, object]]
         Schema map and shared component definitions.
     """
-    schema_types = _schema_registry_types()
+    schema_types = _supported_schema_types(_schema_registry_types())
     schemas, components = msgspec.json.schema_components(schema_types, schema_hook=_schema_hook)
     schema_map: dict[str, object] = {
         schema_type.__name__: schema
@@ -706,7 +731,7 @@ def schema_contract_index() -> list[dict[str, object]]:
     list[dict[str, object]]
         List of contract entries with type info payloads.
     """
-    schema_types = _schema_registry_types()
+    schema_types = _supported_schema_types(_schema_registry_types())
     type_info = msgspec.inspect.multi_type_info(schema_types)
 
     def _stable_contract_fallback(value: object) -> str:

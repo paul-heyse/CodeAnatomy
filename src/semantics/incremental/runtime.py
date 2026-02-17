@@ -33,6 +33,7 @@ class IncrementalRuntimeBuildRequest:
 
     dataset_resolver: ManifestDatasetResolver
     profile: DataFusionRuntimeProfile | None = None
+    delta_service: DeltaServicePort | None = None
     profile_name: str = "default"
     determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
 
@@ -58,10 +59,24 @@ class IncrementalRuntime:
         -------
         IncrementalRuntime
             Newly constructed runtime instance.
+
+        Raises:
+            ValueError: If neither an explicit profile nor an explicit delta service
+                is provided.
         """
+        if request.profile is None and request.delta_service is None:
+            msg = (
+                "IncrementalRuntime.build requires an explicit runtime profile or "
+                "an explicit delta service binding."
+            )
+            raise ValueError(msg)
         runtime_profile = request.profile or DataFusionRuntimeProfile(
             policies=PolicyBundleConfig(config_policy_name=request.profile_name),
         )
+        if request.delta_service is not None:
+            from datafusion_engine.session.runtime_ops import bind_delta_service
+
+            bind_delta_service(runtime_profile, service=request.delta_service)
         return cls(
             profile=runtime_profile,
             _session_runtime=runtime_profile.session_runtime(),

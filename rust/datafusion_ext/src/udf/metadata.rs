@@ -48,9 +48,9 @@ impl ScalarUDFImpl for CpgScoreUdf {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() < 2 || arg_types.len() > 65 {
+        if arg_types.len() != 1 {
             return Err(DataFusionError::Plan(
-                "stable_id_parts expects between two and sixty-five arguments".into(),
+                "cpg_score expects exactly one argument".into(),
             ));
         }
         Ok(vec![DataType::Utf8; arg_types.len()])

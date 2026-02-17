@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -17,6 +17,7 @@ use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use tokio::time;
 
+use crate::async_udf_config::CodeAnatomyAsyncUdfConfig;
 use crate::async_runtime;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -25,33 +26,11 @@ pub struct AsyncUdfPolicy {
     pub timeout: Option<Duration>,
 }
 
-static ASYNC_UDF_POLICY: OnceLock<RwLock<AsyncUdfPolicy>> = OnceLock::new();
-fn async_udf_policy_lock() -> &'static RwLock<AsyncUdfPolicy> {
-    ASYNC_UDF_POLICY.get_or_init(|| RwLock::new(AsyncUdfPolicy::default()))
-}
-
-pub fn set_async_udf_policy(
-    ideal_batch_size: Option<usize>,
-    timeout_ms: Option<u64>,
-) -> Result<()> {
-    let timeout = timeout_ms.map(Duration::from_millis);
-    let policy = AsyncUdfPolicy {
-        ideal_batch_size,
-        timeout,
-    };
-    let lock = async_udf_policy_lock();
-    let mut guard = lock
-        .write()
-        .map_err(|_| DataFusionError::Execution("Async UDF policy lock poisoned".into()))?;
-    *guard = policy;
-    Ok(())
-}
-
-pub fn async_udf_policy() -> AsyncUdfPolicy {
-    let lock = async_udf_policy_lock();
-    match lock.read() {
-        Ok(guard) => *guard,
-        Err(_) => AsyncUdfPolicy::default(),
+pub fn async_udf_policy(config: &ConfigOptions) -> AsyncUdfPolicy {
+    let ext = CodeAnatomyAsyncUdfConfig::from_config(config);
+    AsyncUdfPolicy {
+        ideal_batch_size: ext.ideal_batch_size,
+        timeout: ext.timeout_ms.map(Duration::from_millis),
     }
 }
 
@@ -71,7 +50,7 @@ struct AsyncEchoUdf {
 
 impl AsyncEchoUdf {
     fn new() -> Self {
-        Self::new_with_policy(async_udf_policy())
+        Self::new_with_policy(AsyncUdfPolicy::default())
     }
 
     fn new_with_policy(policy: AsyncUdfPolicy) -> Self {
@@ -151,6 +130,13 @@ impl ScalarUDFImpl for AsyncEchoUdf {
 
     fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
         let mut policy = self.policy;
+        let configured = async_udf_policy(config);
+        if policy.ideal_batch_size.is_none() {
+            policy.ideal_batch_size = configured.ideal_batch_size;
+        }
+        if policy.timeout.is_none() {
+            policy.timeout = configured.timeout;
+        }
         if policy.ideal_batch_size.is_none() {
             let size = config.execution.batch_size;
             if size > 0 {
@@ -210,7 +196,7 @@ pub fn async_echo_udf() -> ScalarUDF {
 pub fn register_async_udfs(ctx: &SessionContext) -> Result<()> {
     let state = ctx.state();
     let config_options = state.config_options();
-    let mut policy = async_udf_policy();
+    let mut policy = async_udf_policy(config_options);
     if policy.ideal_batch_size.is_none() {
         let size = config_options.execution.batch_size;
         if size > 0 {

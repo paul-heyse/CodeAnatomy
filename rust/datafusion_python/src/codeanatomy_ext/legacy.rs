@@ -4,12 +4,12 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::helpers::extract_session_ctx;
 use crate::context::{PyRuntimeEnvBuilder, PySessionContext};
 use crate::dataframe::PyDataFrame;
 use crate::delta_control_plane::{
@@ -45,14 +45,13 @@ use crate::delta_observability::{
     add_action_payloads, maintenance_report_payload, mutation_report_payload, scan_config_payload,
     scan_config_schema_ipc, snapshot_payload,
 };
-use crate::delta_protocol::{gate_from_parts, DeltaSnapshotInfo};
+use crate::delta_protocol::{gate_from_parts, DeltaSnapshotInfo, TableVersion};
 use crate::expr::PyExpr;
 use crate::utils::py_obj_to_scalar_value;
 use crate::{registry_snapshot, udf_docs};
 use arrow::array::{Int64Array, MapBuilder, RecordBatchReader, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use arrow::ffi_stream::ArrowArrayStreamReader;
-use arrow::ipc::reader::StreamReader;
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use arrow::record_batch::RecordBatch;
 use blake2::digest::{Update, VariableOutput};
@@ -103,9 +102,9 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 use deltalake::delta_datafusion::planner::DeltaPlanner;
 use deltalake::delta_datafusion::{
     DeltaLogicalCodec, DeltaPhysicalCodec, DeltaScanConfig, DeltaSessionConfig, DeltaTableFactory,
-    DeltaTableProvider,
 };
 use deltalake::protocol::SaveMode;
+use df_plugin_common::{parse_major, schema_from_ipc, DELTA_SCAN_CONFIG_VERSION};
 use df_plugin_host::{load_plugin, PluginHandle};
 use df_plugin_host::{DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -123,8 +122,6 @@ use codeanatomy_engine::session::extraction::{
     build_extraction_session as build_extraction_session_native, ExtractionConfig,
 };
 
-const DELTA_SCAN_CONFIG_VERSION: u32 = 1;
-
 macro_rules! register_pyfunctions {
     ($module:expr, [$($func:path),* $(,)?]) => {
         $(
@@ -141,10 +138,9 @@ macro_rules! register_pyclasses {
     };
 }
 
-fn schema_from_ipc(schema_ipc: Vec<u8>) -> PyResult<SchemaRef> {
-    let reader = StreamReader::try_new(Cursor::new(schema_ipc), None)
-        .map_err(|err| PyValueError::new_err(format!("Failed to decode schema IPC: {err}")))?;
-    Ok(reader.schema())
+fn decode_schema_ipc(schema_ipc: &[u8]) -> PyResult<SchemaRef> {
+    schema_from_ipc(schema_ipc)
+        .map_err(|err| PyValueError::new_err(format!("Failed to decode schema IPC: {err}")))
 }
 
 fn storage_options_map(
@@ -177,6 +173,15 @@ fn delta_gate_from_params(
     ))
 }
 
+fn table_version_from_options(
+    version: Option<i64>,
+    timestamp: Option<String>,
+) -> PyResult<TableVersion> {
+    TableVersion::from_options(version, timestamp).map_err(|err| {
+        PyValueError::new_err(format!("Invalid Delta table version options: {err}"))
+    })
+}
+
 fn scan_overrides_from_params(
     file_column_name: Option<String>,
     enable_parquet_pushdown: Option<bool>,
@@ -185,7 +190,7 @@ fn scan_overrides_from_params(
     schema_ipc: Option<Vec<u8>>,
 ) -> PyResult<DeltaScanOverrides> {
     let schema = match schema_ipc {
-        Some(schema_ipc) => Some(schema_from_ipc(schema_ipc)?),
+        Some(schema_ipc) => Some(decode_schema_ipc(&schema_ipc)?),
         None => None,
     };
     Ok(DeltaScanOverrides {
@@ -269,13 +274,13 @@ struct SessionContextContract {
 fn session_context_contract(ctx: &Bound<'_, PyAny>) -> PyResult<SessionContextContract> {
     if let Ok(session) = ctx.extract::<Bound<'_, PySessionContext>>() {
         return Ok(SessionContextContract {
-            ctx: session.borrow().ctx.clone(),
+            ctx: session.borrow().ctx().clone(),
         });
     }
     if let Ok(inner) = ctx.getattr("ctx") {
         if let Ok(session) = inner.extract::<Bound<'_, PySessionContext>>() {
             return Ok(SessionContextContract {
-                ctx: session.borrow().ctx.clone(),
+                ctx: session.borrow().ctx().clone(),
             });
         }
     }
@@ -317,8 +322,8 @@ struct DatasetProviderRequestPayload {
     required_writer_features: Option<Vec<String>>,
 }
 
-fn provider_capsule(py: Python<'_>, provider: DeltaTableProvider) -> PyResult<Py<PyAny>> {
-    let ffi_provider = FFI_TableProvider::new(Arc::new(provider), true, None);
+fn provider_capsule(py: Python<'_>, provider: Arc<dyn TableProvider>) -> PyResult<Py<PyAny>> {
+    let ffi_provider = FFI_TableProvider::new(provider, true, None);
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
@@ -465,11 +470,15 @@ fn commit_options_from_params(
     })
 }
 
-fn now_unix_ms() -> i64 {
+fn now_unix_ms_or(fallback: i64) -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
+        .unwrap_or(fallback)
+}
+
+fn now_unix_ms() -> i64 {
+    now_unix_ms_or(-1)
 }
 
 const PLUGIN_HANDLE_CAPSULE_NAME: &str = "datafusion_ext.DfPluginHandle";
@@ -500,17 +509,6 @@ fn extract_plugin_handle(py: Python<'_>, plugin: &Py<PyAny>) -> PyResult<Arc<Plu
     Ok(handle.clone())
 }
 
-fn parse_major(version: &str) -> PyResult<u16> {
-    let Some((major, _)) = version.split_once('.') else {
-        return Err(PyValueError::new_err(format!(
-            "Invalid version string {version:?}"
-        )));
-    };
-    major
-        .parse::<u16>()
-        .map_err(|err| PyValueError::new_err(format!("Invalid version string {version:?}: {err}")))
-}
-
 fn ensure_plugin_manifest_compat(handle: &PluginHandle) -> PyResult<()> {
     let manifest = handle.manifest();
     if manifest.plugin_abi_major != DF_PLUGIN_ABI_MAJOR {
@@ -535,7 +533,8 @@ fn ensure_plugin_manifest_compat(handle: &PluginHandle) -> PyResult<()> {
             actual = manifest.df_ffi_major,
         )));
     }
-    let datafusion_major = parse_major(datafusion::DATAFUSION_VERSION)?;
+    let datafusion_major =
+        parse_major(datafusion::DATAFUSION_VERSION).map_err(PyValueError::new_err)?;
     if manifest.datafusion_major != datafusion_major {
         return Err(PyRuntimeError::new_err(format!(
             "Plugin DataFusion major mismatch: expected {expected} got {actual}",
@@ -543,7 +542,7 @@ fn ensure_plugin_manifest_compat(handle: &PluginHandle) -> PyResult<()> {
             actual = manifest.datafusion_major,
         )));
     }
-    let arrow_major = parse_major(arrow::ARROW_VERSION)?;
+    let arrow_major = parse_major(arrow::ARROW_VERSION).map_err(PyValueError::new_err)?;
     if manifest.arrow_major != arrow_major {
         return Err(PyRuntimeError::new_err(format!(
             "Plugin Arrow major mismatch: expected {expected} got {actual}",
@@ -570,7 +569,7 @@ fn udf_config_payload_from_ctx(ctx: &SessionContext) -> JsonValue {
 
 #[pyfunction]
 fn install_codeanatomy_udf_config(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
-    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
+    let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     if config.get_extension::<CodeAnatomyUdfConfig>().is_none() {
@@ -584,7 +583,7 @@ fn install_function_factory(
     ctx: &Bound<'_, PyAny>,
     policy_ipc: &Bound<'_, PyBytes>,
 ) -> PyResult<()> {
-    datafusion_ext::udf::install_function_factory_native(&session_context_contract(ctx)?.ctx, policy_ipc.as_bytes())
+    datafusion_ext::udf::install_function_factory_native(&extract_session_ctx(ctx)?, policy_ipc.as_bytes())
         .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))
 }
 
@@ -786,7 +785,7 @@ fn replay_substrait_plan(
         let plan = Plan::decode(payload_bytes.as_bytes()).map_err(|err| {
             PyValueError::new_err(format!("Failed to decode Substrait payload: {err}"))
         })?;
-        let state = session_context_contract(ctx)?.ctx.state();
+        let state = extract_session_ctx(ctx)?.state();
         let runtime = runtime()?;
         let logical_plan = runtime
             .block_on(from_substrait_plan(&state, &plan))
@@ -876,14 +875,14 @@ fn register_dataset_provider(
         request.schema_ipc,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(request.version, request.timestamp.clone())?;
     let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
         .block_on(delta_provider_from_session_native(
             DeltaProviderFromSessionRequest {
-                session_ctx: &session_context_contract(ctx)?.ctx,
+                session_ctx: &extract_session_ctx(ctx)?,
                 table_uri: &request.table_uri,
                 storage_options,
-                version: request.version,
-                timestamp: request.timestamp.clone(),
+                table_version,
                 predicate: request.predicate.clone(),
                 overrides,
                 gate,
@@ -893,10 +892,10 @@ fn register_dataset_provider(
 
     let table_name = request.table_name;
     if request.overwrite.unwrap_or(true) {
-        let _ = session_context_contract(ctx)?.ctx.deregister_table(table_name.as_str());
+        let _ = extract_session_ctx(ctx)?.deregister_table(table_name.as_str());
     }
-    session_context_contract(ctx)?.ctx
-        .register_table(table_name.as_str(), Arc::new(provider))
+    extract_session_ctx(ctx)?
+        .register_table(table_name.as_str(), provider)
         .map_err(|err| {
             PyRuntimeError::new_err(format!(
                 "Failed to register dataset provider for table {table_name:?}: {err}"
@@ -992,7 +991,7 @@ fn install_codeanatomy_policy_config(
     allow_dml: Option<bool>,
     allow_statements: Option<bool>,
 ) -> PyResult<()> {
-    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
+    let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     let policy = ensure_policy_config(config.options_mut()).map_err(|err| {
@@ -1016,7 +1015,7 @@ fn install_codeanatomy_physical_config(
     ctx: &Bound<'_, PyAny>,
     enabled: Option<bool>,
 ) -> PyResult<()> {
-    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
+    let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     let physical = ensure_physical_config(config.options_mut()).map_err(|err| {
@@ -1030,19 +1029,19 @@ fn install_codeanatomy_physical_config(
 
 #[pyfunction]
 fn install_planner_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
-    install_policy_rules_native(&session_context_contract(ctx)?.ctx)
+    install_policy_rules_native(&extract_session_ctx(ctx)?)
         .map_err(|err| PyRuntimeError::new_err(format!("Planner rule install failed: {err}")))
 }
 
 #[pyfunction]
 fn install_physical_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
-    install_physical_rules_native(&session_context_contract(ctx)?.ctx)
+    install_physical_rules_native(&extract_session_ctx(ctx)?)
         .map_err(|err| PyRuntimeError::new_err(format!("Physical rule install failed: {err}")))
 }
 
 #[pyfunction(name = "registry_snapshot")]
 fn registry_snapshot_py(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    let snapshot = registry_snapshot::registry_snapshot(&session_context_contract(ctx)?.ctx.state());
+    let snapshot = registry_snapshot::registry_snapshot(&extract_session_ctx(ctx)?.state());
     let payload = PyDict::new(py);
     payload.set_item("scalar", PyList::new(py, snapshot.scalar)?)?;
     payload.set_item("aggregate", PyList::new(py, snapshot.aggregate)?)?;
@@ -1135,7 +1134,7 @@ fn register_codeanatomy_udfs(
     async_udf_batch_size: Option<usize>,
 ) -> PyResult<()> {
     udf_registry::register_all_with_policy(
-        &session_context_contract(ctx)?.ctx,
+        &extract_session_ctx(ctx)?,
         enable_async,
         async_udf_timeout_ms,
         async_udf_batch_size,
@@ -1151,7 +1150,7 @@ fn session_context_contract_probe(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    let snapshot = registry_snapshot::registry_snapshot(&session_context_contract(ctx)?.ctx.state());
+    let snapshot = registry_snapshot::registry_snapshot(&extract_session_ctx(ctx)?.state());
     let hash = registry_snapshot_hash(&snapshot)?;
     let payload = json!({
         "ok": true,
@@ -1186,7 +1185,7 @@ fn install_codeanatomy_runtime(
     async_udf_batch_size: Option<usize>,
 ) -> PyResult<Py<PyAny>> {
     udf_registry::register_all_with_policy(
-        &session_context_contract(ctx)?.ctx,
+        &extract_session_ctx(ctx)?,
         enable_async_udfs,
         async_udf_timeout_ms,
         async_udf_batch_size,
@@ -1194,18 +1193,18 @@ fn install_codeanatomy_runtime(
     .map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to install CodeAnatomy runtime UDFs: {err}"))
     })?;
-    install_sql_macro_factory_native(&session_context_contract(ctx)?.ctx).map_err(|err| {
+    install_sql_macro_factory_native(&extract_session_ctx(ctx)?).map_err(|err| {
         PyRuntimeError::new_err(format!(
             "Failed to install CodeAnatomy FunctionFactory runtime: {err}"
         ))
     })?;
     let planner_names = ["codeanatomy_domain"];
-    install_expr_planners_native(&session_context_contract(ctx)?.ctx, &planner_names).map_err(|err| {
+    install_expr_planners_native(&extract_session_ctx(ctx)?, &planner_names).map_err(|err| {
         PyRuntimeError::new_err(format!(
             "Failed to install CodeAnatomy ExprPlanner runtime: {err}"
         ))
     })?;
-    let snapshot = registry_snapshot::registry_snapshot(&session_context_contract(ctx)?.ctx.state());
+    let snapshot = registry_snapshot::registry_snapshot(&extract_session_ctx(ctx)?.state());
     let snapshot_json = serde_json::to_value(&snapshot).map_err(|err| {
         PyRuntimeError::new_err(format!(
             "Failed to serialize runtime snapshot payload: {err}"
@@ -1261,7 +1260,7 @@ fn udf_docs_snapshot(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
         Ok(())
     };
 
-    let state = session_context_contract(ctx)?.ctx.state();
+    let state = extract_session_ctx(ctx)?.state();
     let docs = udf_docs::registry_docs(&state);
     for (name, doc) in docs {
         add_doc(name.as_str(), doc)?;
@@ -1288,7 +1287,7 @@ fn register_df_plugin_udfs(
     options_json: Option<String>,
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
-    let config_payload = udf_config_payload_from_ctx(&session_context_contract(ctx)?.ctx);
+    let config_payload = udf_config_payload_from_ctx(&extract_session_ctx(ctx)?);
     let mut options_value = if let Some(raw) = options_json.as_deref() {
         serde_json::from_str::<JsonValue>(raw)
             .map_err(|err| PyValueError::new_err(format!("Invalid UDF options JSON: {err}")))?
@@ -1312,7 +1311,7 @@ fn register_df_plugin_udfs(
             PyValueError::new_err(format!("Failed to encode UDF options: {err}"))
         })?);
     handle
-        .register_udfs(&session_context_contract(ctx)?.ctx, options_json.as_deref())
+        .register_udfs(&extract_session_ctx(ctx)?, options_json.as_deref())
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
     Ok(())
 }
@@ -1324,7 +1323,7 @@ fn register_df_plugin_table_functions(
     plugin: Py<PyAny>,
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
-    handle.register_table_functions(&session_context_contract(ctx)?.ctx).map_err(|err| {
+    handle.register_table_functions(&extract_session_ctx(ctx)?).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
     })?;
     Ok(())
@@ -1359,12 +1358,12 @@ fn register_df_plugin_table_providers(
     table_names: Option<Vec<String>>,
     options_json: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    install_delta_plan_codecs_inner(&session_context_contract(ctx)?.ctx)?;
+    install_delta_plan_codecs_inner(&extract_session_ctx(ctx)?)?;
     let handle = extract_plugin_handle(py, &plugin)?;
     let mut resolved = HashMap::new();
     if let Some(options) = options_json {
         for (name, value) in options {
-            let injected = inject_delta_scan_defaults(&session_context_contract(ctx)?.ctx, name.as_str(), Some(&value))
+            let injected = inject_delta_scan_defaults(&extract_session_ctx(ctx)?, name.as_str(), Some(&value))
                 .map_err(PyValueError::new_err)?;
             if let Some(injected) = injected {
                 resolved.insert(name, injected);
@@ -1376,7 +1375,7 @@ fn register_df_plugin_table_providers(
         .map_or(true, |names| names.iter().any(|name| name == "delta"));
     if wants_delta && !resolved.contains_key("delta") {
         if let Some(injected) =
-            inject_delta_scan_defaults(&session_context_contract(ctx)?.ctx, "delta", None).map_err(PyValueError::new_err)?
+            inject_delta_scan_defaults(&extract_session_ctx(ctx)?, "delta", None).map_err(PyValueError::new_err)?
         {
             resolved.insert("delta".to_string(), injected);
         }
@@ -1387,7 +1386,7 @@ fn register_df_plugin_table_providers(
         Some(resolved)
     };
     handle
-        .register_table_providers(&session_context_contract(ctx)?.ctx, table_names.as_deref(), resolved_options.as_ref())
+        .register_table_providers(&extract_session_ctx(ctx)?, table_names.as_deref(), resolved_options.as_ref())
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table providers: {err}"))
         })?;
@@ -1404,16 +1403,16 @@ fn register_df_plugin(
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
     handle
-        .register_udfs(&session_context_contract(ctx)?.ctx, None)
+        .register_udfs(&extract_session_ctx(ctx)?, None)
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
-    handle.register_table_functions(&session_context_contract(ctx)?.ctx).map_err(|err| {
+    handle.register_table_functions(&extract_session_ctx(ctx)?).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
     })?;
-    install_delta_plan_codecs_inner(&session_context_contract(ctx)?.ctx)?;
+    install_delta_plan_codecs_inner(&extract_session_ctx(ctx)?)?;
     let resolved_options = if let Some(options) = options_json {
         let mut resolved = HashMap::with_capacity(options.len());
         for (name, value) in options {
-            let injected = inject_delta_scan_defaults(&session_context_contract(ctx)?.ctx, name.as_str(), Some(&value))
+            let injected = inject_delta_scan_defaults(&extract_session_ctx(ctx)?, name.as_str(), Some(&value))
                 .map_err(PyValueError::new_err)?;
             if let Some(injected) = injected {
                 resolved.insert(name, injected);
@@ -1424,7 +1423,7 @@ fn register_df_plugin(
         None
     };
     handle
-        .register_table_providers(&session_context_contract(ctx)?.ctx, table_names.as_deref(), resolved_options.as_ref())
+        .register_table_providers(&extract_session_ctx(ctx)?, table_names.as_deref(), resolved_options.as_ref())
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table providers: {err}"))
         })?;
@@ -1743,7 +1742,7 @@ fn parquet_listing_table_provider(
     let schema_ipc = schema_ipc.ok_or_else(|| {
         PyValueError::new_err("Parquet listing table provider requires schema_ipc.")
     })?;
-    let schema = schema_from_ipc(schema_ipc)?;
+    let schema = decode_schema_ipc(&schema_ipc)?;
     let mut format = ParquetFormat::default();
     if let Some(enable_pruning) = parquet_pruning {
         format = format.with_enable_pruning(enable_pruning);
@@ -1756,7 +1755,7 @@ fn parquet_listing_table_provider(
         options = options.with_collect_stat(collect);
     }
     if let Some(schema_ipc) = partition_schema_ipc {
-        let schema = schema_from_ipc(schema_ipc)?;
+        let schema = decode_schema_ipc(&schema_ipc)?;
         let mut cols = Vec::with_capacity(schema.fields().len());
         for field in schema.fields() {
             cols.push((field.name().to_string(), field.data_type().clone()));
@@ -1869,14 +1868,14 @@ fn delta_table_provider_with_files(
         schema_ipc,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let (provider, snapshot, scan_config, add_actions) = runtime
         .block_on(delta_provider_with_files_native(
             DeltaProviderWithFilesRequest {
-                session_ctx: &session_context_contract(ctx)?.ctx,
+                session_ctx: &extract_session_ctx(ctx)?,
                 table_uri: &table_uri,
                 storage_options: storage,
-                version,
-                timestamp,
+                table_version,
                 overrides,
                 files,
                 gate,
@@ -1899,13 +1898,13 @@ fn delta_table_provider_with_files(
 #[pyfunction]
 fn install_expr_planners(ctx: &Bound<'_, PyAny>, planner_names: Vec<String>) -> PyResult<()> {
     let names: Vec<&str> = planner_names.iter().map(String::as_str).collect();
-    install_expr_planners_native(&session_context_contract(ctx)?.ctx, &names)
+    install_expr_planners_native(&extract_session_ctx(ctx)?, &names)
         .map_err(|err| PyRuntimeError::new_err(format!("ExprPlanner install failed: {err}")))
 }
 
 #[pyfunction]
 fn install_tracing(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
-    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
+    let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let new_state = SessionStateBuilder::new_from_existing(state.clone())
         .with_physical_optimizer_rule(Arc::new(TracingMarkerRule))
@@ -1920,7 +1919,7 @@ fn register_cache_tables(
     config: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let snapshot_config = CacheSnapshotConfig::from_map(config);
-    register_cache_table_functions(&session_context_contract(ctx)?.ctx, snapshot_config).map_err(|err| {
+    register_cache_table_functions(&extract_session_ctx(ctx)?, snapshot_config).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to register cache table functions: {err}"))
     })?;
     Ok(())
@@ -1931,7 +1930,7 @@ fn table_logical_plan(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<St
     let runtime = Runtime::new()
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))?;
     let df = runtime
-        .block_on(session_context_contract(ctx)?.ctx.table(table_name.as_str()))
+        .block_on(extract_session_ctx(ctx)?.table(table_name.as_str()))
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to resolve table {table_name:?}: {err}"))
         })?;
@@ -1943,7 +1942,7 @@ fn table_dfschema_tree(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<S
     let runtime = Runtime::new()
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))?;
     let df = runtime
-        .block_on(session_context_contract(ctx)?.ctx.table(table_name.as_str()))
+        .block_on(extract_session_ctx(ctx)?.table(table_name.as_str()))
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to resolve table {table_name:?}: {err}"))
         })?;
@@ -1952,7 +1951,7 @@ fn table_dfschema_tree(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<S
 
 #[pyfunction]
 fn install_schema_evolution_adapter_factory(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
-    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
+    let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     ensure_physical_config(config.options_mut()).map_err(|err| {
@@ -2183,7 +2182,7 @@ fn register_cache_table_functions(ctx: &SessionContext, config: CacheSnapshotCon
 // Scope 1: Delta SQL DDL registration via DeltaTableFactory
 #[pyfunction]
 fn install_delta_table_factory(ctx: &Bound<'_, PyAny>, alias: String) -> PyResult<()> {
-    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
+    let state_ref = extract_session_ctx(ctx)?.state_ref();
     let mut state = state_ref.write();
     let factories = state.table_factories_mut();
     factories.insert(alias, Arc::new(DeltaTableFactory {}));
@@ -2234,10 +2233,6 @@ impl DeltaSessionRuntimePolicyOptions {
             max_temp_directory_size: None,
         }
     }
-}
-
-fn saturating_i64_from_u64(value: u64) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 fn saturating_i64_from_usize(value: usize) -> i64 {
@@ -2409,7 +2404,7 @@ fn runtime_execution_metrics_payload(ctx: &SessionContext) -> JsonValue {
     }
     json!({
         "schema_version": 1,
-        "event_time_unix_ms": saturating_i64_from_u64(now_unix_ms() as u64),
+        "event_time_unix_ms": now_unix_ms(),
         "summary": {
             "memory_reserved_bytes": memory_reserved,
             "memory_limit_kind": memory_limit_kind,
@@ -2429,7 +2424,7 @@ fn runtime_execution_metrics_snapshot(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    json_to_py(py, &runtime_execution_metrics_payload(&session_context_contract(ctx)?.ctx))
+    json_to_py(py, &runtime_execution_metrics_payload(&extract_session_ctx(ctx)?))
 }
 
 // Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
@@ -2445,7 +2440,7 @@ fn install_delta_plan_codecs_inner(ctx: &SessionContext) -> PyResult<()> {
 // Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
 #[pyfunction]
 fn install_delta_plan_codecs(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
-    install_delta_plan_codecs_inner(&session_context_contract(ctx)?.ctx)
+    install_delta_plan_codecs_inner(&extract_session_ctx(ctx)?)
 }
 
 // Scope 8: Native Delta CDF TableProvider integration
@@ -2561,14 +2556,14 @@ fn delta_table_provider_from_session(
         schema_ipc,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
         .block_on(delta_provider_from_session_native(
             DeltaProviderFromSessionRequest {
-                session_ctx: &session_context_contract(ctx)?.ctx,
+                session_ctx: &extract_session_ctx(ctx)?,
                 table_uri: &table_uri,
                 storage_options: storage,
-                version,
-                timestamp,
+                table_version,
                 predicate,
                 overrides,
                 gate,
@@ -2606,7 +2601,7 @@ fn delta_scan_config_from_session(
         wrap_partition_values,
         schema_ipc,
     )?;
-    let session_state = session_context_contract(ctx)?.ctx.state();
+    let session_state = extract_session_ctx(ctx)?.state();
     let scan_config = delta_scan_config_from_session_native(&session_state, None, overrides)
         .map_err(|err| {
             PyRuntimeError::new_err(format!(
@@ -2636,10 +2631,9 @@ fn delta_snapshot_info(
         required_writer_features,
     );
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let snapshot = runtime
-        .block_on(delta_snapshot_info_native(
-            &table_uri, storage, version, timestamp, gate,
-        ))
+        .block_on(delta_snapshot_info_native(&table_uri, storage, table_version, gate))
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to load Delta snapshot: {err}")))?;
     snapshot_to_pydict(py, &snapshot)
 }
@@ -2727,13 +2721,13 @@ fn delta_write_ipc(
         create_checkpoint,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_write_ipc_native(DeltaWriteIpcRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             data_ipc: data_ipc.as_slice(),
             save_mode,
             schema_mode_label: schema_mode,
@@ -2784,13 +2778,13 @@ fn delta_delete(
         create_checkpoint,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_delete_native(DeltaDeleteRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             predicate,
             gate,
             commit_options: Some(commit_options),
@@ -2843,13 +2837,13 @@ fn delta_update(
         create_checkpoint,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_update_native(DeltaUpdateRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             predicate,
             updates,
             gate,
@@ -2918,13 +2912,13 @@ fn delta_merge(
         create_checkpoint,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_merge_native(DeltaMergeRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             source_table: &source_table,
             predicate,
             source_alias,
@@ -2986,13 +2980,13 @@ fn delta_optimize_compact(
         None => None,
     };
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_optimize_compact_native(DeltaOptimizeCompactRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             target_size,
             gate,
             commit_options: Some(commit_options),
@@ -3043,13 +3037,13 @@ fn delta_vacuum(
     let enforce_retention_duration = enforce_retention_duration.unwrap_or(true);
     let require_vacuum_protocol_check = require_vacuum_protocol_check.unwrap_or(false);
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_vacuum_native(DeltaVacuumRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             retention_hours,
             dry_run,
             enforce_retention_duration,
@@ -3098,15 +3092,15 @@ fn delta_restore(
         create_checkpoint,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
+    let restore_target = table_version_from_options(restore_version, restore_timestamp)?;
     let report = runtime
         .block_on(delta_restore_native(DeltaRestoreRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
-            restore_version,
-            restore_timestamp,
+            table_version,
+            restore_target,
             gate,
             commit_options: Some(commit_options),
         }))
@@ -3156,13 +3150,13 @@ fn delta_set_properties(
         create_checkpoint,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_set_properties_native(DeltaSetPropertiesRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             properties,
             gate,
             commit_options: Some(commit_options),
@@ -3214,13 +3208,13 @@ fn delta_add_features(
     )?;
     let allow_protocol_versions_increase = allow_protocol_versions_increase.unwrap_or(true);
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_add_features_native(DeltaAddFeaturesRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             features,
             allow_protocol_versions_increase,
             gate,
@@ -3271,13 +3265,13 @@ fn delta_add_constraints(
         create_checkpoint,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_add_constraints_native(DeltaAddConstraintsRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             constraints,
             gate,
             commit_options: Some(commit_options),
@@ -3328,13 +3322,13 @@ fn delta_drop_constraints(
         create_checkpoint,
     )?;
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_drop_constraints_native(DeltaDropConstraintsRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             constraints,
             raise_if_not_exists: raise_if_not_exists.unwrap_or(true),
             gate,
@@ -3365,9 +3359,10 @@ fn delta_create_checkpoint(
         required_writer_features,
     );
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_create_checkpoint_native(
-            &session_context_contract(ctx)?.ctx, &table_uri, storage, version, timestamp, gate,
+            &extract_session_ctx(ctx)?, &table_uri, storage, table_version, gate,
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta checkpoint failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
@@ -3394,9 +3389,10 @@ fn delta_cleanup_metadata(
         required_writer_features,
     );
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     let report = runtime
         .block_on(delta_cleanup_metadata_native(
-            &session_context_contract(ctx)?.ctx, &table_uri, storage, version, timestamp, gate,
+            &extract_session_ctx(ctx)?, &table_uri, storage, table_version, gate,
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta metadata cleanup failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
@@ -3425,13 +3421,13 @@ fn delta_data_checker(
         required_writer_features,
     );
     let runtime = runtime()?;
+    let table_version = table_version_from_options(version, timestamp)?;
     runtime
         .block_on(delta_data_check_native(DeltaDataCheckRequest {
-            session_ctx: &session_context_contract(ctx)?.ctx,
+            session_ctx: &extract_session_ctx(ctx)?,
             table_uri: &table_uri,
             storage_options: storage,
-            version,
-            timestamp,
+            table_version,
             gate,
             data_ipc: data_ipc.as_slice(),
             extra_constraints,
@@ -3443,71 +3439,71 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
     register_pyfunctions!(
         module,
         [
-            crate::codeanatomy_ext::capabilities_snapshot,
-            crate::codeanatomy_ext::replay_substrait_plan,
-            crate::codeanatomy_ext::lineage_from_substrait,
-            crate::codeanatomy_ext::build_extraction_session,
-            crate::codeanatomy_ext::register_dataset_provider,
-            crate::codeanatomy_ext::session_context_contract_probe,
-            crate::codeanatomy_ext::install_codeanatomy_runtime,
-            crate::codeanatomy_ext::install_function_factory,
-            crate::codeanatomy_ext::derive_function_factory_policy,
-            crate::codeanatomy_ext::udf_expr,
+            crate::codeanatomy_ext::legacy::capabilities_snapshot,
+            crate::codeanatomy_ext::legacy::replay_substrait_plan,
+            crate::codeanatomy_ext::legacy::lineage_from_substrait,
+            crate::codeanatomy_ext::legacy::build_extraction_session,
+            crate::codeanatomy_ext::legacy::register_dataset_provider,
+            crate::codeanatomy_ext::legacy::session_context_contract_probe,
+            crate::codeanatomy_ext::legacy::install_codeanatomy_runtime,
+            crate::codeanatomy_ext::legacy::install_function_factory,
+            crate::codeanatomy_ext::legacy::derive_function_factory_policy,
+            crate::codeanatomy_ext::legacy::udf_expr,
         ]
     );
     register_pyfunctions!(
         module,
         [
-            crate::codeanatomy_ext::install_codeanatomy_udf_config,
-            crate::codeanatomy_ext::install_codeanatomy_policy_config,
-            crate::codeanatomy_ext::install_codeanatomy_physical_config,
-            crate::codeanatomy_ext::install_planner_rules,
-            crate::codeanatomy_ext::install_physical_rules,
-            crate::codeanatomy_ext::register_codeanatomy_udfs,
-            crate::codeanatomy_ext::registry_snapshot_py,
-            crate::codeanatomy_ext::udf_docs_snapshot,
-            crate::codeanatomy_ext::load_df_plugin,
-            crate::codeanatomy_ext::register_df_plugin_udfs,
-            crate::codeanatomy_ext::register_df_plugin_table_functions,
-            crate::codeanatomy_ext::create_df_plugin_table_provider,
-            crate::codeanatomy_ext::register_df_plugin_table_providers,
-            crate::codeanatomy_ext::register_df_plugin,
-            crate::codeanatomy_ext::plugin_library_path,
-            crate::codeanatomy_ext::plugin_manifest,
-            crate::codeanatomy_ext::schema_evolution_adapter_factory,
-            crate::codeanatomy_ext::parquet_listing_table_provider,
-            crate::codeanatomy_ext::delta_table_provider_with_files,
-            crate::codeanatomy_ext::install_expr_planners,
-            crate::codeanatomy_ext::install_tracing,
-            crate::codeanatomy_ext::register_cache_tables,
-            crate::codeanatomy_ext::table_logical_plan,
-            crate::codeanatomy_ext::table_dfschema_tree,
-            crate::codeanatomy_ext::install_schema_evolution_adapter_factory,
-            crate::codeanatomy_ext::registry_catalog_provider_factory,
-            crate::codeanatomy_ext::install_delta_table_factory,
-            crate::codeanatomy_ext::delta_session_context,
-            crate::codeanatomy_ext::install_delta_plan_codecs,
-            crate::codeanatomy_ext::delta_cdf_table_provider,
-            crate::codeanatomy_ext::delta_snapshot_info,
-            crate::codeanatomy_ext::validate_protocol_gate,
-            crate::codeanatomy_ext::delta_add_actions,
-            crate::codeanatomy_ext::delta_table_provider_from_session,
-            crate::codeanatomy_ext::delta_scan_config_from_session,
-            crate::codeanatomy_ext::delta_data_checker,
-            crate::codeanatomy_ext::delta_write_ipc,
-            crate::codeanatomy_ext::delta_delete,
-            crate::codeanatomy_ext::delta_update,
-            crate::codeanatomy_ext::delta_merge,
-            crate::codeanatomy_ext::delta_optimize_compact,
-            crate::codeanatomy_ext::delta_vacuum,
-            crate::codeanatomy_ext::delta_restore,
-            crate::codeanatomy_ext::delta_set_properties,
-            crate::codeanatomy_ext::delta_add_features,
-            crate::codeanatomy_ext::delta_add_constraints,
-            crate::codeanatomy_ext::delta_drop_constraints,
-            crate::codeanatomy_ext::delta_create_checkpoint,
-            crate::codeanatomy_ext::delta_cleanup_metadata,
-            crate::codeanatomy_ext::runtime_execution_metrics_snapshot,
+            crate::codeanatomy_ext::legacy::install_codeanatomy_udf_config,
+            crate::codeanatomy_ext::legacy::install_codeanatomy_policy_config,
+            crate::codeanatomy_ext::legacy::install_codeanatomy_physical_config,
+            crate::codeanatomy_ext::legacy::install_planner_rules,
+            crate::codeanatomy_ext::legacy::install_physical_rules,
+            crate::codeanatomy_ext::legacy::register_codeanatomy_udfs,
+            crate::codeanatomy_ext::legacy::registry_snapshot_py,
+            crate::codeanatomy_ext::legacy::udf_docs_snapshot,
+            crate::codeanatomy_ext::legacy::load_df_plugin,
+            crate::codeanatomy_ext::legacy::register_df_plugin_udfs,
+            crate::codeanatomy_ext::legacy::register_df_plugin_table_functions,
+            crate::codeanatomy_ext::legacy::create_df_plugin_table_provider,
+            crate::codeanatomy_ext::legacy::register_df_plugin_table_providers,
+            crate::codeanatomy_ext::legacy::register_df_plugin,
+            crate::codeanatomy_ext::legacy::plugin_library_path,
+            crate::codeanatomy_ext::legacy::plugin_manifest,
+            crate::codeanatomy_ext::legacy::schema_evolution_adapter_factory,
+            crate::codeanatomy_ext::legacy::parquet_listing_table_provider,
+            crate::codeanatomy_ext::legacy::delta_table_provider_with_files,
+            crate::codeanatomy_ext::legacy::install_expr_planners,
+            crate::codeanatomy_ext::legacy::install_tracing,
+            crate::codeanatomy_ext::legacy::register_cache_tables,
+            crate::codeanatomy_ext::legacy::table_logical_plan,
+            crate::codeanatomy_ext::legacy::table_dfschema_tree,
+            crate::codeanatomy_ext::legacy::install_schema_evolution_adapter_factory,
+            crate::codeanatomy_ext::legacy::registry_catalog_provider_factory,
+            crate::codeanatomy_ext::legacy::install_delta_table_factory,
+            crate::codeanatomy_ext::legacy::delta_session_context,
+            crate::codeanatomy_ext::legacy::install_delta_plan_codecs,
+            crate::codeanatomy_ext::legacy::delta_cdf_table_provider,
+            crate::codeanatomy_ext::legacy::delta_snapshot_info,
+            crate::codeanatomy_ext::legacy::validate_protocol_gate,
+            crate::codeanatomy_ext::legacy::delta_add_actions,
+            crate::codeanatomy_ext::legacy::delta_table_provider_from_session,
+            crate::codeanatomy_ext::legacy::delta_scan_config_from_session,
+            crate::codeanatomy_ext::legacy::delta_data_checker,
+            crate::codeanatomy_ext::legacy::delta_write_ipc,
+            crate::codeanatomy_ext::legacy::delta_delete,
+            crate::codeanatomy_ext::legacy::delta_update,
+            crate::codeanatomy_ext::legacy::delta_merge,
+            crate::codeanatomy_ext::legacy::delta_optimize_compact,
+            crate::codeanatomy_ext::legacy::delta_vacuum,
+            crate::codeanatomy_ext::legacy::delta_restore,
+            crate::codeanatomy_ext::legacy::delta_set_properties,
+            crate::codeanatomy_ext::legacy::delta_add_features,
+            crate::codeanatomy_ext::legacy::delta_add_constraints,
+            crate::codeanatomy_ext::legacy::delta_drop_constraints,
+            crate::codeanatomy_ext::legacy::delta_create_checkpoint,
+            crate::codeanatomy_ext::legacy::delta_cleanup_metadata,
+            crate::codeanatomy_ext::legacy::runtime_execution_metrics_snapshot,
         ]
     );
     register_pyclasses!(
@@ -3525,49 +3521,49 @@ pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> Py
     register_pyfunctions!(
         module,
         [
-            crate::codeanatomy_ext::install_function_factory,
-            crate::codeanatomy_ext::derive_function_factory_policy,
-            crate::codeanatomy_ext::capabilities_snapshot,
-            crate::codeanatomy_ext::replay_substrait_plan,
-            crate::codeanatomy_ext::lineage_from_substrait,
-            crate::codeanatomy_ext::build_extraction_session,
-            crate::codeanatomy_ext::register_dataset_provider,
-            crate::codeanatomy_ext::session_context_contract_probe,
-            crate::codeanatomy_ext::install_codeanatomy_runtime,
-            crate::codeanatomy_ext::arrow_stream_to_batches,
-            crate::codeanatomy_ext::udf_expr,
-            crate::codeanatomy_ext::install_codeanatomy_udf_config,
-            crate::codeanatomy_ext::install_codeanatomy_policy_config,
-            crate::codeanatomy_ext::install_codeanatomy_physical_config,
-            crate::codeanatomy_ext::install_expr_planners,
-            crate::codeanatomy_ext::install_delta_table_factory,
-            crate::codeanatomy_ext::delta_session_context,
-            crate::codeanatomy_ext::install_delta_plan_codecs,
-            crate::codeanatomy_ext::delta_cdf_table_provider,
-            crate::codeanatomy_ext::delta_snapshot_info,
-            crate::codeanatomy_ext::validate_protocol_gate,
-            crate::codeanatomy_ext::delta_add_actions,
-            crate::codeanatomy_ext::delta_table_provider_from_session,
-            crate::codeanatomy_ext::delta_table_provider_with_files,
-            crate::codeanatomy_ext::delta_scan_config_from_session,
-            crate::codeanatomy_ext::delta_data_checker,
-            crate::codeanatomy_ext::delta_write_ipc,
-            crate::codeanatomy_ext::delta_delete,
-            crate::codeanatomy_ext::delta_update,
-            crate::codeanatomy_ext::delta_merge,
-            crate::codeanatomy_ext::delta_optimize_compact,
-            crate::codeanatomy_ext::delta_vacuum,
-            crate::codeanatomy_ext::delta_restore,
-            crate::codeanatomy_ext::delta_set_properties,
-            crate::codeanatomy_ext::delta_add_features,
-            crate::codeanatomy_ext::delta_add_constraints,
-            crate::codeanatomy_ext::delta_drop_constraints,
-            crate::codeanatomy_ext::delta_create_checkpoint,
-            crate::codeanatomy_ext::delta_cleanup_metadata,
-            crate::codeanatomy_ext::runtime_execution_metrics_snapshot,
-            crate::codeanatomy_ext::create_df_plugin_table_provider,
-            crate::codeanatomy_ext::plugin_library_path,
-            crate::codeanatomy_ext::plugin_manifest,
+            crate::codeanatomy_ext::legacy::install_function_factory,
+            crate::codeanatomy_ext::legacy::derive_function_factory_policy,
+            crate::codeanatomy_ext::legacy::capabilities_snapshot,
+            crate::codeanatomy_ext::legacy::replay_substrait_plan,
+            crate::codeanatomy_ext::legacy::lineage_from_substrait,
+            crate::codeanatomy_ext::legacy::build_extraction_session,
+            crate::codeanatomy_ext::legacy::register_dataset_provider,
+            crate::codeanatomy_ext::legacy::session_context_contract_probe,
+            crate::codeanatomy_ext::legacy::install_codeanatomy_runtime,
+            crate::codeanatomy_ext::legacy::arrow_stream_to_batches,
+            crate::codeanatomy_ext::legacy::udf_expr,
+            crate::codeanatomy_ext::legacy::install_codeanatomy_udf_config,
+            crate::codeanatomy_ext::legacy::install_codeanatomy_policy_config,
+            crate::codeanatomy_ext::legacy::install_codeanatomy_physical_config,
+            crate::codeanatomy_ext::legacy::install_expr_planners,
+            crate::codeanatomy_ext::legacy::install_delta_table_factory,
+            crate::codeanatomy_ext::legacy::delta_session_context,
+            crate::codeanatomy_ext::legacy::install_delta_plan_codecs,
+            crate::codeanatomy_ext::legacy::delta_cdf_table_provider,
+            crate::codeanatomy_ext::legacy::delta_snapshot_info,
+            crate::codeanatomy_ext::legacy::validate_protocol_gate,
+            crate::codeanatomy_ext::legacy::delta_add_actions,
+            crate::codeanatomy_ext::legacy::delta_table_provider_from_session,
+            crate::codeanatomy_ext::legacy::delta_table_provider_with_files,
+            crate::codeanatomy_ext::legacy::delta_scan_config_from_session,
+            crate::codeanatomy_ext::legacy::delta_data_checker,
+            crate::codeanatomy_ext::legacy::delta_write_ipc,
+            crate::codeanatomy_ext::legacy::delta_delete,
+            crate::codeanatomy_ext::legacy::delta_update,
+            crate::codeanatomy_ext::legacy::delta_merge,
+            crate::codeanatomy_ext::legacy::delta_optimize_compact,
+            crate::codeanatomy_ext::legacy::delta_vacuum,
+            crate::codeanatomy_ext::legacy::delta_restore,
+            crate::codeanatomy_ext::legacy::delta_set_properties,
+            crate::codeanatomy_ext::legacy::delta_add_features,
+            crate::codeanatomy_ext::legacy::delta_add_constraints,
+            crate::codeanatomy_ext::legacy::delta_drop_constraints,
+            crate::codeanatomy_ext::legacy::delta_create_checkpoint,
+            crate::codeanatomy_ext::legacy::delta_cleanup_metadata,
+            crate::codeanatomy_ext::legacy::runtime_execution_metrics_snapshot,
+            crate::codeanatomy_ext::legacy::create_df_plugin_table_provider,
+            crate::codeanatomy_ext::legacy::plugin_library_path,
+            crate::codeanatomy_ext::legacy::plugin_manifest,
         ]
     );
     register_pyclasses!(

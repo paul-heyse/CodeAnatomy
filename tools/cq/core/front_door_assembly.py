@@ -1,18 +1,35 @@
-"""Front-door insight contract and helpers.
-
-This module defines the canonical ``FrontDoorInsightV1`` schema used by
-search, calls, and entity outputs. The schema is intentionally front-door
-focused: concise target grounding, neighborhood previews, risk drivers,
-confidence, degradation status, budgets, and artifact references.
-"""
+"""Front-door insight assembly helpers."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
 import msgspec
 
+from tools.cq.core.front_door_contracts import (
+    DEFAULT_INSIGHT_THRESHOLDS,
+    Availability,
+    CallsInsightBuildRequestV1,
+    EntityInsightBuildRequestV1,
+    FrontDoorInsightV1,
+    InsightArtifactRefsV1,
+    InsightBudgetV1,
+    InsightConfidenceV1,
+    InsightDegradationV1,
+    InsightLocationV1,
+    InsightNeighborhoodV1,
+    InsightRiskCountersV1,
+    InsightRiskV1,
+    InsightSliceV1,
+    InsightSource,
+    InsightTargetV1,
+    InsightThresholdPolicyV1,
+    NeighborhoodSource,
+    SearchInsightBuildRequestV1,
+    SummaryLike,
+)
+from tools.cq.core.front_door_risk import risk_from_counters
 from tools.cq.core.render_utils import summary_value
 from tools.cq.core.semantic_contracts import (
     SemanticContractStateInputV1,
@@ -20,290 +37,10 @@ from tools.cq.core.semantic_contracts import (
     derive_semantic_contract_state,
 )
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
-from tools.cq.core.structs import CqStruct
-from tools.cq.core.summary_contract import CqSummary, coerce_semantic_telemetry
-from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
+from tools.cq.core.summary_contract import coerce_semantic_telemetry
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import Finding
-
-InsightSource = Literal["search", "calls", "entity"]
-Availability = Literal["full", "partial", "unavailable"]
-NeighborhoodSource = Literal["structural", "semantic", "heuristic", "none"]
-RiskLevel = Literal["low", "med", "high"]
-type SummaryLike = CqSummary | Mapping[str, object]
-
-
-class InsightThresholdPolicyV1(CqStruct, frozen=True):
-    """Front-door threshold policy for risk/budget calculations."""
-
-    default_top_candidates: int = 3
-    default_preview_per_slice: int = 5
-    high_caller_threshold: int = 10
-    high_caller_strict_threshold: int = 10
-    medium_caller_threshold: int = 4
-    medium_caller_strict_threshold: int = 3
-    arg_variance_threshold: int = 3
-    files_with_calls_threshold: int = 3
-    default_semantic_targets: int = 1
-
-
-DEFAULT_INSIGHT_THRESHOLDS = InsightThresholdPolicyV1()
-
-
-class InsightLocationV1(CqStruct, frozen=True):
-    """Location payload for a selected target."""
-
-    file: str = ""
-    line: int | None = None
-    col: int | None = None
-
-
-class InsightTargetV1(CqStruct, frozen=True):
-    """Primary target selected by a front-door command."""
-
-    symbol: str
-    kind: str = "unknown"
-    location: InsightLocationV1 = InsightLocationV1()
-    signature: str | None = None
-    qualname: str | None = None
-    selection_reason: str = ""
-
-
-class InsightSliceV1(CqStruct, frozen=True):
-    """Preview-able neighborhood slice with provenance and availability."""
-
-    total: int = 0
-    preview: tuple[SemanticNodeRefV1, ...] = ()
-    availability: Availability = "unavailable"
-    source: NeighborhoodSource = "none"
-    overflow_artifact_ref: str | None = None
-
-
-class InsightNeighborhoodV1(CqStruct, frozen=True):
-    """Neighborhood envelope used by the front-door card."""
-
-    callers: InsightSliceV1 = InsightSliceV1()
-    callees: InsightSliceV1 = InsightSliceV1()
-    references: InsightSliceV1 = InsightSliceV1()
-    hierarchy_or_scope: InsightSliceV1 = InsightSliceV1()
-
-
-class InsightRiskCountersV1(CqStruct, frozen=True):
-    """Deterministic risk counters for edit-surface evaluation."""
-
-    callers: int = 0
-    callees: int = 0
-    files_with_calls: int = 0
-    arg_shape_count: int = 0
-    forwarding_count: int = 0
-    hazard_count: int = 0
-    closure_capture_count: int = 0
-
-
-class InsightRiskV1(CqStruct, frozen=True):
-    """Risk level + explicit drivers and counters."""
-
-    level: RiskLevel = "low"
-    drivers: tuple[str, ...] = ()
-    counters: InsightRiskCountersV1 = InsightRiskCountersV1()
-
-
-class InsightConfidenceV1(CqStruct, frozen=True):
-    """Confidence payload used by card headline and machine parsing."""
-
-    evidence_kind: str = "unknown"
-    score: float = 0.0
-    bucket: str = "low"
-
-
-class InsightDegradationV1(CqStruct, frozen=True):
-    """Compact degradation status for front-door rendering."""
-
-    semantic: SemanticStatus = "unavailable"
-    scan: str = "ok"
-    scope_filter: str = "none"
-    notes: tuple[str, ...] = ()
-
-
-class InsightBudgetV1(CqStruct, frozen=True):
-    """Budget knobs used to keep front-door output bounded."""
-
-    top_candidates: int = DEFAULT_INSIGHT_THRESHOLDS.default_top_candidates
-    preview_per_slice: int = DEFAULT_INSIGHT_THRESHOLDS.default_preview_per_slice
-    semantic_targets: int = DEFAULT_INSIGHT_THRESHOLDS.default_semantic_targets
-
-
-class InsightArtifactRefsV1(CqStruct, frozen=True):
-    """Artifact references for offloaded diagnostic/detail payloads."""
-
-    diagnostics: str | None = None
-    telemetry: str | None = None
-    neighborhood_overflow: str | None = None
-
-
-class FrontDoorInsightV1(CqStruct, frozen=True):
-    """Canonical front-door insight schema for search/calls/entity."""
-
-    source: InsightSource
-    target: InsightTargetV1
-    neighborhood: InsightNeighborhoodV1 = InsightNeighborhoodV1()
-    risk: InsightRiskV1 = InsightRiskV1()
-    confidence: InsightConfidenceV1 = InsightConfidenceV1()
-    degradation: InsightDegradationV1 = InsightDegradationV1()
-    budget: InsightBudgetV1 = InsightBudgetV1()
-    artifact_refs: InsightArtifactRefsV1 = InsightArtifactRefsV1()
-    schema_version: str = "cq.insight.v1"
-
-
-class SearchInsightBuildRequestV1(CqStruct, frozen=True):
-    """Typed request contract for search insight assembly."""
-
-    summary: SummaryLike
-    primary_target: Finding | None
-    target_candidates: tuple[Finding, ...]
-    neighborhood: InsightNeighborhoodV1 | None = None
-    risk: InsightRiskV1 | None = None
-    degradation: InsightDegradationV1 | None = None
-    budget: InsightBudgetV1 | None = None
-
-
-class CallsInsightBuildRequestV1(CqStruct, frozen=True):
-    """Typed request contract for calls insight assembly."""
-
-    function_name: str
-    signature: str | None
-    location: InsightLocationV1 | None
-    neighborhood: InsightNeighborhoodV1
-    files_with_calls: int
-    arg_shape_count: int
-    forwarding_count: int
-    hazard_counts: dict[str, int]
-    confidence: InsightConfidenceV1
-    budget: InsightBudgetV1 | None = None
-    degradation: InsightDegradationV1 | None = None
-
-
-class EntityInsightBuildRequestV1(CqStruct, frozen=True):
-    """Typed request contract for entity insight assembly."""
-
-    summary: SummaryLike
-    primary_target: Finding | None
-    neighborhood: InsightNeighborhoodV1 | None = None
-    risk: InsightRiskV1 | None = None
-    confidence: InsightConfidenceV1 | None = None
-    degradation: InsightDegradationV1 | None = None
-    budget: InsightBudgetV1 | None = None
-
-
-def render_insight_card(insight: FrontDoorInsightV1) -> list[str]:
-    """Render a compact markdown card from a front-door insight.
-
-    Returns:
-        Markdown lines representing the insight card.
-    """
-    lines = ["## Insight Card", _render_target_line(insight.target)]
-    lines.extend(_render_neighborhood_lines(insight.neighborhood))
-    lines.append(_render_risk_line(insight.risk))
-    lines.append(_render_confidence_line(insight.confidence))
-    lines.append(_render_degradation_line(insight.degradation))
-    lines.append(_render_budget_line(insight.budget))
-    artifact_refs_line = _render_artifact_refs_line(insight.artifact_refs)
-    if artifact_refs_line is not None:
-        lines.append(artifact_refs_line)
-    lines.append("")
-    return lines
-
-
-def _render_target_line(target: InsightTargetV1) -> str:
-    location = _format_target_location(target.location)
-    target_parts = [f"**{target.symbol}**", f"({target.kind})", location]
-    if target.signature:
-        target_parts.append(f"`{target.signature}`")
-    return f"- Target: {' '.join(part for part in target_parts if part)}"
-
-
-def _format_target_location(location: InsightLocationV1) -> str:
-    if not location.file:
-        return ""
-    if location.line is not None:
-        return f"`{location.file}:{location.line}`"
-    return f"`{location.file}`"
-
-
-def _render_neighborhood_lines(neighborhood: InsightNeighborhoodV1) -> list[str]:
-    lines = [
-        (
-            "- Neighborhood: "
-            f"callers={neighborhood.callers.total}, "
-            f"callees={neighborhood.callees.total}, "
-            f"references={neighborhood.references.total}, "
-            f"scope={neighborhood.hierarchy_or_scope.total}"
-        )
-    ]
-    callers_preview = _preview_labels(neighborhood.callers.preview)
-    if callers_preview:
-        lines.append(f"  - Top callers: {', '.join(callers_preview)}")
-    callees_preview = _preview_labels(neighborhood.callees.preview)
-    if callees_preview:
-        lines.append(f"  - Top callees: {', '.join(callees_preview)}")
-    return lines
-
-
-def _render_risk_line(risk: InsightRiskV1) -> str:
-    driver_text = ", ".join(risk.drivers) if risk.drivers else "none"
-    counters = risk.counters
-    return (
-        "- Risk: "
-        f"level={risk.level}; "
-        f"drivers={driver_text}; "
-        f"callers={counters.callers}, "
-        f"callees={counters.callees}, "
-        f"hazards={counters.hazard_count}, "
-        f"forwarding={counters.forwarding_count}"
-    )
-
-
-def _render_confidence_line(confidence: InsightConfidenceV1) -> str:
-    return (
-        "- Confidence: "
-        f"evidence={confidence.evidence_kind}, "
-        f"score={confidence.score:.2f}, "
-        f"bucket={confidence.bucket}"
-    )
-
-
-def _render_degradation_line(degradation: InsightDegradationV1) -> str:
-    notes = f" ({'; '.join(degradation.notes)})" if degradation.notes else ""
-    return (
-        "- Degradation: "
-        f"semantic={degradation.semantic}, "
-        f"scan={degradation.scan}, "
-        f"scope_filter={degradation.scope_filter}{notes}"
-    )
-
-
-def _render_budget_line(budget: InsightBudgetV1) -> str:
-    return (
-        "- Budget: "
-        f"top_candidates={budget.top_candidates}, "
-        f"preview_per_slice={budget.preview_per_slice}, "
-        f"semantic_targets={budget.semantic_targets}"
-    )
-
-
-def _render_artifact_refs_line(artifact_refs: InsightArtifactRefsV1) -> str | None:
-    ref_parts = [
-        f"diagnostics={artifact_refs.diagnostics}" if artifact_refs.diagnostics else None,
-        f"telemetry={artifact_refs.telemetry}" if artifact_refs.telemetry else None,
-        f"neighborhood_overflow={artifact_refs.neighborhood_overflow}"
-        if artifact_refs.neighborhood_overflow
-        else None,
-    ]
-    refs = [part for part in ref_parts if part is not None]
-    if not refs:
-        return None
-    return f"- Artifact Refs: {' | '.join(refs)}"
 
 
 def build_neighborhood_from_slices(
@@ -694,67 +431,6 @@ def mark_partial_for_missing_languages(
     return msgspec.structs.replace(insight, neighborhood=neighborhood, degradation=degradation)
 
 
-def coerce_front_door_insight(payload: object) -> FrontDoorInsightV1 | None:
-    """Best-effort conversion from summary payload to insight struct.
-
-    Returns:
-        Parsed insight payload when conversion succeeds, otherwise `None`.
-    """
-    if isinstance(payload, FrontDoorInsightV1):
-        return payload
-    if not isinstance(payload, dict):
-        return None
-    try:
-        return convert_lax(payload, type_=FrontDoorInsightV1)
-    except BoundaryDecodeError:
-        return None
-
-
-def risk_from_counters(counters: InsightRiskCountersV1) -> InsightRiskV1:
-    """Build risk payload from deterministic counters.
-
-    Returns:
-        Risk payload with level and driver labels.
-    """
-    drivers: list[str] = []
-    if counters.callers >= DEFAULT_INSIGHT_THRESHOLDS.high_caller_threshold:
-        drivers.append("high_call_surface")
-    elif counters.callers >= DEFAULT_INSIGHT_THRESHOLDS.medium_caller_threshold:
-        drivers.append("medium_call_surface")
-
-    if counters.forwarding_count > 0:
-        drivers.append("argument_forwarding")
-
-    if counters.hazard_count > 0:
-        drivers.append("dynamic_hazards")
-
-    if counters.arg_shape_count > DEFAULT_INSIGHT_THRESHOLDS.arg_variance_threshold:
-        drivers.append("arg_shape_variance")
-
-    if counters.closure_capture_count > 0:
-        drivers.append("closure_capture")
-
-    level = _risk_level_from_counters(counters)
-    return InsightRiskV1(level=level, drivers=tuple(drivers), counters=counters)
-
-
-def _risk_level_from_counters(counters: InsightRiskCountersV1) -> RiskLevel:
-    if (
-        counters.callers > DEFAULT_INSIGHT_THRESHOLDS.high_caller_strict_threshold
-        or counters.hazard_count > 0
-        or (counters.forwarding_count > 0 and counters.callers > 0)
-    ):
-        return "high"
-    if (
-        counters.callers > DEFAULT_INSIGHT_THRESHOLDS.medium_caller_strict_threshold
-        or counters.arg_shape_count > DEFAULT_INSIGHT_THRESHOLDS.arg_variance_threshold
-        or counters.files_with_calls > DEFAULT_INSIGHT_THRESHOLDS.files_with_calls_threshold
-        or counters.closure_capture_count > 0
-    ):
-        return "med"
-    return "low"
-
-
 def _confidence_from_findings(findings: Sequence[Finding]) -> InsightConfidenceV1:
     best_score = 0.0
     best_bucket = "low"
@@ -971,11 +647,6 @@ def _extract_symbol_from_message(message: str) -> str | None:
     return text
 
 
-def _preview_labels(nodes: Iterable[SemanticNodeRefV1]) -> list[str]:
-    labels: list[str] = [node.display_label or node.name for node in nodes]
-    return labels[:3]
-
-
 def _max_bucket(lhs: str, rhs: str) -> str:
     order = {"none": 0, "low": 1, "med": 2, "high": 3}
     return lhs if order.get(lhs, 0) >= order.get(rhs, 0) else rhs
@@ -1013,21 +684,6 @@ def _empty_neighborhood() -> InsightNeighborhoodV1:
         references=InsightSliceV1(availability="unavailable", source="none"),
         hierarchy_or_scope=InsightSliceV1(availability="unavailable", source="none"),
     )
-
-
-def to_public_front_door_insight_dict(insight: FrontDoorInsightV1) -> dict[str, object]:
-    """Serialize insight contract to deterministic builtins mapping.
-
-    Returns:
-    -------
-    dict[str, object]
-        Deterministic JSON-serializable mapping.
-    """
-    from tools.cq.core.front_door_serialization import (
-        to_public_front_door_insight_dict as _serialize_front_door,
-    )
-
-    return _serialize_front_door(insight)
 
 
 def _semantic_provider_and_availability(
@@ -1098,7 +754,6 @@ __all__ = [
     "InsightTargetV1",
     "InsightThresholdPolicyV1",
     "NeighborhoodSource",
-    "RiskLevel",
     "SearchInsightBuildRequestV1",
     "SemanticStatus",
     "attach_artifact_refs",
@@ -1108,9 +763,6 @@ __all__ = [
     "build_entity_insight",
     "build_neighborhood_from_slices",
     "build_search_insight",
-    "coerce_front_door_insight",
     "mark_partial_for_missing_languages",
-    "render_insight_card",
     "risk_from_counters",
-    "to_public_front_door_insight_dict",
 ]

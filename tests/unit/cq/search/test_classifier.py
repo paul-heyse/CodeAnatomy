@@ -248,9 +248,7 @@ import os
         sg_root = get_sg_root(python_source, cache_context=cache_context)
         assert sg_root is not None
 
-        result = classify_from_node(
-            sg_root, 13, 0, cache_context=cache_context
-        )  # from import line
+        result = classify_from_node(sg_root, 13, 0, cache_context=cache_context)  # from import line
         assert result is not None
         assert result.category in {"from_import", "reference"}
 

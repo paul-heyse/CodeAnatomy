@@ -8,11 +8,8 @@ import msgspec
 
 from tools.cq.core.structs import CqSettingsStruct, CqStruct
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE_SCOPE,
-    QueryLanguage,
-    QueryLanguageScope,
-)
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
 from tools.cq.search._shared.types import QueryMode, SearchLimits
 
 # --- From partition_contracts.py ---

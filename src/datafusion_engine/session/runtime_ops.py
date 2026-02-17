@@ -437,6 +437,22 @@ class RuntimeProfileCatalog:
         return location
 
 
+def _runtime_profile_io_ops(owner: object) -> RuntimeProfileIO:
+    io_ops = getattr(owner, "io_ops", None)
+    if isinstance(io_ops, RuntimeProfileIO):
+        return io_ops
+    msg = "Runtime profile I/O operations are unavailable on this instance."
+    raise TypeError(msg)
+
+
+def _runtime_profile_delta_ops(owner: object) -> RuntimeProfileDeltaOps:
+    delta_ops = getattr(owner, "delta_ops", None)
+    if isinstance(delta_ops, RuntimeProfileDeltaOps):
+        return delta_ops
+    msg = "Runtime profile Delta operations are unavailable on this instance."
+    raise TypeError(msg)
+
+
 class _RuntimeProfileIOFacadeMixin:
     """Facade methods for runtime-profile I/O operations."""
 
@@ -448,8 +464,7 @@ class _RuntimeProfileIOFacadeMixin:
         str
             Cache root directory.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
-        return profile.io_ops.cache_root()
+        return _runtime_profile_io_ops(self).cache_root()
 
 
 class _RuntimeProfileCatalogFacadeMixin:
@@ -489,8 +504,7 @@ class _RuntimeProfileDeltaFacadeMixin:
         DeltaServicePort
             DeltaService instance bound to this profile.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
-        return profile.delta_ops.delta_service()
+        return _runtime_profile_delta_ops(self).delta_service()
 
 
 def _delta_commit_spec() -> ArtifactSpec:

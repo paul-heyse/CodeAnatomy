@@ -1,4 +1,4 @@
-# ruff: noqa: D100, D103, INP001
+# ruff: noqa: D100, D103
 from __future__ import annotations
 
 from datafusion_engine.session.contracts import (

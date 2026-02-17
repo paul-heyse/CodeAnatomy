@@ -144,6 +144,9 @@ version = "51"
 [dependencies.df_plugin_host]
 path = "../df_plugin_host"
 
+[dependencies.df_plugin_common]
+path = "../df_plugin_common"
+
 [dependencies.datafusion_ext]
 path = "../datafusion_ext"
 

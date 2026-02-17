@@ -61,11 +61,7 @@ pub(crate) fn user_defined_signature(volatility: Volatility) -> Signature {
     Signature::one_of(vec![TypeSignature::UserDefined], volatility)
 }
 
-pub(crate) fn variadic_any_signature(
-    _min_args: usize,
-    _max_args: usize,
-    volatility: Volatility,
-) -> Signature {
+pub(crate) fn variadic_any_signature(volatility: Volatility) -> Signature {
     user_defined_signature(volatility)
 }
 

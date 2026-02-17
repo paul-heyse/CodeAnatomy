@@ -124,6 +124,11 @@ pub fn collect_plan_metrics(plan: &dyn ExecutionPlan) -> CollectedMetrics {
     collected
 }
 
+/// Single source of truth for scan-operator detection in metrics collection.
+pub(crate) fn is_scan_operator(name: &str) -> bool {
+    name.contains("Scan") || name.contains("Parquet") || name.contains("Delta")
+}
+
 /// Recursively walk the plan tree, collecting metrics from each node.
 fn collect_recursive(
     plan: &dyn ExecutionPlan,
@@ -148,7 +153,7 @@ fn collect_recursive(
         // Track scan selectivity from leaf nodes.
         // Leaf scan operators have names containing "Scan", "Parquet", or "Delta".
         let name = plan.name();
-        if name.contains("Scan") || name.contains("Parquet") || name.contains("Delta") {
+        if is_scan_operator(name) {
             *scan_output_rows += output_rows as u64;
             // For scans, input rows approximated from partition statistics when
             // available. This gives the pre-pushdown row count for selectivity.
@@ -238,5 +243,13 @@ mod tests {
         assert_eq!(summary.elapsed_compute_nanos, 777);
         assert_eq!(summary.selectivity, Some(0.5));
         assert_eq!(summary.operator_count, 1);
+    }
+
+    #[test]
+    fn test_is_scan_operator_classifier() {
+        assert!(is_scan_operator("ParquetExec"));
+        assert!(is_scan_operator("DeltaScanExec"));
+        assert!(is_scan_operator("CsvScanExec"));
+        assert!(!is_scan_operator("HashJoinExec"));
     }
 }

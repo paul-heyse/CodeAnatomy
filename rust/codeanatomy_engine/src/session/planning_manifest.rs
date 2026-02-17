@@ -10,15 +10,15 @@
 
 use std::collections::BTreeMap;
 
-use arrow::array::Array;
 use datafusion::prelude::SessionContext;
 use datafusion_common::config::TableOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::session::planning_surface::{
-    ExtensionGovernancePolicy, PlanningSurfaceSpec, TableFactoryEntry,
+use crate::session::capture::{
+    capture_df_settings, GovernancePolicy, PLANNING_AFFECTING_CONFIG_KEYS,
 };
+use crate::session::planning_surface::{PlanningSurfaceSpec, TableFactoryEntry};
 
 /// Deterministic manifest of the planning surface configuration.
 ///
@@ -214,12 +214,8 @@ impl From<&TableFactoryEntry> for TableFactoryManifestEntry {
     }
 }
 
-fn extension_policy_name(policy: &ExtensionGovernancePolicy) -> &'static str {
-    match policy {
-        ExtensionGovernancePolicy::StrictAllowlist => "strict_allowlist",
-        ExtensionGovernancePolicy::WarnOnUnregistered => "warn_on_unregistered",
-        ExtensionGovernancePolicy::Permissive => "permissive",
-    }
+fn extension_policy_name(policy: &GovernancePolicy) -> &'static str {
+    policy.as_str()
 }
 
 fn capture_function_registry(ctx: &SessionContext) -> FunctionRegistryIdentity {
@@ -329,61 +325,12 @@ fn capture_schema_provider_identities(ctx: &SessionContext) -> Vec<SchemaProvide
     entries
 }
 
-const PLANNING_AFFECTING_CONFIG_KEYS: &[&str] = &[
-    "datafusion.catalog.default_catalog",
-    "datafusion.catalog.default_schema",
-    "datafusion.sql_parser.enable_ident_normalization",
-    "datafusion.sql_parser.dialect",
-    "datafusion.sql_parser.parse_float_as_decimal",
-    "datafusion.sql_parser.map_string_types_to_utf8view",
-    "datafusion.sql_parser.collect_spans",
-    "datafusion.execution.enable_ansi_mode",
-    "datafusion.optimizer.max_passes",
-    "datafusion.optimizer.skip_failed_rules",
-    "datafusion.optimizer.prefer_hash_join",
-    "datafusion.execution.target_partitions",
-    "datafusion.execution.parquet.pushdown_filters",
-    "datafusion.execution.parquet.enable_page_index",
-    "datafusion.execution.parquet.bloom_filter_on_read",
-    "datafusion.execution.collect_statistics",
-];
-
 async fn capture_planning_config_keys(ctx: &SessionContext) -> Result<BTreeMap<String, String>> {
-    let df = ctx
-        .sql("SELECT name, value FROM information_schema.df_settings ORDER BY name")
-        .await?;
-    let batches = df.collect().await?;
-    let mut out = BTreeMap::new();
-    for batch in batches {
-        let names = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::StringArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "Expected StringArray for information_schema.df_settings name".to_string(),
-                )
-            })?;
-        let values = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<arrow::array::StringArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "Expected StringArray for information_schema.df_settings value".to_string(),
-                )
-            })?;
-        for row in 0..batch.num_rows() {
-            if names.is_null(row) || values.is_null(row) {
-                continue;
-            }
-            let key = names.value(row).to_string();
-            if PLANNING_AFFECTING_CONFIG_KEYS.contains(&key.as_str()) {
-                out.insert(key, values.value(row).to_string());
-            }
-        }
-    }
-    Ok(out)
+    let settings = capture_df_settings(ctx).await?;
+    Ok(settings
+        .into_iter()
+        .filter(|(key, _)| PLANNING_AFFECTING_CONFIG_KEYS.contains(&key.as_str()))
+        .collect())
 }
 
 fn hash_table_options(options: Option<&TableOptions>) -> [u8; 32] {

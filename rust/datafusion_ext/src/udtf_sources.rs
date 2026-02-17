@@ -10,6 +10,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Expr;
 
+use crate::delta_protocol::TableVersion;
 use crate::{async_runtime, delta_control_plane, macros::TableUdfSpec, table_udfs};
 
 const READ_DELTA_TABLE_FUNCTION: &str = "read_delta";
@@ -283,8 +284,7 @@ impl TableFunctionImpl for ReadDeltaTableFunction {
                     session_ctx: &self.ctx,
                     table_uri: table_uri.as_str(),
                     storage_options: None,
-                    version: None,
-                    timestamp: None,
+                    table_version: TableVersion::Latest,
                     predicate: None,
                     overrides: delta_control_plane::DeltaScanOverrides::default(),
                     gate: None,
@@ -292,7 +292,7 @@ impl TableFunctionImpl for ReadDeltaTableFunction {
             ))?;
         let (provider, _, _, _, _) =
             resolved.map_err(|err| map_delta_error(READ_DELTA_TABLE_FUNCTION, err))?;
-        Ok(Arc::new(provider))
+        Ok(provider)
     }
 }
 
@@ -359,8 +359,7 @@ impl TableFunctionImpl for DeltaSnapshotTableFunction {
         let resolved = async_runtime::block_on(delta_control_plane::snapshot_info_with_gate(
             table_uri.as_str(),
             None,
-            None,
-            None,
+            TableVersion::Latest,
             None,
         ))?;
         let snapshot =

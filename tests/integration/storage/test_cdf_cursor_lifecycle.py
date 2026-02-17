@@ -103,7 +103,11 @@ def _create_session() -> tuple[DataFusionRuntimeProfile, SessionContext]:
     tuple[DataFusionRuntimeProfile, SessionContext]
         Runtime profile and session context.
     """
+    from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.session.runtime_ops import bind_delta_service
+
     profile = DataFusionRuntimeProfile()
+    bind_delta_service(profile, service=DeltaService(profile=profile))
     ctx = profile.session_context()
     return profile, ctx
 

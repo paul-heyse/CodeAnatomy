@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::session::capture::GovernancePolicy;
+
 /// Runtime tuner operating mode.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum RuntimeTunerMode {
@@ -20,16 +22,6 @@ pub enum PushdownEnforcementMode {
     Warn,
     Strict,
     Disabled,
-}
-
-/// Extension governance policy for planning-time registry mutations.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ExtensionGovernanceMode {
-    StrictAllowlist,
-    WarnOnUnregistered,
-    #[default]
-    Permissive,
 }
 
 /// Rule tracing verbosity mode for planner/rule instrumentation.
@@ -229,7 +221,7 @@ pub struct RuntimeConfig {
     pub pushdown_enforcement_mode: PushdownEnforcementMode,
     /// Planning extension governance policy.
     #[serde(default)]
-    pub extension_governance_mode: ExtensionGovernanceMode,
+    pub extension_governance_mode: GovernancePolicy,
 
     // -- WS-P13: OpenTelemetry tracing --
     /// Enable OpenTelemetry-native execution tracing (requires `tracing` feature).
@@ -412,7 +404,7 @@ mod tests {
         );
         assert_eq!(
             runtime.extension_governance_mode,
-            ExtensionGovernanceMode::Permissive
+            GovernancePolicy::Permissive
         );
     }
 
@@ -435,7 +427,7 @@ mod tests {
         );
         assert_eq!(
             runtime.extension_governance_mode,
-            ExtensionGovernanceMode::StrictAllowlist
+            GovernancePolicy::StrictAllowlist
         );
     }
 

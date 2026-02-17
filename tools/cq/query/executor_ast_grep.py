@@ -21,37 +21,19 @@ from tools.cq.astgrep.sgpy_scanner import (
     is_variadic_separator,
     node_payload,
 )
-from tools.cq.core.cache.content_hash import file_content_hash
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import decode_fragment_payload
 from tools.cq.core.cache.fragment_contracts import (
     FragmentEntryV1,
     FragmentHitV1,
     FragmentMissV1,
-    FragmentRequestV1,
     FragmentWriteV1,
-)
-from tools.cq.core.cache.fragment_engine import FragmentPersistRuntimeV1, FragmentProbeRuntimeV1
-from tools.cq.core.cache.fragment_orchestrator import run_fragment_scan
-from tools.cq.core.cache.interface import CqCacheBackend
-from tools.cq.core.cache.key_builder import build_cache_key, build_scope_hash
-from tools.cq.core.cache.namespaces import (
-    is_namespace_cache_enabled,
-    resolve_namespace_ttl_seconds,
-)
-from tools.cq.core.cache.policy import default_cache_policy
-from tools.cq.core.cache.run_lifecycle import CacheWriteTagRequestV1, resolve_write_cache_tag
-from tools.cq.core.cache.snapshot_fingerprint import build_scope_snapshot_fingerprint
-from tools.cq.core.cache.telemetry import (
-    record_cache_decode_failure,
-    record_cache_get,
-    record_cache_set,
 )
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.schema import Anchor, Finding
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.types import QueryLanguage
 from tools.cq.query.cache_converters import (
     cache_record_to_record,
     record_to_cache_record,
@@ -62,7 +44,7 @@ from tools.cq.query.cache_converters import (
 from tools.cq.query.cache_converters import (
     record_sort_key_lightweight as record_sort_key,
 )
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage, is_rust_language
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, is_rust_language
 from tools.cq.query.match_contracts import MatchData, MatchRange, MatchRangePoint
 from tools.cq.query.metavar import (
     apply_metavar_filters,
@@ -71,6 +53,13 @@ from tools.cq.query.metavar import (
     partition_metavar_filters,
 )
 from tools.cq.query.planner import AstGrepRule
+from tools.cq.query.query_cache import (
+    QueryFragmentCacheContext,
+    QueryFragmentContextBuildRequest,
+    build_query_fragment_cache_context,
+    build_query_fragment_entries,
+    run_query_fragment_scan,
+)
 from tools.cq.search.cache.contracts import PatternFragmentCacheV1
 from tools.cq.search.rg.prefilter import extract_literal_fragments, rg_prefilter_files
 
@@ -92,14 +81,7 @@ logger = logging.getLogger(__name__)
 class PatternFragmentContext:
     """Context for pattern fragment caching."""
 
-    namespace: str
-    root: Path
-    language: QueryLanguage
-    paths: list[Path]
-    cache: CqCacheBackend
-    cache_enabled: bool
-    ttl_seconds: int | None
-    tag: str
+    cache_ctx: QueryFragmentCacheContext
     rules_digest: str
     query_filters_digest: str
 
@@ -200,41 +182,11 @@ def execute_ast_grep_rules(
         run_id=run_id,
     )
     entries = pattern_fragment_entries(fragment_ctx)
-    request = FragmentRequestV1(
-        namespace=fragment_ctx.namespace,
-        workspace=str(fragment_ctx.root),
-        language=fragment_ctx.language,
-        ttl_seconds=fragment_ctx.ttl_seconds or 0,
-        tag=fragment_ctx.tag,
-        run_id=run_id,
-    )
-    scan_result = run_fragment_scan(
-        request=request,
+    scan_result = run_query_fragment_scan(
+        context=fragment_ctx.cache_ctx,
         entries=entries,
-        probe_runtime=FragmentProbeRuntimeV1(
-            cache_get=fragment_ctx.cache.get,
-            decode=decode_pattern_fragment_payload,
-            cache_enabled=fragment_ctx.cache_enabled,
-            record_get=record_cache_get,
-            record_decode_failure=record_cache_decode_failure,
-        ),
-        persist_runtime=FragmentPersistRuntimeV1(
-            cache_set=lambda key, value, *, expire=None, tag=None: fragment_ctx.cache.set(
-                key,
-                value,
-                expire=expire,
-                tag=tag,
-            ),
-            cache_set_many=lambda rows, *, expire=None, tag=None: fragment_ctx.cache.set_many(
-                rows,
-                expire=expire,
-                tag=tag,
-            ),
-            encode=contract_to_builtins,
-            cache_enabled=fragment_ctx.cache_enabled,
-            transact=fragment_ctx.cache.transact,
-            record_set=record_cache_set,
-        ),
+        run_id=run_id,
+        decode=decode_pattern_fragment_payload,
         scan_misses=lambda misses: _scan_pattern_fragment_misses(
             rules=rules,
             query=query,
@@ -248,8 +200,8 @@ def execute_ast_grep_rules(
         records_by_rel.update(scan_result.miss_payload[1])
         raw_by_rel.update(scan_result.miss_payload[2])
     return assemble_pattern_output(
-        paths=fragment_ctx.paths,
-        root=fragment_ctx.root,
+        paths=fragment_ctx.cache_ctx.files,
+        root=fragment_ctx.cache_ctx.root,
         findings_by_rel=findings_by_rel,
         records_by_rel=records_by_rel,
         raw_by_rel=raw_by_rel,
@@ -315,9 +267,7 @@ def build_pattern_fragment_context(
     Returns:
         PatternFragmentContext: Cache/runtime context for pattern fragment operations.
     """
-    resolved_root = root.resolve()
     lang = query.primary_language if query is not None else DEFAULT_QUERY_LANGUAGE
-    namespace = "pattern_fragment"
     rules_digest = hashlib.sha256(
         msgspec.json.encode(contract_to_builtins(list(rules)))
     ).hexdigest()
@@ -326,40 +276,16 @@ def build_pattern_fragment_context(
             contract_to_builtins(list(query.metavar_filters if query is not None else []))
         )
     ).hexdigest()
-    scope_hash = build_scope_hash(
-        {
-            "paths": tuple(sorted(str(path.resolve()) for path in paths)),
-            "scope_globs": tuple(globs or ()),
-            "lang": lang,
-            "rules_digest": rules_digest,
-        }
-    )
-    cache = get_cq_cache_backend(root=resolved_root)
-    snapshot = build_scope_snapshot_fingerprint(
-        root=resolved_root,
-        backend=cache,
-        files=paths,
-        language=lang,
-        scope_globs=globs or [],
-        scope_roots=paths,
-    )
-    policy = default_cache_policy(root=resolved_root)
     return PatternFragmentContext(
-        namespace=namespace,
-        root=resolved_root,
-        language=lang,
-        paths=sorted(paths, key=lambda item: item.as_posix()),
-        cache=cache,
-        cache_enabled=is_namespace_cache_enabled(policy=policy, namespace=namespace),
-        ttl_seconds=resolve_namespace_ttl_seconds(policy=policy, namespace=namespace),
-        tag=resolve_write_cache_tag(
-            CacheWriteTagRequestV1(
-                policy=policy,
-                workspace=str(resolved_root),
+        cache_ctx=build_query_fragment_cache_context(
+            QueryFragmentContextBuildRequest(
+                root=root,
+                files=paths,
+                scope_roots=paths,
+                scope_globs=globs,
+                namespace="pattern_fragment",
                 language=lang,
-                namespace=namespace,
-                scope_hash=scope_hash,
-                snapshot=snapshot.digest,
+                scope_hash_extras={"rules_digest": rules_digest},
                 run_id=run_id,
             )
         ),
@@ -374,29 +300,13 @@ def pattern_fragment_entries(fragment_ctx: PatternFragmentContext) -> list[Fragm
     Returns:
         list[FragmentEntryV1]: Cache entry descriptors for every scoped file path.
     """
-    entries: list[FragmentEntryV1] = []
-    for file_path in fragment_ctx.paths:
-        rel_path = normalize_repo_relative_path(str(file_path), root=fragment_ctx.root)
-        content_hash = file_content_hash(file_path).digest
-        entries.append(
-            FragmentEntryV1(
-                file=rel_path,
-                content_hash=content_hash,
-                cache_key=build_cache_key(
-                    fragment_ctx.namespace,
-                    version="v1",
-                    workspace=str(fragment_ctx.root),
-                    language=fragment_ctx.language,
-                    target=rel_path,
-                    extras={
-                        "file_content_hash": content_hash,
-                        "rules_digest": fragment_ctx.rules_digest,
-                        "query_filters_digest": fragment_ctx.query_filters_digest,
-                    },
-                ),
-            )
-        )
-    return entries
+    return build_query_fragment_entries(
+        fragment_ctx.cache_ctx,
+        extras_builder=lambda _path, _rel: {
+            "rules_digest": fragment_ctx.rules_digest,
+            "query_filters_digest": fragment_ctx.query_filters_digest,
+        },
+    )
 
 
 def decode_pattern_fragment_payload(payload: object) -> object | None:
@@ -455,15 +365,15 @@ def compute_pattern_miss_data(
         tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[MatchData]]]:
             File-bucketed findings, records, and raw-match payloads for missed entries.
     """
-    miss_paths = [fragment_ctx.root / miss.entry.file for miss in misses]
+    miss_paths = [fragment_ctx.cache_ctx.root / miss.entry.file for miss in misses]
     state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
     run_ast_grep(
         AstGrepExecutionContext(
             rules=rules,
             paths=miss_paths,
-            root=fragment_ctx.root,
+            root=fragment_ctx.cache_ctx.root,
             query=query,
-            lang=fragment_ctx.language,
+            lang=fragment_ctx.cache_ctx.language,
         ),
         state,
     )

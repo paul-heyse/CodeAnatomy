@@ -31,13 +31,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FunctionKind {
-    Scalar,
-    Aggregate,
-    Window,
-    Table,
-}
+use crate::function_types::FunctionKind;
 
 const DOC_SECTION_SQL_MACRO: DocSection = DocSection {
     include: true,

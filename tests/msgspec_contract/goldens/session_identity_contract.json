@@ -1,0 +1,13 @@
+{
+  "spec": {
+    "description": "Golden fixture payload for determinism-contract identity checks."
+  },
+  "session_inputs": {
+    "description": "Golden fixture session inputs for cross-language identity checks."
+  },
+  "expected": {
+    "spec_hash_hex": "8d7db7f6f3ec52ad46a957fce73663f31880c4d6e2f206f3efa5f4f87ddf2d5f",
+    "envelope_hash_hex": "fc0bf84f8c9f2db35d51f5f2910c9aafec12fbe17f7eb9a4f9247f846f66de91",
+    "rulepack_fingerprint_hex": "49e2e55bd56d8bc4f14ad2f1b9fbf31ff6f91e6b2c77d76b8bcde63c6aebfb38"
+  }
+}

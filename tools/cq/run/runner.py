@@ -10,7 +10,8 @@ from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.run_context import RunContext, RunExecutionContext
 from tools.cq.core.schema import CqResult, assign_result_finding_ids, mk_result, ms
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.summary_contract import as_run_summary
+from tools.cq.core.types import QueryLanguage
 from tools.cq.run.q_execution import (
     ParsedQStep,
 )
@@ -21,10 +22,7 @@ from tools.cq.run.q_execution import (
     execute_pattern_q_steps as _execute_pattern_q_steps,
 )
 from tools.cq.run.q_execution import (
-    expand_q_step_by_scope as _expand_q_step_by_scope,
-)
-from tools.cq.run.q_execution import (
-    prepare_q_step as _prepare_q_step,
+    partition_q_steps as _partition_q_steps,
 )
 from tools.cq.run.q_step_collapsing import collapse_parent_q_results
 from tools.cq.run.run_summary import populate_run_summary_metadata
@@ -67,7 +65,7 @@ def execute_run_plan(
         ctx.root,
     )
     merged = mk_result(run_ctx.to_runmeta("run"))
-    merged.summary.plan_version = plan.version
+    as_run_summary(merged.summary).plan_version = plan.version
 
     steps = normalize_step_ids(plan.steps)
     executed_results: list[tuple[str, CqResult]] = []
@@ -157,37 +155,6 @@ def _execute_q_steps(
         if should_stop:
             return collapse_parent_q_results(results, ctx=ctx)
     return collapse_parent_q_results(results, ctx=ctx)
-
-
-def _partition_q_steps(
-    *,
-    steps: list[QStep],
-    plan: RunPlan,
-    ctx: RunExecutionContext,
-    stop_on_error: bool,
-    immediate_results: list[tuple[str, CqResult]],
-) -> tuple[dict[QueryLanguage, list[ParsedQStep]], dict[QueryLanguage, list[ParsedQStep]]]:
-    parsed_by_lang: dict[QueryLanguage, list[ParsedQStep]] = {}
-    pattern_by_lang: dict[QueryLanguage, list[ParsedQStep]] = {}
-
-    for step in steps:
-        step_id, outcome, is_error = _prepare_q_step(step, plan, ctx)
-        if isinstance(outcome, CqResult):
-            immediate_results.append((step_id, outcome))
-            if outcome.summary.error:
-                logger.warning(
-                    "Immediate q-step error step_id=%s error=%s",
-                    step_id,
-                    outcome.summary.error,
-                )
-            if stop_on_error and is_error:
-                break
-            continue
-        expanded = _expand_q_step_by_scope(outcome, ctx)
-        for parsed in expanded:
-            target = pattern_by_lang if parsed.plan.is_pattern_query else parsed_by_lang
-            target.setdefault(parsed.plan.lang, []).append(parsed)
-    return parsed_by_lang, pattern_by_lang
 
 
 def _run_grouped_q_batches(

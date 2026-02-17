@@ -8,7 +8,8 @@ from typing import Literal, TypeGuard
 import msgspec
 
 from tools.cq.core.typed_boundary import convert_strict
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, QueryLanguageScope
+from tools.cq.core.types import QueryLanguageScope
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
 
 SearchMode = Literal["regex", "literal"]
 

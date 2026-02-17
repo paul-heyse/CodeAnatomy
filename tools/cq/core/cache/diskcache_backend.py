@@ -5,9 +5,10 @@ from __future__ import annotations
 import shutil
 import sqlite3
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
-from typing import Final
+from tempfile import NamedTemporaryFile
+from typing import Final, Protocol
 
 from diskcache import FanoutCache, Timeout
 
@@ -36,10 +37,24 @@ _NAMESPACE_PARTS_MIN_LENGTH: Final = 2
 _NAMESPACE_PREFIX_LENGTH: Final = 3
 
 
+class _TimeoutAbortRecorder(Protocol):
+    """Telemetry surface required by fail-open helper wrappers."""
+
+    def record_timeout(self, namespace: str) -> None: ...
+
+    def record_abort(self, namespace: str) -> None: ...
+
+
+class _TransactBackend(_TimeoutAbortRecorder, Protocol):
+    """Minimum backend contract required for transaction wrapper."""
+
+    cache: FanoutCache
+
+
 class _FailOpenTransaction:
     """Fail-open transaction wrapper that degrades to no-op on backend errors."""
 
-    def __init__(self, backend: DiskcacheBackend) -> None:
+    def __init__(self, backend: _TransactBackend) -> None:
         self.backend = backend
         self.ctx: object | None = None
 
@@ -76,7 +91,7 @@ class _FailOpenTransaction:
 class _FailOpenCoordinationContext:
     """Fail-open coordination wrapper for lock/semaphore primitives."""
 
-    def __init__(self, backend: DiskcacheBackend, *, ctx: object, namespace: str) -> None:
+    def __init__(self, backend: _TimeoutAbortRecorder, *, ctx: object, namespace: str) -> None:
         self.backend = backend
         self.ctx = ctx
         self.namespace = namespace
@@ -112,26 +127,12 @@ class _FailOpenCoordinationContext:
             return False
 
 
-class DiskcacheBackend:
-    """Fail-open diskcache backend for CQ runtime."""
+class _DiskcacheNamespaceMixin:
+    """Shared namespace/telemetry helpers for diskcache capability mixins."""
 
-    def __init__(
-        self,
-        cache: FanoutCache,
-        *,
-        default_ttl_seconds: int,
-        transaction_batch_size: int = 128,
-    ) -> None:
-        """Initialize disk cache adapter.
-
-        Args:
-            cache: Backing diskcache instance.
-            default_ttl_seconds: Default cache TTL in seconds.
-            transaction_batch_size: Max keys to write per transaction batch.
-        """
-        self.cache = cache
-        self.default_ttl_seconds = default_ttl_seconds
-        self.transaction_batch_size = max(1, int(transaction_batch_size))
+    cache: FanoutCache
+    default_ttl_seconds: int
+    transaction_batch_size: int
 
     @staticmethod
     def _namespace_from_key(key: str) -> str:
@@ -157,6 +158,10 @@ class DiskcacheBackend:
     def record_abort(namespace: str) -> None:
         """Record non-timeout cache abort for ``namespace``."""
         record_cache_abort(namespace=namespace)
+
+
+class _DiskcacheReadWriteMixin(_DiskcacheNamespaceMixin):
+    """Core key/value and transaction operations."""
 
     def get(self, key: str) -> object | None:
         """Fetch key from cache.
@@ -255,15 +260,15 @@ class DiskcacheBackend:
         namespace = self._namespace_from_key(key)
         try:
             value = self.cache.incr(key, delta=delta, default=default, retry=True)
-            if value is None:
-                return None
-            return int(value)
         except Timeout:
             self.record_timeout(namespace=namespace)
             return None
         except _NON_FATAL_ERRORS:
             self.record_abort(namespace=namespace)
             return None
+        if value is None:
+            return None
+        return int(value)
 
     def decr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
         """Decrement numeric value and return updated value.
@@ -274,15 +279,15 @@ class DiskcacheBackend:
         namespace = self._namespace_from_key(key)
         try:
             value = self.cache.decr(key, delta=delta, default=default, retry=True)
-            if value is None:
-                return None
-            return int(value)
         except Timeout:
             self.record_timeout(namespace=namespace)
             return None
         except _NON_FATAL_ERRORS:
             self.record_abort(namespace=namespace)
             return None
+        if value is None:
+            return None
+        return int(value)
 
     def delete(self, key: str) -> bool:
         """Delete key from cache and return acknowledgement.
@@ -315,8 +320,7 @@ class DiskcacheBackend:
         except _NON_FATAL_ERRORS:
             self.record_abort(namespace=namespace)
             return False
-        else:
-            return True
+        return True
 
     def transact(self) -> _FailOpenTransaction:
         """Return fail-open transaction context manager.
@@ -325,6 +329,10 @@ class DiskcacheBackend:
             _FailOpenTransaction: Context manager for best-effort transactional scope.
         """
         return _FailOpenTransaction(self)
+
+
+class _DiskcacheMaintenanceMixin(_DiskcacheNamespaceMixin):
+    """Maintenance and lifecycle operations."""
 
     def stats(self) -> dict[str, object]:
         """Return cache stats payload.
@@ -360,8 +368,7 @@ class DiskcacheBackend:
         except _NON_FATAL_ERRORS:
             self.record_abort(namespace="cache_backend")
             return None
-        else:
-            return volume_bytes
+        return volume_bytes
 
     def cull(self) -> int | None:
         """Trigger backend cull and return number of removed entries.
@@ -378,8 +385,7 @@ class DiskcacheBackend:
         except _NON_FATAL_ERRORS:
             self.record_abort(namespace="cache_backend")
             return None
-        else:
-            return removed
+        return removed
 
     def touch(self, key: str, *, expire: int | None = None) -> bool:
         """Refresh key TTL and return acknowledgement.
@@ -436,6 +442,37 @@ class DiskcacheBackend:
         except _NON_FATAL_ERRORS:
             return
 
+
+class _DiskcacheStreamingMixin(_DiskcacheNamespaceMixin):
+    """Streaming read/write capability backed by diskcache file handles."""
+
+    @staticmethod
+    def _normalize_stream_payload(payload: object) -> bytes | None:
+        if isinstance(payload, memoryview):
+            return payload.tobytes()
+        if isinstance(payload, (bytes, bytearray)):
+            return bytes(payload)
+        return None
+
+    def _read_payload_from_reader(self, *, namespace: str, reader: object) -> bytes | None:
+        read_method = getattr(reader, "read", None)
+        if not callable(read_method):
+            return self._normalize_stream_payload(reader)
+        try:
+            payload = read_method()
+        except Timeout:
+            self.record_timeout(namespace=namespace)
+            return None
+        except _NON_FATAL_ERRORS:
+            self.record_abort(namespace=namespace)
+            return None
+        finally:
+            close_fn = getattr(reader, "close", None)
+            if callable(close_fn):
+                with suppress(*_NON_FATAL_ERRORS):
+                    close_fn()
+        return self._normalize_stream_payload(payload)
+
     def read_streaming(self, key: str) -> bytes | None:
         """Read byte payload via diskcache streaming API when available.
 
@@ -443,46 +480,28 @@ class DiskcacheBackend:
             bytes | None: Streamed payload when present.
         """
         namespace = self._namespace_from_key(key)
-        read_fn = getattr(self.cache, "read", None)
-        if not callable(read_fn):
-            value = self.get(key)
-            if isinstance(value, (bytes, bytearray, memoryview)):
-                return bytes(value)
-            return None
         try:
-            reader_cm = read_fn(key, retry=True)
-        except TypeError:
-            try:
-                reader_cm = read_fn(key)
-            except Timeout:
-                self.record_timeout(namespace=namespace)
-                return None
-            except _NON_FATAL_ERRORS:
-                self.record_abort(namespace=namespace)
-                return None
+            reader = self.cache.get(key, default=None, read=True, retry=True)
         except Timeout:
             self.record_timeout(namespace=namespace)
             return None
         except _NON_FATAL_ERRORS:
             self.record_abort(namespace=namespace)
             return None
+
+        payload = self._read_payload_from_reader(namespace=namespace, reader=reader)
+        if payload is not None:
+            return payload
+
         try:
-            with reader_cm as reader:
-                read_method = getattr(reader, "read", None)
-                if not callable(read_method):
-                    return None
-                payload = read_method()
+            fallback_payload = self.cache.get(key, default=None, retry=True)
         except Timeout:
             self.record_timeout(namespace=namespace)
             return None
         except _NON_FATAL_ERRORS:
             self.record_abort(namespace=namespace)
             return None
-        if isinstance(payload, memoryview):
-            return payload.tobytes()
-        if isinstance(payload, (bytes, bytearray)):
-            return bytes(payload)
-        return None
+        return self._normalize_stream_payload(fallback_payload)
 
     def set_streaming(
         self,
@@ -492,48 +511,38 @@ class DiskcacheBackend:
         expire: int | None = None,
         tag: str | None = None,
     ) -> bool:
-        """Write byte payload via diskcache read=True API when available.
+        """Write byte payload via diskcache ``read=True`` API.
 
         Returns:
             bool: ``True`` when payload is written.
         """
-        from tempfile import NamedTemporaryFile
-
         namespace = self._namespace_from_key(key)
         ttl = expire if expire is not None else self.default_ttl_seconds
         try:
-            with NamedTemporaryFile("w+b", delete=True) as tmp:
-                tmp.write(payload)
-                tmp.flush()
-                tmp.seek(0)
-                try:
-                    return bool(
-                        self.cache.set(
-                            key,
-                            tmp,
-                            read=True,
-                            expire=ttl,
-                            tag=tag,
-                            retry=True,
-                        )
+            with NamedTemporaryFile("w+b", delete=True) as temp_file:
+                temp_file.write(payload)
+                temp_file.flush()
+                temp_file.seek(0)
+                return bool(
+                    self.cache.set(
+                        key,
+                        temp_file,
+                        read=True,
+                        expire=ttl,
+                        tag=tag,
+                        retry=True,
                     )
-                except TypeError:
-                    tmp.seek(0)
-                    return bool(
-                        self.cache.set(
-                            key,
-                            tmp,
-                            read=True,
-                            expire=ttl,
-                            tag=tag,
-                        )
-                    )
+                )
         except Timeout:
             self.record_timeout(namespace=namespace)
             return False
         except _NON_FATAL_ERRORS:
             self.record_abort(namespace=namespace)
             return False
+
+
+class _DiskcacheCoordinationMixin(_DiskcacheNamespaceMixin):
+    """Coordination/locking capability wrappers."""
 
     @contextmanager
     def lock(self, key: str, *, expire: int | None = None) -> Iterator[None]:
@@ -597,6 +606,7 @@ class DiskcacheBackend:
 
     def barrier(self, key: str, publish_fn: Callable[[], None]) -> None:
         """Run publish function once with diskcache barrier when available."""
+        namespace = self._namespace_from_key(key)
         try:
             from diskcache import Lock, barrier
         except ImportError:
@@ -606,11 +616,38 @@ class DiskcacheBackend:
             wrapped = barrier(self.cache, Lock, name=key)(publish_fn)
             wrapped()
         except Timeout:
-            self.record_timeout(namespace=self._namespace_from_key(key))
+            self.record_timeout(namespace=namespace)
             publish_fn()
         except _NON_FATAL_ERRORS:
-            self.record_abort(namespace=self._namespace_from_key(key))
+            self.record_abort(namespace=namespace)
             publish_fn()
+
+
+class DiskcacheBackend(
+    _DiskcacheReadWriteMixin,
+    _DiskcacheMaintenanceMixin,
+    _DiskcacheStreamingMixin,
+    _DiskcacheCoordinationMixin,
+):
+    """Fail-open diskcache backend for CQ runtime."""
+
+    def __init__(
+        self,
+        cache: FanoutCache,
+        *,
+        default_ttl_seconds: int,
+        transaction_batch_size: int = 128,
+    ) -> None:
+        """Initialize disk cache adapter.
+
+        Args:
+            cache: Backing diskcache instance.
+            default_ttl_seconds: Default cache TTL in seconds.
+            transaction_batch_size: Max keys to write per transaction batch.
+        """
+        self.cache = cache
+        self.default_ttl_seconds = default_ttl_seconds
+        self.transaction_batch_size = max(1, int(transaction_batch_size))
 
 
 def _build_diskcache_backend(policy: CqCachePolicyV1) -> CqCacheBackend:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import datafusion
 
@@ -27,9 +27,11 @@ from datafusion_engine.session.runtime_telemetry import (
     _datafusion_write_policy_payload,
     _delta_protocol_support_payload,
     _delta_store_policy_payload,
+    _effective_ident_normalization,
     _encode_telemetry_msgpack,
     _enrich_query_telemetry,
     _extra_settings_payload,
+    _identifier_normalization_mode,
     _map_entries,
     _runtime_settings_payload,
     _settings_by_prefix,
@@ -37,26 +39,21 @@ from datafusion_engine.session.runtime_telemetry import (
     _telemetry_enrichment_policy_for_profile,
     performance_policy_settings,
 )
-from datafusion_engine.session.runtime_telemetry import (
-    _effective_ident_normalization as _telemetry_effective_ident_normalization,
-)
-from datafusion_engine.session.runtime_telemetry import (
-    _identifier_normalization_mode as _telemetry_identifier_normalization_mode,
-)
 from storage.ipc_utils import payload_hash
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from serde_schema_registry import ArtifactSpec
 
-# Re-export for backward compat with runtime.py aliases.
-_identifier_normalization_mode = _telemetry_identifier_normalization_mode
-_effective_ident_normalization = _telemetry_effective_ident_normalization
-
 
 class _RuntimeDiagnosticsMixin:
-    def _diagnostics_profile(self: object) -> DataFusionRuntimeProfile:
-        return cast("DataFusionRuntimeProfile", self)
+    def _diagnostics_profile(self) -> DataFusionRuntimeProfile:
+        from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+        if not isinstance(self, DataFusionRuntimeProfile):
+            msg = "_RuntimeDiagnosticsMixin must be composed into DataFusionRuntimeProfile."
+            raise TypeError(msg)
+        return self
 
     def record_artifact(self, name: ArtifactSpec, payload: Mapping[str, object]) -> None:
         """Record an artifact through DiagnosticsRecorder when configured."""
@@ -432,5 +429,3 @@ class _RuntimeDiagnosticsMixin:
 
 
 # Avoid circular import: DataFusionRuntimeProfile is used by type annotations only.
-if TYPE_CHECKING:
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile

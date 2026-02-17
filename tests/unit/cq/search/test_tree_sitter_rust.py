@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.tree_sitter.rust_lane import runtime as tree_sitter_rust
+from tools.cq.search.tree_sitter.rust_lane import runtime_core as tree_sitter_rust_core
 from tools.cq.search.tree_sitter.rust_lane.enrichment_extractors import _MAX_FIELDS_SHOWN
 from tools.cq.search.tree_sitter.rust_lane.runtime import MAX_SOURCE_BYTES
 from tools.cq.search.tree_sitter.rust_lane.runtime_cache import (
@@ -49,14 +50,14 @@ def test_enrich_rust_context_fail_open_on_parser_error(monkeypatch: pytest.Monke
         raise RuntimeError(msg)
 
     CACHE_REGISTRY.clear_all("rust")
-    monkeypatch.setattr(tree_sitter_rust, "_parse_with_session", _boom)
+    monkeypatch.setattr(tree_sitter_rust_core, "_parse_with_session", _boom)
     payload = tree_sitter_rust.enrich_rust_context(_RUST_SAMPLE, line=2, col=8, cache_key="boom")
     assert payload is None
 
 
 def test_enrich_rust_context_returns_none_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unavailable runtime should return None without raising."""
-    monkeypatch.setattr(tree_sitter_rust, "is_tree_sitter_rust_available", lambda: False)
+    monkeypatch.setattr(tree_sitter_rust_core, "is_tree_sitter_rust_available", lambda: False)
     payload = tree_sitter_rust.enrich_rust_context(_RUST_SAMPLE, line=2, col=8, cache_key="missing")
     assert payload is None
 

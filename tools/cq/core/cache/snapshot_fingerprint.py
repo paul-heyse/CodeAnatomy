@@ -57,6 +57,17 @@ class ScopeSnapshotFingerprintV1(CqCacheStruct, frozen=True):
         return len(self.files)
 
 
+class ScopeSnapshotBuildRequestV1(CqCacheStruct, frozen=True):
+    """Typed input contract for scope snapshot fingerprint construction."""
+
+    root: Path
+    files: tuple[Path, ...]
+    language: str
+    scope_globs: tuple[str, ...] = ()
+    scope_roots: tuple[Path, ...] = ()
+    inventory_token: object | None = None
+
+
 class _ScopeSnapshotCacheContextV1(CqCacheStruct, frozen=True):
     namespace: str
     root: str
@@ -245,31 +256,26 @@ def _persist_scope_snapshot(
 
 def build_scope_snapshot_fingerprint(
     *,
-    root: Path,
+    request: ScopeSnapshotBuildRequestV1,
     backend: CqCacheBackend,
-    files: list[Path],
-    language: str,
-    scope_globs: list[str] | None = None,
-    scope_roots: list[Path] | None = None,
-    inventory_token: Mapping[str, object] | object | None = None,
 ) -> ScopeSnapshotFingerprintV1:
     """Build deterministic scope fingerprint from file metadata.
 
     Returns:
         Snapshot payload containing sorted file stats and digest.
     """
-    resolved_root = root.resolve()
+    resolved_root = request.root.resolve()
     stats = sorted(
-        (_file_stat(root=resolved_root, file_path=path) for path in files),
+        (_file_stat(root=resolved_root, file_path=path) for path in request.files),
         key=lambda item: item.path,
     )
     file_signature = tuple((item.path, item.size_bytes, item.mtime_ns) for item in stats)
     context, policy = _snapshot_cache_context(
         root=resolved_root,
-        language=language,
-        scope_globs=scope_globs,
-        scope_roots=scope_roots,
-        inventory_token=inventory_token,
+        language=request.language,
+        scope_globs=list(request.scope_globs),
+        scope_roots=list(request.scope_roots),
+        inventory_token=request.inventory_token,
         file_signature=file_signature,
     )
     cached_snapshot = _cached_scope_snapshot(cache=backend, context=context)
@@ -277,7 +283,7 @@ def build_scope_snapshot_fingerprint(
         return cached_snapshot
 
     payload = {
-        "language": language,
+        "language": request.language,
         "scope_globs": context.scope_globs,
         "scope_roots": context.scope_roots,
         "inventory_token": context.inventory_token,
@@ -285,8 +291,8 @@ def build_scope_snapshot_fingerprint(
     }
     digest = hashlib.sha256(msgspec.json.encode(payload)).hexdigest()
     snapshot = ScopeSnapshotFingerprintV1(
-        language=language,
-        scope_globs=tuple(scope_globs or ()),
+        language=request.language,
+        scope_globs=tuple(request.scope_globs),
         files=tuple(stats),
         digest=digest,
     )
@@ -301,6 +307,7 @@ def build_scope_snapshot_fingerprint(
 
 __all__ = [
     "ScopeFileStatV1",
+    "ScopeSnapshotBuildRequestV1",
     "ScopeSnapshotFingerprintV1",
     "build_scope_snapshot_fingerprint",
 ]

@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use deltalake::errors::DeltaTableError;
+use deltalake::DeltaTableBuilder;
 use deltalake::DeltaTable;
 use rmp_serde::from_slice;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use crate::delta_common::eager_snapshot;
 use crate::DeltaFeatureGate;
 
 #[derive(Debug, Clone)]
@@ -19,6 +21,39 @@ pub struct DeltaSnapshotInfo {
     pub table_properties: BTreeMap<String, String>,
     pub schema_json: String,
     pub partition_columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TableVersion {
+    #[default]
+    Latest,
+    Version(i64),
+    Timestamp(String),
+}
+
+impl TableVersion {
+    pub fn from_options(
+        version: Option<i64>,
+        timestamp: Option<String>,
+    ) -> Result<Self, DeltaTableError> {
+        match (version, timestamp) {
+            (Some(_), Some(_)) => Err(DeltaTableError::Generic(
+                "cannot specify both version and timestamp".to_string(),
+            )),
+            (Some(version), None) => Ok(Self::Version(version)),
+            (None, Some(timestamp)) => Ok(Self::Timestamp(timestamp)),
+            (None, None) => Ok(Self::Latest),
+        }
+    }
+
+    pub fn apply(self, builder: DeltaTableBuilder) -> Result<DeltaTableBuilder, DeltaTableError> {
+        match self {
+            Self::Latest => Ok(builder),
+            Self::Version(version) => Ok(builder.with_version(version)),
+            Self::Timestamp(timestamp) => builder.with_datestring(timestamp),
+        }
+    }
 }
 
 fn feature_strings<T>(features: Option<&[T]>) -> Vec<String>
@@ -37,7 +72,7 @@ pub async fn delta_snapshot_info(
     table_uri: &str,
     table: &DeltaTable,
 ) -> Result<DeltaSnapshotInfo, DeltaTableError> {
-    let snapshot = table.snapshot()?.snapshot().clone();
+    let snapshot = eager_snapshot(table)?;
     let protocol = snapshot.protocol();
     let metadata = snapshot.metadata();
     let version = snapshot.version();

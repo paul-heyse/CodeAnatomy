@@ -18,6 +18,7 @@ from schema_spec.dataset_spec import (
     TableSchemaSpec,
 )
 from schema_spec.metadata_spec import metadata_spec_from_schema
+from schema_spec.table_spec import delta_constraints_from_table_spec
 
 
 def dataset_spec_from_schema(
@@ -31,11 +32,7 @@ def dataset_spec_from_schema(
     Returns:
         DatasetSpec: Dataset spec derived from the provided schema.
     """
-    from schema_spec.dataset_spec import (
-        _delta_constraints_from_table_spec,
-        make_dataset_spec,
-        resolve_schema_evolution_spec,
-    )
+    from schema_spec.dataset_spec import make_dataset_spec, resolve_schema_evolution_spec
 
     table_spec = TableSchemaSpec.from_schema(name, schema, version=version)
     evolution_spec = resolve_schema_evolution_spec(name)
@@ -43,7 +40,7 @@ def dataset_spec_from_schema(
         table_spec=table_spec,
         metadata_spec=metadata_spec_from_schema(schema),
         evolution_spec=evolution_spec,
-        delta_constraints=_delta_constraints_from_table_spec(table_spec),
+        delta_constraints=delta_constraints_from_table_spec(table_spec),
     )
 
 

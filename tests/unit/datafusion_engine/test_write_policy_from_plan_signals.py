@@ -7,9 +7,12 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from datafusion_engine.io import write_core as write_module
+from datafusion_engine.io import write_planning as write_planning_module
 from datafusion_engine.io.write_core import (
-    _adaptive_file_size_from_bundle,
     _AdaptiveFileSizeDecision,
+)
+from datafusion_engine.io.write_planning import (
+    adaptive_file_size_from_bundle,
     compute_adaptive_file_size,
 )
 from datafusion_engine.plan.signals import NormalizedPlanStats, PlanSignals
@@ -81,9 +84,9 @@ class TestAdaptiveFileSizeFromBundle:
         def _fake(_bundle: object, **_kw: object) -> PlanSignals:
             return PlanSignals(stats=NormalizedPlanStats(num_rows=100))
 
-        monkeypatch.setattr(write_module, "extract_plan_signals", _fake)
+        monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake)
         bundle = cast("DataFusionPlanArtifact", object())
-        target, decision = _adaptive_file_size_from_bundle(bundle, 64 * 1024 * 1024)
+        target, decision = adaptive_file_size_from_bundle(bundle, 64 * 1024 * 1024)
 
         assert target == 32 * 1024 * 1024
         assert decision is not None
@@ -99,9 +102,9 @@ class TestAdaptiveFileSizeFromBundle:
         def _fake(_bundle: object, **_kw: object) -> PlanSignals:
             return PlanSignals(stats=NormalizedPlanStats(num_rows=2_000_000))
 
-        monkeypatch.setattr(write_module, "extract_plan_signals", _fake)
+        monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake)
         bundle = cast("DataFusionPlanArtifact", object())
-        target, decision = _adaptive_file_size_from_bundle(bundle, 64 * 1024 * 1024)
+        target, decision = adaptive_file_size_from_bundle(bundle, 64 * 1024 * 1024)
 
         assert target == 128 * 1024 * 1024
         assert decision is not None
@@ -117,10 +120,10 @@ class TestAdaptiveFileSizeFromBundle:
         def _fake(_bundle: object, **_kw: object) -> PlanSignals:
             return PlanSignals(stats=NormalizedPlanStats(num_rows=500_000))
 
-        monkeypatch.setattr(write_module, "extract_plan_signals", _fake)
+        monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake)
         bundle = cast("DataFusionPlanArtifact", object())
         base = 64 * 1024 * 1024
-        target, decision = _adaptive_file_size_from_bundle(bundle, base)
+        target, decision = adaptive_file_size_from_bundle(bundle, base)
 
         assert target == base
         assert decision is None
@@ -134,10 +137,10 @@ class TestAdaptiveFileSizeFromBundle:
         def _fake(_bundle: object, **_kw: object) -> PlanSignals:
             return PlanSignals(stats=None)
 
-        monkeypatch.setattr(write_module, "extract_plan_signals", _fake)
+        monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake)
         bundle = cast("DataFusionPlanArtifact", object())
         base = 64 * 1024 * 1024
-        target, decision = _adaptive_file_size_from_bundle(bundle, base)
+        target, decision = adaptive_file_size_from_bundle(bundle, base)
 
         assert target == base
         assert decision is None
@@ -156,7 +159,7 @@ def test_delta_policy_context_uses_plan_signals_for_adaptive_target_file_size(
     def _fake_extract_plan_signals(*_args: object, **_kwargs: object) -> PlanSignals:
         return PlanSignals(stats=NormalizedPlanStats(num_rows=1))
 
-    monkeypatch.setattr(write_module, "extract_plan_signals", _fake_extract_plan_signals)
+    monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake_extract_plan_signals)
 
     policy_context = write_module._delta_policy_context(  # noqa: SLF001
         options={"target_file_size": 64 * 1024 * 1024},
@@ -176,7 +179,7 @@ def test_delta_policy_context_keeps_target_file_size_when_stats_missing(
     def _fake_extract_plan_signals(*_args: object, **_kwargs: object) -> PlanSignals:
         return PlanSignals(stats=None)
 
-    monkeypatch.setattr(write_module, "extract_plan_signals", _fake_extract_plan_signals)
+    monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake_extract_plan_signals)
 
     policy_context = write_module._delta_policy_context(  # noqa: SLF001
         options={"target_file_size": 64 * 1024 * 1024},
@@ -196,7 +199,7 @@ def test_delta_policy_context_carries_adaptive_decision(
     def _fake_extract_plan_signals(*_args: object, **_kwargs: object) -> PlanSignals:
         return PlanSignals(stats=NormalizedPlanStats(num_rows=50))
 
-    monkeypatch.setattr(write_module, "extract_plan_signals", _fake_extract_plan_signals)
+    monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake_extract_plan_signals)
 
     policy_context = write_module._delta_policy_context(  # noqa: SLF001
         options={"target_file_size": 64 * 1024 * 1024},
@@ -233,7 +236,7 @@ def test_delta_policy_context_no_adaptive_decision_mid_range(
     def _fake_extract_plan_signals(*_args: object, **_kwargs: object) -> PlanSignals:
         return PlanSignals(stats=NormalizedPlanStats(num_rows=500_000))
 
-    monkeypatch.setattr(write_module, "extract_plan_signals", _fake_extract_plan_signals)
+    monkeypatch.setattr(write_planning_module, "extract_plan_signals", _fake_extract_plan_signals)
 
     policy_context = write_module._delta_policy_context(  # noqa: SLF001
         options={"target_file_size": 64 * 1024 * 1024},

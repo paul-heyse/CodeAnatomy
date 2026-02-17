@@ -14,14 +14,20 @@ use crate::udf::common::{
     columnar_to_optional_strings, expand_string_signatures, signature_with_names, SignatureEqHash,
 };
 
+pub(crate) const CDF_RANK_UPDATE_POSTIMAGE: i32 = 3;
+pub(crate) const CDF_RANK_INSERT: i32 = 2;
+pub(crate) const CDF_RANK_DELETE: i32 = 1;
+pub(crate) const CDF_RANK_UPDATE_PREIMAGE: i32 = 0;
+pub(crate) const CDF_RANK_UNKNOWN: i32 = -1;
+
 fn cdf_rank(change_type: &str) -> i32 {
     let normalized = change_type.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "update_postimage" => 3,
-        "insert" => 2,
-        "delete" => 1,
-        "update_preimage" => 0,
-        _ => -1,
+        "update_postimage" => CDF_RANK_UPDATE_POSTIMAGE,
+        "insert" => CDF_RANK_INSERT,
+        "delete" => CDF_RANK_DELETE,
+        "update_preimage" => CDF_RANK_UPDATE_PREIMAGE,
+        _ => CDF_RANK_UNKNOWN,
     }
 }
 
@@ -138,7 +144,7 @@ impl ScalarUDFImpl for CdfIsUpsertUdf {
                 continue;
             };
             let rank = cdf_rank(&value);
-            builder.append_value(rank == 3 || rank == 2);
+            builder.append_value(rank == CDF_RANK_UPDATE_POSTIMAGE || rank == CDF_RANK_INSERT);
         }
         Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
     }
@@ -197,7 +203,7 @@ impl ScalarUDFImpl for CdfIsDeleteUdf {
                 builder.append_null();
                 continue;
             };
-            builder.append_value(cdf_rank(&value) == 1);
+            builder.append_value(cdf_rank(&value) == CDF_RANK_DELETE);
         }
         Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
     }

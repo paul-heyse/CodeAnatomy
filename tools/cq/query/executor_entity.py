@@ -24,9 +24,9 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     Returns:
         CqResult: Query result payload.
     """
-    from tools.cq.query.executor import execute_entity_query_from_records as _execute_from_records
+    from tools.cq.query.executor import execute_entity_query_from_records
 
-    return _execute_from_records(request)
+    return execute_entity_query_from_records(request)
 
 
 __all__ = ["execute_entity_query", "execute_entity_query_from_records"]

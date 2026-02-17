@@ -655,9 +655,9 @@ fn test_profile_driven_rulepack_construction() {
     assert!(strict.total_count() > 0);
 
     // Verify fingerprints are computed (non-zero)
-    assert_ne!(low_latency.fingerprint, [0u8; 32]);
-    assert_ne!(default.fingerprint, [0u8; 32]);
-    assert_ne!(strict.fingerprint, [0u8; 32]);
+    assert_ne!(low_latency.fingerprint(), [0u8; 32]);
+    assert_ne!(default.fingerprint(), [0u8; 32]);
+    assert_ne!(strict.fingerprint(), [0u8; 32]);
 
     // Verify that different profiles can produce different rule counts
     // (Though specific ordering is not guaranteed, all should be valid)
@@ -716,7 +716,7 @@ async fn test_prepared_context_and_pipeline_identity_surfaces_are_stable() {
         &prepared_a.ctx,
         &spec,
         prepared_a.envelope.envelope_hash,
-        ruleset.fingerprint,
+        ruleset.fingerprint(),
         prepared_a.provider_identities.clone(),
         prepared_a.envelope.planning_surface_hash,
         prepared_a.preflight_warnings.clone(),

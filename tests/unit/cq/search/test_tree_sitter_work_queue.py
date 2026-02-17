@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 from tools.cq.search.tree_sitter.contracts.core_models import QueryWindowV1
 from tools.cq.search.tree_sitter.core.work_queue import dequeue_window, enqueue_windows
@@ -11,39 +13,40 @@ SECOND_WINDOW_START_BYTE = 10
 SECOND_WINDOW_END_BYTE = 20
 
 
-class _Cache:
+class _Backend:
     def __init__(self) -> None:
-        self.items: list[bytes] = []
+        self._counters: dict[str, int] = {}
+        self._items: dict[str, bytes] = {}
 
-    def push(self, value: bytes, prefix: str | None = None) -> None:
-        _ = prefix
-        self.items.append(value)
+    def incr(self, key: str, *, delta: int = 1, default: int = 0) -> int:
+        current = self._counters.get(key, default)
+        updated = int(current) + int(delta)
+        self._counters[key] = updated
+        return updated
 
-    def pull(self, prefix: str | None = None) -> bytes | None:
-        _ = prefix
-        if not self.items:
-            return None
-        return self.items.pop(0)
+    def set(
+        self,
+        key: str,
+        value: bytes,
+        *,
+        expire: int | None = None,
+        tag: str | None = None,
+    ) -> bool:
+        _ = expire
+        _ = tag
+        self._items[key] = value
+        return True
 
-
-class _FanoutLike:
-    def __init__(self) -> None:
-        self.named: dict[str, _Cache] = {}
-
-    def cache(self, name: str) -> _Cache:
-        store = self.named.get(name)
-        if store is None:
-            store = _Cache()
-            self.named[name] = store
-        return store
+    def get(self, key: str) -> bytes | None:
+        return self._items.get(key)
 
 
 def test_enqueue_and_dequeue_windows_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test enqueue and dequeue windows roundtrip."""
     import tools.cq.search.tree_sitter.core.work_queue as queue_mod
 
-    cache = _Cache()
-    monkeypatch.setattr(queue_mod, "_cache", lambda: cache)
+    backend = _Backend()
+    monkeypatch.setattr(queue_mod, "get_cq_cache_backend", lambda **_kwargs: backend)
     pushed = enqueue_windows(
         language="python",
         file_key="sample.py",
@@ -58,11 +61,18 @@ def test_enqueue_and_dequeue_windows_roundtrip(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_enqueue_dequeue_windows_with_named_subcache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test enqueue dequeue windows with named subcache."""
+    """Test dequeue path accepts memoryview payloads from backend adapters."""
     import tools.cq.search.tree_sitter.core.work_queue as queue_mod
 
-    cache = _FanoutLike()
-    monkeypatch.setattr(queue_mod, "_cache", lambda: cache)
+    backend = _Backend()
+    original_get: Callable[[str], bytes | None] = backend.get
+
+    def _get_as_memoryview(key: str) -> memoryview | None:
+        payload = original_get(key)
+        return None if payload is None else memoryview(payload)
+
+    monkeypatch.setattr(queue_mod, "get_cq_cache_backend", lambda **_kwargs: backend)
+    monkeypatch.setattr(backend, "get", _get_as_memoryview)
     pushed = enqueue_windows(
         language="python",
         file_key="sample.py",

@@ -20,6 +20,7 @@ from tools.cq.core.scoring import (
     build_score_details,
 )
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.summary_contract import as_search_summary
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.scan import ScanContext
 from tools.cq.query.shared_utils import extract_def_name
@@ -76,8 +77,9 @@ def process_import_query(
             matching_imports,
         )
 
-    result.summary.total_imports = len(import_records)
-    result.summary.matches = len(result.key_findings)
+    summary = as_search_summary(result.summary)
+    summary.total_imports = len(import_records)
+    summary.matches = len(result.key_findings)
 
 
 def process_def_query(
@@ -251,9 +253,10 @@ def finalize_def_query_summary(result: CqResult, scan_ctx: ScanContext) -> None:
     scan_ctx
         Scan context
     """
-    result.summary.total_defs = len(scan_ctx.def_records)
-    result.summary.total_calls = len(scan_ctx.call_records)
-    result.summary.matches = len(result.key_findings)
+    summary = as_search_summary(result.summary)
+    summary.total_defs = len(scan_ctx.def_records)
+    summary.total_calls = len(scan_ctx.call_records)
+    summary.matches = len(result.key_findings)
 
 
 def filter_to_matching(
@@ -278,7 +281,11 @@ def filter_to_matching(
 
     for record in def_records:
         # Filter by entity type
-        if not matches_entity(record, query.entity):
+        if not ENTITY_KINDS.matches(
+            entity_type=query.entity,
+            record_kind=record.kind,
+            record_type=record.record,
+        ):
             continue
 
         # Filter by name pattern
@@ -288,28 +295,6 @@ def filter_to_matching(
         matching.append(record)
 
     return matching
-
-
-def matches_entity(record: SgRecord, entity: str | None) -> bool:
-    """Check if record matches entity type.
-
-    Parameters
-    ----------
-    record
-        Record to check
-    entity
-        Entity type filter
-
-    Returns:
-    -------
-    bool
-        True if the record matches the entity type
-    """
-    return ENTITY_KINDS.matches(
-        entity_type=entity,
-        record_kind=record.kind,
-        record_type=record.record,
-    )
 
 
 def matches_name(record: SgRecord, name: str) -> bool:
@@ -682,7 +667,6 @@ __all__ = [
     "finalize_def_query_summary",
     "import_match_key",
     "import_to_finding",
-    "matches_entity",
     "matches_name",
     "process_def_query",
     "process_import_query",

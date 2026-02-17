@@ -7,12 +7,8 @@ from typing import cast
 
 from tools.cq.core.schema import CqResult
 from tools.cq.core.summary_contract import SemanticTelemetryV1, build_semantic_telemetry
-from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE_SCOPE,
-    QueryLanguage,
-    QueryLanguageScope,
-    expand_language_scope,
-)
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, expand_language_scope
 
 
 def populate_run_summary_metadata(

@@ -295,7 +295,7 @@ def runtime_capabilities_payload(snapshot: RuntimeCapabilitiesSnapshot) -> dict[
 
 def _extension_capabilities_report() -> dict[str, object]:
     try:
-        from datafusion_engine.udf.extension_core import extension_capabilities_report
+        from datafusion_engine.udf.extension_validation import extension_capabilities_report
     except ImportError:
         return {}
     try:

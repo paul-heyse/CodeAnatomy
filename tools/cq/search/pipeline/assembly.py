@@ -13,7 +13,7 @@ from tools.cq.core.cache.maintenance import maintenance_tick
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import Anchor, CqResult, Finding, Section, assign_result_finding_ids
-from tools.cq.core.summary_contract import CqSummary, summary_from_mapping
+from tools.cq.core.summary_contract import SearchSummaryV1, as_search_summary, summary_from_mapping
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.python_semantic import merge_matches_and_python_semantic
@@ -27,7 +27,7 @@ from tools.cq.search.pipeline.smart_search_types import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_assembly import (
+    from tools.cq.core.front_door_contracts import (
         FrontDoorInsightV1,
         InsightNeighborhoodV1,
         InsightRiskV1,
@@ -376,7 +376,7 @@ def _build_tree_sitter_neighborhood_preview(
     *,
     ctx: SearchConfig,
     partition_results: list[LanguageSearchResult],
-    summary: CqSummary,
+    summary: SearchSummaryV1,
     sections: list[Section],
     inputs: _NeighborhoodPreviewInputs,
 ) -> tuple[InsightNeighborhoodV1 | None, list[str]]:
@@ -466,7 +466,8 @@ def _build_search_risk(
     InsightRiskV1 | None
         Risk assessment or None if no neighborhood available.
     """
-    from tools.cq.core.front_door_assembly import InsightRiskCountersV1, risk_from_counters
+    from tools.cq.core.front_door_contracts import InsightRiskCountersV1
+    from tools.cq.core.front_door_risk import risk_from_counters
 
     if neighborhood is None:
         return None
@@ -496,7 +497,8 @@ def _assemble_search_insight(
     FrontDoorInsightV1
         Assembled insight card with semantic enrichment.
     """
-    from tools.cq.core.front_door_assembly import SearchInsightBuildRequestV1, build_search_insight
+    from tools.cq.core.front_door_assembly import build_search_insight
+    from tools.cq.core.front_door_contracts import SearchInsightBuildRequestV1
 
     insight = build_search_insight(
         SearchInsightBuildRequestV1(
@@ -562,10 +564,10 @@ def _prepare_search_assembly_inputs(
         python_semantic_telemetry=python_semantic_telemetry,
         python_semantic_diagnostics=python_semantic_diagnostics,
     )
-    summary = summary_from_mapping(summary_raw)
+    summary = as_search_summary(summary_from_mapping(summary_raw))
     object_runtime = build_object_resolved_view(enriched_matches, query=ctx.query)
-    summary["resolved_objects"] = len(object_runtime.view.summaries)
-    summary["resolved_occurrences"] = len(object_runtime.view.occurrences)
+    summary.resolved_objects = len(object_runtime.view.summaries)
+    summary.resolved_occurrences = len(object_runtime.view.occurrences)
     sections = build_sections(
         enriched_matches,
         ctx.root,
@@ -658,7 +660,7 @@ def _assemble_smart_search_result(
     cache_maintenance_payload = contract_to_builtins(
         maintenance_tick(get_cq_cache_backend(root=ctx.root))
     )
-    result.summary.cache_maintenance = (
+    as_search_summary(result.summary).cache_maintenance = (
         cache_maintenance_payload if isinstance(cache_maintenance_payload, dict) else {}
     )
     return assign_result_finding_ids(result)

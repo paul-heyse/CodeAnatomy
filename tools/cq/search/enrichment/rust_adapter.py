@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
 from tools.cq.search.enrichment.core import string_or_none
 from tools.cq.search.pipeline.enrichment_contracts import (
@@ -138,10 +138,17 @@ def _accumulate_bundle_drift(*, lang_bucket: dict[str, object], bundle: object) 
 def _accumulate_stage_timings(*, lang_bucket: dict[str, object], timings_payload: object) -> None:
     if not isinstance(timings_payload, dict):
         return
-    stage_bucket = lang_bucket.get("stage_timings_ms")
-    if not isinstance(stage_bucket, dict):
-        stage_bucket = {}
-        lang_bucket["stage_timings_ms"] = stage_bucket
+    stage_bucket_raw = lang_bucket.get("stage_timings_ms")
+    stage_bucket: dict[str, float] = {}
+    if isinstance(stage_bucket_raw, dict):
+        for key, value in stage_bucket_raw.items():
+            if (
+                isinstance(key, str)
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ):
+                stage_bucket[key] = float(value)
+    lang_bucket["stage_timings_ms"] = stage_bucket
     for key, value in timings_payload.items():
         if not isinstance(key, str):
             continue

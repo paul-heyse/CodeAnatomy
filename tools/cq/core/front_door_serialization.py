@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_assembly import FrontDoorInsightV1
+    from tools.cq.core.front_door_contracts import FrontDoorInsightV1
 
 
 def _to_full_builtins(value: object) -> object:

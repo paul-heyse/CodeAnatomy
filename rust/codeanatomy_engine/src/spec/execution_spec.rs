@@ -97,6 +97,13 @@ impl SemanticExecutionSpec {
     pub fn hash(&self) -> &[u8; 32] {
         &self.spec_hash
     }
+
+    /// Whether all input relations are pinned to deterministic versions.
+    pub fn are_inputs_deterministic(&self) -> bool {
+        self.input_relations
+            .iter()
+            .all(|relation| relation.version_pin.is_some())
+    }
 }
 
 #[cfg(test)]

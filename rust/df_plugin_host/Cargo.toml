@@ -16,4 +16,5 @@ datafusion-expr = "51.0.0"
 datafusion-ffi = "51.0.0"
 deltalake = { version = "0.30.1", features = ["datafusion"] }
 df_plugin_api = { path = "../df_plugin_api" }
+df_plugin_common = { path = "../df_plugin_common" }
 tokio = { version = "1.49.0", features = ["rt-multi-thread"] }

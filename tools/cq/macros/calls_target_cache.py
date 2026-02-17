@@ -19,7 +19,10 @@ from tools.cq.core.cache.namespaces import (
 )
 from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
 from tools.cq.core.cache.run_lifecycle import CacheWriteTagRequestV1, resolve_write_cache_tag
-from tools.cq.core.cache.snapshot_fingerprint import build_scope_snapshot_fingerprint
+from tools.cq.core.cache.snapshot_fingerprint import (
+    ScopeSnapshotBuildRequestV1,
+    build_scope_snapshot_fingerprint,
+)
 from tools.cq.core.cache.telemetry import (
     record_cache_decode_failure,
     record_cache_get,
@@ -30,7 +33,7 @@ from tools.cq.core.contracts import contract_to_builtins
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from tools.cq.query.language import QueryLanguage
+    from tools.cq.core.types import QueryLanguage
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,12 +79,14 @@ def target_scope_snapshot_digest(
     if not file_path.exists():
         return None
     return build_scope_snapshot_fingerprint(
-        root=root,
+        request=ScopeSnapshotBuildRequestV1(
+            root=root,
+            files=(file_path,),
+            language=language or "python",
+            scope_globs=(),
+            scope_roots=(file_path.parent,),
+        ),
         backend=backend,
-        files=[file_path],
-        language=language or "python",
-        scope_globs=[],
-        scope_roots=[file_path.parent],
     ).digest
 
 

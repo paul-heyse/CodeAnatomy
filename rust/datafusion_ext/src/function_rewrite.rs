@@ -1,4 +1,3 @@
-use arrow::datatypes::DataType;
 use datafusion_common::{
     config::ConfigOptions, tree_node::Transformed, utils::list_ndims, DFSchema, Result,
 };
@@ -7,6 +6,8 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{Expr, ExprSchemable, Operator};
 use datafusion_functions::core::get_field as get_field_udf;
 use datafusion_functions_nested::expr_fn::array_has_all;
+
+use crate::operator_utils::{can_use_get_field, is_arrow_operator};
 
 #[derive(Debug, Default)]
 pub struct CodeAnatomyOperatorRewrite;
@@ -57,25 +58,10 @@ impl FunctionRewrite for CodeAnatomyOperatorRewrite {
         ))))
     }
 }
-
-fn is_arrow_operator(op: Operator) -> bool {
-    matches!(
-        op,
-        Operator::Arrow | Operator::LongArrow | Operator::HashArrow | Operator::HashLongArrow
-    )
-}
-
-fn can_use_get_field(expr: &Expr, schema: &DFSchema) -> Result<bool> {
-    match expr.get_type(schema)? {
-        DataType::Struct(_) | DataType::Map(_, _) | DataType::Null => Ok(true),
-        _ => Ok(false),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::BinaryExpr;
     use datafusion_expr::expr_fn::col;

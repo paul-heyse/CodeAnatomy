@@ -1,4 +1,4 @@
-# ruff: noqa: D103, INP001
+# ruff: noqa: D103
 """Tests for listing/schema registration split modules."""
 
 from __future__ import annotations

@@ -11,11 +11,11 @@ from tools.cq.core.front_door_schema import FrontDoorInsightV1
 from tools.cq.core.render_utils import na as _na
 from tools.cq.core.render_utils import summary_value
 from tools.cq.core.serialization import to_builtins
+from tools.cq.core.summary_contract import SummaryEnvelopeV1
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding
-    from tools.cq.core.summary_contract import CqSummary
 
 
 SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
@@ -54,6 +54,11 @@ ARTIFACT_ONLY_KEYS: frozenset[str] = frozenset(
 )
 
 RUN_QUERY_ARG_START_INDEX = 2
+
+
+def _summary_int(summary: SummaryEnvelopeV1, key: str) -> int:
+    raw = summary_value(summary, key)
+    return raw if isinstance(raw, int) else 0
 
 
 def _derive_query_fallback(result: CqResult) -> str | None:
@@ -130,7 +135,7 @@ def summary_string(
     return _na(missing_reason)
 
 
-def _ordered_summary_payload(summary: CqSummary | dict[str, object]) -> dict[str, object]:
+def _ordered_summary_payload(summary: SummaryEnvelopeV1 | dict[str, object]) -> dict[str, object]:
     """Order summary keys by priority.
 
     Parameters
@@ -146,6 +151,8 @@ def _ordered_summary_payload(summary: CqSummary | dict[str, object]) -> dict[str
     rendered_summary = to_builtins(summary)
     if not isinstance(rendered_summary, dict):
         return {"summary": rendered_summary}
+    if isinstance(summary, SummaryEnvelopeV1):
+        rendered_summary.setdefault("summary_variant", summary.summary_variant)
     ordered: dict[str, object] = {}
     for key in SUMMARY_PRIORITY_KEYS:
         if key in rendered_summary:
@@ -156,7 +163,7 @@ def _ordered_summary_payload(summary: CqSummary | dict[str, object]) -> dict[str
     return ordered
 
 
-def render_summary(summary: CqSummary | dict[str, object]) -> list[str]:
+def render_summary(summary: SummaryEnvelopeV1 | dict[str, object]) -> list[str]:
     """Render summary section lines.
 
     Parameters
@@ -179,7 +186,7 @@ def render_summary(summary: CqSummary | dict[str, object]) -> list[str]:
     return lines
 
 
-def render_insight_card_from_summary(summary: CqSummary | dict[str, object]) -> list[str]:
+def render_insight_card_from_summary(summary: SummaryEnvelopeV1 | dict[str, object]) -> list[str]:
     """Extract and render insight card from summary.
 
     Parameters
@@ -403,7 +410,7 @@ def _derive_compact_status(key: str, value: object) -> str | None:
 
 
 def compact_summary_for_rendering(
-    summary: CqSummary | dict[str, object],
+    summary: SummaryEnvelopeV1 | dict[str, object],
 ) -> tuple[dict[str, object], list[tuple[str, object]]]:
     """Split summary into compact display and artifact detail payloads.
 
@@ -509,10 +516,11 @@ def render_summary_condensed(result: CqResult) -> str:
 
         # For sig-impact, show breakage counts
         if "would_break" in result.summary:
-            wb = result.summary.would_break
-            amb = result.summary.ambiguous
-            ok = result.summary.ok
-            summary_parts = [f"break:{wb}", f"ambiguous:{amb}", f"ok:{ok}"]
+            summary_parts = [
+                f"break:{_summary_int(result.summary, 'would_break')}",
+                f"ambiguous:{_summary_int(result.summary, 'ambiguous')}",
+                f"ok:{_summary_int(result.summary, 'ok')}",
+            ]
 
     if not summary_parts:
         # Fallback: count findings

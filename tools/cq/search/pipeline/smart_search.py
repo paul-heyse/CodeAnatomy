@@ -9,32 +9,21 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
-from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.schema import (
-    Anchor,
     CqResult,
-    DetailPayload,
     Finding,
-    ScoreDetails,
     Section,
     ms,
 )
+from tools.cq.core.summary_contract import as_search_summary
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 from tools.cq.orchestration.multilang_orchestrator import (
     execute_by_language_scope,
     merge_partitioned_items,
 )
-from tools.cq.orchestration.multilang_summary import (
-    assert_multilang_summary,
-    build_multilang_summary,
-)
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
-    QueryLanguage,
-    QueryLanguageScope,
     expand_language_scope,
-    file_globs_for_scope,
-    is_python_language,
-    is_rust_language,
     ripgrep_types_for_scope,
 )
 from tools.cq.search._shared.core import (
@@ -42,16 +31,7 @@ from tools.cq.search._shared.core import (
     RgRunRequest,
 )
 from tools.cq.search._shared.types import SearchLimits
-from tools.cq.search.objects.render import (
-    SearchOccurrenceV1,
-    build_non_code_occurrence_section,
-    build_occurrence_hot_files_section,
-    build_occurrence_kind_counts_section,
-    build_occurrences_section,
-    build_resolved_objects_section,
-    is_non_code_occurrence,
-)
-from tools.cq.search.objects.resolve import ObjectResolutionRuntime, build_object_resolved_view
+from tools.cq.search.objects.resolve import ObjectResolutionRuntime
 from tools.cq.search.pipeline.assembly import assemble_smart_search_result
 from tools.cq.search.pipeline.candidate_phase import (
     collect_candidates as _collect_candidates_phase,
@@ -62,7 +42,6 @@ from tools.cq.search.pipeline.candidate_phase import (
 from tools.cq.search.pipeline.classifier import (
     MatchCategory,
     QueryMode,
-    SymtableEnrichment,
     clear_caches,
     detect_query_mode,
 )
@@ -74,11 +53,6 @@ from tools.cq.search.pipeline.contracts import (
     SearchPartitionPlanV1,
     SearchRequest,
 )
-from tools.cq.search.pipeline.enrichment_contracts import (
-    python_enrichment_payload,
-    python_semantic_enrichment_payload,
-    rust_enrichment_payload,
-)
 from tools.cq.search.pipeline.enrichment_phase import run_enrichment_phase
 from tools.cq.search.pipeline.orchestration import (
     SearchPipeline,
@@ -86,9 +60,6 @@ from tools.cq.search.pipeline.orchestration import (
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.pipeline.runtime_context import build_search_runtime_context
 from tools.cq.search.pipeline.search_object_view_store import pop_search_object_view_for_run
-from tools.cq.search.pipeline.smart_search_telemetry import (
-    build_enrichment_telemetry as _build_enrichment_telemetry,
-)
 from tools.cq.search.pipeline.smart_search_telemetry import (
     new_python_semantic_telemetry as _new_python_semantic_telemetry,
 )
@@ -103,13 +74,6 @@ from tools.cq.search.pipeline.smart_search_types import (
     _PythonSemanticPrefetchResult,
 )
 from tools.cq.search.rg.runner import build_rg_command
-from tools.cq.search.semantic.diagnostics import (
-    build_cross_language_diagnostics,
-    build_language_capabilities,
-    diagnostics_to_summary_payload,
-    is_python_oriented_query_text,
-)
-from tools.cq.search.tree_sitter.query.lint import lint_search_query_packs
 from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
@@ -361,135 +325,9 @@ def _category_message(category: MatchCategory, match: EnrichedMatch) -> str:
 
 
 def build_finding(match: EnrichedMatch, _root: Path) -> Finding:
-    """Convert EnrichedMatch to Finding.
+    from tools.cq.search.pipeline.smart_search_sections import build_finding as _build_finding
 
-    Used by the smart search pipeline to emit standardized findings.
-
-    Parameters
-    ----------
-    match
-        Enriched match.
-    _root
-        Repository root (unused; kept for interface compatibility).
-
-    Returns:
-    -------
-    Finding
-        Finding object.
-    """
-    score = _build_score_details(match)
-    data = _build_match_data(match)
-    details = DetailPayload(kind=match.category, score=score, data=data)
-    return Finding(
-        category=match.category,
-        message=_category_message(match.category, match),
-        anchor=Anchor.from_span(match.span),
-        severity="info",
-        details=details,
-    )
-
-
-def _build_score_details(match: EnrichedMatch) -> ScoreDetails:
-    return ScoreDetails(
-        confidence_score=match.confidence,
-        confidence_bucket=_evidence_to_bucket(match.evidence_kind),
-        evidence_kind=match.evidence_kind,
-    )
-
-
-def _build_match_data(match: EnrichedMatch) -> dict[str, object]:
-    data: dict[str, object] = {
-        "match_text": match.match_text,
-        "language": match.language,
-    }
-    # Rec 10: Only include line_text when context_snippet is absent
-    if not match.context_snippet:
-        data["line_text"] = match.text
-    _populate_optional_fields(data, match)
-    _merge_enrichment_payloads(data, match)
-    return data
-
-
-def _populate_optional_fields(data: dict[str, object], match: EnrichedMatch) -> None:
-    """Add optional context fields to the match data dict.
-
-    Parameters
-    ----------
-    data
-        Target dict (mutated in place).
-    match
-        Enriched match to extract fields from.
-    """
-    if match.context_window:
-        data["context_window"] = match.context_window
-    if match.context_snippet:
-        data["context_snippet"] = match.context_snippet
-    if match.containing_scope:
-        data["containing_scope"] = match.containing_scope
-    if match.node_kind:
-        data["node_kind"] = match.node_kind
-    if match.symtable:
-        flags = _symtable_flags(match.symtable)
-        if flags:
-            data["binding_flags"] = flags
-
-
-def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) -> None:
-    """Merge language-specific enrichment payloads into the data dict.
-
-    Parameters
-    ----------
-    data
-        Target dict (mutated in place).
-    match
-        Enriched match with optional enrichment payloads.
-    """
-    enrichment: dict[str, object] = {"language": match.language}
-    if match.rust_tree_sitter:
-        enrichment["rust"] = rust_enrichment_payload(match.rust_tree_sitter)
-    python_payload: dict[str, object] | None = None
-    if match.python_enrichment:
-        python_payload = python_enrichment_payload(match.python_enrichment)
-    elif is_python_language(match.language):
-        # Keep a stable python payload container for Python findings even when
-        # only secondary enrichment sources are available.
-        python_payload = {}
-    if python_payload is not None:
-        if match.python_semantic_enrichment:
-            python_payload.setdefault(
-                "python_semantic",
-                python_semantic_enrichment_payload(match.python_semantic_enrichment),
-            )
-        enrichment["python"] = python_payload
-    if match.python_semantic_enrichment:
-        enrichment["python_semantic"] = python_semantic_enrichment_payload(
-            match.python_semantic_enrichment
-        )
-    if match.symtable:
-        enrichment["symtable"] = match.symtable
-    if len(enrichment) > 1:
-        data["enrichment"] = enrichment
-
-
-def _symtable_flags(symtable: SymtableEnrichment) -> list[str]:
-    flags: list[str] = []
-    if symtable.is_imported:
-        flags.append("imported")
-    if symtable.is_assigned:
-        flags.append("assigned")
-    if symtable.is_parameter:
-        flags.append("parameter")
-    if symtable.is_free:
-        flags.append("closure_var")
-    if symtable.is_global:
-        flags.append("global")
-    if symtable.is_referenced:
-        flags.append("referenced")
-    if symtable.is_local:
-        flags.append("local")
-    if symtable.is_nonlocal:
-        flags.append("nonlocal")
-    return flags
+    return _build_finding(match, _root)
 
 
 def build_followups(
@@ -497,183 +335,15 @@ def build_followups(
     query: str,
     mode: QueryMode,
 ) -> list[Finding]:
-    """Generate actionable next commands.
+    from tools.cq.search.pipeline.smart_search_followups import build_followups as _build_followups
 
-    Parameters
-    ----------
-    matches
-        List of enriched matches.
-    query
-        Original search query.
-    mode
-        Query mode.
-
-    Returns:
-    -------
-    list[Finding]
-        Follow-up suggestions.
-    """
-    findings: list[Finding] = []
-
-    if mode == QueryMode.IDENTIFIER:
-        defs = [m for m in matches if m.category == "definition"]
-        if defs:
-            findings.append(
-                Finding(
-                    category="next_step",
-                    message=f"Find callers: /cq calls {query}",
-                    severity="info",
-                    details=DetailPayload(
-                        kind="next_step",
-                        data={"cmd": f"/cq calls {query}"},
-                    ),
-                )
-            )
-            findings.append(
-                Finding(
-                    category="next_step",
-                    message=f'Find definitions: /cq q "entity=function name={query}"',
-                    severity="info",
-                    details=DetailPayload(
-                        kind="next_step",
-                        data={"cmd": f'/cq q "entity=function name={query}"'},
-                    ),
-                )
-            )
-            findings.append(
-                Finding(
-                    category="next_step",
-                    message=f'Find callers (transitive): /cq q "entity=function name={query} expand=callers(depth=2)"',
-                    severity="info",
-                    details=DetailPayload(
-                        kind="next_step",
-                        data={
-                            "cmd": f'/cq q "entity=function name={query} expand=callers(depth=2)"'
-                        },
-                    ),
-                )
-            )
-
-        calls = [m for m in matches if m.category == "callsite"]
-        if calls:
-            findings.append(
-                Finding(
-                    category="next_step",
-                    message=f"Analyze impact: /cq impact {query}",
-                    severity="info",
-                    details=DetailPayload(
-                        kind="next_step",
-                        data={"cmd": f"/cq impact {query}"},
-                    ),
-                )
-            )
-
-    return findings
+    return _build_followups(matches, query, mode)
 
 
 def build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
-    """Build summary dict for CqResult.
+    from tools.cq.search.pipeline.smart_search_summary import build_language_summary
 
-    Returns:
-    -------
-    dict[str, object]
-        Normalized summary payload for CQ result rendering.
-    """
-    return _build_summary(inputs)
-
-
-def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
-    config = inputs.config
-    language_stats: dict[QueryLanguage, dict[str, object]] = {
-        lang: {
-            "scanned_files": stat.scanned_files,
-            "scanned_files_is_estimate": stat.scanned_files_is_estimate,
-            "matched_files": stat.matched_files,
-            "total_matches": stat.total_matches,
-            "timed_out": stat.timed_out,
-            "truncated": stat.truncated,
-            "caps_hit": (
-                "timeout"
-                if stat.timed_out
-                else (
-                    "max_files"
-                    if stat.max_files_hit
-                    else ("max_total_matches" if stat.max_matches_hit else "none")
-                )
-            ),
-        }
-        for lang, stat in inputs.language_stats.items()
-    }
-    common = {
-        "query": config.query,
-        "mode": config.mode.value,
-        "mode_requested": (
-            config.mode_requested.value if isinstance(config.mode_requested, QueryMode) else "auto"
-        ),
-        "mode_effective": config.mode.value,
-        "mode_chain": [mode.value for mode in (config.mode_chain or (config.mode,))],
-        "fallback_applied": config.fallback_applied,
-        "file_globs": inputs.file_globs or file_globs_for_scope(config.lang_scope),
-        "include": config.include_globs or [],
-        "exclude": config.exclude_globs or [],
-        "context_lines": {
-            "before": config.limits.context_before,
-            "after": config.limits.context_after,
-        },
-        "limit": inputs.limit if inputs.limit is not None else config.limits.max_total_matches,
-        "scanned_files": inputs.stats.scanned_files,
-        "scanned_files_is_estimate": inputs.stats.scanned_files_is_estimate,
-        "matched_files": inputs.stats.matched_files,
-        "total_matches": inputs.stats.total_matches,
-        "returned_matches": len(inputs.matches),
-        "scan_method": "hybrid",
-        "pattern": inputs.pattern,
-        "case_sensitive": True,
-        "with_neighborhood": bool(config.with_neighborhood),
-        "caps_hit": (
-            "timeout"
-            if inputs.stats.timed_out
-            else (
-                "max_files"
-                if inputs.stats.max_files_hit
-                else ("max_total_matches" if inputs.stats.max_matches_hit else "none")
-            )
-        ),
-        "truncated": inputs.stats.truncated,
-        "timed_out": inputs.stats.timed_out,
-        "python_semantic_overview": dict[str, object](),
-        "python_semantic_telemetry": {
-            "attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-        },
-        "rust_semantic_telemetry": {
-            "attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-        },
-        "semantic_planes": dict[str, object](),
-        "python_semantic_diagnostics": list[dict[str, object]](),
-    }
-    if config.tc is not None:
-        common["rg_pcre2_available"] = bool(getattr(config.tc, "rg_pcre2_available", False))
-        common["rg_pcre2_version"] = getattr(config.tc, "rg_pcre2_version", None)
-    if isinstance(inputs.stats.rg_stats, dict):
-        common["rg_stats"] = inputs.stats.rg_stats.copy()
-    return build_multilang_summary(
-        SummaryBuildRequest(
-            common=common,
-            lang_scope=config.lang_scope,
-            language_order=inputs.languages,
-            languages=language_stats,
-            cross_language_diagnostics=[],
-            language_capabilities=build_language_capabilities(lang_scope=config.lang_scope),
-        )
-    )
+    return build_language_summary(inputs)
 
 
 def build_sections(
@@ -685,88 +355,16 @@ def build_sections(
     include_strings: bool = False,
     object_runtime: ObjectResolutionRuntime | None = None,
 ) -> list[Section]:
-    """Build object-resolved sections for CqResult.
+    from tools.cq.search.pipeline.smart_search_sections import build_sections as _build_sections
 
-    Parameters
-    ----------
-    matches
-        List of enriched matches.
-    root
-        Repository root.
-    query
-        Original query.
-    mode
-        Query mode.
-    include_strings
-        Include string/comment/docstring matches.
-    object_runtime
-        Optional precomputed object-resolution runtime.
-
-    Returns:
-    -------
-    list[Section]
-        Organized sections.
-    """
-    _ = root
-    runtime = object_runtime or build_object_resolved_view(matches, query=query)
-    visible_occurrences, non_code_occurrences = _split_occurrences_for_render(
-        runtime.view.occurrences,
+    return _build_sections(
+        matches,
+        root,
+        query,
+        mode,
         include_strings=include_strings,
+        object_runtime=object_runtime,
     )
-    object_symbols = {
-        summary.object_ref.object_id: summary.object_ref.symbol
-        for summary in runtime.view.summaries
-    }
-    occurrences_by_object: dict[str, list[SearchOccurrenceV1]] = {}
-    for row in runtime.view.occurrences:
-        occurrences_by_object.setdefault(row.object_id, []).append(row)
-    occurrence_rows = runtime.view.occurrences if include_strings else visible_occurrences
-    sections: list[Section] = [
-        build_resolved_objects_section(
-            runtime.view.summaries,
-            occurrences_by_object=occurrences_by_object,
-        ),
-        build_occurrences_section(occurrence_rows, object_symbols=object_symbols),
-        build_occurrence_kind_counts_section(occurrence_rows),
-    ]
-    non_code_section = build_non_code_occurrence_section(non_code_occurrences)
-    if non_code_section is not None and not include_strings:
-        sections.append(non_code_section)
-    sections.append(build_occurrence_hot_files_section(occurrence_rows))
-
-    followups_section = _build_followups_section(matches, query, mode)
-    if followups_section is not None:
-        sections.append(followups_section)
-
-    return sections
-
-
-def _split_occurrences_for_render(
-    occurrences: list[SearchOccurrenceV1],
-    *,
-    include_strings: bool,
-) -> tuple[list[SearchOccurrenceV1], list[SearchOccurrenceV1]]:
-    if include_strings:
-        return occurrences, []
-    visible: list[SearchOccurrenceV1] = []
-    non_code: list[SearchOccurrenceV1] = []
-    for row in occurrences:
-        if is_non_code_occurrence(row.category):
-            non_code.append(row)
-        else:
-            visible.append(row)
-    return visible, non_code
-
-
-def _build_followups_section(
-    matches: list[EnrichedMatch],
-    query: str,
-    mode: QueryMode,
-) -> Section | None:
-    followup_findings = build_followups(matches, query, mode)
-    if not followup_findings:
-        return None
-    return Section(title="Suggested Follow-ups", findings=followup_findings)
 
 
 def _build_search_context(request: SearchRequest) -> SearchConfig:
@@ -992,11 +590,15 @@ def _build_cross_language_diagnostics_for_search(
     python_matches: int,
     rust_matches: int,
 ) -> list[Finding]:
-    return build_cross_language_diagnostics(
+    from tools.cq.search.pipeline.smart_search_summary import (
+        _build_cross_language_diagnostics_for_search as _build_diagnostics,
+    )
+
+    return _build_diagnostics(
+        query=query,
         lang_scope=lang_scope,
         python_matches=python_matches,
         rust_matches=rust_matches,
-        python_oriented=is_python_oriented_query_text(query),
     )
 
 
@@ -1004,57 +606,21 @@ def _build_capability_diagnostics_for_search(
     *,
     lang_scope: QueryLanguageScope,
 ) -> list[Finding]:
-    from tools.cq.search.semantic.diagnostics import build_capability_diagnostics
-
-    return build_capability_diagnostics(
-        features=["pattern_query"],
-        lang_scope=lang_scope,
+    from tools.cq.search.pipeline.smart_search_summary import (
+        _build_capability_diagnostics_for_search as _build_capability_diagnostics,
     )
+
+    return _build_capability_diagnostics(lang_scope=lang_scope)
 
 
 def _build_tree_sitter_runtime_diagnostics(
     telemetry: dict[str, object],
 ) -> list[Finding]:
-    python_bucket = telemetry.get("python")
-    if not isinstance(python_bucket, dict):
-        return []
-    runtime = python_bucket.get("query_runtime")
-    if not isinstance(runtime, dict):
-        return []
-    did_exceed = int(runtime.get("did_exceed_match_limit", 0) or 0)
-    cancelled = int(runtime.get("cancelled", 0) or 0)
-    findings: list[Finding] = []
-    if did_exceed > 0:
-        findings.append(
-            Finding(
-                category="tree_sitter_runtime",
-                message=f"tree-sitter match limit exceeded on {did_exceed} anchors",
-                severity="warning",
-                details=DetailPayload(
-                    kind="tree_sitter_runtime",
-                    data={
-                        "reason": "did_exceed_match_limit",
-                        "count": did_exceed,
-                    },
-                ),
-            )
-        )
-    if cancelled > 0:
-        findings.append(
-            Finding(
-                category="tree_sitter_runtime",
-                message=f"tree-sitter query cancelled on {cancelled} anchors",
-                severity="warning",
-                details=DetailPayload(
-                    kind="tree_sitter_runtime",
-                    data={
-                        "reason": "cancelled",
-                        "count": cancelled,
-                    },
-                ),
-            )
-        )
-    return findings
+    from tools.cq.search.pipeline.smart_search_summary import (
+        _build_tree_sitter_runtime_diagnostics as _build_runtime_diagnostics,
+    )
+
+    return _build_runtime_diagnostics(telemetry)
 
 
 def _build_search_summary(
@@ -1066,81 +632,18 @@ def _build_search_summary(
     python_semantic_telemetry: dict[str, object],
     python_semantic_diagnostics: list[dict[str, object]],
 ) -> tuple[dict[str, object], list[Finding]]:
-    language_stats: dict[QueryLanguage, SearchStats] = {
-        result.lang: result.stats for result in partition_results
-    }
-    patterns = {result.lang: result.pattern for result in partition_results}
-    merged_stats = SearchStats(
-        scanned_files=sum(stat.scanned_files for stat in language_stats.values()),
-        matched_files=sum(stat.matched_files for stat in language_stats.values()),
-        total_matches=sum(stat.total_matches for stat in language_stats.values()),
-        scanned_files_is_estimate=any(
-            stat.scanned_files_is_estimate for stat in language_stats.values()
-        ),
-        truncated=any(stat.truncated for stat in language_stats.values()),
-        timed_out=any(stat.timed_out for stat in language_stats.values()),
-        max_files_hit=any(stat.max_files_hit for stat in language_stats.values()),
-        max_matches_hit=any(stat.max_matches_hit for stat in language_stats.values()),
+    from tools.cq.search.pipeline.smart_search_summary import (
+        build_search_summary as _build_search_summary_v2,
     )
-    summary_inputs = SearchSummaryInputs(
-        config=ctx,
-        stats=merged_stats,
-        matches=enriched_matches,
-        languages=tuple(expand_language_scope(ctx.lang_scope)),
-        language_stats=language_stats,
-        file_globs=file_globs_for_scope(ctx.lang_scope),
-        limit=ctx.limits.max_total_matches,
-        pattern=patterns.get("python") or next(iter(patterns.values()), None),
+
+    return _build_search_summary_v2(
+        ctx,
+        partition_results,
+        enriched_matches,
+        python_semantic_overview=python_semantic_overview,
+        python_semantic_telemetry=python_semantic_telemetry,
+        python_semantic_diagnostics=python_semantic_diagnostics,
     )
-    summary = build_summary(summary_inputs)
-    dropped_by_scope = {
-        result.lang: result.dropped_by_scope
-        for result in partition_results
-        if result.dropped_by_scope > 0
-    }
-    python_matches = sum(1 for match in enriched_matches if is_python_language(match.language))
-    rust_matches = sum(1 for match in enriched_matches if is_rust_language(match.language))
-    diagnostics = _build_cross_language_diagnostics_for_search(
-        query=ctx.query,
-        lang_scope=ctx.lang_scope,
-        python_matches=python_matches,
-        rust_matches=rust_matches,
-    )
-    capability_diagnostics = _build_capability_diagnostics_for_search(lang_scope=ctx.lang_scope)
-    all_diagnostics = diagnostics + capability_diagnostics
-    query_pack_lint = lint_search_query_packs()
-    summary["query_pack_lint"] = {
-        "status": query_pack_lint.status,
-        "errors": list(query_pack_lint.errors),
-    }
-    if query_pack_lint.status != "ok":
-        all_diagnostics.append(
-            Finding(
-                category="query_pack_lint",
-                message=f"Query pack lint failed: {len(query_pack_lint.errors)} errors",
-                severity="warning",
-                details=DetailPayload(
-                    kind="query_pack_lint",
-                    data={"errors": list(query_pack_lint.errors)},
-                ),
-            )
-        )
-    enrichment_telemetry = _build_enrichment_telemetry(enriched_matches)
-    all_diagnostics.extend(_build_tree_sitter_runtime_diagnostics(enrichment_telemetry))
-    summary["cross_language_diagnostics"] = diagnostics_to_summary_payload(all_diagnostics)
-    summary["language_capabilities"] = build_language_capabilities(lang_scope=ctx.lang_scope)
-    summary["enrichment_telemetry"] = enrichment_telemetry
-    summary["python_semantic_overview"] = python_semantic_overview
-    summary["python_semantic_telemetry"] = python_semantic_telemetry
-    summary.setdefault(
-        "rust_semantic_telemetry",
-        {"attempted": 0, "applied": 0, "failed": 0, "skipped": 0, "timed_out": 0},
-    )
-    summary["python_semantic_diagnostics"] = python_semantic_diagnostics
-    if dropped_by_scope:
-        summary["dropped_by_scope"] = dropped_by_scope
-    assert_multilang_summary(summary)
-    return summary, all_diagnostics
 
 
 def smart_search(
@@ -1193,7 +696,7 @@ def smart_search(
 
     assemble_started = ms()
     result = SearchPipeline(ctx).assemble(partition_results, assemble_smart_search_result)
-    result.summary.search_stage_timings_ms = {
+    as_search_summary(result.summary).search_stage_timings_ms = {
         "partition": max(0.0, assemble_started - partition_started),
         "assemble": max(0.0, ms() - assemble_started),
         "total": max(0.0, ms() - ctx.started_ms),
@@ -1211,7 +714,7 @@ def assemble_result(assembly: SearchResultAssembly) -> CqResult:
         CqResult: Function return value.
     """
     return SearchPipeline(assembly.context).assemble(
-        cast("list[LanguageSearchResult]", assembly.partition_results),
+        assembly.partition_results,
         assemble_smart_search_result,
     )
 

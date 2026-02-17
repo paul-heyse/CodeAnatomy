@@ -9,12 +9,8 @@ from typing import Annotated, Literal, cast, get_args
 
 import msgspec
 
-from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE_SCOPE,
-    QueryLanguage,
-    QueryLanguageScope,
-    expand_language_scope,
-)
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, expand_language_scope
 
 # Entity types that can be queried
 EntityType = Literal["function", "class", "method", "module", "callsite", "import", "decorator"]

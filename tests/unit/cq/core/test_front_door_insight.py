@@ -4,13 +4,6 @@ from __future__ import annotations
 
 import msgspec
 from tools.cq.core.front_door_assembly import (
-    CallsInsightBuildRequestV1,
-    EntityInsightBuildRequestV1,
-    FrontDoorInsightV1,
-    InsightConfidenceV1,
-    InsightLocationV1,
-    InsightRiskCountersV1,
-    SearchInsightBuildRequestV1,
     attach_artifact_refs,
     attach_neighborhood_overflow_ref,
     augment_insight_with_semantic,
@@ -18,12 +11,23 @@ from tools.cq.core.front_door_assembly import (
     build_entity_insight,
     build_neighborhood_from_slices,
     build_search_insight,
-    coerce_front_door_insight,
     mark_partial_for_missing_languages,
+)
+from tools.cq.core.front_door_contracts import (
+    CallsInsightBuildRequestV1,
+    EntityInsightBuildRequestV1,
+    FrontDoorInsightV1,
+    InsightConfidenceV1,
+    InsightLocationV1,
+    InsightRiskCountersV1,
+    SearchInsightBuildRequestV1,
+)
+from tools.cq.core.front_door_render import (
+    coerce_front_door_insight,
     render_insight_card,
-    risk_from_counters,
     to_public_front_door_insight_dict,
 )
+from tools.cq.core.front_door_risk import risk_from_counters
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails
 from tools.cq.core.semantic_contracts import (
     SemanticContractStateInputV1,

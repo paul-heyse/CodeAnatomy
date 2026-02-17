@@ -11,9 +11,10 @@ from tools.cq.core.contracts import (
     summary_contract_to_mapping,
 )
 from tools.cq.core.contracts_constraints import enforce_mapping_constraints
-from tools.cq.core.summary_contract import CqSummary
+from tools.cq.core.summary_contract import SummaryEnvelopeV1
 from tools.cq.core.summary_contracts import build_summary_envelope, summary_envelope_to_mapping
-from tools.cq.query.language import QueryLanguage, QueryLanguageScope, expand_language_scope
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+from tools.cq.query.language import expand_language_scope
 from tools.cq.search._shared.search_contracts import (
     LanguagePartitionStats,
     SearchSummaryContract,
@@ -115,7 +116,7 @@ def _coerce_enrichment_telemetry(
 
 
 def partition_stats_from_result_summary(
-    summary: CqSummary | Mapping[str, object],
+    summary: SummaryEnvelopeV1 | Mapping[str, object],
     *,
     fallback_matches: int = 0,
 ) -> dict[str, object]:
@@ -126,7 +127,7 @@ def partition_stats_from_result_summary(
     dict[str, object]
         Stable per-language stats map.
     """
-    summary_map = summary.to_dict() if isinstance(summary, CqSummary) else summary
+    summary_map = summary.to_dict() if isinstance(summary, SummaryEnvelopeV1) else summary
 
     files_scanned = _coerce_int(summary_map.get("files_scanned"), 0)
     if files_scanned == 0:

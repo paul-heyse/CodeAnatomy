@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from tools.cq.core.locations import line_relative_byte_range_to_absolute
-from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE,
-    QueryLanguage,
-    is_python_language,
-    is_rust_language,
-)
+from tools.cq.core.types import QueryLanguage
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, is_python_language, is_rust_language
 from tools.cq.search._shared.core import PythonByteRangeEnrichmentRequest
 from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
@@ -68,6 +65,19 @@ _TREE_SITTER_QUERY_BUDGET_FALLBACK_MS = budget_ms_per_anchor(
     timeout_seconds=INTERACTIVE.timeout_seconds,
     max_anchors=INTERACTIVE.max_total_matches,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class MatchClassificationRequestV1:
+    """Input contract for node/record-backed match classification resolution."""
+
+    raw: RawMatch
+    file_path: Path
+    heuristic: HeuristicResult
+    root: Path
+    lang: QueryLanguage
+    cache_context: ClassifierCacheContext
+    resolved_python: ResolvedNodeContext | None = None
 
 
 def _merged_classify_options(
@@ -134,13 +144,15 @@ def classify_match(
         else None
     )
     classification = _resolve_match_classification(
-        raw,
-        file_path,
-        heuristic,
-        root,
-        lang=lang,
-        resolved_python=resolved_python,
-        cache_context=cache_context,
+        MatchClassificationRequestV1(
+            raw=raw,
+            file_path=file_path,
+            heuristic=heuristic,
+            root=root,
+            lang=lang,
+            cache_context=cache_context,
+            resolved_python=resolved_python,
+        )
     )
     symtable_enrichment = _maybe_symtable_enrichment(
         file_path,
@@ -234,42 +246,36 @@ def _build_heuristic_enriched(
     )
 
 
-def _resolve_match_classification(
-    raw: RawMatch,
-    file_path: Path,
-    heuristic: HeuristicResult,
-    root: Path,
-    *,
-    lang: QueryLanguage,
-    resolved_python: ResolvedNodeContext | None = None,
-    cache_context: ClassifierCacheContext,
-) -> ClassificationResult:
-    lang_suffixes = {".py", ".pyi"} if is_python_language(lang) else {".rs"}
-    if file_path.suffix not in lang_suffixes:
+def _resolve_match_classification(request: MatchClassificationRequestV1) -> ClassificationResult:
+    lang_suffixes = {".py", ".pyi"} if is_python_language(request.lang) else {".rs"}
+    if request.file_path.suffix not in lang_suffixes:
         return _classification_from_heuristic(
-            heuristic, default_confidence=0.4, evidence_kind="rg_only"
+            request.heuristic, default_confidence=0.4, evidence_kind="rg_only"
         )
 
     ast_result = _classify_from_node(
-        file_path,
-        raw,
-        lang=lang,
-        resolved_python=resolved_python,
-        cache_context=cache_context,
+        request.file_path,
+        request.raw,
+        lang=request.lang,
+        resolved_python=request.resolved_python,
+        cache_context=request.cache_context,
     )
     if ast_result is None:
         ast_result = classify_from_records(
-            file_path,
-            root,
-            raw.line,
-            raw.col,
-            lang=lang,
-            cache_context=cache_context,
+            request.file_path,
+            request.root,
+            request.raw.line,
+            request.raw.col,
+            lang=request.lang,
+            cache_context=request.cache_context,
         )
     if ast_result is not None:
         return _classification_from_node(ast_result)
-    if heuristic.category is not None:
-        return _classification_from_heuristic(heuristic, default_confidence=heuristic.confidence)
+    if request.heuristic.category is not None:
+        return _classification_from_heuristic(
+            request.heuristic,
+            default_confidence=request.heuristic.confidence,
+        )
     return _default_classification()
 
 

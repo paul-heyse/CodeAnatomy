@@ -9,7 +9,10 @@ import msgspec
 
 from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import build_scope_hash
-from tools.cq.core.cache.snapshot_fingerprint import build_scope_snapshot_fingerprint
+from tools.cq.core.cache.snapshot_fingerprint import (
+    ScopeSnapshotBuildRequestV1,
+    build_scope_snapshot_fingerprint,
+)
 from tools.cq.core.structs import CqStruct
 
 
@@ -72,13 +75,15 @@ def resolve_scope(
         }
     )
     snapshot = build_scope_snapshot_fingerprint(
-        root=resolved_root,
+        request=ScopeSnapshotBuildRequestV1(
+            root=resolved_root,
+            files=tuple(files),
+            language=plan.language,
+            scope_globs=tuple(globs),
+            scope_roots=tuple(Path(item) for item in scope_roots),
+            inventory_token=token,
+        ),
         backend=backend,
-        files=files,
-        language=plan.language,
-        scope_globs=globs,
-        scope_roots=[Path(item) for item in scope_roots],
-        inventory_token=token,
     )
     return ScopeResolutionV1(
         root=str(resolved_root),

@@ -24,9 +24,9 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     Returns:
         CqResult: Query result payload.
     """
-    from tools.cq.query.executor import execute_pattern_query_with_files as _execute_with_files
+    from tools.cq.query.executor import execute_pattern_query_with_files
 
-    return _execute_with_files(request)
+    return execute_pattern_query_with_files(request)
 
 
 __all__ = ["execute_pattern_query", "execute_pattern_query_with_files"]

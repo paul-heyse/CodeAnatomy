@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.schema import DetailPayload, Finding
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 from tools.cq.orchestration.multilang_summary import (
     assert_multilang_summary,
     build_multilang_summary,
 )
 from tools.cq.query.language import (
-    QueryLanguage,
-    QueryLanguageScope,
     expand_language_scope,
     file_globs_for_scope,
     is_python_language,

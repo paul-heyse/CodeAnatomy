@@ -1,4 +1,4 @@
-# ruff: noqa: D103, INP001
+# ruff: noqa: D103
 """Tests for DataFusion profile/location convenience accessors."""
 
 from __future__ import annotations

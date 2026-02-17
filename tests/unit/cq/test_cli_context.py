@@ -5,9 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tools.cq.cli_app.context import CliContext, CliResult, CliTextResult, FilterConfig
+from tools.cq.cli_app.context import (
+    CliContext,
+    CliContextOptions,
+    CliResult,
+    CliTextResult,
+    FilterConfig,
+)
 
 EXPLICIT_EXIT_CODE = 42
+VERBOSE_LEVEL = 2
 
 
 class TestFilterConfig:
@@ -87,6 +94,20 @@ class TestCliContext:
         assert injected.toolchain is built.toolchain
         assert injected.services is built.services
         assert injected.argv == ["custom"]
+
+    @staticmethod
+    def test_from_parts_applies_options_bundle(tmp_path: Path) -> None:
+        """Test from_parts receives optional runtime settings via options object."""
+        built = CliContext.build(argv=["seed"], root=tmp_path)
+        injected = CliContext.from_parts(
+            root=tmp_path,
+            toolchain=built.toolchain,
+            services=built.services,
+            argv=["custom"],
+            options=CliContextOptions(verbose=VERBOSE_LEVEL, save_artifact=False),
+        )
+        assert injected.verbose == VERBOSE_LEVEL
+        assert injected.save_artifact is False
 
 
 class TestCliResult:

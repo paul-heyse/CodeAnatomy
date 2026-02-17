@@ -2,20 +2,158 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import cast
 
 import msgspec
 
 from tools.cq.core.contracts_constraints import enforce_mapping_constraints
-from tools.cq.core.schema import CqResult
+from tools.cq.core.schema import Artifact, CqResult, Finding, RunMeta, Section
+from tools.cq.core.summary_contract import (
+    SummaryVariantName,
+    resolve_summary_variant_name,
+    summary_class_for_variant,
+    summary_from_mapping,
+)
+
+_RUN_SUMMARY_HINTS = frozenset({"plan_version", "plan"})
+_NEIGHBORHOOD_SUMMARY_HINTS = frozenset(
+    {
+        "target_resolution_kind",
+        "top_k",
+        "enable_semantic_enrichment",
+        "bundle_id",
+        "semantic_health",
+        "semantic_quiescent",
+        "semantic_position_encoding",
+        "total_slices",
+        "total_diagnostics",
+        "total_nodes",
+        "total_edges",
+    }
+)
+_CALLS_SUMMARY_HINTS = frozenset(
+    {
+        "signature",
+        "total_sites",
+        "files_with_calls",
+        "total_py_files",
+        "candidate_files",
+        "rg_candidates",
+        "fallback_count",
+        "call_records",
+    }
+)
+_IMPACT_SUMMARY_HINTS = frozenset(
+    {
+        "parameter",
+        "new_signature",
+        "taint_sites",
+        "max_depth",
+        "functions_analyzed",
+        "callers_found",
+        "would_break",
+        "ambiguous",
+        "ok",
+        "call_sites",
+    }
+)
+
+
+def _infer_summary_variant(
+    summary_mapping: Mapping[str, object],
+    *,
+    macro: str | None,
+) -> SummaryVariantName:
+    keys = {key for key in summary_mapping if isinstance(key, str)}
+    if keys & _NEIGHBORHOOD_SUMMARY_HINTS:
+        return "neighborhood"
+    if keys & _RUN_SUMMARY_HINTS:
+        return "run"
+    if keys & _IMPACT_SUMMARY_HINTS:
+        return "impact"
+    if keys & _CALLS_SUMMARY_HINTS:
+        return "calls"
+    return resolve_summary_variant_name(
+        mode=summary_mapping.get("mode"),
+        explicit=summary_mapping.get("summary_variant"),
+        macro=macro,
+    )
+
+
+def _normalize_summary_mapping(
+    summary_mapping: Mapping[str, object],
+    *,
+    macro: str | None,
+) -> Mapping[str, object]:
+    variant = _infer_summary_variant(summary_mapping, macro=macro)
+    allowed_fields = set(summary_class_for_variant(variant).__struct_fields__)
+    normalized = {
+        key: value
+        for key, value in summary_mapping.items()
+        if isinstance(key, str) and key in allowed_fields
+    }
+    normalized["summary_variant"] = variant
+    return cast("Mapping[str, object]", normalized)
+
 
 JSON_ENCODER = msgspec.json.Encoder(order="deterministic")
 JSON_DECODER = msgspec.json.Decoder(strict=True)
-JSON_RESULT_DECODER = msgspec.json.Decoder(type=CqResult, strict=True)
+JSON_RESULT_DECODER = msgspec.json.Decoder(type=object, strict=True)
 MSGPACK_ENCODER = msgspec.msgpack.Encoder()
 MSGPACK_DECODER = msgspec.msgpack.Decoder(type=object)
-MSGPACK_RESULT_DECODER = msgspec.msgpack.Decoder(type=CqResult)
+MSGPACK_RESULT_DECODER = msgspec.msgpack.Decoder(type=object)
+
+
+def _decode_result_payload(payload: object) -> CqResult:
+    if not isinstance(payload, Mapping):
+        msg = f"Expected CqResult payload mapping, got {type(payload).__name__}"
+        raise TypeError(msg)
+
+    run = msgspec.convert(payload.get("run"), type=RunMeta, strict=True)
+    key_findings = msgspec.convert(
+        payload.get("key_findings", ()),
+        type=list[Finding],
+        strict=True,
+    )
+    evidence = msgspec.convert(
+        payload.get("evidence", ()),
+        type=list[Finding],
+        strict=True,
+    )
+    sections = msgspec.convert(
+        payload.get("sections", ()),
+        type=list[Section],
+        strict=True,
+    )
+    artifacts = msgspec.convert(
+        payload.get("artifacts", ()),
+        type=list[Artifact],
+        strict=True,
+    )
+
+    summary_raw = payload.get("summary")
+    if summary_raw is None:
+        summary = summary_from_mapping(None)
+    elif isinstance(summary_raw, Mapping):
+        summary = summary_from_mapping(
+            _normalize_summary_mapping(
+                cast("Mapping[str, object]", summary_raw),
+                macro=run.macro if isinstance(run.macro, str) else None,
+            )
+        )
+    else:
+        msg = f"Expected summary mapping, got {type(summary_raw).__name__}"
+        raise TypeError(msg)
+
+    return CqResult(
+        run=run,
+        summary=summary,
+        key_findings=key_findings,
+        evidence=evidence,
+        sections=sections,
+        artifacts=artifacts,
+    )
 
 
 def encode_json(value: object, *, indent: int | None = None) -> str:
@@ -49,7 +187,7 @@ def decode_json_result(payload: bytes | str) -> CqResult:
     """
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
-    return JSON_RESULT_DECODER.decode(payload)
+    return _decode_result_payload(JSON_RESULT_DECODER.decode(payload))
 
 
 def encode_msgpack(value: object) -> bytes:
@@ -76,7 +214,7 @@ def decode_msgpack_result(payload: bytes | bytearray | memoryview) -> CqResult:
     Returns:
         CqResult: Function return value.
     """
-    return MSGPACK_RESULT_DECODER.decode(payload)
+    return _decode_result_payload(MSGPACK_RESULT_DECODER.decode(payload))
 
 
 def to_contract_builtins(value: object) -> object:

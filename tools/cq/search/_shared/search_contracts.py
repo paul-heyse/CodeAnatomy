@@ -9,7 +9,7 @@ import msgspec
 
 from tools.cq.core.contract_codec import to_public_dict
 from tools.cq.core.structs import CqOutputStruct, CqStrictOutputStruct
-from tools.cq.query.language import QueryLanguage, QueryLanguageScope
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 
 Severity = Literal["info", "warning", "error"]
 

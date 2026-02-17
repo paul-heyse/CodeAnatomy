@@ -13,13 +13,26 @@ from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.dataset.resolution import DatasetResolution
 from datafusion_engine.delta import service as delta_service
 from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
+from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.delta.store_policy import DeltaStorePolicy
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_ops import bind_delta_service
 from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
 from storage.deltalake.delta_read import DeltaReadRequest
 
 DELTA_VERSION = 7
 FINGERPRINT_LENGTH = 16
+
+
+def _bound_profile(*, policy: DeltaStorePolicy | None = None) -> DataFusionRuntimeProfile:
+    policies = (
+        PolicyBundleConfig(delta_store_policy=policy)
+        if policy is not None
+        else PolicyBundleConfig()
+    )
+    profile = DataFusionRuntimeProfile(policies=policies)
+    bind_delta_service(profile, service=DeltaService(profile=profile))
+    return profile
 
 
 def test_delta_service_table_version_resolves_store_policy(
@@ -46,7 +59,7 @@ def test_delta_service_table_version_resolves_store_policy(
         storage_options={"policy": "1"},
         log_storage_options={"log": "1"},
     )
-    profile = DataFusionRuntimeProfile(policies=PolicyBundleConfig(delta_store_policy=policy))
+    profile = _bound_profile(policy=policy)
     service = profile.delta_service()
 
     version = service.table_version(
@@ -75,7 +88,7 @@ def test_delta_service_read_table_attaches_runtime_profile(
     monkeypatch.setattr(delta_service, "read_delta_table_eager", _fake_read_delta_table)
 
     policy = DeltaStorePolicy(storage_options={"policy": "1"}, log_storage_options={"log": "1"})
-    profile = DataFusionRuntimeProfile(policies=PolicyBundleConfig(delta_store_policy=policy))
+    profile = _bound_profile(policy=policy)
     service = profile.delta_service()
 
     request = DeltaReadRequest(
@@ -93,7 +106,7 @@ def test_delta_service_read_table_attaches_runtime_profile(
 
 def test_delta_service_provider_artifact_payload_includes_canonical_fields() -> None:
     """Provider artifact payloads should include canonical snapshot identity metadata."""
-    profile = DataFusionRuntimeProfile()
+    profile = _bound_profile()
     service = profile.delta_service()
     location = DatasetLocation(
         path="s3a://Example-Bucket/path/table",

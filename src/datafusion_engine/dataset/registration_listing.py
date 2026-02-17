@@ -11,13 +11,38 @@ import pyarrow.dataset as ds
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.dataset import registration_core as _core
+from arrow_utils.core.ordering import OrderingLevel
+from datafusion_engine.arrow.metadata import ordering_from_schema, schema_constraints_from_metadata
 from datafusion_engine.dataset.registration_core import (
-    _DDL_IDENTIFIER_RE,
-    _ExternalTableDdlRequest,
-    _resolve_dataset_caches,
-    _sql_type_name,
+    DDL_IDENTIFIER_RE as _DDL_IDENTIFIER_RE,
 )
+from datafusion_engine.dataset.registration_core import (
+    ExternalTableDdlRequest as _ExternalTableDdlRequest,
+)
+from datafusion_engine.dataset.registration_core import (
+    invalidate_information_schema_cache as _invalidate_information_schema_cache,
+)
+from datafusion_engine.dataset.registration_core import (
+    resolve_dataset_caches as _resolve_dataset_caches,
+)
+from datafusion_engine.dataset.registration_core import (
+    sql_type_name as _sql_type_name,
+)
+from datafusion_engine.dataset.registration_projection import (
+    _apply_projection_exprs,
+    _projection_exprs_for_schema,
+    _sql_literal_for_field,
+)
+from datafusion_engine.dataset.registration_provider import (
+    TableProviderArtifact as _TableProviderArtifact,
+)
+from datafusion_engine.dataset.registration_provider import (
+    record_table_provider_artifact as _record_table_provider_artifact,
+)
+from datafusion_engine.dataset.registration_provider import (
+    update_table_provider_fingerprints as _update_table_provider_fingerprints,
+)
+from datafusion_engine.dataset.registration_validation import _expected_column_defaults
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.sql.options import sql_options_for_profile
 from datafusion_engine.tables.registration import (
@@ -115,13 +140,11 @@ def _ddl_schema_components(
         fields.append(pa.field(name, dtype, nullable=False))
         field_names.add(name)
     merged_schema = pa.schema(fields, metadata=schema.metadata)
-    required_non_null, key_fields = _core.schema_constraints_from_metadata(schema.metadata)
+    required_non_null, key_fields = schema_constraints_from_metadata(schema.metadata)
     if partition_cols:
         required_non_null = tuple(
             dict.fromkeys([*required_non_null, *(name for name, _ in partition_cols)])
         )
-    from datafusion_engine.dataset.registration_core import _expected_column_defaults
-
     defaults = _expected_column_defaults(merged_schema)
     return (
         merged_schema,
@@ -150,8 +173,6 @@ def _ddl_column_definitions(
             fragments.append("NOT NULL")
         default_value = defaults.get(schema_field.name)
         if default_value is not None:
-            from datafusion_engine.dataset.registration_core import _sql_literal_for_field
-
             literal = _sql_literal_for_field(default_value, dtype=schema_field.type)
             if literal is not None:
                 fragments.append(f"DEFAULT {literal}")
@@ -193,8 +214,8 @@ def _ddl_ordering_keys(
         return scan.file_sort_order
     if merged_schema is None:
         return ()
-    metadata_ordering = _core.ordering_from_schema(merged_schema)
-    if metadata_ordering.level == _core.OrderingLevel.EXPLICIT and metadata_ordering.keys:
+    metadata_ordering = ordering_from_schema(merged_schema)
+    if metadata_ordering.level == OrderingLevel.EXPLICIT and metadata_ordering.keys:
         return metadata_ordering.keys
     return ()
 
@@ -321,11 +342,6 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
 
     if context.options.provider == "listing":
         result = _register_listing_authority(context)
-        from datafusion_engine.dataset.registration_core import (
-            _record_table_provider_artifact,
-            _TableProviderArtifact,
-            _update_table_provider_fingerprints,
-        )
 
         _, _, fingerprint_details = _update_table_provider_fingerprints(
             context.ctx,
@@ -352,15 +368,11 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
     scan = context.options.scan
     projection_exprs = scan.projection_exprs if scan is not None else ()
     if not projection_exprs and context.options.schema is not None:
-        from datafusion_engine.dataset.registration_core import _projection_exprs_for_schema
-
         projection_exprs = _projection_exprs_for_schema(
             actual_columns=df.schema().names,
             expected_schema=pa.schema(context.options.schema),
         )
     if projection_exprs:
-        from datafusion_engine.dataset.registration_core import _apply_projection_exprs
-
         df = _apply_projection_exprs(
             context.ctx,
             table_name=context.name,
@@ -368,8 +380,6 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
             sql_options=sql_options_for_profile(context.runtime_profile),
             runtime_profile=context.runtime_profile,
         )
-    from datafusion_engine.dataset.registration_core import _invalidate_information_schema_cache
-
     _invalidate_information_schema_cache(
         context.runtime_profile,
         context.ctx,

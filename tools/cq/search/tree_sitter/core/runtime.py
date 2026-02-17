@@ -112,12 +112,16 @@ def _combined_progress_callback(
 ) -> Callable[[object], bool] | None:
     callback = progress_callback if callable(progress_callback) else None
     has_budget = budget_ms is not None and budget_ms > 0
-    if callback is None and not has_budget:
+    if callback is None:
         return None
     if not has_budget:
         return callback
 
-    deadline = monotonic() + (float(budget_ms) / 1000.0)
+    budget_value = budget_ms
+    if budget_value is None:
+        return callback
+    budget_seconds = float(budget_value) / 1000.0
+    deadline = monotonic() + budget_seconds
 
     def _budget_callback(state: object) -> bool:
         if monotonic() >= deadline:

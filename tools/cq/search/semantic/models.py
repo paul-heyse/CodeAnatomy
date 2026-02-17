@@ -13,7 +13,7 @@ from pathspec import PathSpec
 
 from tools.cq.core.semantic_contracts import SemanticProvider
 from tools.cq.core.structs import CqOutputStruct, CqStruct
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.core import string_or_none as _string
 from tools.cq.search.enrichment.language_registry import get_language_adapter
 

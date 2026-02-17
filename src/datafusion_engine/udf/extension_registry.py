@@ -12,12 +12,14 @@ from datafusion_engine.udf.extension_core import (
     _build_docs_snapshot,
     _build_registry_snapshot,
     _install_rust_udfs,
-    _iter_snapshot_values,
     _notify_udf_snapshot,
     _registered_snapshot,
     _resolve_registries,
-    _snapshot_alias_names,
     _validated_snapshot,
+)
+from datafusion_engine.udf.extension_validation import (
+    _iter_snapshot_values,
+    _snapshot_alias_names,
     validate_rust_udf_snapshot,
 )
 

@@ -211,17 +211,108 @@ class _OverrideDeltaCdfPort:
         )
 
 
+@dataclass(frozen=True)
+class _OverrideOnlyDeltaCdfPort:
+    table_version_fn: DeltaVersionFn
+    cdf_enabled_fn: DeltaCdfEnabledFn
+    read_delta_cdf_fn: CdfTableReader
+
+    def table_version(
+        self,
+        path: str,
+        *,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+    ) -> int | None:
+        return self.table_version_fn(
+            path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+        )
+
+    def cdf_enabled(
+        self,
+        path: str,
+        *,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+    ) -> bool:
+        return self.cdf_enabled_fn(
+            path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+        )
+
+    def read_cdf(
+        self,
+        path: str,
+        *,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+        cdf_options: DeltaCdfOptions | None = None,
+    ) -> TableLike:
+        return self.read_delta_cdf_fn(
+            path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            cdf_options=cdf_options,
+        )
+
+    def fallback_read_cdf(
+        self,
+        path: str,
+        *,
+        storage_options: StorageOptions | None = None,
+        cdf_options: DeltaCdfOptions,
+    ) -> pa.Table:
+        result = self.read_cdf(
+            path,
+            storage_options=storage_options,
+            log_storage_options=None,
+            cdf_options=cdf_options,
+        )
+        if isinstance(result, pa.Table):
+            return result
+        msg = "read_delta_cdf_fn must return a pyarrow.Table for fallback CDF reads."
+        raise TypeError(msg)
+
+
 def _resolve_cdf_port(
     opts: CdfReadOptions,
     *,
-    service_port: DeltaCdfPort,
+    service_port: DeltaCdfPort | None,
 ) -> DeltaCdfPort:
+    if service_port is None:
+        if (
+            opts.delta_table_version_fn is None
+            or opts.delta_cdf_enabled_fn is None
+            or opts.read_delta_cdf_fn is None
+        ):
+            msg = (
+                "CDF reads require an explicit delta_service/runtime_profile, "
+                "or all override functions (delta_table_version_fn, "
+                "delta_cdf_enabled_fn, read_delta_cdf_fn)."
+            )
+            raise ValueError(msg)
+        return _OverrideOnlyDeltaCdfPort(
+            table_version_fn=opts.delta_table_version_fn,
+            cdf_enabled_fn=opts.delta_cdf_enabled_fn,
+            read_delta_cdf_fn=opts.read_delta_cdf_fn,
+        )
     return _OverrideDeltaCdfPort(
         base=service_port,
         table_version_fn=opts.delta_table_version_fn,
         cdf_enabled_fn=opts.delta_cdf_enabled_fn,
         read_delta_cdf_fn=opts.read_delta_cdf_fn,
     )
+
+
+def _resolve_delta_service(opts: CdfReadOptions) -> DeltaServicePort | None:
+    if opts.delta_service is not None:
+        return opts.delta_service
+    if opts.runtime_profile is None:
+        return None
+    return opts.runtime_profile.delta_ops.delta_service()
 
 
 def read_cdf_changes(
@@ -246,9 +337,13 @@ def read_cdf_changes(
     options
         Optional read options including version range, cursor tracking,
         storage options, and column/predicate filters. If not provided,
-        defaults are used (start from version 0, read to latest).
-        Validation may raise ``ValueError`` if ``cursor_store`` is set
-        without ``dataset_name``.
+        defaults are used (start from version 0, read to latest). Callers
+        must provide one of:
+        - ``runtime_profile`` with a bound ``DeltaServicePort``
+        - explicit ``delta_service``
+        - all override functions (for tests)
+        Validation may raise ``ValueError`` if required dependencies are
+        missing or when ``cursor_store`` is set without ``dataset_name``.
 
     Returns:
     -------
@@ -285,13 +380,9 @@ def read_cdf_changes(
     opts = options or CdfReadOptions()
     _validate_cdf_options(opts)
 
-    runtime_profile = opts.runtime_profile
-    if runtime_profile is None:
-        from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-        runtime_profile = DataFusionRuntimeProfile()
-    service = opts.delta_service or runtime_profile.delta_ops.delta_service()
-    port = _resolve_cdf_port(opts, service_port=DeltaServiceCdfPort(service))
+    service = _resolve_delta_service(opts)
+    service_port = DeltaServiceCdfPort(service) if service is not None else None
+    port = _resolve_cdf_port(opts, service_port=service_port)
     arrow_to_df = opts.arrow_table_to_dataframe_fn or _arrow_table_to_dataframe
     resolved_start = _resolve_start_version(
         start_version=opts.start_version,

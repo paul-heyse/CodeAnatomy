@@ -77,6 +77,18 @@ class EntityKindRegistry(msgspec.Struct, frozen=True):
         """Kinds that can carry decorators."""
         return self.function_kinds | self.class_kinds
 
+    def _kind_matcher_map(self) -> dict[str, frozenset[str] | str | None]:
+        return {
+            "function": self.function_kinds,
+            "method": self.function_kinds,
+            "class": self.class_kinds,
+            "import": self.import_kinds,
+            "decorator": self.decorator_kinds,
+            "module": "module",
+            # Callsite selectors are record_type-gated and accept all call kinds.
+            "callsite": None,
+        }
+
     def matches(self, *, entity_type: str | None, record_kind: str, record_type: str) -> bool:
         """Check whether one scan record matches an entity selector.
 
@@ -89,18 +101,13 @@ class EntityKindRegistry(msgspec.Struct, frozen=True):
             return False
         if record_type not in self.record_types_for_entity(entity_type):
             return False
-        if entity_type in {"function", "method"}:
-            return record_kind in self.function_kinds
-        if entity_type == "class":
-            return record_kind in self.class_kinds
-        if entity_type == "import":
-            return record_kind in self.import_kinds
-        if entity_type == "decorator":
-            return record_kind in self.decorator_kinds
-        if entity_type == "module":
-            return record_kind == "module"
-        if entity_type == "callsite":
+        matcher = self._kind_matcher_map().get(entity_type)
+        if matcher is None:
             return entity_type == "callsite"
+        if isinstance(matcher, frozenset):
+            return record_kind in matcher
+        if isinstance(matcher, str):
+            return record_kind == matcher
         return False
 
 

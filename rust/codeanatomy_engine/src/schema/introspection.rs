@@ -10,7 +10,19 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{DataFusionError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub type SchemaDiff = (Vec<String>, Vec<String>, Vec<(String, DataType, DataType)>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldTypeChange {
+    pub field_name: String,
+    pub old_type: DataType,
+    pub new_type: DataType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaDiff {
+    pub added_fields: Vec<String>,
+    pub removed_fields: Vec<String>,
+    pub changed_fields: Vec<FieldTypeChange>,
+}
 
 /// Compute a BLAKE3 hash of an Arrow schema for drift detection.
 ///
@@ -80,7 +92,7 @@ pub fn hash_arrow_schema(schema: &Schema) -> [u8; 32] {
 
 /// Detect schema differences between two Arrow schemas.
 ///
-/// Returns a tuple of:
+/// Returns a named struct containing:
 /// - Added fields (field names in `new` but not in `old`)
 /// - Removed fields (field names in `old` but not in `new`)
 /// - Type-changed fields (field name, old type, new type)
@@ -102,10 +114,10 @@ pub fn hash_arrow_schema(schema: &Schema) -> [u8; 32] {
 ///     Field::new("email", DataType::Utf8, true),
 /// ]);
 ///
-/// let (added, removed, changed) = schema_diff(&old_schema, &new_schema);
-/// assert_eq!(added, vec!["email".to_string()]);
-/// assert!(removed.is_empty());
-/// assert!(changed.is_empty());
+/// let diff = schema_diff(&old_schema, &new_schema);
+/// assert_eq!(diff.added_fields, vec!["email".to_string()]);
+/// assert!(diff.removed_fields.is_empty());
+/// assert!(diff.changed_fields.is_empty());
 /// ```
 pub fn schema_diff(old: &Schema, new: &Schema) -> SchemaDiff {
     let old_fields: BTreeMap<String, &Field> = old
@@ -138,15 +150,19 @@ pub fn schema_diff(old: &Schema, new: &Schema) -> SchemaDiff {
         if old_field.data_type() != new_field.data_type()
             || old_field.is_nullable() != new_field.is_nullable()
         {
-            changed.push((
-                name.clone(),
-                old_field.data_type().clone(),
-                new_field.data_type().clone(),
-            ));
+            changed.push(FieldTypeChange {
+                field_name: name.clone(),
+                old_type: old_field.data_type().clone(),
+                new_type: new_field.data_type().clone(),
+            });
         }
     }
 
-    (added, removed, changed)
+    SchemaDiff {
+        added_fields: added,
+        removed_fields: removed,
+        changed_fields: changed,
+    }
 }
 
 /// Check if schema evolution is additive-only (safe for Delta append).
@@ -174,13 +190,13 @@ pub fn schema_diff(old: &Schema, new: &Schema) -> SchemaDiff {
 /// assert!(is_additive_evolution(&old_schema, &new_schema));
 /// ```
 pub fn is_additive_evolution(old: &Schema, new: &Schema) -> bool {
-    let (_added, removed, changed) = schema_diff(old, new);
+    let diff = schema_diff(old, new);
 
     // Evolution is additive if:
     // - No fields were removed
     // - No field types were changed
     // - New fields may have been added (allowed)
-    removed.is_empty() && changed.is_empty()
+    diff.removed_fields.is_empty() && diff.changed_fields.is_empty()
 }
 
 /// Generate cast expressions for type-compatible schema alignment.
@@ -373,11 +389,11 @@ mod tests {
             Field::new("name", DataType::Utf8, true),
         ]);
 
-        let (added, removed, changed) = schema_diff(&old_schema, &new_schema);
+        let diff = schema_diff(&old_schema, &new_schema);
 
-        assert_eq!(added, vec!["name".to_string()]);
-        assert!(removed.is_empty());
-        assert!(changed.is_empty());
+        assert_eq!(diff.added_fields, vec!["name".to_string()]);
+        assert!(diff.removed_fields.is_empty());
+        assert!(diff.changed_fields.is_empty());
     }
 
     #[test]
@@ -389,11 +405,11 @@ mod tests {
 
         let new_schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
 
-        let (added, removed, changed) = schema_diff(&old_schema, &new_schema);
+        let diff = schema_diff(&old_schema, &new_schema);
 
-        assert!(added.is_empty());
-        assert_eq!(removed, vec!["name".to_string()]);
-        assert!(changed.is_empty());
+        assert!(diff.added_fields.is_empty());
+        assert_eq!(diff.removed_fields, vec!["name".to_string()]);
+        assert!(diff.changed_fields.is_empty());
     }
 
     #[test]
@@ -402,14 +418,14 @@ mod tests {
 
         let new_schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
 
-        let (added, removed, changed) = schema_diff(&old_schema, &new_schema);
+        let diff = schema_diff(&old_schema, &new_schema);
 
-        assert!(added.is_empty());
-        assert!(removed.is_empty());
-        assert_eq!(changed.len(), 1);
-        assert_eq!(changed[0].0, "id");
-        assert_eq!(changed[0].1, DataType::Int32);
-        assert_eq!(changed[0].2, DataType::Int64);
+        assert!(diff.added_fields.is_empty());
+        assert!(diff.removed_fields.is_empty());
+        assert_eq!(diff.changed_fields.len(), 1);
+        assert_eq!(diff.changed_fields[0].field_name, "id");
+        assert_eq!(diff.changed_fields[0].old_type, DataType::Int32);
+        assert_eq!(diff.changed_fields[0].new_type, DataType::Int64);
     }
 
     #[test]
@@ -418,11 +434,15 @@ mod tests {
 
         let new_schema = Schema::new(vec![Field::new("id", DataType::Int64, true)]);
 
-        let (added, removed, changed) = schema_diff(&old_schema, &new_schema);
+        let diff = schema_diff(&old_schema, &new_schema);
 
-        assert!(added.is_empty());
-        assert!(removed.is_empty());
-        assert_eq!(changed.len(), 1, "Nullability change should be detected");
+        assert!(diff.added_fields.is_empty());
+        assert!(diff.removed_fields.is_empty());
+        assert_eq!(
+            diff.changed_fields.len(),
+            1,
+            "Nullability change should be detected"
+        );
     }
 
     #[test]

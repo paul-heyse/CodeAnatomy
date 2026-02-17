@@ -17,7 +17,9 @@ require_delta_extension()
 
 def test_delta_query_runtime_path(tmp_path: Path) -> None:
     """Ensure delta_query executes through SessionContext table registration."""
+    from datafusion_engine.delta.service import DeltaService
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_ops import bind_delta_service
     from extraction.delta_tools import DeltaQueryRequest, delta_query
 
     table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
@@ -31,6 +33,7 @@ def test_delta_query_runtime_path(tmp_path: Path) -> None:
     )
 
     profile = DataFusionRuntimeProfile()
+    bind_delta_service(profile, service=DeltaService(profile=profile))
 
     def _builder(ctx: SessionContext, table_name: str) -> DataFrame:
         return ctx.table(table_name).filter(col("id") > lit(1))

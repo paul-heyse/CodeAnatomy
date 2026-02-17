@@ -14,7 +14,7 @@ from tools.cq.search.rg.runner import RgFilesWithMatchesRequest, run_rg_files_wi
 
 if TYPE_CHECKING:
     from tools.cq.astgrep.sgpy_scanner import RuleSpec
-    from tools.cq.query.language import QueryLanguageScope
+    from tools.cq.core.types import QueryLanguageScope
 
 _METAVAR_TOKEN_RE = re.compile(r"\${1,3}_?[A-Z][A-Z0-9_]*")
 _MIN_PREFILTER_LITERAL_LEN = 3

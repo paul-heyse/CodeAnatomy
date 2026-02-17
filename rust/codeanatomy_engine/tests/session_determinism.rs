@@ -20,7 +20,7 @@ async fn test_session_envelope_hash_is_deterministic() {
     let envelope_a = SessionEnvelope::capture(
         &state_a.ctx,
         [7u8; 32],
-        ruleset.fingerprint,
+        ruleset.fingerprint(),
         state_a.memory_pool_bytes,
         true,
         state_a.planning_surface_hash,
@@ -35,7 +35,7 @@ async fn test_session_envelope_hash_is_deterministic() {
     let envelope_b = SessionEnvelope::capture(
         &state_b.ctx,
         [7u8; 32],
-        ruleset.fingerprint,
+        ruleset.fingerprint(),
         state_b.memory_pool_bytes,
         true,
         state_b.planning_surface_hash,
@@ -172,7 +172,7 @@ async fn test_envelope_includes_planning_surface_hash() {
     let envelope = SessionEnvelope::capture(
         &state.ctx,
         [0u8; 32],
-        ruleset.fingerprint,
+        ruleset.fingerprint(),
         state.memory_pool_bytes,
         true,
         state.planning_surface_hash,
@@ -251,7 +251,7 @@ async fn test_planning_hash_propagates_to_envelope_and_plan_bundle() {
     let envelope = SessionEnvelope::capture(
         &state.ctx,
         [9u8; 32],
-        ruleset.fingerprint,
+        ruleset.fingerprint(),
         state.memory_pool_bytes,
         true,
         state.planning_surface_hash,
@@ -270,7 +270,7 @@ async fn test_planning_hash_propagates_to_envelope_and_plan_bundle() {
             codeanatomy_engine::compiler::plan_bundle::PlanBundleArtifactBuildRequest {
                 ctx: &state.ctx,
                 runtime: &runtime,
-                rulepack_fingerprint: ruleset.fingerprint,
+                rulepack_fingerprint: ruleset.fingerprint(),
                 provider_identities: vec![],
                 optimizer_traces: vec![],
                 pushdown_report: None,

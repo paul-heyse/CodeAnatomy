@@ -6,7 +6,7 @@ from pathlib import Path
 
 import msgspec
 from tools.cq.core.contracts import MergeResultsRequest
-from tools.cq.core.front_door_assembly import FrontDoorInsightV1, InsightSliceV1, InsightTargetV1
+from tools.cq.core.front_door_contracts import FrontDoorInsightV1, InsightSliceV1, InsightTargetV1
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.schema import CqResult, Finding, RunMeta, Section
 from tools.cq.core.summary_contract import SemanticTelemetryV1, summary_from_mapping

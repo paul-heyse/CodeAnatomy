@@ -1,4 +1,4 @@
-# ruff: noqa: D100, D103, ANN001, ANN002, ANN003, ANN202, INP001
+# ruff: noqa: D100, D103, ANN001, ANN002, ANN003, ANN202
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -7,7 +7,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from hashlib import blake2b
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import msgspec
 
@@ -15,7 +15,7 @@ from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.structs import CqSettingsStruct, CqStruct
 from tools.cq.core.typed_boundary import convert_lax
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from ast_grep_py import SgNode
 
     from tools.cq.search._shared.types import QueryMode, SearchLimits
+    from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 
 
 # Shared core helpers
@@ -44,6 +45,12 @@ _RUNTIME_ONLY_ATTR_NAMES: frozenset[str] = frozenset(
 
 _JSON_ENCODER = msgspec.json.Encoder(order="deterministic")
 _JSON_DECODER = msgspec.json.Decoder(type=dict[str, object])
+
+
+class PythonClassifierSessionLike(Protocol):
+    """Runtime session surface required by Python enrichment extractors."""
+
+    classifier_cache: ClassifierCacheContext
 
 
 def line_col_to_byte_offset(source_bytes: bytes, line: int, col: int) -> int | None:
@@ -205,7 +212,7 @@ class PythonNodeRuntimeV1:
 
     sg_root: object
     node: object
-    session: object | None = None
+    session: PythonClassifierSessionLike | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,7 +221,7 @@ class PythonByteRangeRuntimeV1:
 
     sg_root: object
     resolved_node: object | None = None
-    session: object | None = None
+    session: PythonClassifierSessionLike | None = None
 
 
 # Shared requests
@@ -273,7 +280,7 @@ class PythonNodeEnrichmentRequest(CqStruct, frozen=True):
     byte_start: int | None = None
     byte_end: int | None = None
     query_budget_ms: int | None = None
-    session: object | None = None
+    session: PythonClassifierSessionLike | None = None
 
     def to_settings(self) -> PythonNodeEnrichmentSettingsV1:
         """Return serializable settings subset for transport/cache boundaries."""
@@ -304,7 +311,7 @@ class PythonByteRangeEnrichmentRequest(CqStruct, frozen=True):
     resolved_line: int | None = None
     resolved_col: int | None = None
     query_budget_ms: int | None = None
-    session: object | None = None
+    session: PythonClassifierSessionLike | None = None
 
     def to_settings(self) -> PythonByteRangeEnrichmentSettingsV1:
         """Return serializable settings subset for transport/cache boundaries."""

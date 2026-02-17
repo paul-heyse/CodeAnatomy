@@ -156,7 +156,7 @@ impl CpgMaterializer {
                     .unwrap_or("environment");
                 let span_info = engine_tracing::ExecutionSpanInfo::without_envelope(
                     &compiled_plan.spec_hash(),
-                    &ruleset.fingerprint,
+                    &ruleset.fingerprint(),
                     profile_name,
                 );
                 engine_tracing::execution_span(&span_info, &tracing_config)
@@ -242,21 +242,21 @@ impl CpgMaterializer {
                 capture.capture_rulepack(RulepackSnapshot {
                     profile: format!("{:?}", spec.rulepack_profile),
                     analyzer_rules: ruleset
-                        .analyzer_rules
+                        .analyzer_rules()
                         .iter()
                         .map(|rule| rule.name().to_string())
                         .collect(),
                     optimizer_rules: ruleset
-                        .optimizer_rules
+                        .optimizer_rules()
                         .iter()
                         .map(|rule| rule.name().to_string())
                         .collect(),
                     physical_rules: ruleset
-                        .physical_rules
+                        .physical_rules()
                         .iter()
                         .map(|rule| rule.name().to_string())
                         .collect(),
-                    fingerprint: ruleset.fingerprint,
+                    fingerprint: ruleset.fingerprint(),
                 });
                 let mut config_snapshot = BTreeMap::new();
                 config_snapshot.insert(
@@ -439,7 +439,7 @@ impl CpgMaterializer {
                 &prepared.ctx,
                 &spec,
                 prepared.envelope.envelope_hash,
-                ruleset.fingerprint,
+                ruleset.fingerprint(),
                 prepared.provider_identities.clone(),
                 prepared.envelope.planning_surface_hash,
                 prepared.preflight_warnings.clone(),
@@ -510,7 +510,11 @@ impl CpgMaterializer {
                     },
                     rows_processed,
                 };
-                if let Some(next) = tuner.observe(&metrics) {
+                tuner.record_metrics(&metrics);
+                if let Some(next) = tuner.propose_adjustment() {
+                    if tuner_mode == RuntimeTunerMode::Apply {
+                        tuner.apply_adjustment(next.clone());
+                    }
                     run_result.tuner_hints.push(TuningHint {
                         target_partitions: next.target_partitions,
                         batch_size: next.batch_size,

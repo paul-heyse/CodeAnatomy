@@ -3,6 +3,7 @@ use std::path::Path;
 
 use abi_stable::library::RootModule;
 use datafusion::error::{DataFusionError, Result};
+use df_plugin_common::parse_major;
 
 use df_plugin_api::{
     DfPluginManifestV1, DfPluginMod_Ref, DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR,
@@ -21,17 +22,6 @@ impl PluginHandle {
     pub(crate) fn module(&self) -> &DfPluginMod_Ref {
         &self.module
     }
-}
-
-fn parse_major(version: &str) -> Result<u16> {
-    let Some((major, _)) = version.split_once('.') else {
-        return Err(DataFusionError::Plan(format!(
-            "Invalid version string {version:?}"
-        )));
-    };
-    major
-        .parse::<u16>()
-        .map_err(|err| DataFusionError::Plan(format!("Invalid version string {version:?}: {err}")))
 }
 
 fn validate_manifest(manifest: &DfPluginManifestV1) -> Result<()> {
@@ -65,7 +55,8 @@ fn validate_manifest(manifest: &DfPluginManifestV1) -> Result<()> {
             actual = manifest.df_ffi_major,
         )));
     }
-    let host_datafusion = parse_major(datafusion::DATAFUSION_VERSION)?;
+    let host_datafusion =
+        parse_major(datafusion::DATAFUSION_VERSION).map_err(DataFusionError::Plan)?;
     if manifest.datafusion_major != host_datafusion {
         return Err(DataFusionError::Plan(format!(
             "Plugin DataFusion major mismatch: expected {expected} got {actual}",
@@ -73,7 +64,7 @@ fn validate_manifest(manifest: &DfPluginManifestV1) -> Result<()> {
             actual = manifest.datafusion_major,
         )));
     }
-    let host_arrow = parse_major(arrow::ARROW_VERSION)?;
+    let host_arrow = parse_major(arrow::ARROW_VERSION).map_err(DataFusionError::Plan)?;
     if manifest.arrow_major != host_arrow {
         return Err(DataFusionError::Plan(format!(
             "Plugin Arrow major mismatch: expected {expected} got {actual}",
@@ -98,9 +89,9 @@ pub fn load_plugin(path: &Path) -> Result<PluginHandle> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_major;
     use super::validate_manifest;
     use abi_stable::std_types::{RString, RVec};
+    use df_plugin_common::parse_major;
     use df_plugin_api::{DfPluginManifestV1, DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR};
     use std::mem::size_of;
 

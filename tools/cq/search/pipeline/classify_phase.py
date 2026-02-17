@@ -6,7 +6,8 @@ import multiprocessing
 from pathlib import Path
 
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
-from tools.cq.query.language import QueryLanguage, is_path_in_lang_scope
+from tools.cq.core.types import QueryLanguage
+from tools.cq.query.language import is_path_in_lang_scope
 from tools.cq.search.pipeline.classification import classify_match
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.contracts import SearchConfig

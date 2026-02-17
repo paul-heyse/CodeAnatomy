@@ -40,99 +40,7 @@ pub async fn execute_and_materialize(
     output_plans: Vec<(OutputTarget, DataFrame)>,
     lineage: &LineageContext,
 ) -> Result<Vec<MaterializationResult>> {
-    let mut results = Vec::new();
-
-    for (target, df) in output_plans {
-        // Get partition count from physical plan for diagnostics
-        // P0 correction #6: use create_physical_plan(), NOT execution_plan()
-        let plan = df.clone().create_physical_plan().await?;
-        let partition_count = plan.output_partitioning().partition_count();
-
-        // Map MaterializationMode to InsertOp
-        let insert_op = match target.materialization_mode {
-            MaterializationMode::Append => InsertOp::Append,
-            MaterializationMode::Overwrite => InsertOp::Overwrite,
-        };
-        let expected_schema = Arc::new(df.schema().as_arrow().clone());
-        let pre_registered_target = ctx.table(&target.table_name).await.ok();
-        let use_native_delta_writer =
-            target.delta_location.is_some() || pre_registered_target.is_none();
-        if pre_registered_target.is_none() || target.delta_location.is_some() {
-            if pre_registered_target.is_some() && target.delta_location.is_some() {
-                let _ = ctx.deregister_table(&target.table_name)?;
-            }
-            let delta_location = target
-                .delta_location
-                .as_deref()
-                .unwrap_or(target.table_name.as_str());
-            ensure_output_table(ctx, &target.table_name, delta_location, &expected_schema).await?;
-        }
-        let existing_df = match pre_registered_target {
-            Some(df) => Some(df),
-            None => ctx.table(&target.table_name).await.ok(),
-        };
-        if let Some(existing_df) = existing_df {
-            validate_output_schema(existing_df.schema().as_arrow(), expected_schema.as_ref())?;
-        }
-
-        let delta_location = target
-            .delta_location
-            .as_deref()
-            .unwrap_or(target.table_name.as_str());
-        let (rows_written, outcome) = if use_native_delta_writer {
-            let batches = df.collect().await?;
-            let rows_written: u64 = batches.iter().map(|batch| batch.num_rows() as u64).sum();
-            let commit_options = build_delta_commit_options(&target, lineage);
-            datafusion_ext::delta_mutations::delta_write_batches_request(
-                datafusion_ext::delta_mutations::DeltaWriteBatchesRequest {
-                    session_ctx: ctx,
-                    table_uri: delta_location,
-                    storage_options: None,
-                    version: None,
-                    timestamp: None,
-                    batches,
-                    save_mode: match target.materialization_mode {
-                        MaterializationMode::Append => SaveMode::Append,
-                        MaterializationMode::Overwrite => SaveMode::Overwrite,
-                    },
-                    schema_mode_label: None,
-                    partition_columns: if target.partition_by.is_empty() {
-                        None
-                    } else {
-                        Some(target.partition_by.clone())
-                    },
-                    target_file_size: None,
-                    gate: Some(datafusion_ext::DeltaFeatureGate::default()),
-                    commit_options: Some(commit_options),
-                    extra_constraints: None,
-                },
-            )
-            .await
-            .map_err(|err| DataFusionError::External(Box::new(err)))?;
-            (rows_written, read_write_outcome(delta_location).await)
-        } else {
-            let mut write_options = DataFrameWriteOptions::new().with_insert_operation(insert_op);
-            if !target.partition_by.is_empty() {
-                write_options = write_options.with_partition_by(target.partition_by.clone());
-            }
-            let write_result = df.write_table(&target.table_name, write_options).await?;
-            (
-                extract_row_count(&write_result),
-                read_write_outcome(delta_location).await,
-            )
-        };
-
-        results.push(MaterializationResult {
-            table_name: target.table_name.clone(),
-            delta_location: Some(delta_location.to_string()),
-            rows_written,
-            partition_count: partition_count as u32,
-            delta_version: outcome.delta_version,
-            files_added: outcome.files_added,
-            bytes_written: outcome.bytes_written,
-        });
-    }
-
+    let (results, _) = execute_and_materialize_with_plans(ctx, output_plans, lineage).await?;
     Ok(results)
 }
 
@@ -201,8 +109,7 @@ pub async fn execute_and_materialize_with_plans(
                     session_ctx: ctx,
                     table_uri: delta_location,
                     storage_options: None,
-                    version: None,
-                    timestamp: None,
+                    table_version: datafusion_ext::delta_protocol::TableVersion::Latest,
                     batches,
                     save_mode: match target.materialization_mode {
                         MaterializationMode::Append => SaveMode::Append,

@@ -17,7 +17,7 @@ from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
 from cli.context import RunContext
 from cli.groups import admin_group, observability_group, session_group
 from cli.result_action import cli_result_action
-from cli.runtime_services import build_cli_runtime_services
+from cli.runtime_services import CliRuntimeServices, build_cli_runtime_services
 from cli.telemetry import apply_telemetry_config, invoke_with_telemetry
 from cli.validation import validate_config_mutual_exclusion
 from core_types import JsonValue
@@ -282,6 +282,25 @@ def _requires_delta_runtime_services(tokens: tuple[str, ...]) -> bool:
     if not tokens:
         return False
     return tokens[0] in {"delta", "diag", "d"}
+
+
+def _compose_delta_runtime_services() -> CliRuntimeServices:
+    """Compose runtime services for Delta-aware CLI commands.
+
+    Returns:
+        Runtime services bound to a fresh profile and Delta service instance.
+    """
+    from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_ops import bind_delta_service
+
+    runtime_profile = DataFusionRuntimeProfile()
+    delta_service = DeltaService(profile=runtime_profile)
+    bind_delta_service(runtime_profile, service=delta_service)
+    return build_cli_runtime_services(
+        runtime_profile=runtime_profile,
+        delta_service=delta_service,
+    )
 
 
 def _config_str(config: Mapping[str, JsonValue], key: str) -> str | None:
@@ -569,7 +588,9 @@ def meta_launcher(
     effective_run_id = session.run_id or uuid7_str()
     command_tokens = tuple(tokens)
     runtime_services = (
-        build_cli_runtime_services() if _requires_delta_runtime_services(command_tokens) else None
+        _compose_delta_runtime_services()
+        if _requires_delta_runtime_services(command_tokens)
+        else None
     )
     run_context = RunContext(
         run_id=effective_run_id,

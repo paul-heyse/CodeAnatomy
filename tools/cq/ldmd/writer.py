@@ -13,7 +13,7 @@ from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
-    from tools.cq.core.summary_contract import CqSummary
+    from tools.cq.core.summary_contract import SummaryEnvelopeV1
 
 
 def render_ldmd_document(
@@ -282,7 +282,7 @@ def _emit_summary(lines: list[str], result: CqResult) -> None:
         lines.append("")
 
 
-def _extract_insight_artifact_refs(summary: CqSummary) -> dict[str, str]:
+def _extract_insight_artifact_refs(summary: SummaryEnvelopeV1) -> dict[str, str]:
     """Extract artifact refs from front_door_insight summary payload.
 
     Returns:

@@ -15,12 +15,12 @@ from tools.cq.core.semantic_contracts import (
     derive_semantic_contract_state,
 )
 from tools.cq.core.summary_contract import (
-    CqSummary,
     SemanticTelemetryV1,
+    SummaryEnvelopeV1,
     build_semantic_telemetry,
     coerce_semantic_telemetry,
 )
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 from tools.cq.search.pipeline._semantic_helpers import (
     count_mapping_rows as _count_mapping_rows,
 )
@@ -39,7 +39,7 @@ from tools.cq.search.semantic.models import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_assembly import FrontDoorInsightV1
+    from tools.cq.core.front_door_contracts import FrontDoorInsightV1
 
 
 def _payload_coverage_status(payload: dict[str, object]) -> tuple[str | None, str | None]:
@@ -377,7 +377,7 @@ def collect_search_semantic_outcome(
 
 
 def update_search_summary_semantic_telemetry(
-    summary: CqSummary,
+    summary: SummaryEnvelopeV1,
     outcome: _SearchSemanticOutcome,
 ) -> None:
     """Update search summary with semantic enrichment telemetry.
@@ -413,7 +413,7 @@ def update_search_summary_semantic_telemetry(
 
 
 def read_semantic_telemetry(
-    summary: CqSummary,
+    summary: SummaryEnvelopeV1,
     *,
     language: QueryLanguage | None,
 ) -> tuple[int, int, int, int]:
@@ -457,7 +457,7 @@ def read_semantic_telemetry(
     )
 
 
-def derive_semantic_provider_from_summary(summary: CqSummary) -> SemanticProvider:
+def derive_semantic_provider_from_summary(summary: SummaryEnvelopeV1) -> SemanticProvider:
     """Derive semantic provider from summary telemetry.
 
     Parameters
@@ -486,7 +486,7 @@ def derive_semantic_provider_from_summary(summary: CqSummary) -> SemanticProvide
 
 
 def derive_search_semantic_state(
-    summary: CqSummary,
+    summary: SummaryEnvelopeV1,
     outcome: _SearchSemanticOutcome,
 ) -> SemanticContractStateV1:
     """Derive semantic contract state from outcome and summary.
@@ -538,7 +538,7 @@ def apply_search_semantic_insight(
     *,
     ctx: SearchConfig,
     insight: FrontDoorInsightV1,
-    summary: CqSummary,
+    summary: SummaryEnvelopeV1,
     primary_target_finding: Finding | None,
     primary_target_match: EnrichedMatch | None,
 ) -> FrontDoorInsightV1:

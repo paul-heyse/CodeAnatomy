@@ -1,8 +1,10 @@
 //! DataFusion extension for native function registration.
 
 pub mod async_runtime;
+pub mod async_udf_config;
 pub mod compat;
 pub mod config_macros;
+pub mod delta_common;
 pub mod delta_control_plane;
 pub mod delta_maintenance;
 pub mod delta_mutations;
@@ -11,13 +13,17 @@ pub mod delta_protocol;
 pub mod error_conversion;
 pub mod errors;
 pub mod expr_planner;
-pub mod function_factory;
+pub mod function_types;
 pub mod function_rewrite;
 pub mod generated;
 pub mod macros;
+pub mod operator_utils;
 pub mod physical_rules;
 pub mod planner_rules;
+pub mod registry;
 pub mod registry_snapshot;
+pub mod sql_macro_factory;
+pub mod udaf_arg_best;
 pub mod udaf_builtin;
 pub mod udf;
 #[cfg(feature = "async-udf")]
@@ -41,7 +47,7 @@ use datafusion_expr::registry::FunctionRegistry;
 pub fn install_sql_macro_factory_native(ctx: &SessionContext) -> Result<()> {
     let state_ref = ctx.state_ref();
     let mut state = state_ref.write();
-    let new_state = function_factory::with_sql_macro_factory(&state);
+    let new_state = sql_macro_factory::with_sql_macro_factory(&state);
     *state = new_state;
     Ok(())
 }

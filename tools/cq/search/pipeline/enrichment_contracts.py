@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TypeVar
 
 import msgspec
-
-_ContractT = TypeVar("_ContractT")
 
 
 class RustTreeSitterEnrichmentV1(
@@ -50,11 +47,11 @@ def _copy_payload(payload: Mapping[str, object]) -> dict[str, object]:
     return {key: value for key, value in payload.items() if isinstance(key, str)}
 
 
-def _convert_contract(
+def _convert_contract[ContractT](
     raw: object,
     *,
-    contract: type[_ContractT],
-) -> _ContractT | None:
+    contract: type[ContractT],
+) -> ContractT | None:
     if isinstance(raw, contract):
         return raw
     if not isinstance(raw, Mapping):
@@ -70,33 +67,58 @@ def _convert_contract(
 
 
 def wrap_rust_enrichment(
-    payload: Mapping[str, object] | RustTreeSitterEnrichmentV1 | None,
+    payload: object,
 ) -> RustTreeSitterEnrichmentV1 | None:
-    """Wrap raw rust enrichment mapping into a typed contract."""
+    """Wrap rust enrichment payload into a typed contract.
+
+    Returns:
+        Typed enrichment payload or ``None`` when payload is not mapping-like
+        (or cannot be coerced).
+    """
     return _convert_contract(payload, contract=RustTreeSitterEnrichmentV1)
 
 
 def wrap_python_enrichment(
-    payload: Mapping[str, object] | PythonEnrichmentV1 | None,
+    payload: object,
 ) -> PythonEnrichmentV1 | None:
-    """Wrap raw python enrichment mapping into a typed contract."""
+    """Wrap python enrichment payload into a typed contract.
+
+    Returns:
+        Typed enrichment payload or ``None`` when payload is not mapping-like
+        (or cannot be coerced).
+    """
     return _convert_contract(payload, contract=PythonEnrichmentV1)
 
 
 def wrap_python_semantic_enrichment(
-    payload: Mapping[str, object] | PythonSemanticEnrichmentV1 | None,
+    payload: object,
 ) -> PythonSemanticEnrichmentV1 | None:
-    """Wrap raw python-semantic enrichment mapping into a typed contract."""
+    """Wrap python-semantic enrichment payload into a typed contract.
+
+    Returns:
+        Typed enrichment payload or ``None`` when payload is not mapping-like
+        (or cannot be coerced).
+    """
     return _convert_contract(payload, contract=PythonSemanticEnrichmentV1)
 
 
 def rust_enrichment_payload(payload: RustTreeSitterEnrichmentV1 | None) -> dict[str, object]:
+    """Extract rust enrichment payload as a mutable dictionary.
+
+    Returns:
+        Plain mapping payload; empty dictionary when payload is missing.
+    """
     if payload is None:
         return {}
     return dict(payload.payload)
 
 
 def python_enrichment_payload(payload: PythonEnrichmentV1 | None) -> dict[str, object]:
+    """Extract python enrichment payload as a mutable dictionary.
+
+    Returns:
+        Plain mapping payload; empty dictionary when payload is missing.
+    """
     if payload is None:
         return {}
     return dict(payload.payload)
@@ -105,6 +127,11 @@ def python_enrichment_payload(payload: PythonEnrichmentV1 | None) -> dict[str, o
 def python_semantic_enrichment_payload(
     payload: PythonSemanticEnrichmentV1 | None,
 ) -> dict[str, object]:
+    """Extract python semantic enrichment payload as a mutable dictionary.
+
+    Returns:
+        Plain mapping payload; empty dictionary when payload is missing.
+    """
     if payload is None:
         return {}
     return dict(payload.payload)

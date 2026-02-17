@@ -84,11 +84,21 @@ class DeltaQueryRequest:
 def _resolve_runtime_profile(
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFusionRuntimeProfile:
-    if runtime_profile is not None:
-        return runtime_profile
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    if runtime_profile is None:
+        msg = "runtime_profile is required for this operation."
+        raise ValueError(msg)
+    return runtime_profile
 
-    return DataFusionRuntimeProfile()
+
+def _resolve_delta_service(
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    delta_service: DeltaServicePort | None,
+) -> DeltaServicePort:
+    if delta_service is not None:
+        return delta_service
+    profile = _resolve_runtime_profile(runtime_profile)
+    return profile.delta_ops.delta_service()
 
 
 def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
@@ -99,8 +109,11 @@ def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
     DeltaHistorySnapshot
         History and protocol snapshots for the Delta table.
     """
-    profile = _resolve_runtime_profile(request.runtime_profile)
-    service = request.delta_service or profile.delta_ops.delta_service()
+    service = _resolve_delta_service(
+        runtime_profile=request.runtime_profile,
+        delta_service=request.delta_service,
+    )
+    profile = request.runtime_profile
     history = service.history_snapshot(
         path=request.path,
         storage_options=request.storage_options,
@@ -129,16 +142,17 @@ def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
         snapshot=history or {},
         dataset_name=request.dataset,
     )
-    EngineEventRecorder(profile).record_delta_maintenance(
-        dataset=request.dataset,
-        path=request.path,
-        operation="history",
-        extra={
-            "version": version,
-            "history": history,
-            "protocol": protocol,
-        },
-    )
+    if profile is not None:
+        EngineEventRecorder(profile).record_delta_maintenance(
+            dataset=request.dataset,
+            path=request.path,
+            operation="history",
+            extra={
+                "version": version,
+                "history": history,
+                "protocol": protocol,
+            },
+        )
     return snapshot
 
 
@@ -163,8 +177,11 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
             f"{_DELTA_MIN_RETENTION_HOURS} when enforcement is enabled."
         )
         raise ValueError(msg)
-    profile = _resolve_runtime_profile(request.runtime_profile)
-    service = request.delta_service or profile.delta_ops.delta_service()
+    service = _resolve_delta_service(
+        runtime_profile=request.runtime_profile,
+        delta_service=request.delta_service,
+    )
+    profile = request.runtime_profile
     removed = service.vacuum(
         path=request.path,
         options=resolved,
@@ -188,16 +205,17 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
             dry_run=resolved.dry_run,
         )
     )
-    EngineEventRecorder(profile).record_delta_maintenance(
-        dataset=request.dataset,
-        path=request.path,
-        operation="vacuum",
-        extra={
-            "dry_run": resolved.dry_run,
-            "retention_hours": resolved.retention_hours,
-            "removed_files": list(removed),
-        },
-    )
+    if profile is not None:
+        EngineEventRecorder(profile).record_delta_maintenance(
+            dataset=request.dataset,
+            path=request.path,
+            operation="vacuum",
+            extra={
+                "dry_run": resolved.dry_run,
+                "retention_hours": resolved.retention_hours,
+                "removed_files": list(removed),
+            },
+        )
     return result
 
 
@@ -209,18 +227,17 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     RecordBatchReaderLike
         Streaming reader over the query results.
     """
-    profile = request.runtime_profile
-    if profile is None:
-        from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-        profile = DataFusionRuntimeProfile()
+    profile = _resolve_runtime_profile(request.runtime_profile)
+    service = _resolve_delta_service(
+        runtime_profile=profile,
+        delta_service=request.delta_service,
+    )
     storage = dict(request.storage_options or {})
     if request.log_storage_options:
         storage.update({str(key): str(value) for key, value in request.log_storage_options.items()})
     from datafusion_engine.dataset.registry import DatasetLocation
 
     ctx = profile.session_context()
-    service = request.delta_service or profile.delta_ops.delta_service()
     location = DatasetLocation(
         path=request.path,
         format="delta",

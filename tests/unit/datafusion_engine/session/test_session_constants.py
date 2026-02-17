@@ -1,4 +1,4 @@
-# ruff: noqa: D103, INP001, PLR2004
+# ruff: noqa: D103, PLR2004
 """Tests for consolidated session constants."""
 
 from __future__ import annotations

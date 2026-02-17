@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_ops import bind_delta_service
 from tests.test_helpers.arrow_seed import register_arrow_table
 
 if TYPE_CHECKING:
@@ -50,11 +52,10 @@ def write_delta_table(
         Runtime profile, session context, and Delta table path.
     """
     resolved_options = options or DeltaSeedOptions()
-    runtime_profile = (
-        resolved_options.profile
-        if resolved_options.profile is not None
-        else DataFusionRuntimeProfile()
-    )
+    created_profile = resolved_options.profile is None
+    runtime_profile = resolved_options.profile or DataFusionRuntimeProfile()
+    if created_profile:
+        bind_delta_service(runtime_profile, service=DeltaService(profile=runtime_profile))
     ctx = runtime_profile.session_context()
     seed = register_arrow_table(ctx, name="delta_seed", value=table)
     pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)

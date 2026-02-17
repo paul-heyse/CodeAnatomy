@@ -8,7 +8,7 @@ import msgspec
 
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, Section
 from tools.cq.core.structs import CqOutputStruct, CqStruct
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 
 
 class OccurrenceGroundingV1(CqOutputStruct, frozen=True):

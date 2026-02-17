@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from tools.cq.core.schema import CqResult, RunMeta, mk_result
+from tools.cq.core.summary_contract import as_calls_summary
 from tools.cq.macros.rust_fallback_policy import (
     RustFallbackPolicyV1,
     apply_rust_fallback_policy,
@@ -51,7 +52,7 @@ def test_apply_rust_fallback_policy_uses_summary_key(monkeypatch: pytest.MonkeyP
     )
 
     result = _base_result()
-    result.summary["fallback_count"] = FALLBACK_MATCH_COUNT
+    as_calls_summary(result.summary).fallback_count = FALLBACK_MATCH_COUNT
     policy = RustFallbackPolicyV1(
         macro_name="calls",
         pattern="foo\\(",
@@ -94,7 +95,7 @@ def test_apply_rust_fallback_policy_non_int_summary_defaults_zero(
     )
 
     result = _base_result()
-    result.summary["fallback_count"] = "7"
+    as_calls_summary(result.summary).fallback_count = "7"  # type: ignore[assignment]
     policy = RustFallbackPolicyV1(
         macro_name="calls",
         pattern="foo\\(",

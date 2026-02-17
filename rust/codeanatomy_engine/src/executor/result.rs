@@ -1,8 +1,9 @@
 //! Result envelope types for execution outcomes.
 //!
-//! Two-layer determinism contract:
+//! Three-layer determinism contract:
 //! - spec_hash: execution spec identity
-//! - envelope_hash: input data identity
+//! - envelope_hash: session/input identity
+//! - rulepack_fingerprint: rule configuration identity
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use crate::executor::maintenance::MaintenanceReport;
 use crate::executor::metrics_collector::{CollectedMetrics, TraceMetricsSummary};
 use crate::executor::warnings::RunWarning;
 
-/// Compact result envelope containing both determinism layers.
+/// Compact result envelope containing all determinism layers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
     pub outputs: Vec<MaterializationResult>,
@@ -56,11 +57,12 @@ pub struct MaterializationResult {
     pub bytes_written: Option<u64>,
 }
 
-/// Two-layer determinism contract.
+/// Three-layer determinism contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeterminismContract {
     pub spec_hash: [u8; 32],
     pub envelope_hash: [u8; 32],
+    pub rulepack_fingerprint: [u8; 32],
 }
 
 /// Runtime tuning hint emitted after execution.
@@ -73,9 +75,11 @@ pub struct TuningHint {
 }
 
 impl DeterminismContract {
-    /// A replay is valid iff both spec_hash AND envelope_hash match.
+    /// A replay is valid iff spec hash, envelope hash, and rulepack fingerprint match.
     pub fn is_replay_valid(&self, original: &DeterminismContract) -> bool {
-        self.spec_hash == original.spec_hash && self.envelope_hash == original.envelope_hash
+        self.spec_hash == original.spec_hash
+            && self.envelope_hash == original.envelope_hash
+            && self.rulepack_fingerprint == original.rulepack_fingerprint
     }
 }
 
@@ -90,6 +94,7 @@ impl RunResult {
         DeterminismContract {
             spec_hash: self.spec_hash,
             envelope_hash: self.envelope_hash,
+            rulepack_fingerprint: self.rulepack_fingerprint,
         }
     }
 

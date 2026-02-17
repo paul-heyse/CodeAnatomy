@@ -92,25 +92,23 @@ class CliContext(CqStruct, frozen=True):
         toolchain: Toolchain,
         services: CqRuntimeServices,
         argv: list[str] | None = None,
-        verbose: int = 0,
-        output_format: OutputFormat | None = None,
-        artifact_dir: Path | None = None,
-        save_artifact: bool = True,
+        options: CliContextOptions | None = None,
     ) -> CliContext:
         """Build context from explicit injected dependencies.
 
         Returns:
             CliContext: Fully initialized CLI context.
         """
+        resolved_options = options or CliContextOptions()
         return cls(
             argv=list(argv or []),
             root=root,
             toolchain=toolchain,
             services=services,
-            verbose=verbose,
-            output_format=output_format,
-            artifact_dir=artifact_dir,
-            save_artifact=save_artifact,
+            verbose=resolved_options.verbose,
+            output_format=resolved_options.output_format,
+            artifact_dir=resolved_options.artifact_dir,
+            save_artifact=resolved_options.save_artifact,
         )
 
     @classmethod
@@ -159,10 +157,7 @@ class CliContext(CqStruct, frozen=True):
             toolchain=toolchain,
             services=services,
             argv=argv,
-            verbose=options.verbose,
-            output_format=options.output_format,
-            artifact_dir=options.artifact_dir,
-            save_artifact=options.save_artifact,
+            options=options,
         )
 
 

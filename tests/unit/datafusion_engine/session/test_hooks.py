@@ -1,4 +1,4 @@
-# ruff: noqa: D100, D103, INP001, PLR2004
+# ruff: noqa: D100, D103, PLR2004
 from __future__ import annotations
 
 import pytest

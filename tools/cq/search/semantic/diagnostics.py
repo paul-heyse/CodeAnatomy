@@ -6,7 +6,8 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
 from tools.cq.core.schema import DetailPayload, Finding
-from tools.cq.query.language import QueryLanguage, QueryLanguageScope, expand_language_scope
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
+from tools.cq.query.language import expand_language_scope
 from tools.cq.search._shared.search_contracts import (
     CapabilitySupport,
     CrossLanguageDiagnostic,

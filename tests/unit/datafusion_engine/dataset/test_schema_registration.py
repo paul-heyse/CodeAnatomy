@@ -1,4 +1,4 @@
-# ruff: noqa: D100, D103, ANN001, INP001
+# ruff: noqa: D100, D103, ANN001
 from __future__ import annotations
 
 from datafusion_engine.dataset import schema_registration

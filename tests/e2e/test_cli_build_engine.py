@@ -55,9 +55,13 @@ def test_build_command_smoke_with_stubbed_orchestrator(
     observed: dict[str, Any] = {}
 
     def _orchestrate_build_stub(*args: Any, **kwargs: Any) -> BuildResult:
-        _ = args
+        request_payload = args[0] if args else None
+        if request_payload is not None:
+            observed["engine_profile"] = request_payload.engine_profile
+            observed["extraction_config"] = request_payload.extraction_config
+            return _stub_build_result(Path(request_payload.output_dir))
         observed.update(kwargs)
-        return _stub_build_result(kwargs["output_dir"])
+        return _stub_build_result(Path(kwargs["output_dir"]))
 
     monkeypatch.setattr("graph.build_pipeline.orchestrate_build", _orchestrate_build_stub)
 

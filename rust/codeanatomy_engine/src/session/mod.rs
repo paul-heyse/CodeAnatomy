@@ -7,6 +7,7 @@ pub mod envelope;
 pub mod extraction;
 pub mod factory;
 pub mod format_policy;
+pub mod capture;
 pub mod planning_manifest;
 pub mod planning_surface;
 pub mod profile_coverage;

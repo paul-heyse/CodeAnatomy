@@ -69,9 +69,9 @@ pub use datafusion_ext::delta_mutations;
 pub use datafusion_ext::delta_observability;
 pub use datafusion_ext::delta_protocol;
 pub use datafusion_ext::expr_planner;
-pub use datafusion_ext::function_factory;
 pub use datafusion_ext::function_rewrite;
 pub use datafusion_ext::registry_snapshot;
+pub use datafusion_ext::sql_macro_factory;
 pub use datafusion_ext::udaf_builtin;
 pub use datafusion_ext::udf as udf_ext;
 #[cfg(feature = "async-udf")]

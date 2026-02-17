@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from tools.cq.core.types import QueryLanguageScope
 from tools.cq.query.ir import (
     CompositeOp,
     CompositeRule,
@@ -32,11 +33,7 @@ from tools.cq.query.ir import (
     Scope,
     ScopeFilter,
 )
-from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE_SCOPE,
-    QueryLanguageScope,
-    parse_query_language_scope,
-)
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, parse_query_language_scope
 
 if TYPE_CHECKING:
     from tools.cq.query.ir import EntityType, ExpanderKind, FieldType, RelationalOp, StrictnessMode

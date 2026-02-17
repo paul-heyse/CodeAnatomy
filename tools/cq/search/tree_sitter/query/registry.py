@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.structs import CqStruct
 from tools.cq.search.tree_sitter.contracts.query_models import GrammarDriftReportV1
@@ -143,7 +143,7 @@ def load_distribution_query_source(language: str, pack_name: str) -> str | None:
 
 
 def _fanout_cache() -> FanoutCache | None:
-    return query_registry_cache(root=Path.cwd())
+    return cast("FanoutCache | None", query_registry_cache(root=Path.cwd()))
 
 
 def _stamped_loader(language: str) -> object | None:

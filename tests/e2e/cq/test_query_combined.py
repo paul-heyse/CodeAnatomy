@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from tools.cq.core.summary_contract import CqSummary
+from tools.cq.core.summary_contract import SummaryEnvelopeV1
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -237,7 +237,9 @@ def test_query_result_metadata(
     assert isinstance(result.run.toolchain, dict), "Toolchain should be a dict"
 
     # Summary should be present (may be empty)
-    assert isinstance(result.summary, CqSummary), "Summary should be a typed CqSummary"
+    assert isinstance(result.summary, SummaryEnvelopeV1), (
+        "Summary should be a typed SummaryEnvelopeV1"
+    )
 
 
 @pytest.mark.e2e

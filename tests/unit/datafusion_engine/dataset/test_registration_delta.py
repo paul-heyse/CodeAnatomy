@@ -1,4 +1,4 @@
-# ruff: noqa: D103, INP001, SLF001
+# ruff: noqa: D103, SLF001
 """Tests for dataset Delta registration split module."""
 
 from __future__ import annotations

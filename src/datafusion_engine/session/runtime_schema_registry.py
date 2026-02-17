@@ -1288,7 +1288,7 @@ def _validate_schema_views(
     Returns:
         View validation errors.
     """
-    from datafusion_engine.udf.extension_core import extension_capabilities_report
+    from datafusion_engine.udf.extension_validation import extension_capabilities_report
 
     _ = ast_view_names
     view_errors: dict[str, str] = {}

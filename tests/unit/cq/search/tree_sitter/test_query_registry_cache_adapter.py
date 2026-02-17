@@ -2,62 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
-import pytest
-from tools.cq.core.cache import diskcache_backend
 from tools.cq.search.tree_sitter.query.support import query_registry_cache
 
 
-class _CacheWithGetSet:
-    @staticmethod
-    def get(
-        _key: str,
-        default: object | None = None,
-        *,
-        _retry: bool = True,
-    ) -> object | None:
-        return default
-
-    @staticmethod
-    def set(
-        _key: str,
-        _value: object,
-        *,
-        _expire: int | None = None,
-        _tag: str | None = None,
-        _retry: bool = True,
-    ) -> bool:
-        return True
-
-
-def test_query_registry_cache_returns_none_when_backend_has_no_cache(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Return None when cache backend does not expose a cache interface."""
-
-    @dataclass
-    class _Backend:
-        cache: object | None = None
-
-    monkeypatch.setattr(diskcache_backend, "get_cq_cache_backend", lambda **_kwargs: _Backend())
+def test_query_registry_cache_returns_none_when_root_provided() -> None:
+    """Query registry cache is intentionally unavailable under hard cutover."""
     assert query_registry_cache(root=Path()) is None
 
 
-def test_query_registry_cache_returns_cache_when_backend_exposes_get_set(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Test query registry cache returns cache when backend exposes get set."""
-    cache = _CacheWithGetSet()
-
-    @dataclass
-    class _Backend:
-        cache: _CacheWithGetSet
-
-    monkeypatch.setattr(
-        diskcache_backend,
-        "get_cq_cache_backend",
-        lambda **_kwargs: _Backend(cache),
-    )
-    assert query_registry_cache(root=Path()) is cache
+def test_query_registry_cache_returns_none_when_root_missing() -> None:
+    """Root-less calls also degrade to uncached mode."""
+    assert query_registry_cache(root=None) is None

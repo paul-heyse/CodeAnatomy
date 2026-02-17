@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
+from tools.cq.core.cache.interface import CqCacheStreamingBackend
 from tools.cq.core.cache.key_builder import (
     build_cache_key,
     build_cache_tag,
@@ -143,6 +144,27 @@ def test_cache_backend_advanced_operations(tmp_path: Path) -> None:
 
     assert backend.delete("k1") is True
     assert backend.get("k1") is None
+
+    close_cq_cache_backend()
+    os.environ.pop("CQ_CACHE_DIR", None)
+    os.environ.pop("CQ_CACHE_ENABLED", None)
+
+
+def test_cache_backend_streaming_roundtrip_and_fallback(tmp_path: Path) -> None:
+    """Verify streaming APIs round-trip and fallback to normal get for plain bytes."""
+    close_cq_cache_backend()
+    os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache_stream")
+    os.environ["CQ_CACHE_ENABLED"] = "1"
+
+    backend = get_cq_cache_backend(root=tmp_path)
+    assert isinstance(backend, CqCacheStreamingBackend)
+    payload = b"x" * 4096
+    assert backend.set_streaming("blob:stream", payload, expire=30, tag="blob") is True
+    assert backend.read_streaming("blob:stream") == payload
+    assert backend.read_streaming("blob:missing") is None
+
+    assert backend.set("blob:plain", payload, expire=30, tag="blob") is True
+    assert backend.read_streaming("blob:plain") == payload
 
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_DIR", None)

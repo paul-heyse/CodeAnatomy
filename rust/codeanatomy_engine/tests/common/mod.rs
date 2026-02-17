@@ -42,7 +42,7 @@ pub async fn test_session() -> (datafusion::prelude::SessionContext, SessionEnve
     let envelope = SessionEnvelope::capture(
         &state.ctx,
         [0u8; 32],
-        ruleset.fingerprint,
+        ruleset.fingerprint(),
         state.memory_pool_bytes,
         true,
         state.planning_surface_hash,

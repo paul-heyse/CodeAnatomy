@@ -18,18 +18,15 @@ from tools.cq.core.summary_contract import (
     summary_from_mapping,
 )
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
+from tools.cq.core.types import QueryLanguage, QueryLanguageScope
 from tools.cq.orchestration.multilang_summary import (
     build_multilang_summary,
     partition_stats_from_result_summary,
 )
-from tools.cq.query.language import (
-    QueryLanguage,
-    QueryLanguageScope,
-    expand_language_scope,
-)
+from tools.cq.query.language import expand_language_scope
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_assembly import FrontDoorInsightV1
+    from tools.cq.core.front_door_contracts import FrontDoorInsightV1
     from tools.cq.core.schema import RunMeta
     from tools.cq.core.toolchain import Toolchain
 
@@ -251,10 +248,8 @@ def _select_front_door_insight(
     scope: QueryLanguageScope,
     results: Mapping[QueryLanguage, CqResult],
 ) -> FrontDoorInsightV1 | None:
-    from tools.cq.core.front_door_assembly import (
-        coerce_front_door_insight,
-        mark_partial_for_missing_languages,
-    )
+    from tools.cq.core.front_door_assembly import mark_partial_for_missing_languages
+    from tools.cq.core.front_door_render import coerce_front_door_insight
 
     order = list(expand_language_scope(scope))
     by_language = _collect_insights_by_language(

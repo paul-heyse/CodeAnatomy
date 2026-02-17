@@ -9,6 +9,11 @@ from pathlib import Path
 import msgspec
 
 from tools.cq.core.front_door_assembly import (
+    augment_insight_with_semantic,
+    build_entity_insight,
+    mark_partial_for_missing_languages,
+)
+from tools.cq.core.front_door_contracts import (
     EntityInsightBuildRequestV1,
     FrontDoorInsightV1,
     InsightBudgetV1,
@@ -17,12 +22,9 @@ from tools.cq.core.front_door_assembly import (
     InsightNeighborhoodV1,
     InsightRiskCountersV1,
     InsightSliceV1,
-    augment_insight_with_semantic,
-    build_entity_insight,
-    mark_partial_for_missing_languages,
-    risk_from_counters,
-    to_public_front_door_insight_dict,
 )
+from tools.cq.core.front_door_render import to_public_front_door_insight_dict
+from tools.cq.core.front_door_risk import risk_from_counters
 from tools.cq.core.schema import CqResult, Finding
 from tools.cq.core.semantic_contracts import (
     SemanticContractStateInputV1,
@@ -30,8 +32,8 @@ from tools.cq.core.semantic_contracts import (
     derive_semantic_contract_state,
 )
 from tools.cq.core.snb_schema import SemanticNodeRefV1
-from tools.cq.core.summary_contract import CqSummary, build_semantic_telemetry
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.summary_contract import SummaryV1, build_semantic_telemetry
+from tools.cq.core.types import QueryLanguage
 from tools.cq.query.shared_utils import extract_missing_languages
 from tools.cq.search.semantic.models import (
     LanguageSemanticEnrichmentRequest,
@@ -194,8 +196,8 @@ def _build_candidate_neighborhood(result: CqResult) -> CandidateNeighborhood:
     )
 
 
-def _build_degradation(summary: CqSummary) -> InsightDegradationV1:
-    dropped = summary.dropped_by_scope
+def _build_degradation(summary: SummaryV1) -> InsightDegradationV1:
+    dropped = getattr(summary, "dropped_by_scope", None)
     scope_filter_status = "dropped" if isinstance(dropped, dict) and dropped else "none"
     notes: list[str] = []
     if isinstance(dropped, dict) and dropped:

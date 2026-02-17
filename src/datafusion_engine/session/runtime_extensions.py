@@ -41,7 +41,7 @@ from datafusion_engine.session.runtime_udf import (
     _rulepack_required_functions,
 )
 from datafusion_engine.sql.options import sql_options_for_profile
-from datafusion_engine.udf.extension_core import extension_capabilities_report
+from datafusion_engine.udf.extension_validation import extension_capabilities_report
 from datafusion_engine.udf.factory import (
     function_factory_payloads,
     install_function_factory,

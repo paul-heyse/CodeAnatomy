@@ -7,8 +7,8 @@ from pathlib import Path
 
 import msgspec
 
+from tools.cq.core.types import QueryLanguage
 from tools.cq.query.language import (
-    QueryLanguage,
     constrain_include_globs_for_language,
     is_path_in_lang_scope,
     language_extension_exclude_globs,

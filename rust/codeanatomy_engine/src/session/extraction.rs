@@ -35,7 +35,8 @@ mod tests {
             batch_size: 2048,
         };
         let ctx = build_extraction_session(&config).expect("session");
-        let settings = ctx.copied_config().options();
+        let copied = ctx.copied_config();
+        let settings = copied.options();
         let partitions = settings.execution.target_partitions;
         let batch_size = settings.execution.batch_size;
         assert_eq!(partitions, 2);

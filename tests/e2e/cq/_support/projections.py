@@ -9,7 +9,7 @@ from typing import Any
 
 from tools.cq.core.front_door_render import coerce_front_door_insight
 from tools.cq.core.schema import CqResult
-from tools.cq.core.summary_contract import CqSummary, SemanticTelemetryV1
+from tools.cq.core.summary_contract import SemanticTelemetryV1, SummaryEnvelopeV1
 
 _DURATION_PATTERN = re.compile(r"(\*\*(?:Created|Elapsed):\*\*)\s+[0-9]+(?:\.[0-9]+)?ms")
 _BUNDLE_ID_PATTERN = re.compile(r"(\*\*Bundle ID:\*\*)\s+\S+")
@@ -31,8 +31,8 @@ def _normalize_path(path: str) -> str:
     return path.removeprefix("./")
 
 
-def _summary_mapping(summary: CqSummary | Mapping[str, object]) -> Mapping[str, object]:
-    if isinstance(summary, CqSummary):
+def _summary_mapping(summary: SummaryEnvelopeV1 | Mapping[str, object]) -> Mapping[str, object]:
+    if isinstance(summary, SummaryEnvelopeV1):
         return summary.to_dict()
     return summary
 
@@ -73,7 +73,9 @@ def _int_or_none(value: object) -> int | None:
     return None
 
 
-def _project_front_door_insight(summary: CqSummary | Mapping[str, object]) -> dict[str, Any] | None:
+def _project_front_door_insight(
+    summary: SummaryEnvelopeV1 | Mapping[str, object],
+) -> dict[str, Any] | None:
     summary_map = _summary_mapping(summary)
     insight = coerce_front_door_insight(summary_map.get("front_door_insight"))
     if insight is None:
@@ -131,7 +133,7 @@ def _project_front_door_insight(summary: CqSummary | Mapping[str, object]) -> di
     }
 
 
-def _project_step_summaries(summary: CqSummary | Mapping[str, object]) -> dict[str, Any]:
+def _project_step_summaries(summary: SummaryEnvelopeV1 | Mapping[str, object]) -> dict[str, Any]:
     step_summaries = _summary_mapping(summary).get("step_summaries")
     if not isinstance(step_summaries, dict):
         return {}
@@ -183,22 +185,22 @@ def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
         "top_k": summary_map.get("top_k"),
         "enable_semantic_enrichment": summary_map.get("enable_semantic_enrichment"),
         "total_slices": (
-            _int_or_fallback(summary_map.get("total_slices"), summary.total_slices)
+            _int_or_fallback(summary_map.get("total_slices"), 0)
             if include_neighborhood_totals
             else _int_or_none(summary_map.get("total_slices"))
         ),
         "total_nodes": (
-            _int_or_fallback(summary_map.get("total_nodes"), summary.total_nodes)
+            _int_or_fallback(summary_map.get("total_nodes"), 0)
             if include_neighborhood_totals
             else _int_or_none(summary_map.get("total_nodes"))
         ),
         "total_edges": (
-            _int_or_fallback(summary_map.get("total_edges"), summary.total_edges)
+            _int_or_fallback(summary_map.get("total_edges"), 0)
             if include_neighborhood_totals
             else _int_or_none(summary_map.get("total_edges"))
         ),
         "total_diagnostics": (
-            _int_or_fallback(summary_map.get("total_diagnostics"), summary.total_diagnostics)
+            _int_or_fallback(summary_map.get("total_diagnostics"), 0)
             if include_neighborhood_totals
             else _int_or_none(summary_map.get("total_diagnostics"))
         ),

@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING, cast
 from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.schema import CqResult
 from tools.cq.core.services import EntityFrontDoorRequest
-from tools.cq.core.summary_contract import CqSummary, coerce_semantic_telemetry
+from tools.cq.core.summary_contract import SummaryEnvelopeV1, coerce_semantic_telemetry
 from tools.cq.core.toolchain import Toolchain
+from tools.cq.core.types import QueryLanguage
 from tools.cq.orchestration.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
 from tools.cq.query.ir import Query
-from tools.cq.query.language import QueryLanguage
 from tools.cq.query.shared_utils import count_result_matches, extract_missing_languages
 from tools.cq.search.semantic.diagnostics import (
     build_capability_diagnostics,
@@ -45,7 +45,7 @@ class MergeAutoScopeQueryRequestV1:
 
 
 def _merge_semantic_contract_inputs(
-    summary: CqSummary,
+    summary: SummaryEnvelopeV1,
 ) -> tuple[str, bool, int, int, int, int]:
     py_telemetry = coerce_semantic_telemetry(summary.python_semantic_telemetry)
     rust_telemetry = coerce_semantic_telemetry(summary.rust_semantic_telemetry)
@@ -76,9 +76,9 @@ def _merge_semantic_contract_inputs(
 def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
     import msgspec
 
-    from tools.cq.core.front_door_assembly import (
+    from tools.cq.core.front_door_assembly import mark_partial_for_missing_languages
+    from tools.cq.core.front_door_render import (
         coerce_front_door_insight,
-        mark_partial_for_missing_languages,
         to_public_front_door_insight_dict,
     )
     from tools.cq.core.semantic_contracts import (

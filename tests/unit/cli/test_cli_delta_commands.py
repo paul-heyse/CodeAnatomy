@@ -15,7 +15,11 @@ from cli.commands.delta import (
     clone_delta_snapshot,
     vacuum_command,
 )
+from cli.context import RunContext
+from cli.runtime_services import CliRuntimeServices
+from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_ops import bind_delta_service
 from tests.test_helpers.delta_seed import write_delta_table
 from tests.test_helpers.optional_deps import (
     require_datafusion,
@@ -28,9 +32,22 @@ require_deltalake()
 require_delta_extension()
 
 _PROFILE = DataFusionRuntimeProfile()
+bind_delta_service(_PROFILE, service=DeltaService(profile=_PROFILE))
 _DELTA_SERVICE = _PROFILE.delta_ops.delta_service()
 
 EXPECTED_ROW_COUNT = 2
+
+
+def _delta_run_context() -> RunContext:
+    return RunContext(
+        run_id="test-run",
+        log_level="INFO",
+        config_contents={},
+        runtime_services=CliRuntimeServices(
+            runtime_profile=_PROFILE,
+            delta_service=_DELTA_SERVICE,
+        ),
+    )
 
 
 def _seed_delta_table(tmp_path: Path) -> Path:
@@ -75,6 +92,7 @@ def test_vacuum_command_writes_report(tmp_path: Path) -> None:
     exit_code = vacuum_command(
         path=str(source),
         options=VacuumOptions(report_path=str(report_path)),
+        run_context=_delta_run_context(),
     )
 
     assert exit_code == 0
@@ -88,7 +106,11 @@ def test_checkpoint_command_writes_report(tmp_path: Path) -> None:
     source = _seed_delta_table(tmp_path)
     report_path = tmp_path / "checkpoint.json"
 
-    exit_code = checkpoint_command(path=str(source), report_path=str(report_path))
+    exit_code = checkpoint_command(
+        path=str(source),
+        report_path=str(report_path),
+        run_context=_delta_run_context(),
+    )
 
     assert exit_code == 0
     payload = json.loads(report_path.read_text(encoding="utf-8"))

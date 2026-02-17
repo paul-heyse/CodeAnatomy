@@ -23,10 +23,7 @@ class ContextWindow(msgspec.Struct, frozen=True):
             msg = f"start_line must be >= 1 (got {self.start_line})"
             raise ValueError(msg)
         if self.end_line < self.start_line:
-            msg = (
-                f"Invalid context window: end_line {self.end_line} < "
-                f"start_line {self.start_line}"
-            )
+            msg = f"Invalid context window: end_line {self.end_line} < start_line {self.start_line}"
             raise ValueError(msg)
 
     @classmethod

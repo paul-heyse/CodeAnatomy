@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.query.language import QueryLanguage
+from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
 
 _LANGUAGE_ADAPTERS: dict[QueryLanguage, LanguageEnrichmentPort] = {}

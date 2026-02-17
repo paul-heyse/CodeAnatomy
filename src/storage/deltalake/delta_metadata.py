@@ -13,8 +13,8 @@ from storage.deltalake.delta_read import (
     DeltaSchemaRequest,
     SnapshotKey,
     _open_delta_table,
-    _storage_span_attributes,
 )
+from storage.deltalake.delta_runtime_ops import _storage_span_attributes
 
 
 def canonical_table_uri(table_uri: str) -> str:

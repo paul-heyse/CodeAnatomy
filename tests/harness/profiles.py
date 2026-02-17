@@ -7,7 +7,9 @@ from functools import lru_cache
 
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.capabilities import is_delta_extension_compatible
+from datafusion_engine.delta.service import DeltaService
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime_ops import bind_delta_service
 from datafusion_engine.session.runtime_profile_config import (
     DataSourceConfig,
     DiagnosticsConfig,
@@ -40,7 +42,7 @@ def conformance_profile(
         if plan_artifacts_root is not None
         else PolicyBundleConfig()
     )
-    return DataFusionRuntimeProfile(
+    profile = DataFusionRuntimeProfile(
         data_sources=DataSourceConfig(extract_output=extract_output),
         diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),
         policies=policies,
@@ -51,6 +53,8 @@ def conformance_profile(
             enforce_delta_ffi_provider=enforce_native_provider,
         ),
     )
+    bind_delta_service(profile, service=DeltaService(profile=profile))
+    return profile
 
 
 def conformance_profile_with_sink(

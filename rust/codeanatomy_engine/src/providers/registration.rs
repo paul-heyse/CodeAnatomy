@@ -12,6 +12,7 @@ use datafusion_expr::Expr;
 use datafusion_ext::delta_control_plane::{
     delta_provider_from_session_request, DeltaProviderFromSessionRequest, DeltaScanOverrides,
 };
+use datafusion_ext::delta_protocol::TableVersion;
 use datafusion_ext::DeltaFeatureGate;
 use deltalake::delta_datafusion::DeltaScanConfig;
 use serde::{Deserialize, Serialize};
@@ -132,8 +133,10 @@ pub async fn register_extraction_inputs(
                 session_ctx: ctx,
                 table_uri: &input.delta_location,
                 storage_options: None,
-                version: input.version_pin,
-                timestamp: None,
+                table_version: input
+                    .version_pin
+                    .map(TableVersion::Version)
+                    .unwrap_or(TableVersion::Latest),
                 predicate: None,
                 overrides,
                 gate: Some(DeltaFeatureGate::default()),
@@ -155,7 +158,7 @@ pub async fn register_extraction_inputs(
         let capabilities = infer_capabilities(&resolved_scan_config);
 
         // Register as table in the session context
-        ctx.register_table(&input.logical_name, Arc::new(provider))?;
+        ctx.register_table(&input.logical_name, provider)?;
 
         registrations.push(TableRegistration {
             name: input.logical_name.clone(),

@@ -69,8 +69,8 @@ from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with
 if TYPE_CHECKING:
     from tools.cq.core.front_door_schema import FrontDoorInsightV1
     from tools.cq.core.toolchain import Toolchain
+    from tools.cq.core.types import QueryLanguage
     from tools.cq.macros.calls.analysis import CallSite
-    from tools.cq.query.language import QueryLanguage
 
 logger = logging.getLogger(__name__)
 
@@ -339,6 +339,7 @@ def _build_calls_front_door_state(
             target_callees=target_callees,
             analysis=analysis,
             score=score,
+            target_language=target_language_hint,
             preview_per_slice=FRONT_DOOR_PREVIEW_PER_SLICE,
         )
     )

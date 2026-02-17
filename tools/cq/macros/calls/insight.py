@@ -18,19 +18,19 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
-from tools.cq.core.summary_contract import CqSummary, coerce_semantic_telemetry
+from tools.cq.core.summary_contract import SummaryEnvelopeV1, coerce_semantic_telemetry
 from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_assembly import (
+    from tools.cq.core.front_door_contracts import (
         FrontDoorInsightV1,
         InsightConfidenceV1,
         InsightNeighborhoodV1,
     )
+    from tools.cq.core.types import QueryLanguage
     from tools.cq.macros.calls.analysis import CallSite
-    from tools.cq.query.language import QueryLanguage
 
 _FRONT_DOOR_TOP_CANDIDATES = 3
 
@@ -287,7 +287,7 @@ def _add_sites_section(
 
 
 def _build_calls_confidence(score: ScoreDetails | None) -> InsightConfidenceV1:
-    from tools.cq.core.front_door_assembly import InsightConfidenceV1
+    from tools.cq.core.front_door_contracts import InsightConfidenceV1
 
     return InsightConfidenceV1(
         evidence_kind=(score.evidence_kind if score and score.evidence_kind else "resolved_ast"),
@@ -306,11 +306,13 @@ def _build_calls_front_door_insight(
     used_fallback: bool,
 ) -> FrontDoorInsightV1:
     from tools.cq.core.front_door_assembly import (
+        build_calls_insight,
+    )
+    from tools.cq.core.front_door_contracts import (
         CallsInsightBuildRequestV1,
         InsightBudgetV1,
         InsightDegradationV1,
         InsightLocationV1,
-        build_calls_insight,
     )
     from tools.cq.core.semantic_contracts import (
         SemanticContractStateInputV1,
@@ -361,7 +363,7 @@ def _build_calls_front_door_insight(
 def _finalize_calls_semantic_state(
     *,
     insight: FrontDoorInsightV1,
-    summary: CqSummary,
+    summary: SummaryEnvelopeV1,
     target_language: QueryLanguage | None,
     top_level_attempted: int,
     top_level_applied: int,

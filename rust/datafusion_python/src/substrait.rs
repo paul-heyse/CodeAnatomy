@@ -98,7 +98,7 @@ impl PySubstraitSerializer {
         py: Python,
     ) -> PyDataFusionResult<Py<PyAny>> {
         let proto_bytes: Vec<u8> =
-            wait_for_future(py, serializer::serialize_bytes(sql, &ctx.ctx))??;
+            wait_for_future(py, serializer::serialize_bytes(sql, ctx.ctx()))??;
         Ok(PyBytes::new(py, &proto_bytes).into())
     }
 

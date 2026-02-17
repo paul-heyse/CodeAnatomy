@@ -130,7 +130,7 @@ def test_execute_plan_function_golden(
     update_golden : bool
         Whether to update golden files.
     """
-    query_text = "entity=function name=execute_plan in=tools/cq/query/executor.py"
+    query_text = "entity=function name=execute_plan in=tools/cq/query/executor_runtime.py"
     query = parse_query(query_text)
     plan = compile_query(query)
     result = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)

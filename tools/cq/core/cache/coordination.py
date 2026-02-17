@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 
-from tools.cq.core.cache.interface import CqCacheBackend
+from tools.cq.core.cache.interface import CqCacheBackend, CqCacheCoordinationBackend
 
 
 @contextmanager
@@ -23,19 +23,16 @@ def tree_sitter_lane_guard(
             yield
         return
 
-    lock_fn = getattr(backend, "lock", None)
-    rlock_fn = getattr(backend, "rlock", None)
-    semaphore_fn = getattr(backend, "semaphore", None)
-    if not callable(lock_fn) or not callable(rlock_fn) or not callable(semaphore_fn):
+    if not isinstance(backend, CqCacheCoordinationBackend):
         with nullcontext():
             yield
         return
 
     expire = max(1, int(ttl_seconds))
     with (
-        semaphore_fn(semaphore_key, value=max(1, int(lane_limit)), expire=expire),
-        lock_fn(lock_key, expire=expire),
-        rlock_fn(f"{lock_key}:reentrant", expire=expire),
+        backend.semaphore(semaphore_key, value=max(1, int(lane_limit)), expire=expire),
+        backend.lock(lock_key, expire=expire),
+        backend.rlock(f"{lock_key}:reentrant", expire=expire),
     ):
         yield
 
@@ -47,11 +44,10 @@ def publish_once_per_barrier(
     publish_fn: Callable[[], None],
 ) -> None:
     """Run publish function under diskcache `barrier` coordination when available."""
-    barrier_fn = getattr(backend, "barrier", None)
-    if not callable(barrier_fn):
+    if not isinstance(backend, CqCacheCoordinationBackend):
         publish_fn()
         return
-    barrier_fn(barrier_key, publish_fn)
+    backend.barrier(barrier_key, publish_fn)
 
 
 __all__ = [

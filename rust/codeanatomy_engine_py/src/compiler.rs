@@ -8,6 +8,10 @@ use tokio::runtime::Runtime;
 use codeanatomy_engine::compiler::compile_contract::{
     compile_request, compile_response_to_json, CompileRequest,
 };
+use codeanatomy_engine::compiler::spec_helpers::{
+    build_join_edges, build_transform, canonical_rulepack_profile, default_rule_intents,
+    join_group_index, SemanticIrPayload,
+};
 use codeanatomy_engine::rules::rulepack::RulepackFactory;
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::spec::execution_spec::SPEC_SCHEMA_VERSION;
@@ -187,7 +191,14 @@ impl SemanticPlanCompiler {
             .map(|view| view.name.as_str())
             .collect();
         let group_by_relationship = join_group_index(&semantic_ir.join_groups);
-        let join_edges = build_join_edges(&semantic_ir.join_groups)?;
+        let join_edges = build_join_edges(&semantic_ir.join_groups).map_err(|err| {
+            engine_execution_error(
+                "validation",
+                "JOIN_EDGE_DERIVATION_FAILED",
+                format!("Failed to derive join edges: {err}"),
+                None,
+            )
+        })?;
 
         let mut sorted_inputs: Vec<(&String, &String)> = request.input_locations.iter().collect();
         sorted_inputs.sort_by(|a, b| a.0.cmp(b.0));
@@ -216,7 +227,14 @@ impl SemanticPlanCompiler {
                     "name": view.name,
                     "view_kind": view.kind,
                     "view_dependencies": deps,
-                    "transform": build_transform(view, &group_by_relationship)?,
+                    "transform": build_transform(view, &group_by_relationship).map_err(|err| {
+                        engine_execution_error(
+                            "validation",
+                            "VIEW_TRANSFORM_DERIVATION_FAILED",
+                            format!("Failed to derive transform for view '{}': {err}", view.name),
+                            None,
+                        )
+                    })?,
                     "output_schema": {"columns": {}}
                 }))
             })
@@ -303,230 +321,6 @@ struct BuildSpecRequest {
     output_locations: Option<BTreeMap<String, String>>,
     #[serde(default)]
     runtime: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SemanticIrPayload {
-    views: Vec<SemanticIrViewPayload>,
-    #[serde(default)]
-    join_groups: Vec<SemanticIrJoinGroupPayload>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SemanticIrViewPayload {
-    name: String,
-    kind: String,
-    #[serde(default)]
-    inputs: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct SemanticIrJoinGroupPayload {
-    #[serde(default)]
-    left_view: String,
-    #[serde(default)]
-    right_view: String,
-    #[serde(default)]
-    left_on: Vec<String>,
-    #[serde(default)]
-    right_on: Vec<String>,
-    #[serde(default)]
-    how: String,
-    #[serde(default)]
-    relationship_names: Vec<String>,
-}
-
-fn canonical_rulepack_profile(raw: Option<&str>) -> &'static str {
-    let normalized = raw.unwrap_or("default").trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "default" => "Default",
-        "low_latency" | "lowlatency" => "LowLatency",
-        "replay" => "Replay",
-        "strict" => "Strict",
-        _ => "Default",
-    }
-}
-
-fn map_join_type(raw: &str) -> &'static str {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "inner" => "Inner",
-        "left" => "Left",
-        "right" => "Right",
-        "full" => "Full",
-        "semi" => "Semi",
-        "anti" => "Anti",
-        _ => "Inner",
-    }
-}
-
-fn cpg_output_kind_for_view(name: &str) -> Option<&'static str> {
-    match name {
-        "cpg_nodes" => Some("Nodes"),
-        "cpg_edges" => Some("Edges"),
-        "cpg_props" => Some("Props"),
-        "cpg_props_map" => Some("PropsMap"),
-        "cpg_edges_by_src" => Some("EdgesBySrc"),
-        "cpg_edges_by_dst" => Some("EdgesByDst"),
-        _ => None,
-    }
-}
-
-fn default_rule_intents(profile: &str) -> Vec<Value> {
-    let mut baseline = vec![
-        json!({"name": "semantic_integrity", "class": "SemanticIntegrity", "params": {}}),
-        json!({"name": "span_containment_rewrite", "class": "SemanticIntegrity", "params": {}}),
-        json!({"name": "delta_scan_aware", "class": "DeltaScanAware", "params": {}}),
-        json!({"name": "cpg_physical", "class": "SemanticIntegrity", "params": {}}),
-        json!({"name": "cost_shape", "class": "CostShape", "params": {}}),
-    ];
-    if matches!(profile, "Strict" | "Replay") {
-        baseline.push(json!({"name": "strict_safety", "class": "Safety", "params": {}}));
-    }
-    baseline
-}
-
-fn join_group_index(
-    groups: &[SemanticIrJoinGroupPayload],
-) -> BTreeMap<String, SemanticIrJoinGroupPayload> {
-    let mut by_relationship = BTreeMap::new();
-    for group in groups {
-        for relationship in &group.relationship_names {
-            by_relationship.insert(relationship.clone(), group.clone());
-        }
-    }
-    by_relationship
-}
-
-fn build_join_edges(groups: &[SemanticIrJoinGroupPayload]) -> PyResult<Vec<Value>> {
-    groups
-        .iter()
-        .map(|group| {
-            Ok(json!({
-                "left_relation": group.left_view,
-                "right_relation": group.right_view,
-                "join_type": map_join_type(&group.how),
-                "left_keys": group.left_on,
-                "right_keys": group.right_on,
-            }))
-        })
-        .collect::<PyResult<Vec<_>>>()
-}
-
-fn build_relate_transform(
-    view: &SemanticIrViewPayload,
-    by_relationship: &BTreeMap<String, SemanticIrJoinGroupPayload>,
-) -> PyResult<Value> {
-    if let Some(group) = by_relationship.get(&view.name) {
-        let join_keys = group
-            .left_on
-            .iter()
-            .zip(group.right_on.iter())
-            .map(|(left, right)| json!({"left_key": left, "right_key": right}))
-            .collect::<Vec<_>>();
-        return Ok(json!({
-            "kind": "Relate",
-            "left": group.left_view,
-            "right": group.right_view,
-            "join_type": map_join_type(&group.how),
-            "join_keys": join_keys,
-        }));
-    }
-    if view.inputs.len() < 2 {
-        return Err(engine_execution_error(
-            "validation",
-            "RELATE_VIEW_INPUTS_INVALID",
-            format!("relate view '{}' must have two inputs", view.name),
-            None,
-        ));
-    }
-    Ok(json!({
-        "kind": "Relate",
-        "left": view.inputs[0],
-        "right": view.inputs[1],
-        "join_type": "Inner",
-        "join_keys": [],
-    }))
-}
-
-fn build_transform(
-    view: &SemanticIrViewPayload,
-    by_relationship: &BTreeMap<String, SemanticIrJoinGroupPayload>,
-) -> PyResult<Value> {
-    if view.kind.eq_ignore_ascii_case("diagnostic") {
-        if view.inputs.len() > 1 {
-            return Ok(json!({
-                "kind": "Union",
-                "sources": view.inputs,
-                "discriminator_column": null,
-                "distinct": false
-            }));
-        }
-        if view.inputs.len() == 1 {
-            return Ok(json!({
-                "kind": "Filter",
-                "source": view.inputs[0],
-                "predicate": "TRUE"
-            }));
-        }
-    }
-    if let Some(output_kind) = cpg_output_kind_for_view(&view.name) {
-        return Ok(json!({
-            "kind": "CpgEmit",
-            "output_kind": output_kind,
-            "sources": view.inputs,
-        }));
-    }
-    if view.kind == "relate" {
-        return build_relate_transform(view, by_relationship);
-    }
-    if view.kind.starts_with("union") || view.inputs.len() > 1 {
-        return Ok(json!({
-            "kind": "Union",
-            "sources": view.inputs,
-            "discriminator_column": null,
-            "distinct": false
-        }));
-    }
-    if view.inputs.len() == 1 && matches!(view.kind.as_str(), "projection" | "project") {
-        return Ok(json!({
-            "kind": "Project",
-            "source": view.inputs[0],
-            "columns": []
-        }));
-    }
-    if view.inputs.len() == 1 && view.kind == "aggregate" {
-        return Ok(json!({
-            "kind": "Aggregate",
-            "source": view.inputs[0],
-            "group_by": [],
-            "aggregations": []
-        }));
-    }
-    if view.inputs.len() == 1 && view.kind.ends_with("normalize") {
-        return Ok(json!({
-            "kind": "Normalize",
-            "source": view.inputs[0],
-            "id_columns": [],
-            "span_columns": null,
-            "text_columns": []
-        }));
-    }
-    if view.inputs.len() == 1 {
-        return Ok(json!({
-            "kind": "Filter",
-            "source": view.inputs[0],
-            "predicate": "TRUE"
-        }));
-    }
-    Err(engine_execution_error(
-        "validation",
-        "VIEW_TRANSFORM_DERIVATION_FAILED",
-        format!(
-            "Unable to derive transform for view '{}' with kind '{}'",
-            view.name, view.kind
-        ),
-        None,
-    ))
 }
 
 fn parse_and_validate_spec(spec_json: &str) -> PyResult<SemanticExecutionSpec> {

@@ -302,71 +302,36 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
                 "prefixed_hash64 expects two arguments".into(),
             ));
         };
-        match (prefix_value, input_value) {
-            (ColumnarValue::Scalar(prefix), ColumnarValue::Scalar(value)) => {
-                let prefix = scalar_str(prefix, "prefixed_hash64 expects string prefix input")?;
-                let value = scalar_str(value, "prefixed_hash64 expects string value input")?;
-                let hashed = match (prefix, value) {
-                    (Some(prefix), Some(value)) => Some(prefixed_hash64_value(prefix, value)),
-                    _ => None,
-                };
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)))
-            }
-            (ColumnarValue::Array(prefixes), ColumnarValue::Array(values)) => {
-                let prefixes =
-                    string_array_any(prefixes, "prefixed_hash64 expects string prefix input")?;
-                let values =
-                    string_array_any(values, "prefixed_hash64 expects string value input")?;
-                let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 16);
-                for index in 0..values.len() {
-                    if prefixes.is_null(index) || values.is_null(index) {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(prefixed_hash64_value(
-                            prefixes.value(index),
-                            values.value(index),
-                        ));
-                    }
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
-            }
-            (ColumnarValue::Array(prefixes), ColumnarValue::Scalar(value)) => {
-                let prefixes =
-                    string_array_any(prefixes, "prefixed_hash64 expects string prefix input")?;
-                let value = scalar_str(value, "prefixed_hash64 expects string value input")?;
-                let mut builder = StringBuilder::with_capacity(prefixes.len(), prefixes.len() * 16);
-                for index in 0..prefixes.len() {
-                    if prefixes.is_null(index) {
-                        builder.append_null();
-                        continue;
-                    }
-                    let Some(value) = value else {
-                        builder.append_null();
-                        continue;
-                    };
-                    builder.append_value(prefixed_hash64_value(prefixes.value(index), value));
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
-            }
-            (ColumnarValue::Scalar(prefix), ColumnarValue::Array(values)) => {
-                let prefix = scalar_str(prefix, "prefixed_hash64 expects string prefix input")?;
-                let values =
-                    string_array_any(values, "prefixed_hash64 expects string value input")?;
-                let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 16);
-                for index in 0..values.len() {
-                    if values.is_null(index) {
-                        builder.append_null();
-                        continue;
-                    }
-                    let Some(prefix) = prefix else {
-                        builder.append_null();
-                        continue;
-                    };
-                    builder.append_value(prefixed_hash64_value(prefix, values.value(index)));
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        if let (ColumnarValue::Scalar(prefix), ColumnarValue::Scalar(value)) =
+            (prefix_value, input_value)
+        {
+            let prefix = scalar_str(prefix, "prefixed_hash64 expects string prefix input")?;
+            let value = scalar_str(value, "prefixed_hash64 expects string value input")?;
+            let hashed = match (prefix, value) {
+                (Some(prefix), Some(value)) => Some(prefixed_hash64_value(prefix, value)),
+                _ => None,
+            };
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)));
+        }
+
+        let row_count = args.number_rows;
+        let prefix_array = prefix_value.to_array(row_count)?;
+        let value_array = input_value.to_array(row_count)?;
+        let prefixes =
+            string_array_any(&prefix_array, "prefixed_hash64 expects string prefix input")?;
+        let values = string_array_any(&value_array, "prefixed_hash64 expects string value input")?;
+        let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 16);
+        for index in 0..values.len() {
+            if prefixes.is_null(index) || values.is_null(index) {
+                builder.append_null();
+            } else {
+                builder.append_value(prefixed_hash64_value(
+                    prefixes.value(index),
+                    values.value(index),
+                ));
             }
         }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
     }
 }
 
@@ -462,67 +427,32 @@ impl ScalarUDFImpl for StableIdUdf {
                 "stable_id expects two arguments".into(),
             ));
         };
-        match (prefix_value, input_value) {
-            (ColumnarValue::Scalar(prefix), ColumnarValue::Scalar(value)) => {
-                let prefix = scalar_str(prefix, "stable_id expects string prefix input")?;
-                let value = scalar_str(value, "stable_id expects string value input")?;
-                let hashed = match (prefix, value) {
-                    (Some(prefix), Some(value)) => Some(stable_id_value(prefix, value)),
-                    _ => None,
-                };
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)))
-            }
-            (ColumnarValue::Array(prefixes), ColumnarValue::Array(values)) => {
-                let prefixes = string_array_any(prefixes, "stable_id expects string prefix input")?;
-                let values = string_array_any(values, "stable_id expects string value input")?;
-                let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 32);
-                for index in 0..values.len() {
-                    if prefixes.is_null(index) || values.is_null(index) {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(stable_id_value(
-                            prefixes.value(index),
-                            values.value(index),
-                        ));
-                    }
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
-            }
-            (ColumnarValue::Array(prefixes), ColumnarValue::Scalar(value)) => {
-                let prefixes = string_array_any(prefixes, "stable_id expects string prefix input")?;
-                let value = scalar_str(value, "stable_id expects string value input")?;
-                let mut builder = StringBuilder::with_capacity(prefixes.len(), prefixes.len() * 32);
-                for index in 0..prefixes.len() {
-                    if prefixes.is_null(index) {
-                        builder.append_null();
-                        continue;
-                    }
-                    let Some(value) = value else {
-                        builder.append_null();
-                        continue;
-                    };
-                    builder.append_value(stable_id_value(prefixes.value(index), value));
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
-            }
-            (ColumnarValue::Scalar(prefix), ColumnarValue::Array(values)) => {
-                let prefix = scalar_str(prefix, "stable_id expects string prefix input")?;
-                let values = string_array_any(values, "stable_id expects string value input")?;
-                let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 32);
-                for index in 0..values.len() {
-                    if values.is_null(index) {
-                        builder.append_null();
-                        continue;
-                    }
-                    let Some(prefix) = prefix else {
-                        builder.append_null();
-                        continue;
-                    };
-                    builder.append_value(stable_id_value(prefix, values.value(index)));
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        if let (ColumnarValue::Scalar(prefix), ColumnarValue::Scalar(value)) =
+            (prefix_value, input_value)
+        {
+            let prefix = scalar_str(prefix, "stable_id expects string prefix input")?;
+            let value = scalar_str(value, "stable_id expects string value input")?;
+            let hashed = match (prefix, value) {
+                (Some(prefix), Some(value)) => Some(stable_id_value(prefix, value)),
+                _ => None,
+            };
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)));
+        }
+
+        let row_count = args.number_rows;
+        let prefix_array = prefix_value.to_array(row_count)?;
+        let value_array = input_value.to_array(row_count)?;
+        let prefixes = string_array_any(&prefix_array, "stable_id expects string prefix input")?;
+        let values = string_array_any(&value_array, "stable_id expects string value input")?;
+        let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 32);
+        for index in 0..values.len() {
+            if prefixes.is_null(index) || values.is_null(index) {
+                builder.append_null();
+            } else {
+                builder.append_value(stable_id_value(prefixes.value(index), values.value(index)));
             }
         }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
     }
 }
 
@@ -941,21 +871,21 @@ pub fn stable_id_udf() -> ScalarUDF {
 }
 
 pub fn stable_id_parts_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(2, 65, Volatility::Immutable);
+    let signature = variadic_any_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(StableIdPartsUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn prefixed_hash_parts64_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(2, 65, Volatility::Immutable);
+    let signature = variadic_any_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(PrefixedHashParts64Udf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn stable_hash_any_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(1, 3, Volatility::Immutable);
+    let signature = variadic_any_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(StableHashAnyUdf {
         signature: SignatureEqHash::new(signature),
     }))

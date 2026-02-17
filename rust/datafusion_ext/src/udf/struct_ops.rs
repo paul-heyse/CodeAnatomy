@@ -170,7 +170,7 @@ impl ScalarUDFImpl for StructPickUdf {
 }
 
 pub fn struct_pick_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(2, 7, Volatility::Immutable);
+    let signature = variadic_any_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(StructPickUdf {
         signature: SignatureEqHash::new(signature),
     }))

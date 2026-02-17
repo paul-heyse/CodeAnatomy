@@ -6,6 +6,8 @@ use datafusion_expr::{AggregateUDF, WindowUDF};
 
 pub use crate::macros::{ScalarUdfSpec, TableUdfSpec};
 #[cfg(feature = "async-udf")]
+use crate::async_udf_config::CodeAnatomyAsyncUdfConfig;
+#[cfg(feature = "async-udf")]
 use crate::udf_async;
 use crate::{scalar_udfs, table_udfs};
 use crate::{udaf_builtin, udf, udtf_builtin, udtf_sources, udwf_builtin};
@@ -120,7 +122,13 @@ pub fn register_all_with_policy(
     if enable_async {
         #[cfg(feature = "async-udf")]
         {
-            udf_async::set_async_udf_policy(async_udf_batch_size, async_udf_timeout_ms)?;
+            let state_ref = ctx.state_ref();
+            let mut state = state_ref.write();
+            let config = state.config_mut();
+            config.set_extension(Arc::new(CodeAnatomyAsyncUdfConfig {
+                ideal_batch_size: async_udf_batch_size,
+                timeout_ms: async_udf_timeout_ms,
+            }));
             udf_async::register_async_udfs(ctx)?;
         }
         #[cfg(not(feature = "async-udf"))]

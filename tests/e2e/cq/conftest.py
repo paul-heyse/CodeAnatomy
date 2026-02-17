@@ -20,6 +20,8 @@ import pytest
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding
 
+from tools.cq.core.serialization import loads_json
+
 
 @dataclass(frozen=True)
 class FindingCriteria:
@@ -228,13 +230,11 @@ def run_cq_result(
     """Run CQ CLI and decode CqResult JSON payload."""
 
     def _run(args: list[str], cwd: Path | None = None) -> CqResult:
-        from tools.cq.core.schema import CqResult
-
         proc = run_cq_command(args, cwd)
         if proc.returncode != 0:
             msg = f"CQ command failed with code {proc.returncode}: {proc.stderr}\nargs={args!r}"
             raise RuntimeError(msg)
-        return msgspec.json.decode(proc.stdout.encode("utf-8"), type=CqResult)
+        return loads_json(proc.stdout)
 
     return _run
 
@@ -289,8 +289,6 @@ def run_query(
         Raises:
             RuntimeError: If the operation cannot be completed.
         """
-        from tools.cq.core.schema import CqResult
-
         proc = run_command(
             [
                 "uv",
@@ -311,7 +309,7 @@ def run_query(
             raise RuntimeError(msg)
 
         try:
-            return msgspec.json.decode(proc.stdout.encode("utf-8"), type=CqResult)
+            return loads_json(proc.stdout)
         except msgspec.ValidationError as e:
             msg = f"Failed to decode CQ JSON output: {e}\nOutput: {proc.stdout[:500]}"
             raise RuntimeError(msg) from e

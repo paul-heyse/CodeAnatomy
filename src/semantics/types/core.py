@@ -15,7 +15,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum, auto
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 
 class SemanticType(StrEnum):
@@ -318,6 +321,46 @@ def columns_are_joinable(left_col: str, right_col: str) -> bool:
     return bool(left_groups & right_groups)
 
 
+def file_identity_equi_join_pairs(
+    pairs: Iterable[tuple[str, str]],
+    *,
+    left_is_file_identity: Callable[[str], bool] | None = None,
+    right_is_file_identity: Callable[[str], bool] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """Return FILE_IDENTITY-compatible equi-join pairs.
+
+    Applies canonical filtering used across semantic compiler/IR assembly:
+    exact-name pairs only, and (optionally) compatibility-group predicates
+    provided by the caller.
+
+    Parameters
+    ----------
+    pairs
+        Candidate ``(left_col, right_col)`` pairs.
+    left_is_file_identity
+        Optional predicate validating the left column compatibility group.
+    right_is_file_identity
+        Optional predicate validating the right column compatibility group.
+
+    Returns:
+    -------
+    tuple[tuple[str, str], ...]
+        Canonical FILE_IDENTITY equi-join pairs.
+    """
+    resolved: list[tuple[str, str]] = []
+    for left_col, right_col in pairs:
+        if left_col != right_col:
+            continue
+        if left_col not in FILE_IDENTITY_COLUMN_NAMES:
+            continue
+        if left_is_file_identity is not None and not left_is_file_identity(left_col):
+            continue
+        if right_is_file_identity is not None and not right_is_file_identity(right_col):
+            continue
+        resolved.append((left_col, right_col))
+    return tuple(resolved)
+
+
 __all__ = [
     "FILE_IDENTITY_COLUMN_NAMES",
     "STANDARD_COLUMNS",
@@ -326,6 +369,7 @@ __all__ = [
     "SemanticType",
     "columns_are_joinable",
     "compatibility_groups_for_semantic_type",
+    "file_identity_equi_join_pairs",
     "get_compatibility_groups",
     "infer_semantic_type",
 ]

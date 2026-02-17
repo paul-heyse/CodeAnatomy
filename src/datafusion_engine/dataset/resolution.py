@@ -167,7 +167,7 @@ def _register_dataset_provider_bridge(
         DataFusionEngineError: If the Rust bridge cannot be imported or fails to register.
     """
     try:
-        from extraction.rust_session_bridge import register_dataset_provider
+        from extraction.rust_session_bridge import register_dataset_provider_payload
     except ImportError as exc:
         msg = (
             "Rust dataset-provider bridge is required for Delta provider resolution "
@@ -185,7 +185,7 @@ def _register_dataset_provider_bridge(
         "overwrite": True,
     }
     try:
-        return register_dataset_provider(ctx, payload)
+        return register_dataset_provider_payload(ctx, payload)
     except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
         msg = (
             "Rust dataset-provider bridge failed during Delta provider resolution. "

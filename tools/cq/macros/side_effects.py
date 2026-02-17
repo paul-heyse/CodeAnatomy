@@ -6,6 +6,7 @@ Detects function calls at module top-level, global state writes, and ambient rea
 from __future__ import annotations
 
 import ast
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from tools.cq.analysis.visitors.side_effect_visitor import SideEffectVisitor
 
 _MAX_EFFECTS_DISPLAY = 40
+logger = logging.getLogger(__name__)
 
 # Known ambient state patterns
 AMBIENT_PATTERNS = {
@@ -250,6 +252,13 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
         Analysis result.
     """
     started = ms()
+    logger.debug(
+        "Running side-effects macro root=%s max_files=%d include=%d exclude=%d",
+        request.root,
+        request.max_files,
+        len(request.include),
+        len(request.exclude),
+    )
 
     all_effects, files_scanned = _scan_side_effects(
         request.root,
@@ -335,7 +344,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
         builder.add_section(section)
     builder.add_evidences(_append_evidence(all_effects, scoring_details))
 
-    return apply_rust_fallback_policy(
+    result = apply_rust_fallback_policy(
         builder.build(),
         root=request.root,
         policy=RustFallbackPolicyV1(
@@ -343,3 +352,9 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
             pattern="static mut \\|lazy_static\\|thread_local\\|unsafe ",
         ),
     )
+    logger.debug(
+        "Completed side-effects macro total_effects=%d files_scanned=%d",
+        len(all_effects),
+        files_scanned,
+    )
+    return result

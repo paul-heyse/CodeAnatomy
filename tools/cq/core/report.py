@@ -556,6 +556,43 @@ def _apply_render_enrichment(
     )
 
 
+def prepare_render_enrichment_session(
+    *,
+    result: CqResult,
+    root: Path,
+    port: RenderEnrichmentPort | None,
+) -> RenderEnrichmentSessionV1:
+    """Prepare render-enrichment session state for one result render pass.
+
+    Returns:
+        RenderEnrichmentSessionV1: Enrichment cache and summary-metric state for
+            rendering.
+    """
+    return _prepare_render_enrichment_session(result=result, root=root, port=port)
+
+
+def apply_render_enrichment(
+    result: CqResult,
+    *,
+    root: Path,
+    cache: dict[tuple[str, int, int, str], dict[str, object]],
+    allowed_files: set[str] | None,
+    port: RenderEnrichmentPort | None,
+) -> CqResult:
+    """Apply cached render enrichment payloads to all findings in a result.
+
+    Returns:
+        CqResult: Result with enrichment payloads attached to findings.
+    """
+    return _apply_render_enrichment(
+        result,
+        root=root,
+        cache=cache,
+        allowed_files=allowed_files,
+        port=port,
+    )
+
+
 def render_markdown(
     result: CqResult,
     *,
@@ -619,7 +656,9 @@ from tools.cq.core.render_summary import ARTIFACT_ONLY_KEYS
 
 __all__ = [
     "ARTIFACT_ONLY_KEYS",
+    "apply_render_enrichment",
     "compact_summary_for_rendering",
+    "prepare_render_enrichment_session",
     "render_markdown",
     "render_summary_condensed",
 ]

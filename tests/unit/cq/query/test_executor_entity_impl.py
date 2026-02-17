@@ -19,7 +19,10 @@ def test_execute_entity_query_delegates(monkeypatch: pytest.MonkeyPatch) -> None
         lambda _ctx: sentinel,
     )
 
-    assert executor_entity_impl.execute_entity_query(cast("QueryExecutionContext", object())) is sentinel
+    assert (
+        executor_entity_impl.execute_entity_query(cast("QueryExecutionContext", object()))
+        is sentinel
+    )
 
 
 def test_execute_entity_query_from_records_delegates(
@@ -33,6 +36,7 @@ def test_execute_entity_query_from_records_delegates(
         lambda _request: sentinel,
     )
 
-    assert executor_entity_impl.execute_entity_query_from_records(
-        cast("EntityQueryRequest", object())
-    ) is sentinel
+    assert (
+        executor_entity_impl.execute_entity_query_from_records(cast("EntityQueryRequest", object()))
+        is sentinel
+    )

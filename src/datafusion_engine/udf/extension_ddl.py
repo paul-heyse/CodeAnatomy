@@ -175,15 +175,4 @@ def _ddl_body_sql(target_name: str, arg_count: int, *, kind: str) -> str:
     return f"{target_name}({placeholders})"
 
 
-__all__ = [
-    "_alias_list",
-    "_ddl_args",
-    "_ddl_body_sql",
-    "_ddl_config_for_spec",
-    "_ddl_return_type",
-    "_ddl_type_name",
-    "_ddl_type_name_from_arrow",
-    "_ddl_type_name_from_string",
-    "_register_udf_aliases",
-    "_register_udf_specs",
-]
+__all__: list[str] = []

@@ -27,7 +27,7 @@ from semantics.naming import canonical_output_name
 from semantics.output_names import RELATION_OUTPUT_NAME
 from semantics.registry import SEMANTIC_MODEL, SemanticModel, SemanticOutputSpec
 from semantics.types.annotated_schema import AnnotatedSchema
-from semantics.types.core import FILE_IDENTITY_COLUMN_NAMES, CompatibilityGroup
+from semantics.types.core import CompatibilityGroup, file_identity_equi_join_pairs
 from semantics.view_kinds import VIEW_KIND_ORDER
 from utils.hashing import hash64_from_text, hash_msgpack_canonical
 
@@ -200,19 +200,12 @@ def _resolve_keys_from_inferred(
     props = view.inferred_properties
     if props is None or props.inferred_join_keys is None:
         return None
-    # Filter to FILE_IDENTITY exact-name pairs only, matching the
-    # compiler's _resolve_join_keys semantics.
-    left_cols: list[str] = []
-    right_cols: list[str] = []
-    for left_col, right_col in props.inferred_join_keys:
-        if left_col != right_col:
-            continue
-        if left_col in FILE_IDENTITY_COLUMN_NAMES:
-            left_cols.append(left_col)
-            right_cols.append(right_col)
-    if not left_cols:
+    pairs = file_identity_equi_join_pairs(props.inferred_join_keys)
+    if not pairs:
         return None
-    return tuple(left_cols), tuple(right_cols)
+    left_cols = tuple(left for left, _right in pairs)
+    right_cols = tuple(right for _left, right in pairs)
+    return left_cols, right_cols
 
 
 def _build_join_groups(

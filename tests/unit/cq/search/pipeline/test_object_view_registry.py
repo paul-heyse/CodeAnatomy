@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from tools.cq.search.objects.render import SearchObjectResolvedViewV1
-from tools.cq.search.pipeline.object_view_registry import SearchObjectViewRegistry
+from tools.cq.search.pipeline.object_view_registry import (
+    SearchObjectViewRegistry,
+    get_default_search_object_view_registry,
+    set_default_search_object_view_registry,
+)
 
 
 def test_object_view_registry_register_and_pop() -> None:
@@ -28,3 +32,13 @@ def test_object_view_registry_clear() -> None:
 
     assert registry.pop("run-1") is None
     assert registry.pop("run-2") is None
+
+
+def test_set_default_registry_replaces_process_default() -> None:
+    """Default registry accessor should return injected registry instance."""
+    injected = SearchObjectViewRegistry()
+    try:
+        set_default_search_object_view_registry(injected)
+        assert get_default_search_object_view_registry() is injected
+    finally:
+        set_default_search_object_view_registry(None)

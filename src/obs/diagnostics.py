@@ -10,15 +10,13 @@ from typing import TYPE_CHECKING, Final
 import datafusion_ext as _datafusion_ext
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
+
+    from datafusion_engine.lineage.diagnostics import DiagnosticsSink
+    from datafusion_engine.schema.contracts import ValidationViolation
+    from datafusion_engine.views.artifacts import DataFusionViewArtifact
+    from datafusion_engine.views.graph import ViewNode
     from serde_schema_registry import ArtifactSpec
-from datafusion_engine.lineage.diagnostics import (
-    ensure_recorder_sink,
-    rust_udf_snapshot_payload,
-    view_fingerprint_payload,
-    view_udf_parity_payload,
-)
-from datafusion_engine.schema.contracts import ValidationViolation
-from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from obs.otel.logs import emit_diagnostics_event
 from obs.otel.metrics import record_artifact_count
 from schema_spec.dataset_spec import ValidationPolicySpec, validation_policy_payload
@@ -37,12 +35,6 @@ from utils.uuid_factory import uuid7_str
 
 _ = _datafusion_ext
 _OBS_SESSION_ID: Final[str] = uuid7_str()
-
-if TYPE_CHECKING:
-    from datafusion import SessionContext
-
-    from datafusion_engine.lineage.diagnostics import DiagnosticsSink
-    from datafusion_engine.views.graph import ViewNode
 
 
 @dataclass
@@ -159,6 +151,8 @@ def prepared_statement_hook(
     """
 
     def _hook(spec: PreparedStatementSpec) -> None:
+        from datafusion_engine.lineage.diagnostics import ensure_recorder_sink
+
         recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
         recorder_sink.record_artifact(DATAFUSION_PREPARED_STATEMENTS_SPEC, spec.payload())
 
@@ -179,6 +173,8 @@ def record_semantic_quality_artifact(
     artifact
         Semantic diagnostics artifact summary payload.
     """
+    from datafusion_engine.lineage.diagnostics import ensure_recorder_sink
+
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(SEMANTIC_QUALITY_ARTIFACT_SPEC, artifact.payload())
 
@@ -200,6 +196,8 @@ def record_semantic_quality_events(
     rows
         Event payload rows.
     """
+    from datafusion_engine.lineage.diagnostics import ensure_recorder_sink
+
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_events(name, rows)
 
@@ -210,6 +208,11 @@ def record_view_fingerprints(
     view_nodes: Sequence[ViewNode],
 ) -> None:
     """Record policy-aware view fingerprints into diagnostics."""
+    from datafusion_engine.lineage.diagnostics import (
+        ensure_recorder_sink,
+        view_fingerprint_payload,
+    )
+
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
         VIEW_FINGERPRINTS_SPEC,
@@ -225,6 +228,11 @@ def record_view_udf_parity(
     ctx: SessionContext | None = None,
 ) -> None:
     """Record view/UDF parity diagnostics into the sink."""
+    from datafusion_engine.lineage.diagnostics import (
+        ensure_recorder_sink,
+        view_udf_parity_payload,
+    )
+
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
         VIEW_UDF_PARITY_SPEC,
@@ -238,6 +246,11 @@ def record_rust_udf_snapshot(
     snapshot: Mapping[str, object],
 ) -> None:
     """Record a Rust UDF snapshot summary payload."""
+    from datafusion_engine.lineage.diagnostics import (
+        ensure_recorder_sink,
+        rust_udf_snapshot_payload,
+    )
+
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
         RUST_UDF_SNAPSHOT_SPEC,
@@ -252,6 +265,8 @@ def record_view_contract_violations(
     violations: Sequence[ValidationViolation],
 ) -> None:
     """Record schema contract violations for a view."""
+    from datafusion_engine.lineage.diagnostics import ensure_recorder_sink
+
     payload = {
         "view": table_name,
         "violations": [
@@ -294,6 +309,8 @@ def record_dataframe_validation_error(
     policy: ValidationPolicySpec | None = None,
 ) -> None:
     """Record a dataframe validation error payload."""
+    from datafusion_engine.lineage.diagnostics import ensure_recorder_sink
+
     failure_cases_payload = _normalize_failure_cases(error)
     payload = {
         "name": name,
@@ -308,6 +325,8 @@ def record_dataframe_validation_error(
 
 def record_view_artifact(sink: DiagnosticsCollector, *, artifact: DataFusionViewArtifact) -> None:
     """Record a deterministic view artifact payload."""
+    from datafusion_engine.lineage.diagnostics import ensure_recorder_sink
+
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
         DATAFUSION_VIEW_ARTIFACTS_SPEC,

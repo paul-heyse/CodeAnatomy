@@ -486,14 +486,12 @@ def _cache_key(file_ctx: FileContext, *, options: AstExtractOptions) -> tuple[ob
 
 
 from extract.extractors.ast.builders_runtime import (
-    _extract_ast_for_context,
     extract_ast,
     extract_ast_plans,
     extract_ast_tables,
 )
 
 __all__ = [
-    "_extract_ast_for_context",
     "extract_ast",
     "extract_ast_plans",
     "extract_ast_tables",

@@ -150,9 +150,6 @@ def builder_for_semantic_spec[ContextT](
 
 
 __all__ = [
-    "_builder_for_semantic_spec",
-    "_dispatch_from_registry",
-    "_semantic_view_specs",
     "builder_for_semantic_spec",
     "dispatch_from_registry",
     "semantic_view_specs",

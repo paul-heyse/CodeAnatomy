@@ -32,10 +32,6 @@ from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.search._shared.helpers import line_col_to_byte_offset
 from tools.cq.search._shared.requests import PythonByteRangeEnrichmentRequest
 from tools.cq.search.pipeline.classifier import get_sg_root
-from tools.cq.search.python.extractors_orchestrator import (
-    enrich_python_context_by_byte_range,
-)
-from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
 from tools.cq.search.semantic.models import (
     LanguageSemanticEnrichmentOutcome,
     LanguageSemanticEnrichmentRequest,
@@ -69,22 +65,15 @@ class _PipelineContext:
     lane_ttl_seconds: int
 
 
-_LANGUAGE_PROVIDER_REGISTRY_STATE: dict[str, LanguageProviderRegistry | None] = {"registry": None}
-
-
-def set_language_provider_registry(registry: LanguageProviderRegistry | None) -> None:
-    """Set process-wide semantic provider registry override (test seam)."""
-    _LANGUAGE_PROVIDER_REGISTRY_STATE["registry"] = registry
-
-
-def _get_language_provider_registry() -> LanguageProviderRegistry:
-    registry = _LANGUAGE_PROVIDER_REGISTRY_STATE.get("registry")
-    if registry is None:
-        registry = LanguageProviderRegistry()
-        registry.register("python", _execute_python_provider)
-        registry.register("rust", _execute_rust_provider)
-        _LANGUAGE_PROVIDER_REGISTRY_STATE["registry"] = registry
-    return registry
+def _resolve_provider_registry(
+    registry: LanguageProviderRegistry | None,
+) -> LanguageProviderRegistry:
+    if registry is not None:
+        return registry
+    default_registry = LanguageProviderRegistry()
+    default_registry.register("python", _execute_python_provider)
+    default_registry.register("rust", _execute_rust_provider)
+    return default_registry
 
 
 def run_language_semantic_enrichment(
@@ -94,6 +83,7 @@ def run_language_semantic_enrichment(
     lock_retry_count: int,
     lock_retry_sleep_seconds: float,
     runtime_enabled: bool,
+    registry: LanguageProviderRegistry | None = None,
 ) -> LanguageSemanticEnrichmentOutcome:
     """Run language-aware static enrichment with cache probe/single-flight/writeback.
 
@@ -101,6 +91,7 @@ def run_language_semantic_enrichment(
         LanguageSemanticEnrichmentOutcome: Enrichment outcome for the request.
     """
     context = _build_context(request=request, cache_namespace=cache_namespace)
+    provider_registry = _resolve_provider_registry(registry)
     if not runtime_enabled:
         return LanguageSemanticEnrichmentOutcome(
             timed_out=False,
@@ -122,7 +113,11 @@ def run_language_semantic_enrichment(
         waited = _probe_cached_outcome(context=context, cache_namespace=cache_namespace)
         if waited is not None:
             return waited
-        outcome = _execute_provider(request=request, context=context)
+        outcome = _execute_provider(
+            request=request,
+            context=context,
+            registry=provider_registry,
+        )
 
         def _publish() -> None:
             _persist_outcome(
@@ -232,8 +227,9 @@ def _execute_provider(
     *,
     request: LanguageSemanticEnrichmentRequest,
     context: _PipelineContext,
+    registry: LanguageProviderRegistry,
 ) -> LanguageSemanticEnrichmentOutcome:
-    provider = _get_language_provider_registry().get(request.language)
+    provider = registry.get(request.language)
     if provider is None:
         provider = _execute_rust_provider
     return provider(request=request, context=context)
@@ -310,6 +306,9 @@ def _python_payload(
     byte_end: int,
 ) -> dict[str, object] | None:
     from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
+    from tools.cq.search.python.extractors_orchestrator import (
+        enrich_python_context_by_byte_range,
+    )
 
     sg_root = get_sg_root(
         context.target_file_path,
@@ -405,6 +404,8 @@ def _rust_payload(
     byte_start: int,
     byte_end: int,
 ) -> dict[str, object] | None:
+    from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
+
     query_budget_ms = int(
         1000.0 * (context.budget.startup_timeout_seconds + context.budget.probe_timeout_seconds)
     )
@@ -560,5 +561,4 @@ __all__ = [
     "enrich_with_language_semantics",
     "fail_open",
     "run_language_semantic_enrichment",
-    "set_language_provider_registry",
 ]

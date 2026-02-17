@@ -194,9 +194,9 @@ def _build_extract_execution_bundle(*, profile: str = "default") -> _ExtractExec
 @cache
 def _delta_write_ctx() -> SessionContext:
     """Return a cached native extraction session context for Delta writes."""
-    from extraction.rust_session_bridge import build_extraction_session
+    from extraction.rust_session_bridge import build_extraction_session, extraction_session_payload
 
-    return build_extraction_session({})
+    return build_extraction_session(extraction_session_payload())
 
 
 def _record_repo_scan_outputs(

@@ -178,6 +178,66 @@ def outputs_from_changed_inputs(
     return {name for name in impacted_views if name in output_names}
 
 
+def resolve_registered_cdf_inputs(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    use_cdf: bool | None,
+    cdf_inputs: Mapping[str, str] | None,
+    inputs: Sequence[str],
+    dataset_resolver: ManifestDatasetResolver,
+) -> Mapping[str, str] | None:
+    """Resolve CDF input mapping, registering inputs when required.
+
+    Returns:
+        Mapping[str, str] | None: Merged CDF input mapping or ``None`` when CDF
+            registration is not active.
+
+    Raises:
+        ValueError: If CDF is explicitly enabled but no runtime profile is
+            provided.
+    """
+    if use_cdf is False:
+        return None
+    if runtime_profile is None:
+        if use_cdf:
+            msg = "CDF input registration requires a runtime profile."
+            raise ValueError(msg)
+        return dict(cdf_inputs) if cdf_inputs else None
+    if use_cdf is None and not has_cdf_inputs(inputs=inputs, dataset_resolver=dataset_resolver):
+        return dict(cdf_inputs) if cdf_inputs else None
+    from datafusion_engine.session.introspection import register_cdf_inputs_for_profile
+
+    mapping = register_cdf_inputs_for_profile(
+        runtime_profile,
+        ctx,
+        table_names=inputs,
+        dataset_resolver=dataset_resolver,
+    )
+    if cdf_inputs:
+        mapping = {**mapping, **cdf_inputs}
+    return mapping or None
+
+
+def has_cdf_inputs(
+    *,
+    inputs: Sequence[str],
+    dataset_resolver: ManifestDatasetResolver,
+) -> bool:
+    """Return whether any inputs resolve to CDF-enabled Delta sources."""
+    from datafusion_engine.dataset.registry import resolve_datafusion_provider
+
+    for name in inputs:
+        location = dataset_resolver.location(name)
+        if location is None:
+            continue
+        if location.delta_cdf_options is not None:
+            return True
+        if resolve_datafusion_provider(location) == "delta_cdf":
+            return True
+    return False
+
+
 def _views_downstream_of_inputs(
     views: Sequence[SemanticIRView],
     seeds: Collection[str],
@@ -203,6 +263,8 @@ __all__ = [
     "CdfCursorStoreLike",
     "DeltaServiceLike",
     "cdf_changed_inputs",
+    "has_cdf_inputs",
     "outputs_from_changed_inputs",
     "resolve_cdf_location",
+    "resolve_registered_cdf_inputs",
 ]

@@ -416,10 +416,14 @@ def _apply_calls_semantic_with_telemetry(
     insight: FrontDoorInsightV1,
     state: CallsFrontDoorState,
     symbol_hint: str,
-) -> tuple[FrontDoorInsightV1, tuple[int, int, int, int], tuple[str, ...]]:
-    insight, _language, attempted, applied, failed, timed_out, reasons = _apply_calls_semantic(
+) -> tuple[
+    FrontDoorInsightV1,
+    tuple[int, int, int, int],
+    tuple[str, ...],
+    dict[str, object] | None,
+]:
+    semantic_outcome = _apply_calls_semantic(
         insight=insight,
-        result=result,
         request=CallsSemanticRequest(
             root=Path(result.run.root),
             target_file_path=state.target_file_path,
@@ -430,7 +434,10 @@ def _apply_calls_semantic_with_telemetry(
             run_id=result.run.run_id,
         ),
     )
-    return insight, (attempted, applied, failed, timed_out), reasons
+    insight, _language, attempted, applied, failed, timed_out, reasons, semantic_planes = (
+        semantic_outcome
+    )
+    return insight, (attempted, applied, failed, timed_out), reasons, semantic_planes
 
 
 def _attach_calls_semantic_summary(
@@ -484,12 +491,16 @@ def _build_calls_result(
         state=state,
         used_fallback=scan_result.used_fallback,
     )
-    insight, semantic_telemetry, semantic_reasons = _apply_calls_semantic_with_telemetry(
-        result,
-        insight=insight,
-        state=state,
-        symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
+    insight, semantic_telemetry, semantic_reasons, semantic_planes = (
+        _apply_calls_semantic_with_telemetry(
+            result,
+            insight=insight,
+            state=state,
+            symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
+        )
     )
+    if semantic_planes is not None:
+        result = update_result_summary(result, {"semantic_planes": semantic_planes})
     result = _attach_calls_semantic_summary(result, state.target_language, semantic_telemetry)
     insight = _finalize_calls_semantic_state(
         insight=insight,

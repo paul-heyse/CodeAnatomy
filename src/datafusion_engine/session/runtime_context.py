@@ -12,6 +12,7 @@ from cache.diskcache_factory import DiskCacheKind, cache_for_kind
 from datafusion_engine.compile.options import DataFusionSqlPolicy, resolve_sql_policy
 from datafusion_engine.registry_facade import RegistrationPhase
 from datafusion_engine.schema.introspection_core import SchemaIntrospector
+from datafusion_engine.schema.introspection_routines import _introspection_cache_for_ctx
 from datafusion_engine.session._session_caches import SESSION_CONTEXT_CACHE
 from datafusion_engine.session.runtime_config_policies import (
     DataFusionConfigPolicy,
@@ -19,7 +20,6 @@ from datafusion_engine.session.runtime_config_policies import (
     _resolved_config_policy_for_profile,
     _resolved_schema_hardening_for_profile,
 )
-from datafusion_engine.session.runtime_dataset_io import _introspection_cache_for_ctx
 from datafusion_engine.session.runtime_extensions import (
     _install_cache_tables,
     _install_physical_expr_adapter_factory,
@@ -113,27 +113,19 @@ class _RuntimeContextMixin:
         _install_udf_platform(_as_runtime_profile(self), ctx)
         _install_planner_rules(_as_runtime_profile(self), ctx)
 
-    def _install_schema_guards_for_context(
-        self, ctx: SessionContext
-    ) -> None:
+    def _install_schema_guards_for_context(self, ctx: SessionContext) -> None:
         _install_schema_registry(_as_runtime_profile(self), ctx)
         _validate_rule_function_allowlist(_as_runtime_profile(self), ctx)
 
-    def _install_planning_extensions_for_context(
-        self, ctx: SessionContext
-    ) -> None:
+    def _install_planning_extensions_for_context(self, ctx: SessionContext) -> None:
         _prepare_statements(_as_runtime_profile(self), ctx)
         self.delta_ops.ensure_delta_plan_codecs(ctx)
 
-    def _install_extension_hooks_for_context(
-        self, ctx: SessionContext
-    ) -> None:
+    def _install_extension_hooks_for_context(self, ctx: SessionContext) -> None:
         _record_extension_parity_validation(_as_runtime_profile(self), ctx)
         _install_physical_expr_adapter_factory(_as_runtime_profile(self), ctx)
 
-    def _install_observability_for_context(
-        self, ctx: SessionContext
-    ) -> None:
+    def _install_observability_for_context(self, ctx: SessionContext) -> None:
         _install_tracing(_as_runtime_profile(self), ctx)
         _install_cache_tables(_as_runtime_profile(self), ctx)
         _record_cache_diagnostics(_as_runtime_profile(self), ctx)
@@ -199,9 +191,7 @@ class _RuntimeContextMixin:
             raise RuntimeError(msg)
         return catalog
 
-    def function_factory_policy_hash(
-        self, ctx: SessionContext
-    ) -> str | None:
+    def function_factory_policy_hash(self, ctx: SessionContext) -> str | None:
         """Return the FunctionFactory policy hash for a session context.
 
         Returns:
@@ -264,9 +254,7 @@ class _RuntimeContextMixin:
         """
         return statement_sql_options_for_profile(_as_runtime_profile(self))
 
-    def _diskcache(
-        self, kind: DiskCacheKind
-    ) -> Cache | FanoutCache | None:
+    def _diskcache(self, kind: DiskCacheKind) -> Cache | FanoutCache | None:
         """Return a DiskCache instance for the requested kind.
 
         Returns:
@@ -292,9 +280,7 @@ class _RuntimeContextMixin:
             return None
         return profile.ttl_for(kind)
 
-    def _record_view_definition(
-        self, *, artifact: DataFusionViewArtifact
-    ) -> None:
+    def _record_view_definition(self, *, artifact: DataFusionViewArtifact) -> None:
         """Record a view artifact for diagnostics snapshots.
 
         Parameters
@@ -304,9 +290,7 @@ class _RuntimeContextMixin:
         """
         record_view_definition(_as_runtime_profile(self), artifact=artifact)
 
-    def _schema_introspector(
-        self, ctx: SessionContext
-    ) -> SchemaIntrospector:
+    def _schema_introspector(self, ctx: SessionContext) -> SchemaIntrospector:
         """Return a schema introspector for the session.
 
         Returns:
@@ -443,4 +427,4 @@ class _RuntimeContextMixin:
         adapter.register_object_store(scheme="file://", store=store, host=None)
 
 
-__all__ = ["_RuntimeContextMixin"]
+__all__: list[str] = []

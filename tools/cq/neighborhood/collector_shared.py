@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from tools.cq.neighborhood.contracts import (
     TreeSitterNeighborhoodCollectRequest,
     TreeSitterNeighborhoodCollectResult,
@@ -26,28 +24,11 @@ def anchor_byte_to_line_col(source_bytes: bytes, anchor_byte: int) -> tuple[int,
 
 
 def collect_language_neighborhood(
-    *,
-    root: Path,
-    target_name: str,
-    target_file: str,
-    language: str,
-    target_line: int,
-    target_col: int,
-    top_k: int,
+    request: TreeSitterNeighborhoodCollectRequest,
 ) -> TreeSitterNeighborhoodCollectResult:
     """Run neighborhood collection for one language target.
 
     Returns:
         TreeSitterNeighborhoodCollectResult: Collected neighborhood payload.
     """
-    return collect_tree_sitter_neighborhood(
-        TreeSitterNeighborhoodCollectRequest(
-            root=str(root),
-            target_name=target_name,
-            target_file=target_file,
-            language=language,
-            target_line=target_line,
-            target_col=target_col,
-            max_per_slice=top_k,
-        )
-    )
+    return collect_tree_sitter_neighborhood(request)

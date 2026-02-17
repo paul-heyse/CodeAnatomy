@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tools.cq.search.objects.render import SearchObjectResolvedViewV1
 from tools.cq.search.pipeline.object_view_registry import (
+    SearchObjectViewRegistry,
     get_default_search_object_view_registry,
 )
 
@@ -12,6 +13,7 @@ def register_search_object_view(
     *,
     run_id: str | None,
     view: SearchObjectResolvedViewV1,
+    registry: SearchObjectViewRegistry | None = None,
 ) -> None:
     """Register a search object view for a run.
 
@@ -24,10 +26,15 @@ def register_search_object_view(
     """
     if not isinstance(run_id, str) or not run_id:
         return
-    get_default_search_object_view_registry().register(run_id, view)
+    active_registry = registry or get_default_search_object_view_registry()
+    active_registry.register(run_id, view)
 
 
-def pop_search_object_view_for_run(run_id: str | None) -> SearchObjectResolvedViewV1 | None:
+def pop_search_object_view_for_run(
+    run_id: str | None,
+    *,
+    registry: SearchObjectViewRegistry | None = None,
+) -> SearchObjectResolvedViewV1 | None:
     """Pop object-resolved search view payload for a completed run.
 
     Parameters
@@ -42,12 +49,14 @@ def pop_search_object_view_for_run(run_id: str | None) -> SearchObjectResolvedVi
     """
     if not isinstance(run_id, str) or not run_id:
         return None
-    return get_default_search_object_view_registry().pop(run_id)
+    active_registry = registry or get_default_search_object_view_registry()
+    return active_registry.pop(run_id)
 
 
-def clear_search_object_views() -> None:
+def clear_search_object_views(*, registry: SearchObjectViewRegistry | None = None) -> None:
     """Clear all run-scoped object views from default registry."""
-    get_default_search_object_view_registry().clear()
+    active_registry = registry or get_default_search_object_view_registry()
+    active_registry.clear()
 
 
 __all__ = [

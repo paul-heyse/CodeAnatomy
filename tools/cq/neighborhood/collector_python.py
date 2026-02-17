@@ -8,7 +8,10 @@ from tools.cq.neighborhood.collector_shared import (
     anchor_byte_to_line_col,
     collect_language_neighborhood,
 )
-from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectResult
+from tools.cq.neighborhood.contracts import (
+    TreeSitterNeighborhoodCollectRequest,
+    TreeSitterNeighborhoodCollectResult,
+)
 
 __all__ = ["collect_python_neighborhood"]
 
@@ -29,11 +32,13 @@ def collect_python_neighborhood(
     """
     line, col = anchor_byte_to_line_col(source_bytes, anchor_byte)
     return collect_language_neighborhood(
-        root=root,
-        target_name=target_name,
-        target_file=file_path,
-        language="python",
-        target_line=line,
-        target_col=col,
-        top_k=top_k,
+        TreeSitterNeighborhoodCollectRequest(
+            root=str(root),
+            target_name=target_name,
+            target_file=file_path,
+            language="python",
+            target_line=line,
+            target_col=col,
+            max_per_slice=top_k,
+        )
     )

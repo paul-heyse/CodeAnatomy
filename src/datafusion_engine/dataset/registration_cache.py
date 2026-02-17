@@ -272,14 +272,5 @@ def _filter_kwargs(fn: Callable[..., object], kwargs: Mapping[str, object]) -> d
 
 
 __all__ = [
-    "_call_register",
-    "_dataset_cache_partition_by",
-    "_filter_kwargs",
-    "_maybe_cache",
-    "_register_delta_cache_for_dataset",
-    "_register_memory_cache",
-    "_resolve_cache_policy",
-    "_should_cache_df",
-    "_strip_delta_file_column_for_cache",
     "cached_dataset_names",
 ]

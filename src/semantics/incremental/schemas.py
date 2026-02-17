@@ -6,7 +6,7 @@ import pyarrow as pa
 
 from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.schema import registered_table_names
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.profiles import create_runtime_profile
 from datafusion_engine.session.runtime_dataset_io import dataset_schema_from_context
 from schema_spec.dataset_spec import (
     DatasetSpec,
@@ -24,7 +24,7 @@ def incremental_dataset_specs() -> tuple[DatasetSpec, ...]:
     tuple[object, ...]
         Dataset specs for incremental datasets.
     """
-    ctx = DataFusionRuntimeProfile().session_runtime().ctx
+    ctx = create_runtime_profile().session_runtime().ctx
     specs: list[DatasetSpec] = []
     for name in sorted(registered_table_names(ctx)):
         try:

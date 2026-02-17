@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from tools.cq.core.contract_codec import encode_json
@@ -213,70 +213,96 @@ def render_insight_card_from_summary(summary: SummaryEnvelopeV1 | dict[str, obje
     return []
 
 
-def _derive_status_from_summary(
-    key: str,
-    value: object,
-) -> str | None:
+def _derive_enrichment_telemetry_status(value: object) -> str:
+    applied = 0
+    total = 0
+    degraded = 0
+    if isinstance(value, Mapping):
+        for lang_data in value.values():
+            if not isinstance(lang_data, Mapping):
+                continue
+            for stage_data in lang_data.values():
+                if not isinstance(stage_data, Mapping):
+                    continue
+                applied += int(stage_data.get("applied", 0) or 0)
+                total += int(stage_data.get("total", 0) or 0)
+                degraded += int(stage_data.get("degraded", 0) or 0)
+    if total == 0:
+        return "Enrichment: none"
+    result = f"Enrichment: {applied}/{total} applied"
+    return f"{result} | degraded: {degraded}" if degraded else result
+
+
+def _derive_language_semantic_status(label: str, value: object) -> str:
+    if not isinstance(value, Mapping):
+        return f"{label}: skipped"
+    applied = value.get("applied", 0)
+    attempted = value.get("attempted", 0)
+    if not attempted:
+        return f"{label}: skipped"
+    return f"{label}: {applied}/{attempted} applied"
+
+
+def _derive_semantic_planes_status(value: object) -> str:
+    if not isinstance(value, Mapping) or not value:
+        return "Semantic planes: none"
+    counts = value.get("counts")
+    if not isinstance(counts, Mapping):
+        return "Semantic planes: present"
+    tokens = int(counts.get("semantic_tokens", 0) or 0)
+    locals_count = int(counts.get("locals", 0) or 0)
+    diagnostics = int(counts.get("diagnostics", 0) or 0)
+    return f"Semantic planes: tokens={tokens}, locals={locals_count}, diagnostics={diagnostics}"
+
+
+def _derive_python_semantic_diagnostics_status(value: object) -> str:
+    count = len(value) if isinstance(value, (list, tuple, Mapping)) else 0
+    if count == 0:
+        return "Python semantic diagnostics: clean"
+    return f"Python semantic diagnostics: {count} items"
+
+
+def _derive_capabilities_status(value: object) -> str:
+    langs: list[str] = [str(name) for name in value] if isinstance(value, Mapping) else []
+    return f"Capabilities: {', '.join(langs)}" if langs else "Capabilities: none"
+
+
+def _derive_cross_language_diagnostics_status(value: object) -> str:
+    if isinstance(value, (list, tuple)):
+        count = len(value)
+    elif isinstance(value, Mapping):
+        raw = value.get("diagnostics")
+        count = len(raw) if isinstance(raw, (list, tuple)) else 0
+    else:
+        count = 0
+    return "Cross-lang: clean" if count == 0 else f"Cross-lang: {count} diagnostics"
+
+
+_STATUS_DERIVERS: dict[str, Callable[[object], str]] = {
+    "cross_language_diagnostics": _derive_cross_language_diagnostics_status,
+    "enrichment_telemetry": _derive_enrichment_telemetry_status,
+    "language_capabilities": _derive_capabilities_status,
+    "python_semantic_diagnostics": _derive_python_semantic_diagnostics_status,
+    "python_semantic_telemetry": lambda value: _derive_language_semantic_status(
+        "Python semantic", value
+    ),
+    "rust_semantic_telemetry": lambda value: _derive_language_semantic_status(
+        "Rust semantic", value
+    ),
+    "semantic_planes": _derive_semantic_planes_status,
+}
+
+
+def _derive_status_from_summary(key: str, value: object) -> str | None:
     """Derive compact diagnostic status lines for artifact-only summary keys.
 
     Returns:
         str | None: Human-readable status line when derivable, else ``None``.
     """
-    if key == "enrichment_telemetry":
-        applied = 0
-        total = 0
-        degraded = 0
-        if isinstance(value, Mapping):
-            for lang_data in value.values():
-                if not isinstance(lang_data, Mapping):
-                    continue
-                for stage_data in lang_data.values():
-                    if not isinstance(stage_data, Mapping):
-                        continue
-                    applied += int(stage_data.get("applied", 0) or 0)
-                    total += int(stage_data.get("total", 0) or 0)
-                    degraded += int(stage_data.get("degraded", 0) or 0)
-        if total == 0:
-            return "Enrichment: none"
-        result = f"Enrichment: {applied}/{total} applied"
-        return f"{result} | degraded: {degraded}" if degraded else result
-    if key in {"python_semantic_telemetry", "rust_semantic_telemetry"}:
-        label = "Python semantic" if key == "python_semantic_telemetry" else "Rust semantic"
-        if not isinstance(value, Mapping):
-            return f"{label}: skipped"
-        applied = value.get("applied", 0)
-        attempted = value.get("attempted", 0)
-        if not attempted:
-            return f"{label}: skipped"
-        return f"{label}: {applied}/{attempted} applied"
-    if key == "semantic_planes":
-        if not isinstance(value, Mapping) or not value:
-            return "Semantic planes: none"
-        counts = value.get("counts")
-        if not isinstance(counts, Mapping):
-            return "Semantic planes: present"
-        tokens = int(counts.get("semantic_tokens", 0) or 0)
-        locals_count = int(counts.get("locals", 0) or 0)
-        diagnostics = int(counts.get("diagnostics", 0) or 0)
-        return f"Semantic planes: tokens={tokens}, locals={locals_count}, diagnostics={diagnostics}"
-    if key == "python_semantic_diagnostics":
-        count = len(value) if isinstance(value, (list, tuple, Mapping)) else 0
-        if count == 0:
-            return "Python semantic diagnostics: clean"
-        return f"Python semantic diagnostics: {count} items"
-    if key == "language_capabilities":
-        langs: list[str] = [str(name) for name in value] if isinstance(value, Mapping) else []
-        return f"Capabilities: {', '.join(langs)}" if langs else "Capabilities: none"
-    if key == "cross_language_diagnostics":
-        if isinstance(value, (list, tuple)):
-            count = len(value)
-        elif isinstance(value, Mapping):
-            raw = value.get("diagnostics")
-            count = len(raw) if isinstance(raw, (list, tuple)) else 0
-        else:
-            count = 0
-        return "Cross-lang: clean" if count == 0 else f"Cross-lang: {count} diagnostics"
-    return None
+    deriver = _STATUS_DERIVERS.get(key)
+    if deriver is None:
+        return None
+    return deriver(value)
 
 
 def _derive_compact_status(key: str, value: object) -> str | None:

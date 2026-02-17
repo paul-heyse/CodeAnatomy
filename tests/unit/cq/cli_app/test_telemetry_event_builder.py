@@ -14,14 +14,16 @@ _EVENT_CREATED_MS = 123456
 def test_build_invoke_event_populates_fields() -> None:
     """Invoke event builder preserves provided telemetry values."""
     event = build_invoke_event(
-        ok=True,
-        command="search",
-        parse_ms=_PARSE_MS,
-        exec_ms=_EXEC_MS,
-        exit_code=0,
-        event_id="run_1",
-        event_uuid_version=_EVENT_UUID_VERSION,
-        event_created_ms=_EVENT_CREATED_MS,
+        CqInvokeEvent(
+            ok=True,
+            command="search",
+            parse_ms=_PARSE_MS,
+            exec_ms=_EXEC_MS,
+            exit_code=0,
+            event_id="run_1",
+            event_uuid_version=_EVENT_UUID_VERSION,
+            event_created_ms=_EVENT_CREATED_MS,
+        )
     )
 
     assert isinstance(event, CqInvokeEvent)
@@ -38,13 +40,15 @@ def test_build_invoke_event_populates_fields() -> None:
 def test_build_invoke_event_with_error_fields() -> None:
     """Invoke event builder carries optional error metadata."""
     event = build_invoke_event(
-        ok=False,
-        command="search",
-        parse_ms=0.1,
-        exec_ms=0.2,
-        exit_code=2,
-        error_class="cyclopts.UnknownCommandError",
-        error_stage="command_resolve",
+        CqInvokeEvent(
+            ok=False,
+            command="search",
+            parse_ms=0.1,
+            exec_ms=0.2,
+            exit_code=2,
+            error_class="cyclopts.UnknownCommandError",
+            error_stage="command_resolve",
+        )
     )
 
     assert event.ok is False

@@ -1,35 +1,18 @@
-"""Extract plan building and materialization utilities.
-
-This module provides functions for building DataFusion plan bundles from
-row iterators and materializing them with schema normalization.
-"""
+"""Extract plan materialization utilities."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-import msgspec
 import pyarrow as pa
 from datafusion.dataframe import DataFrame
 
 from core_types import DeterminismTier
-from datafusion_engine.arrow.build import (
-    record_batch_reader_from_row_batches as schema_record_batch_reader_from_row_batches,
-)
-from datafusion_engine.arrow.build import (
-    record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
-)
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.expr.query_spec import apply_query_spec
-from datafusion_engine.extract.registry import dataset_query, dataset_schema, extract_metadata
-from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.plan.bundle_artifact import (
-    DataFusionPlanArtifact,
-    PlanBundleOptions,
-    build_plan_artifact,
-)
+from datafusion_engine.extract.registry import dataset_schema
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from datafusion_engine.plan.result_types import (
     PlanExecutionOptions,
     PlanScanOverrides,
@@ -43,27 +26,42 @@ from datafusion_engine.schema.policy import SchemaPolicy
 from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.views.graph import _validate_schema_contract
-from extract.coordination.evidence_plan import EvidencePlan
+from extract.coordination.extract_plan_builder import (
+    ExtractPlanOptions,
+    apply_query_and_project,
+    datafusion_plan_from_reader,
+    extract_plan_from_reader,
+    extract_plan_from_row_batches,
+    extract_plan_from_rows,
+    raw_plan_from_rows,
+    record_batch_reader_from_row_batches,
+    record_batch_reader_from_rows,
+)
+from extract.coordination.extract_recorder import (
+    record_extract_compile as _record_extract_compile,
+)
+from extract.coordination.extract_recorder import (
+    record_extract_execution as _record_extract_execution,
+)
+from extract.coordination.extract_recorder import (
+    record_extract_udf_parity as _record_extract_udf_parity,
+)
+from extract.coordination.extract_recorder import (
+    record_extract_view_artifact as _record_extract_view_artifact,
+)
 from extract.coordination.schema_ops import (
     ExtractNormalizeOptions,
     apply_pipeline_kernels,
     finalize_context_for_dataset,
     normalized_schema_policy_for_dataset,
 )
-from extract.coordination.spec_helpers import (
-    ExtractExecutionOptions,
-    plan_requires_row,
-    rule_execution_options,
-)
 from extract.session import ExtractSession
 from extraction.diagnostics import EngineEventRecorder, ExtractQualityEvent
 from extraction.materialize_pipeline import write_extract_outputs
-from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scheduling import ScanUnit
-    from datafusion_engine.session.runtime_session import SessionRuntime
     from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
 
@@ -94,41 +92,12 @@ class _ProfileDatasetResolver:
 
 
 @dataclass(frozen=True)
-class ExtractPlanOptions:
-    """Options for building extract plans."""
-
-    normalize: ExtractNormalizeOptions | None = None
-    evidence_plan: EvidencePlan | None = None
-    repo_id: str | None = None
-
-    def resolved_repo_id(self) -> str | None:
-        """Return the effective repo id for query construction."""
-        if self.repo_id is not None:
-            return self.repo_id
-        if self.normalize is None:
-            return None
-        return self.normalize.repo_id
-
-
-@dataclass(frozen=True)
 class ExtractMaterializeOptions:
     """Options for materializing extract plans."""
 
     normalize: ExtractNormalizeOptions | None = None
     prefer_reader: bool = False
     apply_post_kernels: bool = False
-
-
-@dataclass(frozen=True)
-class _ExtractProjectionRequest:
-    """Inputs required to apply query and evidence projection."""
-
-    name: str
-    table: DataFrame
-    session: ExtractSession
-    normalize: ExtractNormalizeOptions | None = None
-    evidence_plan: EvidencePlan | None = None
-    repo_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -144,237 +113,6 @@ class _StreamingMaterializeRequest:
     options: ExtractMaterializeOptions
     streaming_supported: bool
     dataset_resolver: ManifestDatasetResolver | None = None
-
-
-def _build_plan_artifact_from_df(
-    df: DataFrame,
-    *,
-    session_runtime: SessionRuntime,
-) -> DataFusionPlanArtifact:
-    return build_plan_artifact(
-        session_runtime.ctx,
-        df,
-        options=PlanBundleOptions(
-            validate_udfs=True,
-            session_runtime=session_runtime,
-        ),
-    )
-
-
-def _empty_plan_from_table(
-    table: DataFrame,
-    *,
-    session_runtime: SessionRuntime,
-) -> DataFusionPlanArtifact:
-    return _build_plan_artifact_from_df(
-        table.limit(0),
-        session_runtime=session_runtime,
-    )
-
-
-def record_batch_reader_from_row_batches(
-    name: str,
-    row_batches: Iterable[Sequence[Mapping[str, object]]],
-) -> pa.RecordBatchReader:
-    """Return a RecordBatchReader aligned to the dataset schema.
-
-    Returns:
-    -------
-    pyarrow.RecordBatchReader
-        Reader yielding schema-aligned record batches.
-    """
-    schema = dataset_schema(name)
-    return schema_record_batch_reader_from_row_batches(schema, row_batches)
-
-
-def record_batch_reader_from_rows(
-    name: str,
-    rows: Iterable[Mapping[str, object]],
-) -> pa.RecordBatchReader:
-    """Return a RecordBatchReader aligned to the dataset schema.
-
-    Returns:
-    -------
-    pyarrow.RecordBatchReader
-        Reader yielding schema-aligned record batches.
-    """
-    schema = dataset_schema(name)
-    return schema_record_batch_reader_from_rows(schema, rows)
-
-
-def datafusion_plan_from_reader(
-    name: str,
-    reader: RecordBatchReaderLike,
-    *,
-    session: ExtractSession,
-) -> DataFusionPlanArtifact:
-    """Return a DataFusion plan bundle for a RecordBatchReader.
-
-    Returns:
-    -------
-    DataFusionPlanArtifact
-        DataFusion plan bundle backed by the registered reader.
-    """
-    df = datafusion_from_arrow(session.session_runtime.ctx, name=name, value=reader)
-    return _build_plan_artifact_from_df(df, session_runtime=session.session_runtime)
-
-
-def extract_plan_from_reader(
-    name: str,
-    reader: RecordBatchReaderLike,
-    *,
-    session: ExtractSession,
-    options: ExtractPlanOptions | None = None,
-) -> DataFusionPlanArtifact:
-    """Return an extract plan bundle for a RecordBatchReader.
-
-    Returns:
-    -------
-    DataFusionPlanArtifact
-        Extract plan bundle with registry query and evidence projection applied.
-    """
-    resolved = options or ExtractPlanOptions()
-    raw_plan = datafusion_plan_from_reader(name, reader, session=session)
-    return apply_query_and_project(
-        _ExtractProjectionRequest(
-            name=name,
-            table=raw_plan.df,
-            session=session,
-            normalize=resolved.normalize,
-            evidence_plan=resolved.evidence_plan,
-            repo_id=resolved.resolved_repo_id(),
-        )
-    )
-
-
-def raw_plan_from_rows(
-    name: str,
-    rows: Iterable[Mapping[str, object]],
-    *,
-    session: ExtractSession,
-) -> DataFusionPlanArtifact:
-    """Return a raw plan bundle for a row iterator.
-
-    Returns:
-    -------
-    DataFusionPlanArtifact
-        Extract plan bundle without registry query or evidence projection applied.
-    """
-    reader = record_batch_reader_from_rows(name, rows)
-    return datafusion_plan_from_reader(name, reader, session=session)
-
-
-def extract_plan_from_rows(
-    name: str,
-    rows: Iterable[Mapping[str, object]],
-    *,
-    session: ExtractSession,
-    options: ExtractPlanOptions | None = None,
-) -> DataFusionPlanArtifact:
-    """Return an extract plan bundle for a row iterator.
-
-    Returns:
-    -------
-    DataFusionPlanArtifact
-        Extract plan bundle with registry query and evidence projection applied.
-    """
-    reader = record_batch_reader_from_rows(name, rows)
-    return extract_plan_from_reader(
-        name,
-        reader,
-        session=session,
-        options=options,
-    )
-
-
-def extract_plan_from_row_batches(
-    name: str,
-    row_batches: Iterable[Sequence[Mapping[str, object]]],
-    *,
-    session: ExtractSession,
-    options: ExtractPlanOptions | None = None,
-) -> DataFusionPlanArtifact:
-    """Return an extract plan bundle for row batches.
-
-    Returns:
-    -------
-    DataFusionPlanArtifact
-        Extract plan bundle with registry query and evidence projection applied.
-    """
-    reader = record_batch_reader_from_row_batches(name, row_batches)
-    return extract_plan_from_reader(
-        name,
-        reader,
-        session=session,
-        options=options,
-    )
-
-
-def _options_overrides(options: object | None) -> Mapping[str, object]:
-    if options is None:
-        return {}
-    if isinstance(options, Mapping):
-        return dict(options)
-    try:
-        builtins = to_builtins(options)
-    except (TypeError, msgspec.EncodeError):
-        return {}
-    if isinstance(builtins, Mapping):
-        return dict(builtins)
-    return {}
-
-
-def _stage_enabled(condition: str, execution: ExtractExecutionOptions) -> bool:
-    if not condition:
-        return True
-    if condition == "allowlist":
-        return bool(execution.module_allowlist)
-    value = execution.as_mapping().get(condition)
-    if isinstance(value, bool):
-        return value
-    return bool(value)
-
-
-def apply_query_and_project(request: _ExtractProjectionRequest) -> DataFusionPlanArtifact:
-    """Apply registry query and evidence projection to a DataFusion table.
-
-    Returns:
-    -------
-    DataFusionPlanArtifact
-        Plan bundle with query and evidence projection applied.
-    """
-    row = extract_metadata(request.name)
-    if request.evidence_plan is not None and not plan_requires_row(request.evidence_plan, row):
-        return _empty_plan_from_table(
-            request.table, session_runtime=request.session.session_runtime
-        )
-    overrides = _options_overrides(request.normalize.options if request.normalize else None)
-    execution = rule_execution_options(
-        row.template or request.name,
-        request.evidence_plan,
-        overrides=overrides,
-    )
-    if row.enabled_when is not None and not _stage_enabled(row.enabled_when, execution):
-        return _empty_plan_from_table(
-            request.table, session_runtime=request.session.session_runtime
-        )
-    projection: tuple[str, ...] = ()
-    if request.evidence_plan is not None:
-        required = set(request.evidence_plan.required_columns_for(request.name))
-        required.update(row.join_keys)
-        required.update(spec.name for spec in row.derived)
-        if row.evidence_required_columns:
-            required.update(row.evidence_required_columns)
-        if required:
-            schema = dataset_schema(request.name)
-            projection = tuple(field.name for field in schema if field.name in required)
-    spec = dataset_query(
-        request.name,
-        repo_id=request.repo_id,
-        projection=projection if projection else None,
-    )
-    df = apply_query_spec(request.table, spec=spec)
-    return _build_plan_artifact_from_df(df, session_runtime=request.session.session_runtime)
 
 
 def _require_schema_policy(name: str, policy: SchemaPolicy | None) -> SchemaPolicy:
@@ -436,14 +174,13 @@ def extract_dataset_location_or_raise(
     *,
     runtime_profile: DataFusionRuntimeProfile,
 ) -> DatasetLocation:
-    """Return the extract dataset location, raising when missing.
-
-    Args:
-        name: Description.
-        runtime_profile: Description.
+    """Return extract dataset location, raising when missing.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If no extract dataset location is configured.
+
+    Returns:
+        DatasetLocation: Resolved extract dataset location.
     """
     location = _dataset_location(runtime_profile, name)
     if location is None:
@@ -453,13 +190,13 @@ def extract_dataset_location_or_raise(
 
 
 def _dataset_location(
-    _runtime_profile: DataFusionRuntimeProfile,
+    runtime_profile: DataFusionRuntimeProfile,
     name: str,
     *,
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> DatasetLocation | None:
     if dataset_resolver is None:
-        return None
+        return runtime_profile.data_sources.dataset_templates.get(name)
     return dataset_resolver.location(name)
 
 
@@ -700,20 +437,11 @@ def materialize_extract_plan(
     options: ExtractMaterializeOptions | None = None,
     execution_context: SemanticExecutionContext | None = None,
 ) -> TableLike | pa.RecordBatchReader:
-    """Materialize an extract plan bundle and normalize at the Arrow boundary.
-
-    Args:
-        name: Extract dataset name.
-        plan: DataFusion plan bundle to materialize.
-        runtime_profile: DataFusion runtime profile.
-        determinism_tier: Determinism tier for the materialization.
-        options: Optional materialization options.
-        execution_context: Optional semantic execution context. When provided,
-            the dataset resolver is extracted from the context instead of
-            building another semantic execution context.
+    """Materialize an extract plan bundle and normalize output.
 
     Returns:
-        Materialized and normalized extract output.
+        TableLike | pa.RecordBatchReader: Materialized extract output in the
+            requested output mode.
     """
     resolved = options or ExtractMaterializeOptions()
     dataset_resolver = _resolve_dataset_resolver(
@@ -790,12 +518,10 @@ def materialize_extract_plan_table(
     options: ExtractMaterializeOptions | None = None,
     execution_context: SemanticExecutionContext | None = None,
 ) -> TableLike:
-    """Materialize an extract plan and always return an Arrow table-like object.
+    """Materialize an extract plan and always return a table-like result.
 
     Returns:
-    -------
-    TableLike
-        Materialized extract output as a table.
+        TableLike: Materialized table output.
     """
     result = materialize_extract_plan(
         name,
@@ -820,15 +546,13 @@ def materialize_extract_plan_reader(
     options: ExtractMaterializeOptions | None = None,
     execution_context: SemanticExecutionContext | None = None,
 ) -> pa.RecordBatchReader:
-    """Materialize an extract plan and always return an Arrow RecordBatchReader.
+    """Materialize an extract plan and always return a RecordBatchReader.
 
     Returns:
-    -------
-    pa.RecordBatchReader
-        Materialized extract output as a streaming reader.
+        pa.RecordBatchReader: Materialized reader output.
 
     Raises:
-        TypeError: If materialization produces an unsupported output type.
+        TypeError: If the materialized output cannot be converted to a reader.
     """
     resolved_options = options or ExtractMaterializeOptions()
     reader_options = (
@@ -864,12 +588,11 @@ def materialize_extract_reader(
     plan_options: ExtractPlanOptions | None = None,
     materialize_options: ExtractMaterializeOptions | None = None,
 ) -> TableLike | RecordBatchReaderLike:
-    """Materialize an extract plan derived from a reader.
+    """Materialize an extract plan derived from an input reader.
 
     Returns:
-    -------
-    TableLike | RecordBatchReaderLike
-        Materialized extract output.
+        TableLike | RecordBatchReaderLike: Materialized output for the input
+            reader.
     """
     resolved_plan = plan_options or ExtractPlanOptions()
     plan = extract_plan_from_reader(
@@ -896,46 +619,6 @@ def materialize_extract_reader(
     )
 
 
-def _record_extract_execution(
-    name: str,
-    result: ExecutionResult,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-) -> None:
-    row_count: int | None = None
-    table = result.table
-    if table is not None:
-        row_count = table.num_rows
-    from datafusion_engine.lineage.diagnostics import record_artifact
-
-    payload = {
-        "dataset": name,
-        "result_kind": result.kind.value,
-        "rows": row_count,
-    }
-    from serde_artifact_specs import EXTRACT_PLAN_EXECUTE_SPEC
-
-    record_artifact(runtime_profile, EXTRACT_PLAN_EXECUTE_SPEC, payload)
-
-
-def _record_extract_compile(
-    name: str,
-    plan: DataFusionPlanArtifact,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-) -> None:
-    """Record a compile fingerprint artifact for extract plans."""
-    from datafusion_engine.lineage.diagnostics import record_artifact
-
-    payload = {
-        "dataset": name,
-        "plan_fingerprint": plan.plan_fingerprint,
-    }
-    from serde_artifact_specs import EXTRACT_PLAN_COMPILE_SPEC
-
-    record_artifact(runtime_profile, EXTRACT_PLAN_COMPILE_SPEC, payload)
-
-
 def _register_extract_view(name: str, *, runtime_profile: DataFusionRuntimeProfile) -> None:
     """Register a view for a materialized extract dataset."""
     location = _dataset_location(runtime_profile, name)
@@ -949,63 +632,16 @@ def _register_extract_view(name: str, *, runtime_profile: DataFusionRuntimeProfi
     facade.register_dataset(name=name, location=location)
 
 
-def _record_extract_view_artifact(
-    name: str,
-    plan: DataFusionPlanArtifact,
-    *,
-    schema: pa.Schema,
-    runtime_profile: DataFusionRuntimeProfile,
-) -> None:
-    """Record a deterministic view artifact for extract outputs."""
-    profile = runtime_profile
-    from datafusion_engine.lineage.reporting import extract_lineage
-    from datafusion_engine.session.runtime_session import (
-        record_view_definition,
-        session_runtime_hash,
-    )
-    from datafusion_engine.views.artifacts import (
-        ViewArtifactLineage,
-        ViewArtifactRequest,
-        build_view_artifact_from_bundle,
-    )
-
-    lineage = extract_lineage(
-        plan.optimized_logical_plan,
-        udf_snapshot=plan.artifacts.udf_snapshot,
-    )
-    required_udfs = plan.required_udfs
-    referenced_tables = lineage.referenced_tables
-    runtime_hash = session_runtime_hash(profile.session_runtime())
-    artifact = build_view_artifact_from_bundle(
-        plan,
-        request=ViewArtifactRequest(
-            name=name,
-            schema=schema,
-            lineage=ViewArtifactLineage(
-                required_udfs=required_udfs,
-                referenced_tables=referenced_tables,
-            ),
-            runtime_hash=runtime_hash,
-        ),
-    )
-    record_view_definition(profile, artifact=artifact)
-
-
 def _validate_extract_schema_contract(
     name: str,
     *,
     schema: pa.Schema,
     runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
-    """Validate extract outputs against the expected ABI schema.
-
-    Args:
-        name: Description.
-        schema: Description.
-        runtime_profile: Description.
+    """Validate extract outputs against expected ABI schema.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If the expected dataset schema cannot be resolved.
     """
     if _dataset_location(runtime_profile, name) is None:
         return
@@ -1035,25 +671,6 @@ def _arrow_schema_from_output(output: TableLike | RecordBatchReaderLike) -> pa.S
             return resolved
     msg = "Failed to resolve schema for extract output."
     raise TypeError(msg)
-
-
-def _record_extract_udf_parity(
-    name: str,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-) -> None:
-    """Record extract-scoped UDF parity diagnostics."""
-    profile = runtime_profile
-    from datafusion_engine.lineage.diagnostics import record_artifact
-    from datafusion_engine.udf.parity import udf_parity_report
-
-    session_runtime = profile.session_runtime()
-    report = udf_parity_report(session_runtime.ctx, snapshot=session_runtime.udf_snapshot)
-    payload = report.payload()
-    payload["dataset"] = name
-    from serde_artifact_specs import EXTRACT_UDF_PARITY_SPEC
-
-    record_artifact(profile, EXTRACT_UDF_PARITY_SPEC, payload)
 
 
 __all__ = [

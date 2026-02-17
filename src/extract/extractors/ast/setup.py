@@ -118,6 +118,4 @@ def _format_feature_version(value: tuple[int, int] | int | None) -> str | None:
 
 __all__ = [
     "AstExtractOptions",
-    "_format_feature_version",
-    "_resolve_feature_version",
 ]

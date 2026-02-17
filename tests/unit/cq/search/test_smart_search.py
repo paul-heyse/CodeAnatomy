@@ -670,7 +670,7 @@ class TestBuildSections:
         ]
         sections = build_sections(matches, sample_repo, "build_graph", QueryMode.IDENTIFIER)
         occurrences_section = next(s for s in sections if s.title == "Occurrences")
-        assert occurrences_section.findings == []
+        assert occurrences_section.findings == ()
         sections_with_strings = build_sections(
             matches,
             sample_repo,

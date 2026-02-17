@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-import shutil
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -14,18 +12,27 @@ from typing import TYPE_CHECKING
 
 import msgspec
 import pyarrow as pa
-import pyarrow.dataset as ds
 from opentelemetry import trace
 
-from datafusion_engine.arrow.field_builders import (
-    binary_field,
-    bool_field,
-    int32_field,
-    int64_field,
-    list_field,
-    string_field,
-)
 from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.delta.obs_schemas import (
+    delta_maintenance_schema,
+    delta_mutation_schema,
+    delta_scan_plan_schema,
+    delta_snapshot_schema,
+)
+from datafusion_engine.delta.obs_table_manager import (
+    DELTA_MAINTENANCE_TABLE_NAME,
+    DELTA_MUTATION_TABLE_NAME,
+    DELTA_SCAN_PLAN_TABLE_NAME,
+    DELTA_SNAPSHOT_TABLE_NAME,
+    ensure_delta_observability_tables,
+    ensure_observability_schema,
+    ensure_observability_table,
+    is_observability_target,
+    is_schema_mismatch_error,
+    observability_commit_metadata,
+)
 from datafusion_engine.delta.payload import (
     msgpack_or_none,
     msgpack_payload,
@@ -33,7 +40,6 @@ from datafusion_engine.delta.payload import (
     string_map,
 )
 from datafusion_engine.errors import DataFusionEngineError
-from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write_core import (
     WriteFormat,
@@ -41,7 +47,6 @@ from datafusion_engine.io.write_core import (
     WritePipeline,
     WriteRequest,
 )
-from datafusion_engine.session.facade import DataFusionExecutionFacade
 from obs.otel import get_run_id
 from serde_msgspec import StructBaseStrict
 from utils.value_coercion import coerce_int
@@ -51,17 +56,6 @@ if TYPE_CHECKING:
 
     from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-
-DELTA_SNAPSHOT_TABLE_NAME = "datafusion_delta_snapshots_v2"
-DELTA_MUTATION_TABLE_NAME = "datafusion_delta_mutations_v2"
-DELTA_SCAN_PLAN_TABLE_NAME = "datafusion_delta_scan_plans_v2"
-DELTA_MAINTENANCE_TABLE_NAME = "datafusion_delta_maintenance_v2"
-
-try:
-    _DEFAULT_OBSERVABILITY_ROOT = Path(__file__).resolve().parents[2] / ".artifacts"
-except IndexError:
-    _DEFAULT_OBSERVABILITY_ROOT = Path.cwd() / ".artifacts"
 
 _DELTA_TRACING_LOCK = threading.Lock()
 _DELTA_TRACING_READY = threading.Event()
@@ -269,11 +263,11 @@ def record_delta_snapshot(
     if profile is None:
         return None
     active_ctx = ctx or profile.session_context()
-    location = _ensure_observability_table(
+    location = ensure_observability_table(
         active_ctx,
         profile,
         name=DELTA_SNAPSHOT_TABLE_NAME,
-        schema=_delta_snapshot_schema(),
+        schema=delta_snapshot_schema(),
     )
     if location is None:
         return None
@@ -304,7 +298,7 @@ def record_delta_snapshot(
             ctx=active_ctx,
             runtime_profile=profile,
             location=location,
-            schema=_delta_snapshot_schema(),
+            schema=delta_snapshot_schema(),
             payload=payload,
             operation="delta_snapshot_artifact",
             commit_metadata={"table_uri": artifact.table_uri},
@@ -327,17 +321,17 @@ def record_delta_mutation(
     """
     if profile is None:
         return None
-    if _is_observability_target(
+    if is_observability_target(
         dataset_name=artifact.dataset_name,
         table_uri=artifact.table_uri,
     ):
         return None
     active_ctx = ctx or profile.session_context()
-    location = _ensure_observability_table(
+    location = ensure_observability_table(
         active_ctx,
         profile,
         name=DELTA_MUTATION_TABLE_NAME,
-        schema=_delta_mutation_schema(),
+        schema=delta_mutation_schema(),
     )
     if location is None:
         return None
@@ -374,7 +368,7 @@ def record_delta_mutation(
             ctx=active_ctx,
             runtime_profile=profile,
             location=location,
-            schema=_delta_mutation_schema(),
+            schema=delta_mutation_schema(),
             payload=payload,
             operation=f"delta_mutation_{artifact.operation}",
             commit_metadata=artifact.commit_metadata,
@@ -426,11 +420,11 @@ def record_delta_scan_plan(
     if profile is None:
         return None
     ctx = profile.session_context()
-    location = _ensure_observability_table(
+    location = ensure_observability_table(
         ctx,
         profile,
         name=DELTA_SCAN_PLAN_TABLE_NAME,
-        schema=_delta_scan_plan_schema(),
+        schema=delta_scan_plan_schema(),
     )
     if location is None:
         return None
@@ -457,7 +451,7 @@ def record_delta_scan_plan(
             ctx=ctx,
             runtime_profile=profile,
             location=location,
-            schema=_delta_scan_plan_schema(),
+            schema=delta_scan_plan_schema(),
             payload=payload,
             operation="delta_scan_plan",
             commit_metadata={"dataset_name": artifact.dataset_name},
@@ -480,11 +474,11 @@ def record_delta_maintenance(
     if profile is None:
         return None
     ctx = profile.session_context()
-    location = _ensure_observability_table(
+    location = ensure_observability_table(
         ctx,
         profile,
         name=DELTA_MAINTENANCE_TABLE_NAME,
-        schema=_delta_maintenance_schema(),
+        schema=delta_maintenance_schema(),
     )
     if location is None:
         return None
@@ -525,7 +519,7 @@ def record_delta_maintenance(
             ctx=ctx,
             runtime_profile=profile,
             location=location,
-            schema=_delta_maintenance_schema(),
+            schema=delta_maintenance_schema(),
             payload=payload,
             operation=f"delta_maintenance_{artifact.operation}",
             commit_metadata=artifact.commit_metadata,
@@ -533,388 +527,15 @@ def record_delta_maintenance(
     )
 
 
-def _ensure_observability_table(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    *,
-    name: str,
-    schema: pa.Schema,
-) -> DatasetLocation | None:
-    table_path = _observability_root(profile) / name
-    delta_log_path = table_path / "_delta_log"
-    has_delta_log = delta_log_path.exists() and any(delta_log_path.glob("*.json"))
-    from serde_artifact_specs import (
-        DELTA_OBSERVABILITY_BOOTSTRAP_COMPLETED_SPEC,
-        DELTA_OBSERVABILITY_BOOTSTRAP_FAILED_SPEC,
-        DELTA_OBSERVABILITY_BOOTSTRAP_STARTED_SPEC,
-        DELTA_OBSERVABILITY_REGISTER_FAILED_SPEC,
-    )
-
-    if not has_delta_log:
-        profile.record_artifact(
-            DELTA_OBSERVABILITY_BOOTSTRAP_STARTED_SPEC,
-            {
-                "event_time_unix_ms": int(time.time() * 1000),
-                "table": name,
-                "path": str(table_path),
-                "operation": "delta_observability_bootstrap",
-            },
-        )
-        try:
-            _bootstrap_observability_table(
-                ctx,
-                profile,
-                table_path=table_path,
-                schema=schema,
-                operation="delta_observability_bootstrap",
-            )
-        except (
-            RuntimeError,
-            TypeError,
-            ValueError,
-            OSError,
-            ImportError,
-        ) as exc:
-            profile.record_artifact(
-                DELTA_OBSERVABILITY_BOOTSTRAP_FAILED_SPEC,
-                {
-                    "event_time_unix_ms": int(time.time() * 1000),
-                    "table": name,
-                    "path": str(table_path),
-                    "operation": "delta_observability_bootstrap",
-                    "error": str(exc),
-                },
-            )
-            return None
-        profile.record_artifact(
-            DELTA_OBSERVABILITY_BOOTSTRAP_COMPLETED_SPEC,
-            {
-                "event_time_unix_ms": int(time.time() * 1000),
-                "table": name,
-                "path": str(table_path),
-                "operation": "delta_observability_bootstrap",
-            },
-        )
-    if not _ensure_observability_schema(
-        ctx,
-        profile,
-        table_path=table_path,
-        schema=schema,
-        operation="delta_observability_schema_reset",
-    ):
-        return None
-    location = DatasetLocation(path=str(table_path), format="delta")
-    try:
-        DataFusionExecutionFacade(
-            ctx=ctx,
-            runtime_profile=profile,
-        ).register_dataset(
-            name=name,
-            location=location,
-            overwrite=True,
-        )
-    except (
-        DataFusionEngineError,
-        RuntimeError,
-        ValueError,
-        TypeError,
-        OSError,
-        KeyError,
-    ) as exc:
-        if _register_observability_fallback(
-            ctx,
-            profile,
-            name=name,
-            table_path=table_path,
-            exc=exc,
-        ):
-            return location
-        profile.record_artifact(
-            DELTA_OBSERVABILITY_REGISTER_FAILED_SPEC,
-            {
-                "event_time_unix_ms": int(time.time() * 1000),
-                "table": name,
-                "path": str(table_path),
-                "error": str(exc),
-            },
-        )
-        return None
-    return location
-
-
-def ensure_delta_observability_tables(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-) -> dict[str, DatasetLocation | None]:
-    """Ensure all Delta observability tables exist and are registered.
-
-    Returns:
-    -------
-    dict[str, DatasetLocation | None]
-        Mapping of observability table names to resolved locations.
-    """
-    specs = (
-        (DELTA_SNAPSHOT_TABLE_NAME, _delta_snapshot_schema()),
-        (DELTA_MUTATION_TABLE_NAME, _delta_mutation_schema()),
-        (DELTA_SCAN_PLAN_TABLE_NAME, _delta_scan_plan_schema()),
-        (DELTA_MAINTENANCE_TABLE_NAME, _delta_maintenance_schema()),
-    )
-    return {
-        name: _ensure_observability_table(
-            ctx,
-            profile,
-            name=name,
-            schema=schema,
-        )
-        for name, schema in specs
-    }
-
-
-def _register_observability_fallback(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    *,
-    name: str,
-    table_path: Path,
-    exc: Exception,
-) -> bool:
-    from serde_artifact_specs import (
-        DELTA_OBSERVABILITY_REGISTER_FALLBACK_FAILED_SPEC,
-        DELTA_OBSERVABILITY_REGISTER_FALLBACK_USED_SPEC,
-    )
-
-    if not _is_control_plane_registration_error(exc):
-        return False
-    try:
-        dataset = ds.dataset(str(table_path), format="parquet")
-    except (RuntimeError, TypeError, ValueError, OSError) as dataset_exc:
-        profile.record_artifact(
-            DELTA_OBSERVABILITY_REGISTER_FALLBACK_FAILED_SPEC,
-            {
-                "event_time_unix_ms": int(time.time() * 1000),
-                "table": name,
-                "path": str(table_path),
-                "error": str(dataset_exc),
-                "cause": str(exc),
-                "stage": "dataset",
-            },
-        )
-        return False
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
-    if ctx.table_exist(name):
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            adapter.deregister_table(name)
-    try:
-        adapter.register_dataset(name, dataset)
-    except (RuntimeError, TypeError, ValueError, OSError, KeyError) as register_exc:
-        profile.record_artifact(
-            DELTA_OBSERVABILITY_REGISTER_FALLBACK_FAILED_SPEC,
-            {
-                "event_time_unix_ms": int(time.time() * 1000),
-                "table": name,
-                "path": str(table_path),
-                "error": str(register_exc),
-                "cause": str(exc),
-                "stage": "register",
-            },
-        )
-        return False
-    profile.record_artifact(
-        DELTA_OBSERVABILITY_REGISTER_FALLBACK_USED_SPEC,
-        {
-            "event_time_unix_ms": int(time.time() * 1000),
-            "table": name,
-            "path": str(table_path),
-            "cause": str(exc),
-        },
-    )
-    return True
-
-
-def _is_control_plane_registration_error(exc: Exception) -> bool:
-    if not isinstance(exc, DataFusionEngineError):
-        return False
-    message = str(exc).lower()
-    return "control-plane failed" in message or "degraded python fallback paths" in message
-
-
-def _ensure_observability_schema(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    *,
-    table_path: Path,
-    schema: pa.Schema,
-    operation: str,
-) -> bool:
-    from serde_artifact_specs import (
-        DELTA_OBSERVABILITY_SCHEMA_CHECK_FAILED_SPEC,
-        DELTA_OBSERVABILITY_SCHEMA_DRIFT_SPEC,
-        DELTA_OBSERVABILITY_SCHEMA_RESET_FAILED_SPEC,
-    )
-
-    table_name = table_path.name
-    try:
-        from arro3.core import Schema as Arro3Schema
-        from deltalake import DeltaTable
-
-        current_schema = DeltaTable(str(table_path)).schema().to_arrow()
-        expected_schema = Arro3Schema.from_arrow(schema)
-    except (
-        RuntimeError,
-        TypeError,
-        ValueError,
-        OSError,
-        ImportError,
-        AttributeError,
-    ) as exc:
-        profile.record_artifact(
-            DELTA_OBSERVABILITY_SCHEMA_CHECK_FAILED_SPEC,
-            {
-                "event_time_unix_ms": int(time.time() * 1000),
-                "table": table_name,
-                "path": str(table_path),
-                "operation": operation,
-                "error": str(exc),
-            },
-        )
-        return False
-    if current_schema.equals(expected_schema):
-        return True
-    profile.record_artifact(
-        DELTA_OBSERVABILITY_SCHEMA_DRIFT_SPEC,
-        {
-            "event_time_unix_ms": int(time.time() * 1000),
-            "table": table_name,
-            "path": str(table_path),
-            "operation": operation,
-            "expected_fields": list(expected_schema.names),
-            "observed_fields": list(current_schema.names),
-        },
-    )
-    try:
-        _bootstrap_observability_table(
-            ctx,
-            profile,
-            table_path=table_path,
-            schema=schema,
-            operation=operation,
-        )
-    except (
-        RuntimeError,
-        TypeError,
-        ValueError,
-        OSError,
-        ImportError,
-    ) as exc:
-        profile.record_artifact(
-            DELTA_OBSERVABILITY_SCHEMA_RESET_FAILED_SPEC,
-            {
-                "event_time_unix_ms": int(time.time() * 1000),
-                "table": table_name,
-                "path": str(table_path),
-                "operation": operation,
-                "error": str(exc),
-            },
-        )
-        return False
-    return True
-
-
-def _bootstrap_observability_table(
-    ctx: SessionContext,
-    profile: DataFusionRuntimeProfile,
-    *,
-    table_path: Path,
-    schema: pa.Schema,
-    operation: str,
-) -> None:
-    _ = profile
-    table_path.parent.mkdir(parents=True, exist_ok=True)
-    bootstrap_row = _bootstrap_observability_row(schema)
-    empty = pa.Table.from_pylist([bootstrap_row], schema=schema)
-    from deltalake.exceptions import (
-        CommitFailedError,
-        DeltaError,
-        DeltaProtocolError,
-        SchemaMismatchError,
-        TableNotFoundError,
-    )
-
-    from datafusion_engine.delta.transactions import write_transaction
-    from datafusion_engine.delta.write_ipc_payload import (
-        DeltaWriteRequestOptions,
-        build_delta_write_request,
-    )
-    from storage.deltalake.delta_runtime_ops import delta_commit_options
-
-    commit_options = delta_commit_options(
-        commit_properties=None,
-        commit_metadata=_observability_commit_metadata(
-            operation,
-            {"table": table_path.name},
-        ),
-        app_id=None,
-        app_version=None,
-    )
-    request = build_delta_write_request(
-        table_uri=str(table_path),
-        table=empty,
-        options=DeltaWriteRequestOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            storage_options=None,
-            commit_options=commit_options,
-        ),
-    )
-    try:
-        write_transaction(ctx, request=request)
-    except (
-        CommitFailedError,
-        DeltaError,
-        DeltaProtocolError,
-        OSError,
-        RuntimeError,
-        SchemaMismatchError,
-        TableNotFoundError,
-        TypeError,
-        ValueError,
-    ) as exc:
-        if not _is_corrupt_delta_log_error(exc):
-            raise
-        with contextlib.suppress(OSError):
-            shutil.rmtree(table_path)
-        table_path.parent.mkdir(parents=True, exist_ok=True)
-        write_transaction(ctx, request=request)
-
-
-def _bootstrap_observability_row(schema: pa.Schema) -> dict[str, object]:
-    row: dict[str, object] = {}
-    for field in schema:
-        if field.nullable:
-            row[field.name] = None
-            continue
-        dtype = field.type
-        if pa.types.is_string(dtype):
-            row[field.name] = "__bootstrap__"
-        elif pa.types.is_integer(dtype):
-            row[field.name] = 0
-        elif pa.types.is_binary(dtype):
-            row[field.name] = b""
-        elif pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
-            row[field.name] = []
-        elif pa.types.is_map(dtype):
-            row[field.name] = {}
-        else:
-            row[field.name] = None
-    return row
-
-
 def _append_observability_row(request: _AppendObservabilityRequest) -> int | None:
     table = pa.Table.from_pylist([dict(request.payload)], schema=request.schema)
     pipeline = WritePipeline(ctx=request.ctx, runtime_profile=request.runtime_profile)
-    commit_metadata = _observability_commit_metadata(
+    commit_metadata_input = (
+        dict(request.commit_metadata) if request.commit_metadata is not None else None
+    )
+    commit_metadata = observability_commit_metadata(
         request.operation,
-        request.commit_metadata,
+        commit_metadata_input,
     )
     try:
         append_name = f"{request.location.path}_append_{time.time_ns()}"
@@ -931,8 +552,8 @@ def _append_observability_row(request: _AppendObservabilityRequest) -> int | Non
     except _OBSERVABILITY_APPEND_ERRORS as exc:  # pragma: no cover - defensive fail-open path
         if (
             request.runtime_profile is not None
-            and _is_schema_mismatch_error(exc)
-            and _ensure_observability_schema(
+            and is_schema_mismatch_error(exc)
+            and ensure_observability_schema(
                 request.ctx,
                 request.runtime_profile,
                 table_path=Path(str(request.location.path)),
@@ -965,55 +586,6 @@ def _append_observability_row(request: _AppendObservabilityRequest) -> int | Non
     return result.delta_result.version
 
 
-def _is_schema_mismatch_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return any(
-        token in message
-        for token in (
-            "schemamismatcherror",
-            "schema mismatch",
-            "cannot cast schema",
-            "number of fields does not match",
-        )
-    )
-
-
-def _is_corrupt_delta_log_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return "invalid json in log record" in message or "duplicate field `operation`" in message
-
-
-def _observability_commit_metadata(
-    operation: str,
-    metadata: Mapping[str, str] | None,
-) -> dict[str, str]:
-    sanitized: dict[str, str] = {
-        str(key): str(value)
-        for key, value in (metadata or {}).items()
-        if str(key).lower() != "operation"
-    }
-    sanitized["observability_operation"] = operation
-    return sanitized
-
-
-def _is_observability_target(
-    *,
-    dataset_name: str | None,
-    table_uri: str | None,
-) -> bool:
-    names = {
-        DELTA_SNAPSHOT_TABLE_NAME,
-        DELTA_MUTATION_TABLE_NAME,
-        DELTA_SCAN_PLAN_TABLE_NAME,
-        DELTA_MAINTENANCE_TABLE_NAME,
-    }
-    if dataset_name in names:
-        return True
-    if table_uri is None:
-        return False
-    return Path(table_uri).name in names
-
-
 def _record_append_failure(request: _AppendObservabilityRequest, exc: Exception) -> None:
     if request.runtime_profile is None:
         return
@@ -1027,113 +599,6 @@ def _record_append_failure(request: _AppendObservabilityRequest, exc: Exception)
             "operation": request.operation,
             "error": str(exc),
         },
-    )
-
-
-def _observability_root(profile: DataFusionRuntimeProfile) -> Path:
-    root_value = profile.policies.plan_artifacts_root
-    root = Path(root_value) if root_value else _DEFAULT_OBSERVABILITY_ROOT
-    return root / "delta_observability"
-
-
-def _delta_snapshot_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            int64_field("event_time_unix_ms", nullable=False),
-            string_field("run_id"),
-            string_field("dataset_name"),
-            string_field("table_uri", nullable=False),
-            string_field("trace_id"),
-            string_field("span_id"),
-            int64_field("delta_version"),
-            int64_field("snapshot_timestamp"),
-            int32_field("min_reader_version"),
-            int32_field("min_writer_version"),
-            list_field("reader_features", pa.string()),
-            list_field("writer_features", pa.string()),
-            pa.field("table_properties", pa.map_(pa.string(), pa.string())),
-            binary_field("schema_msgpack", nullable=False),
-            string_field("schema_identity_hash"),
-            string_field("ddl_fingerprint"),
-            list_field("partition_columns", pa.string()),
-        ]
-    )
-
-
-def _delta_mutation_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            int64_field("event_time_unix_ms", nullable=False),
-            string_field("run_id"),
-            string_field("dataset_name"),
-            string_field("table_uri", nullable=False),
-            string_field("trace_id"),
-            string_field("span_id"),
-            string_field("operation", nullable=False),
-            string_field("mode"),
-            int64_field("delta_version"),
-            int32_field("min_reader_version"),
-            int32_field("min_writer_version"),
-            list_field("reader_features", pa.string()),
-            list_field("writer_features", pa.string()),
-            pa.field("table_properties", pa.map_(pa.string(), pa.string())),
-            string_field("constraint_status"),
-            list_field("constraint_violations", pa.string()),
-            string_field("commit_app_id"),
-            int64_field("commit_version"),
-            string_field("commit_run_id"),
-            pa.field("commit_metadata", pa.map_(pa.string(), pa.string())),
-            binary_field("metrics_msgpack", nullable=False),
-        ]
-    )
-
-
-def _delta_scan_plan_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            int64_field("event_time_unix_ms", nullable=False),
-            string_field("run_id"),
-            string_field("dataset_name", nullable=False),
-            string_field("table_uri", nullable=False),
-            string_field("trace_id"),
-            string_field("span_id"),
-            int64_field("delta_version"),
-            int64_field("snapshot_timestamp"),
-            int64_field("total_files", nullable=False),
-            int64_field("candidate_files", nullable=False),
-            int64_field("pruned_files", nullable=False),
-            list_field("pushed_filters", pa.string()),
-            list_field("projected_columns", pa.string()),
-            binary_field("delta_protocol_msgpack"),
-        ]
-    )
-
-
-def _delta_maintenance_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            int64_field("event_time_unix_ms", nullable=False),
-            string_field("run_id"),
-            string_field("dataset_name"),
-            string_field("table_uri", nullable=False),
-            string_field("trace_id"),
-            string_field("span_id"),
-            string_field("operation", nullable=False),
-            int64_field("delta_version"),
-            int32_field("min_reader_version"),
-            int32_field("min_writer_version"),
-            list_field("reader_features", pa.string()),
-            list_field("writer_features", pa.string()),
-            pa.field("table_properties", pa.map_(pa.string(), pa.string())),
-            string_field("log_retention_duration"),
-            string_field("checkpoint_interval"),
-            string_field("checkpoint_retention_duration"),
-            string_field("checkpoint_protection"),
-            int64_field("retention_hours"),
-            bool_field("dry_run"),
-            binary_field("metrics_msgpack", nullable=False),
-            pa.field("commit_metadata", pa.map_(pa.string(), pa.string())),
-        ]
     )
 
 

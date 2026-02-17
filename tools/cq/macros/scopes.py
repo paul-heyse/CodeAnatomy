@@ -5,6 +5,7 @@ Reports free vars, cell vars, globals, nonlocals for refactor analysis.
 
 from __future__ import annotations
 
+import logging
 import symtable
 from pathlib import Path
 
@@ -22,10 +23,15 @@ from tools.cq.core.scoring import build_detail_payload
 from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1
-from tools.cq.macros.shared import macro_scoring_details, resolve_target_files
+from tools.cq.macros.shared import (
+    iter_python_sources,
+    macro_scoring_details,
+    resolve_target_files,
+)
 
 _MAX_FILES_ANALYZED = 50
 _MAX_SCOPES_DISPLAY = 30
+logger = logging.getLogger(__name__)
 
 
 class ScopeInfo(msgspec.Struct, frozen=True):
@@ -159,16 +165,14 @@ def _extract_scopes(st: symtable.SymbolTable, file: str, parent_name: str = "") 
 
 def _collect_scopes(root: Path, files: list[Path]) -> list[ScopeInfo]:
     all_scopes: list[ScopeInfo] = []
-    for pyfile in files[:_MAX_FILES_ANALYZED]:
+    for rel, source in iter_python_sources(
+        root=root,
+        files=files,
+        max_files=_MAX_FILES_ANALYZED,
+    ):
         try:
-            rel = str(pyfile.relative_to(root))
-        except ValueError:
-            # File is outside root (e.g., absolute path)
-            rel = pyfile.name
-        try:
-            source = pyfile.read_text(encoding="utf-8")
             st = symtable.symtable(source, rel, "exec")
-        except (SyntaxError, OSError, UnicodeDecodeError):
+        except SyntaxError:
             continue
         all_scopes.extend(_extract_scopes(st, rel))
     return all_scopes
@@ -256,6 +260,12 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
         Analysis result.
     """
     started = ms()
+    logger.debug(
+        "Running scopes macro root=%s target=%s max_files=%d",
+        request.root,
+        request.target,
+        request.max_files,
+    )
 
     files = resolve_target_files(
         root=request.root,
@@ -333,10 +343,16 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
         builder.add_section(section)
     builder.add_evidences(_append_scope_evidence(all_scopes, scoring_details))
 
-    return builder.apply_rust_fallback(
+    result = builder.apply_rust_fallback(
         policy=RustFallbackPolicyV1(
             macro_name="scopes",
             pattern=request.target,
             query=request.target,
         )
     ).build()
+    logger.debug(
+        "Completed scopes macro files=%d scopes=%d",
+        len(files),
+        len(all_scopes),
+    )
+    return result

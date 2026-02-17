@@ -97,7 +97,7 @@ def test_calls_request(request_context: RequestContextV1) -> None:
     assert request.request.root == request_context.root
     assert request.request.function_name == "test_function"
     assert request.request.tc == request_context.tc
-    assert request.request.argv == request_context.argv
+    assert request.request.argv == tuple(request_context.argv)
 
 
 def test_search_request(request_context: RequestContextV1) -> None:

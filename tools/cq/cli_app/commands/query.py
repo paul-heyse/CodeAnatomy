@@ -15,7 +15,7 @@ from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context
 from tools.cq.cli_app.params import QueryParams
 from tools.cq.cli_app.schema_projection import query_options_from_projected_params
-from tools.cq.query.router import route_query_or_search
+from tools.cq.query.router import QueryRoutingRequestV1, route_query_or_search
 
 
 def q(
@@ -46,13 +46,15 @@ def q(
         opts = QueryParams()
     options = query_options_from_projected_params(opts)
     routing = route_query_or_search(
-        query_string,
-        root=ctx.root,
-        argv=ctx.argv,
-        toolchain=ctx.toolchain,
-        services=ctx.services,
-        include=options.include if options.include else None,
-        exclude=options.exclude if options.exclude else None,
+        QueryRoutingRequestV1(
+            query_string=query_string,
+            root=ctx.root,
+            argv=ctx.argv,
+            toolchain=ctx.toolchain,
+            services=ctx.services,
+            include=options.include if options.include else None,
+            exclude=options.exclude if options.exclude else None,
+        )
     )
     if routing.result is not None:
         return CliResult(result=routing.result, context=ctx, filters=options)

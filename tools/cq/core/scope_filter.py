@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 from collections.abc import Callable
 from pathlib import Path
 
@@ -35,10 +36,13 @@ def filter_findings_by_scope(
         if anchor is None:
             return True
         rel_path = Path(anchor.file)
+        rel_posix = rel_path.as_posix()
         abs_path = (resolved_root / rel_path).resolve()
         if base is not None and not abs_path.is_relative_to(base):
             return False
-        if exclude_patterns and any(rel_path.match(pattern) for pattern in exclude_patterns):
+        if exclude_patterns and any(
+            fnmatch.fnmatch(rel_posix, pattern) for pattern in exclude_patterns
+        ):
             return False
         return path_filter is None or path_filter(abs_path)
 

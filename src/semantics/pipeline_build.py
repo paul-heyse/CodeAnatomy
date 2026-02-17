@@ -11,7 +11,7 @@ The entire pipeline in ~50 lines:
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -19,7 +19,11 @@ from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from datafusion_engine.views.artifacts import CachePolicy
 from obs.otel import SCOPE_SEMANTICS, stage_span
 from semantics import pipeline_cache as _pipeline_cache
-from semantics.cdf_resolution import cdf_changed_inputs, outputs_from_changed_inputs
+from semantics.cdf_resolution import (
+    cdf_changed_inputs,
+    outputs_from_changed_inputs,
+    resolve_registered_cdf_inputs,
+)
 from semantics.naming import canonical_output_name
 from semantics.output_materialization import (
     SemanticOutputWriteContext,
@@ -653,7 +657,7 @@ def _resolve_semantic_input_mapping(
     cdf_candidates = tuple(
         source for canonical, source in resolved_inputs.items() if canonical != "file_line_index_v1"
     )
-    resolved_cdf = _resolve_cdf_inputs(
+    resolved_cdf = resolve_registered_cdf_inputs(
         ctx,
         runtime_profile=runtime_profile,
         use_cdf=use_cdf,
@@ -670,56 +674,6 @@ def _resolve_semantic_input_mapping(
         override = resolved_cdf.get(source) or resolved_cdf.get(canonical)
         mapped[canonical] = override if override is not None else source
     return mapped, True
-
-
-def _resolve_cdf_inputs(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None,
-    use_cdf: bool | None,
-    cdf_inputs: Mapping[str, str] | None,
-    inputs: Sequence[str],
-    dataset_resolver: ManifestDatasetResolver,
-) -> Mapping[str, str] | None:
-    if use_cdf is False:
-        return None
-    if runtime_profile is None:
-        if use_cdf:
-            msg = "CDF input registration requires a runtime profile."
-            raise ValueError(msg)
-        return dict(cdf_inputs) if cdf_inputs else None
-    if use_cdf is None and not _has_cdf_inputs(
-        runtime_profile, inputs=inputs, dataset_resolver=dataset_resolver
-    ):
-        return dict(cdf_inputs) if cdf_inputs else None
-    from datafusion_engine.session.introspection import register_cdf_inputs_for_profile
-
-    mapping = register_cdf_inputs_for_profile(
-        runtime_profile, ctx, table_names=inputs, dataset_resolver=dataset_resolver
-    )
-    if cdf_inputs:
-        mapping = {**mapping, **cdf_inputs}
-    return mapping or None
-
-
-def _has_cdf_inputs(
-    runtime_profile: DataFusionRuntimeProfile,
-    *,
-    inputs: Sequence[str],
-    dataset_resolver: ManifestDatasetResolver,
-) -> bool:
-    from datafusion_engine.dataset.registry import resolve_datafusion_provider
-
-    _ = runtime_profile
-    for name in inputs:
-        location = dataset_resolver.location(name)
-        if location is None:
-            continue
-        if location.delta_cdf_options is not None:
-            return True
-        if resolve_datafusion_provider(location) == "delta_cdf":
-            return True
-    return False
 
 
 __all__ = [

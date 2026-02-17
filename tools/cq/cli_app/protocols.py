@@ -29,4 +29,5 @@ class ConsolePort(Protocol):
         """Write one rendered console line."""
         ...
 
+
 __all__ = ["ConsoleFilePort", "ConsolePort"]

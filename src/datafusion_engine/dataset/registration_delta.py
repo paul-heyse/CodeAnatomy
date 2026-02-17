@@ -287,13 +287,4 @@ def _register_delta_provider(
     return _maybe_cache(context, result.df), result.cache_prefix
 
 
-__all__ = [
-    "_DeltaRegistrationResult",
-    "_build_delta_provider_registration",
-    "_delta_registration_mode",
-    "_record_delta_cdf_registration_artifacts",
-    "_record_delta_table_registration_artifacts",
-    "_register_delta_provider",
-    "_register_delta_provider_with_adapter",
-    "_resolve_delta_registration_state",
-]
+__all__: list[str] = []

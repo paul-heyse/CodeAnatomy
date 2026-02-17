@@ -43,4 +43,4 @@ class AstLimitError(ValueError):
     """Raised when AST extraction exceeds configured limits."""
 
 
-__all__ = ["AstLimitError", "_AstWalkAccumulator", "_AstWalkResult"]
+__all__ = ["AstLimitError"]

@@ -21,7 +21,6 @@ from datafusion_engine.arrow.interop import (
 )
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.expr.cast import safe_cast
-from datafusion_engine.schema.introspection_routines import _introspection_cache_for_ctx
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import planning_sql_options
 from datafusion_engine.tables.metadata import table_provider_metadata
@@ -40,31 +39,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "_align_projection_exprs",
-    "_align_table_with_arrow",
-    "_apply_readiness_status",
-    "_apply_table_schema_metadata",
-    "_base_readiness_payload",
-    "_cache_config_payload",
-    "_cache_snapshot_rows",
-    "_capture_cache_diagnostics",
-    "_count_dir_entries",
-    "_datafusion_type_name",
-    "_dataset_readiness_payload",
-    "_delta_readiness_payload",
-    "_extract_output_config_for_profile",
-    "_file_readiness_payload",
-    "_introspection_cache_for_ctx",
-    "_is_remote_scheme",
-    "_local_readiness_payload",
-    "_normalize_dataset_locations_for_root",
-    "_register_cache_introspection_functions",
-    "_remote_readiness_payload",
-    "_resolve_local_path",
-    "_schema_has_extension",
-    "_schema_with_table_metadata",
-    "_semantic_output_config_for_profile",
-    "_type_has_extension",
     "align_table_to_schema",
     "assert_schema_metadata",
     "cache_prefix_for_delta_snapshot",

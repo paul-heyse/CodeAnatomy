@@ -11,8 +11,8 @@ import pyarrow as pa
 from core_types import DeterminismTier
 from datafusion_engine.catalog.introspection import invalidate_introspection_cache
 from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.session.profiles import create_runtime_profile
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
 from datafusion_engine.session.runtime_session import SessionRuntime
 from utils.uuid_factory import uuid7_hex
 
@@ -70,8 +70,8 @@ class IncrementalRuntime:
                 "an explicit delta service binding."
             )
             raise ValueError(msg)
-        runtime_profile = request.profile or DataFusionRuntimeProfile(
-            policies=PolicyBundleConfig(config_policy_name=request.profile_name),
+        runtime_profile = request.profile or create_runtime_profile(
+            config_policy_name=request.profile_name,
         )
         if request.delta_service is not None:
             from datafusion_engine.session.runtime_ops import bind_delta_service

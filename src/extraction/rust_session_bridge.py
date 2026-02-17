@@ -9,6 +9,27 @@ from datafusion import SessionContext
 from datafusion_engine.extensions import datafusion_ext
 
 
+def extraction_session_payload(
+    *,
+    parallelism: int | None = None,
+    batch_size: int | None = None,
+    memory_limit_bytes: int | None = None,
+) -> dict[str, object]:
+    """Build normalized extraction-session payload for the native bridge.
+
+    Returns:
+        dict[str, object]: Payload suitable for ``build_extraction_session``.
+    """
+    payload: dict[str, object] = {}
+    if parallelism is not None:
+        payload["parallelism"] = int(parallelism)
+    if batch_size is not None:
+        payload["batch_size"] = int(batch_size)
+    if memory_limit_bytes is not None:
+        payload["memory_limit_bytes"] = int(memory_limit_bytes)
+    return payload
+
+
 def build_extraction_session(config_payload: Mapping[str, object]) -> SessionContext:
     """Build a session context via native extension bridge.
 
@@ -47,4 +68,21 @@ def register_dataset_provider(
     return {str(key): value for key, value in response.items()}
 
 
-__all__ = ["build_extraction_session", "register_dataset_provider"]
+def register_dataset_provider_payload(
+    ctx: SessionContext,
+    request_payload: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Register dataset provider and return normalized payload.
+
+    Returns:
+        Mapping[str, object]: Normalized provider registration payload.
+    """
+    return register_dataset_provider(ctx, request_payload)
+
+
+__all__ = [
+    "build_extraction_session",
+    "extraction_session_payload",
+    "register_dataset_provider",
+    "register_dataset_provider_payload",
+]

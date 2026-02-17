@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.core.contracts import CallsMacroRequestV1
 from tools.cq.core.enrichment_mode import (
     IncrementalEnrichmentModeV1,
-    parse_incremental_enrichment_mode,
 )
 from tools.cq.core.schema import CqResult
 from tools.cq.core.structs import CqStruct
-from tools.cq.macros.contracts import CallsRequest
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -31,7 +31,7 @@ class EntityFrontDoorRequest(CqStruct, frozen=True):
 class CallsServiceRequest(CqStruct, frozen=True):
     """Typed request contract for calls macro service execution."""
 
-    request: CallsRequest
+    request: CallsMacroRequestV1
 
 
 class SearchServiceRequest(CqStruct, frozen=True):
@@ -56,75 +56,53 @@ class SearchServiceRequest(CqStruct, frozen=True):
 class EntityService:
     """Application-layer service for CQ entity flow."""
 
-    @staticmethod
-    def attach_front_door(request: EntityFrontDoorRequest) -> CqResult:
+    def __init__(
+        self,
+        *,
+        attach_front_door_fn: Callable[[EntityFrontDoorRequest], CqResult],
+    ) -> None:
+        """Initialize entity service with an injected front-door adapter."""
+        self._attach_front_door_fn = attach_front_door_fn
+
+    def attach_front_door(self, request: EntityFrontDoorRequest) -> CqResult:
         """Attach entity front-door insight to a CQ result.
 
         Returns:
             CqResult: Updated result including front-door insight payload.
         """
-        from tools.cq.query.entity_front_door import attach_entity_front_door_insight
-
-        return attach_entity_front_door_insight(
-            request.result,
-            relationship_detail_max_matches=request.relationship_detail_max_matches,
-        )
+        return self._attach_front_door_fn(request)
 
 
 class CallsService:
     """Application-layer service for CQ calls macro."""
 
-    @staticmethod
-    def execute(request: CallsServiceRequest) -> CqResult:
+    def __init__(self, *, execute_fn: Callable[[CallsServiceRequest], CqResult]) -> None:
+        """Initialize calls service with an injected execution function."""
+        self._execute_fn = execute_fn
+
+    def execute(self, request: CallsServiceRequest) -> CqResult:
         """Execute CQ calls macro.
 
         Returns:
             Calls macro result payload.
         """
-        from tools.cq.macros.calls import cmd_calls
-
-        return cmd_calls(request.request)
+        return self._execute_fn(request)
 
 
 class SearchService:
     """Application-layer service for CQ search."""
 
-    @staticmethod
-    def execute(request: SearchServiceRequest) -> CqResult:
+    def __init__(self, *, execute_fn: Callable[[SearchServiceRequest], CqResult]) -> None:
+        """Initialize search service with an injected execution function."""
+        self._execute_fn = execute_fn
+
+    def execute(self, request: SearchServiceRequest) -> CqResult:
         """Execute CQ smart search.
 
         Returns:
             Search result payload.
         """
-        from tools.cq.search._shared.types import QueryMode
-        from tools.cq.search.pipeline.smart_search import smart_search
-
-        parsed_mode: QueryMode | None = None
-        if isinstance(request.mode, QueryMode):
-            parsed_mode = request.mode
-        elif isinstance(request.mode, str):
-            normalized_mode = request.mode.strip().lower()
-            if normalized_mode in {"identifier", "regex", "literal"}:
-                parsed_mode = QueryMode(normalized_mode)
-
-        return smart_search(
-            root=request.root,
-            query=request.query,
-            mode=parsed_mode,
-            lang_scope=request.lang_scope,
-            include_globs=request.include_globs,
-            exclude_globs=request.exclude_globs,
-            include_strings=request.include_strings,
-            with_neighborhood=request.with_neighborhood,
-            limits=request.limits,
-            tc=request.tc,
-            argv=request.argv,
-            run_id=request.run_id,
-            incremental_enrichment_enabled=request.incremental_enrichment_enabled,
-            incremental_enrichment_mode=parse_incremental_enrichment_mode(
-                request.incremental_enrichment_mode
-            ),
-        )
+        return self._execute_fn(request)
 
 
 __all__ = [

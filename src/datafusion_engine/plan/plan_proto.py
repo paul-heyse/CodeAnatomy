@@ -1,25 +1,52 @@
-"""Plan proto serialization helpers extracted from bundle_artifact."""
+"""Plan proto serialization helpers for plan artifacts."""
 
 from __future__ import annotations
 
-from datafusion_engine.plan.bundle_artifact import (
-    _plan_proto_bytes,
-    _proto_serialization_enabled,
-)
+from collections.abc import Callable
+from typing import TypeVar
+
+T = TypeVar("T")
 
 
 def proto_serialization_enabled() -> bool:
-    """Return whether DataFusion plan proto serialization is enabled."""
-    return _proto_serialization_enabled()
+    """Return True when plan proto serialization should be attempted."""
+    try:
+        from datafusion_engine.extensions import datafusion_ext
+    except ImportError:
+        return True
+    return not bool(getattr(datafusion_ext, "IS_STUB", False))
 
 
 def plan_to_proto_bytes(plan: object | None, *, enabled: bool) -> bytes | None:
-    """Serialize a plan object to proto bytes when supported.
+    """Serialize a plan object to proto bytes when supported."""
+    if plan is None:
+        return None
+    if not enabled or not proto_serialization_enabled():
+        return None
+    method = getattr(plan, "to_proto", None)
+    if not callable(method):
+        return None
+    try:
+        payload = method()
+    except (RuntimeError, TypeError, ValueError, AttributeError):
+        # DataFusion may raise errors when proto codecs are unavailable.
+        return None
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        return bytes(payload)
+    return None
 
-    Returns:
-        bytes | None: Serialized proto payload when supported and available.
-    """
-    return _plan_proto_bytes(plan, enabled=enabled)
+
+def plan_proto_payload(
+    plan: object | None,
+    wrapper: Callable[[bytes], T],
+    *,
+    enabled: bool,
+) -> T | None:
+    """Serialize a plan and wrap proto bytes in a typed payload."""
+    payload = plan_to_proto_bytes(plan, enabled=enabled)
+    if payload is None:
+        return None
+    return wrapper(payload)
 
 
-__all__ = ["plan_to_proto_bytes", "proto_serialization_enabled"]
+__all__ = ["plan_proto_payload", "plan_to_proto_bytes", "proto_serialization_enabled"]

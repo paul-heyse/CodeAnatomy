@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 import msgspec
@@ -15,6 +16,7 @@ from tools.cq.core.contract_codec import (
     to_public_dict,
 )
 from tools.cq.core.structs import CqOutputStruct, CqStruct
+from tools.cq.core.toolchain import Toolchain
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding, RunMeta
@@ -115,7 +117,17 @@ class UuidIdentityContractV1(CqStruct, frozen=True):
     run_created_ms: int | None = None
 
 
+class CallsMacroRequestV1(CqStruct, frozen=True):
+    """Core-layer request contract for calls macro execution."""
+
+    root: Path
+    function_name: str
+    tc: Toolchain
+    argv: tuple[str, ...] = ()
+
+
 __all__ = [
+    "CallsMacroRequestV1",
     "ContractEnvelope",
     "MergeResultsRequest",
     "SummaryBuildRequest",

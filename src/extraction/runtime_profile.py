@@ -14,8 +14,8 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from core_types import DeterminismTier
 from datafusion_engine.arrow.schema import version_field
+from datafusion_engine.session.profiles import create_runtime_profile
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from datafusion_engine.session.runtime_profile_config import PolicyBundleConfig
 from serde_artifacts import RuntimeProfileSnapshot
 from serde_msgspec import StructBaseStrict, coalesce_unset, dumps_msgpack, to_builtins
 from storage.ipc_utils import payload_hash
@@ -457,9 +457,7 @@ def resolve_runtime_profile(
     RuntimeProfileSpec
         Resolved runtime profile spec.
     """
-    df_profile = DataFusionRuntimeProfile(
-        policies=PolicyBundleConfig(config_policy_name=profile),
-    )
+    df_profile = create_runtime_profile(config_policy_name=profile)
     rust_profile_snapshot = _collect_rust_profile_snapshot(profile)
     rust_profile_hash = rust_profile_snapshot.profile_hash
     rust_settings_hash = rust_profile_snapshot.settings_hash

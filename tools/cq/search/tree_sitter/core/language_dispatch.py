@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from tools.cq.core.types import QueryLanguage
 
@@ -16,7 +17,7 @@ def detect_language(target: str, *, lang: str = "auto") -> QueryLanguage:
         QueryLanguage: Effective language selection for target.
     """
     if lang in {"python", "rust"}:
-        return lang
+        return cast("QueryLanguage", lang)
     suffix = Path(target).suffix.lower()
     if suffix == ".rs":
         return "rust"

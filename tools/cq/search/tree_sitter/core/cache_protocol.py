@@ -10,6 +10,7 @@ class CacheBackendProtocol(Protocol):
 
     def get(self, key: str) -> object | None:
         """Return cached value for ``key`` when available."""
+        ...
 
     def set(
         self,
@@ -20,6 +21,7 @@ class CacheBackendProtocol(Protocol):
         tag: str | None = None,
     ) -> bool:
         """Persist ``value`` for ``key`` and return backend acknowledgement."""
+        ...
 
 
 __all__ = ["CacheBackendProtocol"]

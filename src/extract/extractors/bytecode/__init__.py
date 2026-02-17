@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from extract.extractors.bytecode.builders import (
-    _bytecode_file_row,
     extract_bytecode,
     extract_bytecode_plans,
     extract_bytecode_table,
@@ -22,7 +21,6 @@ __all__ = [
     "CodeUnitContext",
     "CodeUnitKey",
     "InstructionData",
-    "_bytecode_file_row",
     "extract_bytecode",
     "extract_bytecode_plans",
     "extract_bytecode_table",

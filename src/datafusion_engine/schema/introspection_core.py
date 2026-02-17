@@ -30,6 +30,10 @@ from datafusion_engine.arrow.interop import coerce_arrow_schema
 from datafusion_engine.schema.introspection_cache import SchemaMapping
 from datafusion_engine.schema.introspection_common import read_only_sql_options
 from datafusion_engine.schema.introspection_routines import _introspection_cache_for_ctx
+from datafusion_engine.schema.snapshot_collector import (
+    routines_snapshot_table,
+    tables_snapshot_table,
+)
 from datafusion_engine.tables.metadata import table_provider_metadata
 from serde_msgspec import to_builtins
 from utils.hashing import CacheKeyBuilder
@@ -163,57 +167,6 @@ def table_names_snapshot(
         except (RuntimeError, TypeError, ValueError):
             return set()
     return set()
-
-
-def settings_snapshot_table(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None = None,
-) -> pa.Table:
-    """Return session settings as a pyarrow.Table.
-
-    Returns:
-    -------
-    pyarrow.Table
-        Table of settings from information_schema.df_settings.
-    """
-    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
-    return snapshot.settings
-
-
-def tables_snapshot_table(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None = None,
-) -> pa.Table:
-    """Return table inventory rows as a pyarrow.Table.
-
-    Returns:
-    -------
-    pyarrow.Table
-        Table inventory from information_schema.tables.
-    """
-    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
-    return snapshot.tables
-
-
-def routines_snapshot_table(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None = None,
-) -> pa.Table:
-    """Return information_schema.routines as a pyarrow.Table.
-
-    Returns:
-    -------
-    pyarrow.Table
-        Routine inventory from information_schema.routines.
-    """
-    from datafusion_engine.schema.introspection_routines import (
-        routines_snapshot_table as _routines_snapshot_table,
-    )
-
-    return _routines_snapshot_table(ctx, sql_options=sql_options)
 
 
 @dataclass(frozen=True)

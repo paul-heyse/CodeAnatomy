@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from tools.cq.core.bootstrap import resolve_runtime_services
@@ -20,8 +21,9 @@ def test_execute_plan_request_requires_injected_symtable(tmp_path: Path) -> None
     plan = compile_query(query)
     services = resolve_runtime_services(tmp_path)
 
+    request_factory = cast("Any", ExecutePlanRequestV1)
     with pytest.raises(TypeError):
-        ExecutePlanRequestV1(  # type: ignore[call-arg]
+        request_factory(
             plan=plan,
             query=query,
             root=str(tmp_path),

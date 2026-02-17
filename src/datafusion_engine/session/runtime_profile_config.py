@@ -62,7 +62,6 @@ __all__ = [
     "CST_DIAGNOSTIC_STATEMENTS",
     "INFO_SCHEMA_STATEMENTS",
     "INFO_SCHEMA_STATEMENT_NAMES",
-    "_AST_OPTIONAL_VIEW_FUNCTIONS",
     "AdapterExecutionPolicy",
     "CatalogConfig",
     "DataSourceConfig",
@@ -76,8 +75,6 @@ __all__ = [
     "PreparedStatementSpec",
     "SemanticOutputConfig",
     "ZeroRowBootstrapConfig",
-    "_DataFusionExplainCollector",
-    "_DataFusionPlanCollector",
 ]
 
 

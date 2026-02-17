@@ -584,8 +584,19 @@ def test_render_enrichment_can_attach_payloads_via_precompute(
         lambda **_kwargs: 2,
     )
 
-    render_markdown(result)
-    pids = _extract_python_enrichment_pids(result)
+    session = report_module.prepare_render_enrichment_session(
+        result=result,
+        root=tmp_path,
+        port=None,
+    )
+    enriched_result = report_module.apply_render_enrichment(
+        result,
+        root=tmp_path,
+        cache=session.cache,
+        allowed_files=session.allowed_files,
+        port=None,
+    )
+    pids = _extract_python_enrichment_pids(enriched_result)
     assert pids == {99}
 
 

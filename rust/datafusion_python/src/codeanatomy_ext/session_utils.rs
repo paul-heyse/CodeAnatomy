@@ -288,9 +288,36 @@ pub(crate) fn capture_plan_bundle_runtime(
     })?;
     let dataframe = py_df.inner_df().as_ref().clone();
     let runtime = build_runtime()?;
-    let runtime_bundle = runtime
-        .block_on(plan_bundle::capture_plan_bundle_runtime(&session_ctx, &dataframe))
-        .map_err(|err| PyRuntimeError::new_err(format!("Plan bundle runtime capture failed: {err}")))?;
+    let (runtime_bundle, artifact, warnings) = runtime.block_on(async {
+        let runtime_bundle = plan_bundle::capture_plan_bundle_runtime(&session_ctx, &dataframe)
+            .await
+            .map_err(|err| {
+                PyRuntimeError::new_err(format!("Plan bundle runtime capture failed: {err}"))
+            })?;
+        let (artifact, warnings) = plan_bundle::build_plan_bundle_artifact_with_warnings(
+            plan_bundle::PlanBundleArtifactBuildRequest {
+                ctx: &session_ctx,
+                runtime: &runtime_bundle,
+                rulepack_fingerprint: [0_u8; 32],
+                provider_identities: Vec::new(),
+                optimizer_traces: Vec::new(),
+                pushdown_report: None,
+                deterministic_inputs: parsed.deterministic_inputs.unwrap_or(true),
+                no_volatile_udfs: parsed.no_volatile_udfs.unwrap_or(true),
+                deterministic_optimizer: parsed.deterministic_optimizer.unwrap_or(true),
+                stats_quality: parsed.stats_quality.clone(),
+                capture_substrait: parsed.capture_substrait.unwrap_or(true),
+                capture_sql: parsed.capture_sql.unwrap_or(false),
+                capture_delta_codec: parsed.capture_delta_codec.unwrap_or(false),
+                planning_surface_hash: [0_u8; 32],
+            },
+        )
+        .await
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!("Plan bundle runtime capture failed: {err}"))
+        })?;
+        Ok::<_, PyErr>((runtime_bundle, artifact, warnings))
+    })?;
     let response = serde_json::json!({
         "captured": true,
         "deterministic_inputs": parsed.deterministic_inputs.unwrap_or(true),
@@ -303,6 +330,12 @@ pub(crate) fn capture_plan_bundle_runtime(
         "logical_plan": format!("{:?}", runtime_bundle.p0_logical),
         "optimized_plan": format!("{:?}", runtime_bundle.p1_optimized),
         "physical_plan": format!("{:?}", runtime_bundle.p2_physical),
+        "required_udfs": artifact.required_udfs,
+        "referenced_tables": artifact.referenced_tables,
+        "artifact_version": artifact.artifact_version,
+        "has_substrait_bytes": artifact.substrait_bytes.is_some(),
+        "has_sql_text": artifact.sql_text.is_some(),
+        "warnings": warnings,
     });
     json_to_py(py, &response)
 }

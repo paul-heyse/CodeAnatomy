@@ -6,6 +6,7 @@ and maps exception propagation through the codebase.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 
 _TOP_EXCEPTION_TYPES = 15
 _BARE_EXCEPT_LIMIT = 20
+logger = logging.getLogger(__name__)
 
 
 class RaiseSite(msgspec.Struct, frozen=True):
@@ -320,6 +322,13 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
         Analysis result.
     """
     started = ms()
+    logger.debug(
+        "Running exceptions macro root=%s function=%s include=%d exclude=%d",
+        request.root,
+        request.function,
+        len(request.include),
+        len(request.exclude),
+    )
 
     all_raises, all_catches, files_scanned = _scan_exceptions(
         request.root,
@@ -341,19 +350,20 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
     )
     raise_types, catch_types = _summarize_exception_types(all_raises, all_catches)
 
-    updated_summary = summary_from_mapping(
-        {
-            "files_scanned": files_scanned,
-            "scope_file_count": files_scanned,
-            "scope_filter_applied": scope_filter_applied(request.include, request.exclude),
-            "total_raises": len(all_raises),
-            "total_catches": len(all_catches),
-            "unique_exception_types": len(raise_types),
-            "bare_excepts": sum(1 for c in all_catches if c.is_bare_except),
-            "reraises": sum(1 for r in all_raises if r.is_reraise),
-        }
+    builder.with_summary(
+        summary_from_mapping(
+            {
+                "files_scanned": files_scanned,
+                "scope_file_count": files_scanned,
+                "scope_filter_applied": scope_filter_applied(request.include, request.exclude),
+                "total_raises": len(all_raises),
+                "total_catches": len(all_catches),
+                "unique_exception_types": len(raise_types),
+                "bare_excepts": sum(1 for c in all_catches if c.is_bare_except),
+                "reraises": sum(1 for r in all_raises if r.is_reraise),
+            }
+        )
     )
-    builder.with_summary(updated_summary)
 
     bare_excepts = [caught for caught in all_catches if caught.is_bare_except]
     scoring_details = macro_scoring_details(
@@ -413,13 +423,23 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
         )
     )
 
-    pattern = request.function if request.function else "panic!\\|unwrap\\|expect\\|Result<\\|Err("
-    return apply_rust_fallback_policy(
+    result = apply_rust_fallback_policy(
         builder.build(),
         root=request.root,
         policy=RustFallbackPolicyV1(
             macro_name="exceptions",
-            pattern=pattern,
+            pattern=(
+                request.function
+                if request.function
+                else "panic!\\|unwrap\\|expect\\|Result<\\|Err("
+            ),
             query=request.function,
         ),
     )
+    logger.debug(
+        "Completed exceptions macro raises=%d catches=%d files_scanned=%d",
+        len(all_raises),
+        len(all_catches),
+        files_scanned,
+    )
+    return result

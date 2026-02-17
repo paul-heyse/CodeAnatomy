@@ -420,21 +420,4 @@ def _ensure_catalog_schema(
     registered_schemas.add((catalog, schema))
 
 
-__all__ = [
-    "_build_pyarrow_dataset",
-    "_ddl_column_definitions",
-    "_ddl_constraints",
-    "_ddl_identifier",
-    "_ddl_identifier_part",
-    "_ddl_options_clause",
-    "_ddl_options_payload",
-    "_ddl_order_clause",
-    "_ddl_ordering_keys",
-    "_ddl_prefix",
-    "_ddl_schema_components",
-    "_ddl_statement",
-    "_ddl_string_literal",
-    "_ensure_catalog_schema",
-    "_external_table_ddl",
-    "_register_dataset_with_context",
-]
+__all__: list[str] = []

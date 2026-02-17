@@ -5,6 +5,7 @@ Analyzes module import structure, identifies cycles, and maps dependencies.
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ _STDLIB_MODULE_NAMES: frozenset[str] = frozenset(sys.stdlib_module_names)
 _CYCLE_LIMIT = 10
 _EXTERNAL_LIMIT = 30
 _REL_IMPORT_LIMIT = 20
+logger = logging.getLogger(__name__)
 
 
 class ImportInfo(msgspec.Struct, frozen=True):
@@ -516,10 +518,18 @@ def cmd_imports(request: ImportRequest) -> CqResult:
         Analysis result.
     """
     started = ms()
+    logger.debug(
+        "Running imports macro root=%s module=%s cycles=%s include=%d exclude=%d",
+        request.root,
+        request.module,
+        request.cycles,
+        len(request.include),
+        len(request.exclude),
+    )
     ctx = _prepare_import_context(request)
     result = _build_imports_result(ctx, started_ms=started)
     pattern = request.module if request.module else "use "
-    return apply_rust_fallback_policy(
+    result = apply_rust_fallback_policy(
         result,
         root=request.root,
         policy=RustFallbackPolicyV1(
@@ -528,3 +538,9 @@ def cmd_imports(request: ImportRequest) -> CqResult:
             query=request.module,
         ),
     )
+    logger.debug(
+        "Completed imports macro imports=%d modules=%d",
+        len(ctx.all_imports),
+        len(ctx.deps),
+    )
+    return result

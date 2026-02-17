@@ -10,7 +10,15 @@ from pathlib import Path
 from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.runtime import RuntimeExecutionPolicy
-from tools.cq.core.services import CallsService, EntityService, SearchService
+from tools.cq.core.schema import CqResult
+from tools.cq.core.services import (
+    CallsService,
+    CallsServiceRequest,
+    EntityFrontDoorRequest,
+    EntityService,
+    SearchService,
+    SearchServiceRequest,
+)
 from tools.cq.core.settings_factory import SettingsFactory
 
 
@@ -31,10 +39,62 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
     Returns:
         Runtime services wired for the provided repository root.
     """
+    from tools.cq.core.enrichment_mode import parse_incremental_enrichment_mode
+    from tools.cq.macros.calls import cmd_calls
+    from tools.cq.query.entity_front_door import attach_entity_front_door_insight
+    from tools.cq.search._shared.types import QueryMode
+    from tools.cq.search.pipeline.smart_search import smart_search
+
+    def _attach_front_door(request: EntityFrontDoorRequest) -> CqResult:
+        return attach_entity_front_door_insight(
+            request.result,
+            relationship_detail_max_matches=request.relationship_detail_max_matches,
+        )
+
+    def _execute_calls(request: CallsServiceRequest) -> CqResult:
+        from tools.cq.macros.contracts import CallsRequest
+
+        call_request = request.request
+        return cmd_calls(
+            CallsRequest(
+                root=call_request.root,
+                function_name=call_request.function_name,
+                tc=call_request.tc,
+                argv=list(call_request.argv),
+            )
+        )
+
+    def _execute_search(request: SearchServiceRequest) -> CqResult:
+        parsed_mode: QueryMode | None = None
+        if isinstance(request.mode, QueryMode):
+            parsed_mode = request.mode
+        elif isinstance(request.mode, str):
+            normalized_mode = request.mode.strip().lower()
+            if normalized_mode in {"identifier", "regex", "literal"}:
+                parsed_mode = QueryMode(normalized_mode)
+        return smart_search(
+            root=request.root,
+            query=request.query,
+            mode=parsed_mode,
+            lang_scope=request.lang_scope,
+            include_globs=request.include_globs,
+            exclude_globs=request.exclude_globs,
+            include_strings=request.include_strings,
+            with_neighborhood=request.with_neighborhood,
+            limits=request.limits,
+            tc=request.tc,
+            argv=request.argv,
+            run_id=request.run_id,
+            incremental_enrichment_enabled=request.incremental_enrichment_enabled,
+            incremental_enrichment_mode=parse_incremental_enrichment_mode(
+                request.incremental_enrichment_mode
+            ),
+        )
+
     return CqRuntimeServices(
-        search=SearchService(),
-        entity=EntityService(),
-        calls=CallsService(),
+        search=SearchService(execute_fn=_execute_search),
+        entity=EntityService(attach_front_door_fn=_attach_front_door),
+        calls=CallsService(execute_fn=_execute_calls),
         cache=get_cq_cache_backend(root=root),
         policy=SettingsFactory.runtime_policy(),
     )

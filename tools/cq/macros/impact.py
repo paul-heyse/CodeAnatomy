@@ -246,7 +246,6 @@ def _append_depth_findings(builder: MacroResultBuilder, summary: ImpactDepthSumm
         return
     request = summary.request
     scoring_details = summary.scoring_details
-    scoring_dict = msgspec.structs.asdict(scoring_details)
     builder.add_finding(
         Finding(
             category="summary",
@@ -255,7 +254,7 @@ def _append_depth_findings(builder: MacroResultBuilder, summary: ImpactDepthSumm
                 f"reaches {summary.site_count} sites in {len(summary.files_affected)} files"
             ),
             severity="info",
-            details=build_detail_payload(scoring=scoring_dict),
+            details=build_detail_payload(scoring=scoring_details),
         ),
     )
     for depth, count in sorted(summary.depth_counts.items()):
@@ -264,7 +263,7 @@ def _append_depth_findings(builder: MacroResultBuilder, summary: ImpactDepthSumm
                 category="depth",
                 message=f"Depth {depth}: {count} taint sites",
                 severity="info",
-                details=build_detail_payload(scoring=scoring_dict),
+                details=build_detail_payload(scoring=scoring_details),
             ),
         )
 
@@ -281,7 +280,6 @@ def _append_kind_sections(
     by_kind: dict[str, list[TaintedSite]],
     scoring_details: ScoringDetailsV1,
 ) -> None:
-    scoring_dict = msgspec.structs.asdict(scoring_details)
     for kind, sites in by_kind.items():
         section = Section(title=f"Taint {kind.title()} Sites")
         for site in sites[:_SECTION_SITE_LIMIT]:
@@ -293,7 +291,7 @@ def _append_kind_sections(
                     message=site.description,
                     anchor=Anchor(file=site.file, line=site.line),
                     severity="info",
-                    details=build_detail_payload(scoring=scoring_dict, data=details),
+                    details=build_detail_payload(scoring=scoring_details, data=details),
                 ),
             )
         builder.add_section(section)
@@ -306,7 +304,6 @@ def _append_callers_section(
 ) -> None:
     if not caller_sites:
         return
-    scoring_dict = msgspec.structs.asdict(scoring_details)
     caller_section = Section(title="Callers (via rg)")
     for file, line in caller_sites[:_CALLER_LIMIT]:
         caller_section = append_section_finding(
@@ -316,7 +313,7 @@ def _append_callers_section(
                 message="Potential call site",
                 anchor=Anchor(file=file, line=line),
                 severity="info",
-                details=build_detail_payload(scoring=scoring_dict),
+                details=build_detail_payload(scoring=scoring_details),
             ),
         )
     builder.add_section(caller_section)
@@ -327,7 +324,6 @@ def _append_evidence(
     all_sites: list[TaintedSite],
     scoring_details: ScoringDetailsV1,
 ) -> None:
-    scoring_dict = msgspec.structs.asdict(scoring_details)
     seen: set[tuple[str, int]] = set()
     for site in all_sites:
         key = (site.file, site.line)
@@ -340,7 +336,7 @@ def _append_evidence(
                 category=site.kind,
                 message=site.description,
                 anchor=Anchor(file=site.file, line=site.line),
-                details=build_detail_payload(scoring=scoring_dict, data=details),
+                details=build_detail_payload(scoring=scoring_details, data=details),
             ),
         )
 

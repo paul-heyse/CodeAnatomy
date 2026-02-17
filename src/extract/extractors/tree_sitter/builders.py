@@ -751,7 +751,6 @@ def _iter_query_matches(
 
 
 from extract.extractors.tree_sitter.builders_runtime import (
-    _extract_ts_file_row,
     _resolve_parse_callback_options,
     _should_run_queries,
     extract_ts,
@@ -760,9 +759,6 @@ from extract.extractors.tree_sitter.builders_runtime import (
 )
 
 __all__ = [
-    "_extract_ts_file_row",
-    "_resolve_parse_callback_options",
-    "_should_run_queries",
     "extract_ts",
     "extract_ts_plans",
     "extract_ts_tables",

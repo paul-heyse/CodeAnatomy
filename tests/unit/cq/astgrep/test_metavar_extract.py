@@ -49,11 +49,11 @@ class _FakeMatch:
     def bind_multi(self, name: str, nodes: list[_FakeNode]) -> None:
         self._multi[name] = nodes
 
-    def get_match(self, name: str) -> _FakeNode | None:
-        return self._single.get(name)
+    def get_match(self, meta_var: str) -> _FakeNode | None:
+        return self._single.get(meta_var)
 
-    def get_multiple_matches(self, name: str) -> list[_FakeNode] | None:
-        return self._multi.get(name)
+    def get_multiple_matches(self, meta_var: str) -> list[_FakeNode]:
+        return self._multi.get(meta_var, [])
 
 
 def test_extract_match_metavars_single_capture_keys() -> None:
@@ -62,7 +62,7 @@ def test_extract_match_metavars_single_capture_keys() -> None:
     match.bind_single("X", _FakeNode("target"))
 
     payload = extract_match_metavars(
-        match,  # type: ignore[arg-type]
+        match,
         metavar_names=("X",),
         variadic_names=frozenset(),
         include_multi=False,
@@ -77,7 +77,7 @@ def test_extract_match_metavars_variadic_skips_separator_nodes() -> None:
     match.bind_multi("ARGS", [_FakeNode("a"), _FakeNode(",", kind=","), _FakeNode("b")])
 
     payload = extract_match_metavars(
-        match,  # type: ignore[arg-type]
+        match,
         metavar_names=("ARGS",),
         variadic_names=frozenset({"ARGS"}),
         include_multi=True,

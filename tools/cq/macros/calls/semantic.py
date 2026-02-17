@@ -15,7 +15,6 @@ from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
 
 if TYPE_CHECKING:
     from tools.cq.core.front_door_contracts import FrontDoorInsightV1
-    from tools.cq.core.schema import CqResult
     from tools.cq.core.types import QueryLanguage
 
 
@@ -35,9 +34,17 @@ class CallsSemanticRequest:
 def _apply_calls_semantic(
     *,
     insight: FrontDoorInsightV1,
-    result: CqResult,
     request: CallsSemanticRequest,
-) -> tuple[FrontDoorInsightV1, QueryLanguage | None, int, int, int, int, tuple[str, ...]]:
+) -> tuple[
+    FrontDoorInsightV1,
+    QueryLanguage | None,
+    int,
+    int,
+    int,
+    int,
+    tuple[str, ...],
+    dict[str, object] | None,
+]:
     from tools.cq.core.front_door_entity import augment_insight_with_semantic
     from tools.cq.search.semantic.models import (
         LanguageSemanticEnrichmentRequest,
@@ -53,6 +60,7 @@ def _apply_calls_semantic(
     semantic_timed_out = 0
     semantic_provider = provider_for_language(target_language) if target_language else "none"
     semantic_reasons: list[str] = []
+    semantic_planes_update: dict[str, object] | None = None
 
     if request.target_file_path is not None and target_language in {"python", "rust"}:
         if semantic_runtime_enabled():
@@ -91,10 +99,7 @@ def _apply_calls_semantic(
                     )
                 semantic_planes = semantic_payload.get("semantic_planes")
                 if isinstance(semantic_planes, dict):
-                    existing_planes = result.summary.semantic_planes
-                    if isinstance(existing_planes, dict):
-                        existing_planes.clear()
-                        existing_planes.update(dict(semantic_planes))
+                    semantic_planes_update = dict(semantic_planes)
             else:
                 semantic_failed = 1
                 semantic_reasons.append(
@@ -113,6 +118,7 @@ def _apply_calls_semantic(
         semantic_failed,
         semantic_timed_out,
         tuple(dict.fromkeys(semantic_reasons)),
+        semantic_planes_update,
     )
 
 

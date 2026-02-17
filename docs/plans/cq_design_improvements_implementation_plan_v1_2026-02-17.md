@@ -1860,30 +1860,30 @@ def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
 
 | Scope | Status | Notes |
 |---|---|---|
-| S1 | Partial | Frozen `Section`, tuple findings, copy-on-write report enrichment, macro struct freezing, and `RunContext.argv` tuple landed; tuple/list compatibility regressions and SNB map hardening remain. |
-| S2 | Partial | `enrichment_contracts` relocation and astgrep metavar extraction landed; `core/services.py` still has deferred high-layer imports and layering cleanup is incomplete. |
-| S3 | Partial | Counter/provenance/AST-parent dedup slices landed; duplicate helpers still remain (`filter_result_by_scope`, `_pack_source_rows`, `_derive_*_status`, local builtin/scope helpers). |
+| S1 | Partial | Frozen `Section`, tuple findings, copy-on-write report enrichment, macro struct freezing, and `RunContext.argv` tuple landed; `SemanticNeighborhoodBundleV1.node_index` remains mutable (`dict`) and full frozen-map hardening is still pending. |
+| S2 | Partial | `enrichment_contracts` relocation and astgrep metavar extraction landed; core calls-service contract wiring moved to `core/contracts.py`, but remaining dependency-direction cleanup is still open in deferred import seams (`settings_factory.py`, `render_context.py`) and contract-surface gaps. |
+| S3 | Partial | Counter/provenance/AST-parent dedup slices plus scope-filter wrapper consolidation landed; duplicate helpers still remain (notably `_pack_source_rows` across tree-sitter lanes and multiple render-summary status-derivation helpers). |
 | S4 | Complete | Canonical enrichment telemetry accumulation module is live and duplicate adapter/pipeline accumulation functions are removed. |
-| S5 | Partial | `build_call_evidence`, result-action split, summary contract rename, and symbol-resolver command/query split landed; additional CQS cleanup remains (router semantics, payload-budget split, residual assert-style guards). |
+| S5 | Partial | `build_call_evidence`, result-action split, summary contract rename, symbol-resolver split, and router malformed-query handling are landed; remaining CQS cleanup still includes payload-budget split and residual assert/guard normalization work. |
 | S6 | Partial | Rust-lane decomposition modules exist and private `__dict__` lookups are removed; `runtime_core.py` remains the dominant implementation module and is not decommissioned. |
 | S7 | Partial | Query executor modules were extracted and facade modules deleted; `executor_runtime_impl.py` remains large and still owns substantial execution logic. |
 | S8 | Partial | `extractors_orchestrator.py` and front-door split modules exist; `extractors.py`, `front_door_assembly.py`, and `calls/analysis.py` remain large/primary. |
 | S9 | Partial | Typed telemetry schema and typed-flow tests landed; enrichment wrapper contracts and downstream flow still carry `dict[str, object]` payloads in primary paths. |
-| S10 | Partial | Runtime context and `ConsolePort` seams landed; module-level CLI console objects remain and singleton elimination is not complete. |
-| S11 | Partial | `apply_in_dir_scope()` and query router are wired; macro file-scan helper adoption is incomplete across planned macro modules. |
-| S12 | Partial | Semantic provider protocols/registry and cache/node abstraction files exist; semantic front door still directly imports concrete enrichers and keeps default registry state. |
+| S10 | Partial | Runtime context and `ConsolePort` seams are landed (including scheduler registry reset seams); full singleton elimination is still open in process-default runtime/app composition state. |
+| S11 | Complete | `apply_in_dir_scope()`, query/search routing extraction, result-action command/query split, and shared macro scan helper adoption are landed across planned command/macro surfaces. |
+| S12 | Partial | Semantic provider protocol/registry plus cache/node abstraction contracts are landed; remaining abstraction work includes additional semantic model decomposition and residual adapter seam cleanup. |
 | S13 | Partial | Python-lane/core split modules exist; legacy god modules (`python_lane/facts.py`, `python_lane/runtime.py`, `core/runtime.py`) remain in place. |
 | S14 | Partial | Neighborhood collector and orchestration split modules exist; legacy `tree_sitter_collector.py` and `multilang_orchestrator.py` remain active. |
 | S15 | Partial | Core split modules (`backend_core`, `summary_*`, `fact_*`) are present; legacy `diskcache_backend.py`, `summary_contract.py`, and `enrichment_facts.py` are still present. |
 | S16 | Partial | Calls entry/target split modules exist; legacy `calls_target.py`, heavy `calls/entry.py`, and `executor_definitions.py` remain non-trivial. |
 | S17 | Complete | Domain visitors moved to `analysis/visitors/` and removed from macro modules. |
 | S18 | Partial | Quick-win contract/naming slices landed (`TreeSitterInputEditV1`, `RgProcessResultV1`, resolution type renames, frozen capability matrix); remaining param/schema alignment still open. |
-| S19 | Not Started | Structured logging rollout has not landed at planned breadth (no module logger adoption across search pipeline files). |
+| S19 | Partial | Structured logging landed for the planned silent macros (`exceptions`, `side_effects`, `imports`, `scopes`, `bytecode`); broad search-pipeline logging rollout remains. |
 | S20 | Complete | Pipeline lazy facade and compatibility aliases removed; query facade modules were deleted and rust-lane private indirection was removed. |
-| S21 | Partial | Registry objects are introduced, but mutable process-default registry holders remain and full registry hardening is incomplete. |
-| S22 | Partial | Typed summary update contracts are in place and used in key query/macro paths; full typed payload replacement for all summary/macro update paths remains. |
-| S23 | Partial | Rulepack registry injection work is present; hidden-constructor defaults and remaining query testability seams still need completion. |
-| S24 | Partial | CLI telemetry event decomposition landed (`telemetry_events.py`); remaining schema-alignment and command-path simplification remains. |
+| S21 | Partial | Registry objects and read-only registry wrappers are landed in key paths (`object_view`, `language_adapter`, `details_kinds`/`snb_registry`); mutable process-default holders and cache telemetry/backend globals still remain. |
+| S22 | Partial | Typed summary update contracts are in place and applied in key query/macro flows; significant dict-based summary/update payloads still remain in calls/query runtime paths. |
+| S23 | Partial | Rulepack registry seam and query batch-session symtable injection are landed; inline `SymtableEnricher(...)` construction still exists in execution entry paths, so full testability injection is not complete. |
+| S24 | Partial | Telemetry event decomposition and neighborhood schema projection are landed; telemetry control-flow simplification is still incomplete in `invoke_with_telemetry()`. |
 | S25 | Partial | Fragment runtime/index extraction landed and `fragment_orchestrator.py` is removed; full search artifact store/index consolidation is incomplete. |
 
 ### Decommission Batch Status Snapshot
@@ -1893,7 +1893,7 @@ def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
 | D1 | Complete | `_apply_render_enrichment_in_place` removed; `render_summary_compact` alias removed. |
 | D2 | Complete | `pipeline/enrichment_contracts.py` deleted and telemetry accumulation duplicates consolidated under `search/enrichment/telemetry.py`. |
 | D3 | Partial | Query facade deletions are complete; `executor_runtime_impl.py`, `rust_lane/runtime_core.py`, and `search/python/extractors.py` are not yet decommissioned. |
-| D4 | Partial | Follow-up alias deletion is complete; trivial `_shared` re-export deletions and full macro scan-boilerplate removal are still pending. |
+| D4 | Partial | Follow-up alias deletion is complete; `_shared` wrapper re-export files (`search/_shared/timeout.py`, `search/_shared/rg_request.py`, `search/_shared/encoding.py`) still exist and final boilerplate cleanup/deletion is pending. |
 | D5 | Not Started | Typed payload deletion batch not yet applied (`_partition_python_payload_fields`, semantic coercion helpers, and dict telemetry factory still present). |
 | D6 | Complete | `_SESSIONS`, `_GLOBAL_STATE_HOLDER`, and `_TREE_CACHE_EVICTIONS` globals are removed and runtime cache registration moved off import-time paths. |
 | D7 | Not Started | Legacy god modules from S13/S14/S15/S16 are still present and have not entered deletion batch. |
@@ -1901,18 +1901,9 @@ def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
 | D9 | Partial | Pipeline facade and selected alias cleanups landed; typed-summary/helper and remaining facade-deletion slices are incomplete. |
 | D10 | Partial | `fragment_orchestrator.py` deletion is complete, but mutable registry globals and remaining cache/index cleanup slices are incomplete. |
 
-### Active CQ Failure Set (Audit: `pytest tests/unit/cq tests/e2e/cq --no-cov`)
+### Quality-Check Tracking
 
-- `tests/unit/cq/core/test_noqa_guard.py::test_tools_cq_runtime_has_no_noqa_suppressions`
-  - Runtime files currently containing `noqa`: `tools/cq/cli_app/telemetry_events.py`, `tools/cq/core/render_summary.py`, `tools/cq/neighborhood/collector_shared.py`, `tools/cq/query/router.py`
-- `tests/unit/cq/core/test_scope_filter.py::test_filter_findings_by_scope_applies_exclude_globs`
-  - Exclude-glob semantics in `tools/cq/core/scope_filter.py` do not currently match expected behavior.
-- `tests/unit/cq/query/test_router.py::test_route_query_or_search_returns_error_result_for_query_parse_failure`
-  - Query-router parse-failure behavior diverges from expected malformed-query handling.
-- `tests/unit/cq/search/test_smart_search.py::TestBuildSections::test_sections_include_strings_when_enabled`
-  - `Section.findings` tuple migration introduced test contract mismatch (`tuple` vs `list`) for empty occurrences section assertions.
-- `tests/unit/cq/test_report.py::test_render_enrichment_can_attach_payloads_via_precompute`
-  - Render enrichment precompute path no longer mutates result in-place; test still expects in-place mutation semantics.
+Quality-check failure tracking is intentionally omitted from this scope-status audit. This section is maintained separately from implementation-scope progress.
 
 ---
 
@@ -1920,21 +1911,21 @@ def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
 
 - [ ] S1. Frozen struct integrity (partial: core + macro COW/frozen slices landed; SNB hardening + tuple/list parity cleanup pending)
 - [ ] S5. CQS violations and public surface cleanup (partial: call evidence + result_action + symbol resolver split landed; remaining CQS splits pending)
-- [ ] S3. DRY consolidation — small wins (partial: counter/builtin/AST-parent dedup landed; remaining dedup set pending)
-- [ ] S2. Dependency direction corrections (partial: enrichment-contract relocation + astgrep metavars extraction landed; core DI/layer cleanup pending)
+- [ ] S3. DRY consolidation — small wins (partial: counter/builtin/AST-parent dedup plus scope-filter wrapper consolidation landed; remaining dedup set pending)
+- [ ] S2. Dependency direction corrections (partial: enrichment-contract relocation + astgrep metavars extraction + core calls-service contract wiring landed; remaining layer cleanup pending)
 - [x] S4. Telemetry accumulation consolidation
 - [x] S20. Facade and alias eradication
-- [ ] S11. Shell-layer domain logic extraction (partial: `apply_in_dir_scope` + query router landed; macro scan-helper adoption incomplete)
+- [x] S11. Shell-layer domain logic extraction
 - [ ] S12. Missing abstraction introduction (LanguageEnrichmentProvider)
 - [ ] S6. God module decomposition — tree-sitter (runtime_core.py → extracted modules, final runtime_core decommission pending)
 - [ ] S7. God module decomposition — query engine (facade deletion landed; runtime_impl decomposition completion pending)
 - [ ] S8. God module decomposition — search backends and core (extractors/front-door/calls analysis completion pending)
 - [ ] S9. Typed enrichment payload migration (dict[str, object] → typed facts)
-- [ ] S22. Typed summary and macro payload contracts
-- [ ] S23. Query testability and rulepack registry injection
+- [ ] S22. Typed summary and macro payload contracts (partial: contracts landed; broad dict-payload replacement pending)
+- [ ] S23. Query testability and rulepack registry injection (partial: registry + batch symtable seams landed; entry-path inline constructors remain)
 - [ ] S10. Mutable singleton elimination (TreeSitterRuntimeContext, ConsolePort)
 - [ ] S21. Mutable singleton elimination completion and registry hardening
-- [ ] S24. CLI telemetry decomposition and schema alignment (partial: telemetry event builders extracted)
+- [ ] S24. CLI telemetry decomposition and schema alignment (partial: telemetry events + neighborhood schema projection landed)
 - [ ] S18. Quick wins — naming and contract fixes (partial: major renames/contracts landed; remaining quick wins pending)
 - [ ] S13. God module decomposition — tree-sitter lanes (facts.py, runtime.py, core/runtime.py)
 - [ ] S14. God module decomposition — CLI + orchestration (tree_sitter_collector.py, multilang_orchestrator.py)
@@ -1942,11 +1933,11 @@ def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
 - [ ] S16. God module decomposition — macros + query periphery (entry.py, calls_target.py, executor_definitions.py)
 - [x] S17. Domain visitor extraction to analysis/ (ExceptionVisitor, SideEffectVisitor, ImportVisitor)
 - [ ] S25. Fragment cache simplification and search artifact index extraction
-- [ ] S19. Observability — structured logging (~55 pipeline files + 5 macros)
+- [ ] S19. Observability — structured logging (partial: macro logging landed; broad pipeline rollout pending)
 - [x] D1. Cross-scope deletion batch (after S1, S5)
 - [x] D2. Cross-scope deletion batch (after S2, S4)
 - [ ] D3. Cross-scope deletion batch (partial: query facade deletions done; runtime_core/extractors/runtime_impl deletions pending)
-- [ ] D4. Cross-scope deletion batch (partial: followups alias removed; remaining D4 deletions pending)
+- [ ] D4. Cross-scope deletion batch (partial: followups alias removed; `_shared` wrapper deletions still pending)
 - [ ] D5. Cross-scope deletion batch (after S9)
 - [x] D6. Cross-scope deletion batch (after S10 singleton removals in tree-sitter runtime)
 - [ ] D7. Cross-scope deletion batch (after S13, S14, S15, S16)

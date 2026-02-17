@@ -45,7 +45,11 @@ from semantics.config import SemanticConfig
 from semantics.join_helpers import join_by_span_contains, join_by_span_overlap
 from semantics.joins import JoinStrategy, JoinStrategyType
 from semantics.schema import SemanticSchema, SemanticSchemaError
-from semantics.types.core import columns_are_joinable
+from semantics.types.core import (
+    CompatibilityGroup,
+    columns_are_joinable,
+    file_identity_equi_join_pairs,
+)
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
@@ -339,28 +343,18 @@ class SemanticCompiler:
             )
             raise SemanticSchemaError(msg)
 
-        from semantics.types.core import CompatibilityGroup
-
         inferred_pairs = left_info.annotated.infer_join_keys(right_info.annotated)
-
-        # Filter to FILE_IDENTITY group with exact name matches only.
-        # Span keys use different join strategies (overlap / contains) and
-        # must not be used as equi-join keys.  Cross-name pairs (e.g.
-        # path ↔ file_id) are semantically compatible but not suitable
-        # for equi-join.
-        file_id_pairs: list[tuple[str, str]] = []
-        for left_col_name, right_col_name in inferred_pairs:
-            if left_col_name != right_col_name:
-                continue
-            left_col = left_info.annotated.get(left_col_name)
-            right_col = right_info.annotated.get(right_col_name)
-            if left_col is None or right_col is None:
-                continue
-            if (
-                CompatibilityGroup.FILE_IDENTITY in left_col.compatibility_groups
+        file_id_pairs = file_identity_equi_join_pairs(
+            inferred_pairs,
+            left_is_file_identity=lambda name: (
+                (left_col := left_info.annotated.get(name)) is not None
+                and CompatibilityGroup.FILE_IDENTITY in left_col.compatibility_groups
+            ),
+            right_is_file_identity=lambda name: (
+                (right_col := right_info.annotated.get(name)) is not None
                 and CompatibilityGroup.FILE_IDENTITY in right_col.compatibility_groups
-            ):
-                file_id_pairs.append((left_col_name, right_col_name))
+            ),
+        )
 
         if not file_id_pairs:
             msg = (

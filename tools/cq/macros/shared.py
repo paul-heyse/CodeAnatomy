@@ -131,6 +131,33 @@ def scan_python_files[VisitorT: _AstVisitor](
     return visitors, files_scanned
 
 
+def iter_python_sources(
+    *,
+    root: Path,
+    files: Sequence[Path],
+    max_files: int | None = None,
+) -> list[tuple[str, str]]:
+    """Load Python source text for candidate files with fail-open reads.
+
+    Returns:
+        list[tuple[str, str]]: `(repo_relative_path, source_text)` rows.
+    """
+    repo_root = resolve_repo_context(root).repo_root
+    rows: list[tuple[str, str]] = []
+    limited = files if max_files is None else files[: max(0, int(max_files))]
+    for pyfile in limited:
+        try:
+            rel = str(pyfile.relative_to(repo_root))
+        except ValueError:
+            rel = pyfile.name
+        try:
+            source = pyfile.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        rows.append((rel, source))
+    return rows
+
+
 # ── Target Resolution ──
 
 
@@ -233,6 +260,7 @@ def macro_score_payload(*, files: int, findings: int) -> MacroScorePayloadV1:
 
 __all__ = [
     "iter_files",
+    "iter_python_sources",
     "macro_score_payload",
     "macro_scoring_details",
     "resolve_macro_files",

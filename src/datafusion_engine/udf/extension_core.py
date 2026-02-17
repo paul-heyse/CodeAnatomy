@@ -358,15 +358,11 @@ def udf_backend_available() -> bool:
 
 from datafusion_engine.udf.extension_ddl import _register_udf_aliases, _register_udf_specs
 from datafusion_engine.udf.extension_snapshot_runtime import (
-    _async_udf_policy,
-    _build_docs_snapshot,
     _mutable_mapping,
     _notify_udf_snapshot,
-    _registered_snapshot,
     _require_bool_mapping,
     _require_mapping,
     _snapshot_names,
-    _validated_snapshot,
     rust_runtime_install_payload,
     rust_udf_docs,
     rust_udf_snapshot,
@@ -490,10 +486,6 @@ __all__ = [
     "AsyncUdfPolicy",
     "ExtensionRegistries",
     "RustUdfSnapshot",
-    "_async_udf_policy",
-    "_build_docs_snapshot",
-    "_registered_snapshot",
-    "_validated_snapshot",
     "expected_plugin_abi",
     "extension_module_with_capabilities",
     "invoke_runtime_entrypoint",

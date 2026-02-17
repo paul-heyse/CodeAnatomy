@@ -470,14 +470,12 @@ def _should_parallelize(
 
 
 from extract.extractors.bytecode.builders_runtime import (
-    _bytecode_file_row,
     extract_bytecode,
     extract_bytecode_plans,
     extract_bytecode_table,
 )
 
 __all__ = [
-    "_bytecode_file_row",
     "extract_bytecode",
     "extract_bytecode_plans",
     "extract_bytecode_table",

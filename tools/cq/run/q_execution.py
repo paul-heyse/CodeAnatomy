@@ -213,6 +213,7 @@ def execute_entity_q_steps(
         paths=union_paths,
         record_types=record_types,
         lang=lang,
+        symtable=SymtableEnricher(ctx.root),
     )
 
     allowed_files = [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from tools.cq.core.types import QueryLanguage
 
@@ -16,7 +17,7 @@ def detect_language(*, target: str | None = None, lang: str = "auto") -> QueryLa
         QueryLanguage: Effective routing language.
     """
     if lang in {"python", "rust"}:
-        return lang
+        return cast("QueryLanguage", lang)
     if target is not None and Path(target).suffix == ".rs":
         return "rust"
     return "python"

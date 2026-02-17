@@ -153,9 +153,6 @@ def _make_console(*, stderr: bool = False) -> Console:
     )
 
 
-console = _make_console()
-error_console = _make_console(stderr=True)
-
 app = App(
     name="cq",
     help="Code Query - High-signal code analysis macros",
@@ -167,8 +164,8 @@ app = App(
     default_parameter=Parameter(show_default=True, show_env_var=False),
     result_action=CQ_DEFAULT_RESULT_ACTION,
     config=build_config_chain(),
-    console=console,
-    error_console=error_console,
+    console=_make_console(),
+    error_console=_make_console(stderr=True),
     exit_on_error=False,
     print_error=True,
     help_on_error=True,
@@ -198,6 +195,8 @@ def _configure_app(config_opts: ConfigOptionArgs) -> None:
 
 
 def _build_cli_context(launch: LaunchContext) -> CliContext:
+    console = _make_console()
+    error_console = _make_console(stderr=True)
     options = CliContextOptions(
         root=launch.root,
         verbose=launch.verbose,

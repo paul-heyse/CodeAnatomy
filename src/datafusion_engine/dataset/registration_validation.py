@@ -179,10 +179,4 @@ def _validate_constraints_and_defaults(
         )
 
 
-__all__ = [
-    "_apply_scan_settings",
-    "_expected_column_defaults",
-    "_scan_details",
-    "_table_key_fields",
-    "_validate_constraints_and_defaults",
-]
+__all__: list[str] = []

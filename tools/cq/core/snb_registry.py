@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import msgspec
 
 from tools.cq.core.snb_schema import (
@@ -16,7 +18,7 @@ from tools.cq.core.snb_schema import (
 )
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
-DETAILS_KIND_REGISTRY: dict[str, type[msgspec.Struct]] = {
+_DETAILS_KIND_REGISTRY_MUTABLE: dict[str, type[msgspec.Struct]] = {
     "cq.snb.bundle_ref.v1": SemanticNeighborhoodBundleRefV1,
     "cq.snb.bundle.v1": SemanticNeighborhoodBundleV1,
     "cq.snb.node.v1": SemanticNodeRefV1,
@@ -26,6 +28,7 @@ DETAILS_KIND_REGISTRY: dict[str, type[msgspec.Struct]] = {
     "cq.snb.bundle_meta.v1": BundleMetaV1,
     "cq.snb.graph_summary.v1": NeighborhoodGraphSummaryV1,
 }
+DETAILS_KIND_REGISTRY = MappingProxyType(_DETAILS_KIND_REGISTRY_MUTABLE)
 
 
 def resolve_kind(kind: str) -> type[msgspec.Struct] | None:

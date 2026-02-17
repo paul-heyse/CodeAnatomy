@@ -231,10 +231,6 @@ def apply_projection_scan_overrides(
 
 
 __all__ = [
-    "_apply_projection_exprs",
-    "_projection_exprs_for_schema",
-    "_resolve_projection_exprs",
-    "_sql_literal_for_field",
     "apply_projection_overrides",
     "apply_projection_scan_overrides",
 ]

@@ -177,9 +177,9 @@ def _resolve_runtime_profile(
 ) -> DataFusionRuntimeProfile:
     if runtime_profile is not None:
         return runtime_profile
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.profiles import create_runtime_profile
 
-    return DataFusionRuntimeProfile()
+    return create_runtime_profile()
 
 
 def _worklist_stream(

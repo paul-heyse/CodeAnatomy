@@ -86,15 +86,15 @@ class RequestFactory:
         CallsServiceRequest
             Request object for calls service.
         """
+        from tools.cq.core.contracts import CallsMacroRequestV1
         from tools.cq.core.services import CallsServiceRequest
-        from tools.cq.macros.contracts import CallsRequest
 
         return CallsServiceRequest(
-            request=CallsRequest(
-                tc=ctx.tc,
+            request=CallsMacroRequestV1(
                 root=ctx.root,
-                argv=ctx.argv,
                 function_name=function_name,
+                tc=ctx.tc,
+                argv=tuple(ctx.argv),
             ),
         )
 

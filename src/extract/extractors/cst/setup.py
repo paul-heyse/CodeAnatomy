@@ -47,4 +47,4 @@ def _qname_keys() -> tuple[str, ...]:
         return _DEFAULT_QNAME_KEYS
 
 
-__all__ = ["CstExtractOptions", "_qname_keys"]
+__all__ = ["CstExtractOptions"]

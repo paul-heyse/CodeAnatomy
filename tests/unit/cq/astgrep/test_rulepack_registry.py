@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from tools.cq.astgrep.rulepack_registry import RulePackRegistry
-from tools.cq.astgrep.rules import get_rules_for_types, set_rulepack_registry
+from tools.cq.astgrep.rules import (
+    get_default_rulepack_registry,
+    get_rules_for_types,
+    set_rulepack_registry,
+)
 from tools.cq.astgrep.sgpy_scanner import RuleSpec
 
 
@@ -56,3 +60,13 @@ def test_get_rules_uses_injected_registry() -> None:
     finally:
         set_rulepack_registry(None)
     assert [rule.rule_id for rule in rules] == ["test_rule"]
+
+
+def test_set_rulepack_registry_updates_default_registry() -> None:
+    """Setter should replace the process-default registry instance."""
+    fake = _FakeRegistry()
+    try:
+        set_rulepack_registry(fake)
+        assert get_default_rulepack_registry() is fake
+    finally:
+        set_rulepack_registry(None)

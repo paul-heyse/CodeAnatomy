@@ -278,7 +278,6 @@ __all__ = [
     "SEMANTIC_SCHEMA_VERSION",
     "DatasetCategory",
     "SemanticDatasetRow",
-    "_reset_cache",
     "dataset_names",
     "dataset_names_by_category",
     "dataset_row",

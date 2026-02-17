@@ -39,7 +39,15 @@ class SearchObjectViewRegistry:
             self._rows.clear()
 
 
-_DEFAULT_REGISTRY = SearchObjectViewRegistry()
+_DEFAULT_REGISTRY_LOCK = threading.Lock()
+
+
+class _ObjectViewRegistryState:
+    def __init__(self) -> None:
+        self.registry = SearchObjectViewRegistry()
+
+
+_OBJECT_VIEW_REGISTRY_STATE = _ObjectViewRegistryState()
 
 
 def get_default_search_object_view_registry() -> SearchObjectViewRegistry:
@@ -48,10 +56,19 @@ def get_default_search_object_view_registry() -> SearchObjectViewRegistry:
     Returns:
         SearchObjectViewRegistry: Process-wide run-id keyed object-view registry.
     """
-    return _DEFAULT_REGISTRY
+    return _OBJECT_VIEW_REGISTRY_STATE.registry
+
+
+def set_default_search_object_view_registry(
+    registry: SearchObjectViewRegistry | None,
+) -> None:
+    """Set or reset process-default object-view registry (test seam)."""
+    with _DEFAULT_REGISTRY_LOCK:
+        _OBJECT_VIEW_REGISTRY_STATE.registry = registry or SearchObjectViewRegistry()
 
 
 __all__ = [
     "SearchObjectViewRegistry",
     "get_default_search_object_view_registry",
+    "set_default_search_object_view_registry",
 ]

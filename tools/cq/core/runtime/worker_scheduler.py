@@ -7,7 +7,7 @@ import multiprocessing
 import threading
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ParamSpec, TypeVar, cast
 
 from tools.cq.core.runtime.execution_policy import (
@@ -156,27 +156,47 @@ class WorkerScheduler:
             io_pool.shutdown(wait=False, cancel_futures=True)
 
 
-_SCHEDULER_LOCK = threading.Lock()
+@dataclass(slots=True)
+class SchedulerRegistry:
+    """Thread-safe holder for process-default worker scheduler."""
+
+    scheduler: WorkerScheduler | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def get_or_create(self) -> WorkerScheduler:
+        """Return active scheduler, creating one from runtime policy when absent."""
+        with self.lock:
+            if self.scheduler is None:
+                policy = default_runtime_execution_policy().parallelism
+                self.scheduler = WorkerScheduler(policy)
+            return self.scheduler
+
+    def replace(self, scheduler: WorkerScheduler | None) -> WorkerScheduler | None:
+        """Replace active scheduler and return previous instance.
+
+        Returns:
+            WorkerScheduler | None: Previous scheduler instance.
+        """
+        with self.lock:
+            previous = self.scheduler
+            self.scheduler = scheduler
+            return previous
+
+    def clear(self) -> WorkerScheduler | None:
+        """Clear active scheduler and return previous instance.
+
+        Returns:
+            WorkerScheduler | None: Previous scheduler instance.
+        """
+        return self.replace(None)
 
 
-class _SchedulerState:
-    """Mutable holder for process-global scheduler singleton."""
-
-    def __init__(self) -> None:
-        """Initialize empty scheduler state."""
-        self.scheduler: WorkerScheduler | None = None
-
-
-_SCHEDULER_STATE = _SchedulerState()
+_SCHEDULER_REGISTRY = SchedulerRegistry()
 
 
 def get_worker_scheduler() -> WorkerScheduler:
     """Return process-global CQ worker scheduler."""
-    with _SCHEDULER_LOCK:
-        if _SCHEDULER_STATE.scheduler is None:
-            policy = default_runtime_execution_policy().parallelism
-            _SCHEDULER_STATE.scheduler = WorkerScheduler(policy)
-        return _SCHEDULER_STATE.scheduler
+    return _SCHEDULER_REGISTRY.get_or_create()
 
 
 def set_worker_scheduler(scheduler: WorkerScheduler | None) -> None:
@@ -188,18 +208,14 @@ def set_worker_scheduler(scheduler: WorkerScheduler | None) -> None:
     Args:
         scheduler: Scheduler instance to set, or None to reset.
     """
-    with _SCHEDULER_LOCK:
-        old_scheduler = _SCHEDULER_STATE.scheduler
-        _SCHEDULER_STATE.scheduler = scheduler
+    old_scheduler = _SCHEDULER_REGISTRY.replace(scheduler)
     if old_scheduler is not None and scheduler is None:
         old_scheduler.close()
 
 
 def close_worker_scheduler() -> None:
     """Close and clear process-global worker scheduler."""
-    with _SCHEDULER_LOCK:
-        scheduler = _SCHEDULER_STATE.scheduler
-        _SCHEDULER_STATE.scheduler = None
+    scheduler = _SCHEDULER_REGISTRY.clear()
     if scheduler is not None:
         scheduler.close()
 

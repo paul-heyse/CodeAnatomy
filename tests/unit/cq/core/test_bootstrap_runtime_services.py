@@ -8,6 +8,7 @@ from tools.cq.core.bootstrap import (
     clear_runtime_services,
     resolve_runtime_services,
 )
+from tools.cq.core.contracts import CallsMacroRequestV1
 from tools.cq.core.schema import RunMeta, mk_result
 from tools.cq.core.services import (
     CallsServiceRequest,
@@ -15,7 +16,6 @@ from tools.cq.core.services import (
     SearchServiceRequest,
 )
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.macros.contracts import CallsRequest
 
 
 def test_runtime_services_are_workspace_scoped(tmp_path: Path) -> None:
@@ -40,11 +40,11 @@ def test_service_request_contracts_are_constructible(tmp_path: Path) -> None:
     toolchain = Toolchain.detect()
     search = SearchServiceRequest(root=tmp_path, query="foo")
     calls = CallsServiceRequest(
-        request=CallsRequest(
+        request=CallsMacroRequestV1(
             root=tmp_path,
             function_name="foo",
             tc=toolchain,
-            argv=[],
+            argv=(),
         ),
     )
     run = RunMeta(

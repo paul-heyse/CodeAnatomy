@@ -6,6 +6,7 @@ Extracts globals, attributes, constants, and opcodes from compiled bytecode with
 from __future__ import annotations
 
 import dis
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 from types import CodeType
@@ -25,7 +26,11 @@ from tools.cq.core.summary_contract import summary_from_mapping
 from tools.cq.macros.contracts import MacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
-from tools.cq.macros.shared import macro_scoring_details, resolve_target_files
+from tools.cq.macros.shared import (
+    iter_python_sources,
+    macro_scoring_details,
+    resolve_target_files,
+)
 
 _DEFAULT_SHOW = "globals,attrs,constants"
 _MAX_CONST_STR_LEN = 100
@@ -40,6 +45,7 @@ _MAX_OPCODE_SUMMARY = 20
 _GLOBAL_OPS: set[str] = {"LOAD_GLOBAL", "STORE_GLOBAL", "DELETE_GLOBAL"}
 _ATTR_OPS: set[str] = {"LOAD_ATTR", "STORE_ATTR", "DELETE_ATTR"}
 _IGNORED_NUMERIC_CONSTS: set[object] = {0, 1, -1, None}
+logger = logging.getLogger(__name__)
 
 
 class BytecodeSurface(msgspec.Struct, frozen=True):
@@ -166,16 +172,14 @@ def _parse_show_set(show: str) -> set[str]:
 
 def _collect_surfaces(root: Path, files: list[Path]) -> list[BytecodeSurface]:
     all_surfaces: list[BytecodeSurface] = []
-    for pyfile in files[:_MAX_FILES_SURFACE]:
+    for rel, source in iter_python_sources(
+        root=root,
+        files=files,
+        max_files=_MAX_FILES_SURFACE,
+    ):
         try:
-            rel = str(pyfile.relative_to(root))
-        except ValueError:
-            # File is outside root (e.g., absolute path)
-            rel = pyfile.name
-        try:
-            source = pyfile.read_text(encoding="utf-8")
             co = compile(source, rel, "exec")
-        except (SyntaxError, OSError, UnicodeDecodeError):
+        except SyntaxError:
             continue
 
         for _, code_obj in _walk_code_objects(co):
@@ -347,6 +351,13 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
         Analysis result.
     """
     started = ms()
+    logger.debug(
+        "Running bytecode-surface macro root=%s target=%s max_files=%d show=%s",
+        request.root,
+        request.target,
+        request.max_files,
+        request.show,
+    )
     show_set = _parse_show_set(request.show)
     files = resolve_target_files(
         root=request.root,
@@ -422,7 +433,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
             builder.add_section(section)
     builder.add_evidences(_append_evidence(all_surfaces, scoring_details))
 
-    return apply_rust_fallback_policy(
+    result = apply_rust_fallback_policy(
         builder.build(),
         root=request.root,
         policy=RustFallbackPolicyV1(
@@ -431,3 +442,9 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
             query=request.target,
         ),
     )
+    logger.debug(
+        "Completed bytecode-surface macro files=%d code_objects=%d",
+        len(files),
+        len(all_surfaces),
+    )
+    return result

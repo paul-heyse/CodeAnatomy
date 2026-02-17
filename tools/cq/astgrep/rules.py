@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import threading
+
 from tools.cq.astgrep.rulepack_registry import RulePackRegistry
 from tools.cq.astgrep.sgpy_scanner import RecordType, RuleSpec
 from tools.cq.core.types import QueryLanguage
 
-_RULEPACK_REGISTRY_STATE: dict[str, RulePackRegistry | None] = {"registry": None}
+_DEFAULT_RULEPACK_REGISTRY_LOCK = threading.Lock()
+
+
+class _RulepackRegistryState:
+    def __init__(self) -> None:
+        self.registry = RulePackRegistry()
+
+
+_RULEPACK_STATE = _RulepackRegistryState()
 
 
 def _filter_rules_for_types(
@@ -32,7 +42,7 @@ def get_rules_for_types(
     tuple[RuleSpec, ...]
         Loaded rules filtered by requested record types.
     """
-    active_registry = registry or _get_default_rulepack_registry()
+    active_registry = registry or get_default_rulepack_registry()
     packs = active_registry.load_default()
     selected = packs.get(lang, ())
     return _filter_rules_for_types(selected, record_types)
@@ -40,15 +50,17 @@ def get_rules_for_types(
 
 def set_rulepack_registry(registry: RulePackRegistry | None) -> None:
     """Set or clear the process-default rulepack registry."""
-    _RULEPACK_REGISTRY_STATE["registry"] = registry
+    with _DEFAULT_RULEPACK_REGISTRY_LOCK:
+        _RULEPACK_STATE.registry = registry or RulePackRegistry()
 
 
-def _get_default_rulepack_registry() -> RulePackRegistry:
-    registry = _RULEPACK_REGISTRY_STATE["registry"]
-    if registry is None:
-        registry = RulePackRegistry()
-        _RULEPACK_REGISTRY_STATE["registry"] = registry
-    return registry
+def get_default_rulepack_registry() -> RulePackRegistry:
+    """Return process-default rulepack registry."""
+    return _RULEPACK_STATE.registry
 
 
-__all__ = ["get_rules_for_types", "set_rulepack_registry"]
+__all__ = [
+    "get_default_rulepack_registry",
+    "get_rules_for_types",
+    "set_rulepack_registry",
+]

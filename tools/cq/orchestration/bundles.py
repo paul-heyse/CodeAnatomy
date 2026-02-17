@@ -108,7 +108,11 @@ def run_bundle(preset: str, ctx: BundleContext) -> CqResult:
     for step in _bundle_steps(preset, ctx):
         result = step.result
         if step.apply_scope:
-            result = filter_result_by_scope(result, ctx.root, target_scope)
+            result = filter_findings_by_scope(
+                result,
+                root=ctx.root,
+                path_filter=target_scope.matches,
+            )
         results.append(result)
 
     return merge_bundle_results(preset, ctx, results)
@@ -164,25 +168,6 @@ def resolve_target_scope(ctx: BundleContext) -> TargetScope:
             continue
         files.add(root / finding.anchor.file)
     return TargetScope(files=frozenset(files), dirs=frozenset())
-
-
-def filter_result_by_scope(
-    result: CqResult,
-    root: Path,
-    scope: TargetScope,
-) -> CqResult:
-    """Filter findings in a result to the target scope.
-
-    Returns:
-    -------
-    CqResult
-        Result containing findings within the target scope.
-    """
-    return filter_findings_by_scope(
-        result,
-        root=root,
-        path_filter=scope.matches,
-    )
 
 
 def merge_bundle_results(preset: str, ctx: BundleContext, results: list[CqResult]) -> CqResult:

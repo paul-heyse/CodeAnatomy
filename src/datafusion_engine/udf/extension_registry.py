@@ -8,13 +8,15 @@ from datafusion import SessionContext
 
 from datafusion_engine.udf.extension_core import (
     ExtensionRegistries,
-    _async_udf_policy,
-    _build_docs_snapshot,
     _build_registry_snapshot,
     _install_rust_udfs,
+    _resolve_registries,
+)
+from datafusion_engine.udf.extension_snapshot_runtime import (
+    _async_udf_policy,
+    _build_docs_snapshot,
     _notify_udf_snapshot,
     _registered_snapshot,
-    _resolve_registries,
     _validated_snapshot,
 )
 from datafusion_engine.udf.extension_validation import (

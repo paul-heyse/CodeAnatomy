@@ -291,10 +291,10 @@ def _compose_delta_runtime_services() -> CliRuntimeServices:
         Runtime services bound to a fresh profile and Delta service instance.
     """
     from datafusion_engine.delta.service import DeltaService
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.profiles import create_runtime_profile
     from datafusion_engine.session.runtime_ops import bind_delta_service
 
-    runtime_profile = DataFusionRuntimeProfile()
+    runtime_profile = create_runtime_profile()
     delta_service = DeltaService(profile=runtime_profile)
     bind_delta_service(runtime_profile, service=delta_service)
     return build_cli_runtime_services(

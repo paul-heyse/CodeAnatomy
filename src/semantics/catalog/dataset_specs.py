@@ -297,7 +297,6 @@ def supports_incremental(name: str) -> bool:
 
 
 __all__ = [
-    "_reset_cache",
     "dataset_alias",
     "dataset_contract",
     "dataset_contract_schema",

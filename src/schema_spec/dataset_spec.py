@@ -1,15 +1,4 @@
-"""Schema system registry, factories, and Arrow validation integration.
-
-This module provides dataset specifications, contracts, and schema discovery
-utilities. Schema discovery and validation are sourced from DataFusion's
-catalog and information_schema views, making DataFusion the source of truth
-for all schema metadata.
-
-IO contracts are specified through DataFusion registration (register_listing_table,
-register_object_store). Schema validation and introspection query DataFusion's
-information_schema.columns, information_schema.tables, information_schema.table_constraints,
-and information_schema.key_column_usage views.
-"""
+"""Dataset spec contracts, scan policies, and schema/runtime adapters."""
 
 from __future__ import annotations
 

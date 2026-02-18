@@ -49,7 +49,7 @@ from tools.cq.search.tree_sitter.python_lane.runtime_engine import (
 )
 from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.planner import (
-    resolve_pack_source_rows,
+    resolve_pack_source_rows_cached,
 )
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
@@ -236,9 +236,9 @@ def _parse_quality(captures: dict[str, list[Node]], source_bytes: bytes) -> dict
 
 @lru_cache(maxsize=1)
 def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    return resolve_pack_source_rows(
+    return resolve_pack_source_rows_cached(
         language="python",
-        source_rows=(
+        source_rows=tuple(
             (source.pack_name, source.source)
             for source in load_query_pack_sources("python", include_distribution=False)
         ),
@@ -585,7 +585,9 @@ def _build_payload(
     if context.parse_quality.get("has_error") is True:
         payload["degrade_reason"] = "parse_error"
         payload["enrichment_status"] = "degraded"
-    return canonicalize_python_lane_payload(payload)
+    canonical = canonicalize_python_lane_payload(payload)
+    builtins_value = msgspec.to_builtins(canonical, str_keys=True)
+    return builtins_value if isinstance(builtins_value, dict) else payload
 
 
 def _build_query_settings(

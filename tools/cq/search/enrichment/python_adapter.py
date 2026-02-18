@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+import msgspec
+
 from tools.cq.core.types import QueryLanguage
 from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentV1,
@@ -11,7 +13,6 @@ from tools.cq.search._shared.enrichment_contracts import (
     incremental_enrichment_facts,
     incremental_enrichment_payload,
     python_enrichment_facts,
-    python_enrichment_payload,
 )
 from tools.cq.search.enrichment.contracts import (
     EnrichmentMeta,
@@ -32,6 +33,39 @@ from tools.cq.search.enrichment.telemetry import (
 )
 
 
+def _to_mapping(value: object) -> dict[str, object]:
+    built = msgspec.to_builtins(value, str_keys=True)
+    return built if isinstance(built, dict) else {}
+
+
+def _raw_python_payload(wrapper: PythonEnrichmentV1) -> dict[str, object]:
+    payload = dict(wrapper.extras)
+    if wrapper.meta is not None:
+        payload["meta"] = _to_mapping(wrapper.meta)
+    facts = wrapper.payload
+    if facts is None:
+        return payload
+    if facts.resolution is not None:
+        payload["resolution"] = _to_mapping(facts.resolution)
+    if facts.behavior is not None:
+        payload["behavior"] = _to_mapping(facts.behavior)
+    if facts.structure is not None:
+        payload["structural"] = _to_mapping(facts.structure)
+    if facts.signature is not None:
+        payload["signature"] = _to_mapping(facts.signature)
+    if facts.call is not None:
+        payload["call"] = _to_mapping(facts.call)
+    if facts.import_ is not None:
+        payload["import"] = _to_mapping(facts.import_)
+    if facts.class_shape is not None:
+        payload["class_shape"] = _to_mapping(facts.class_shape)
+    if facts.locals is not None:
+        payload["locals"] = _to_mapping(facts.locals)
+    if facts.parse_quality is not None:
+        payload["parse_quality"] = _to_mapping(facts.parse_quality)
+    return payload
+
+
 class PythonEnrichmentAdapter(LanguageEnrichmentPort):
     """Adapter for Python enrichment payload handling."""
 
@@ -50,44 +84,19 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
         incremental_payload = getattr(match, "incremental_enrichment", None)
         if not isinstance(python_payload, PythonEnrichmentV1):
             return None
-        raw = python_enrichment_payload(python_payload)
-        meta_raw = raw.get("meta")
-        if isinstance(meta_raw, Mapping):
-            status_raw = meta_raw.get("enrichment_status")
-            sources_raw = meta_raw.get("enrichment_sources")
-            degrade_reason_raw = meta_raw.get("degrade_reason")
-            payload_size_hint_raw = meta_raw.get("payload_size_hint")
-            dropped_raw = meta_raw.get("dropped_fields")
-            truncated_raw = meta_raw.get("truncated_fields")
-            meta = EnrichmentMeta(
-                language="python",
-                enrichment_status=coerce_enrichment_status(status_raw),
-                enrichment_sources=(
-                    [item for item in sources_raw if isinstance(item, str)]
-                    if isinstance(sources_raw, list)
-                    else []
-                ),
-                degrade_reason=degrade_reason_raw if isinstance(degrade_reason_raw, str) else None,
-                payload_size_hint=(
-                    payload_size_hint_raw if isinstance(payload_size_hint_raw, int) else None
-                ),
-                dropped_fields=(
-                    [item for item in dropped_raw if isinstance(item, str)]
-                    if isinstance(dropped_raw, list)
-                    else None
-                ),
-                truncated_fields=(
-                    [item for item in truncated_raw if isinstance(item, str)]
-                    if isinstance(truncated_raw, list)
-                    else None
-                ),
-            )
-        else:
-            meta = (
-                python_payload.meta
-                if python_payload.meta is not None
-                else EnrichmentMeta(language="python")
-            )
+        raw = _raw_python_payload(python_payload)
+        meta = python_payload.meta or EnrichmentMeta(language="python")
+        meta = EnrichmentMeta(
+            language=meta.language,
+            enrichment_status=coerce_enrichment_status(meta.enrichment_status),
+            enrichment_sources=list(meta.enrichment_sources),
+            degrade_reason=meta.degrade_reason,
+            payload_size_hint=meta.payload_size_hint,
+            dropped_fields=list(meta.dropped_fields) if meta.dropped_fields is not None else None,
+            truncated_fields=(
+                list(meta.truncated_fields) if meta.truncated_fields is not None else None
+            ),
+        )
         if isinstance(incremental_payload, IncrementalEnrichmentV1):
             raw["incremental"] = incremental_enrichment_payload(incremental_payload)
             incremental_facts = incremental_enrichment_facts(incremental_payload)

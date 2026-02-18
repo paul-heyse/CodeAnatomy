@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -13,14 +13,12 @@ from tools.cq.core.id import stable_digest24
 from tools.cq.search._shared.enrichment_contracts import (
     incremental_enrichment_facts,
     python_enrichment_facts,
-    python_enrichment_payload,
     rust_enrichment_facts,
 )
 from tools.cq.search.enrichment.incremental_facts import IncrementalFacts
 from tools.cq.search.enrichment.python_facts import PythonEnrichmentFacts
 from tools.cq.search.objects.payload_views import (
     AgreementView,
-    EnrichmentPayloadView,
     ResolutionView,
     StructuralView,
 )
@@ -49,27 +47,16 @@ _CALLABLE_KINDS = {
 _EMPTY_OBJECT_PAYLOAD: dict[str, object] = {}
 
 
-def _payload_view(payload: dict[str, object]) -> EnrichmentPayloadView:
-    if not payload:
-        return EnrichmentPayloadView()
-    return EnrichmentPayloadView.from_raw(payload)
-
-
-def _struct_to_mapping(value: object) -> dict[str, object]:
-    built = msgspec.to_builtins(value, str_keys=True)
-    return built if isinstance(built, dict) else {}
-
-
-def _mapping_has_signal(payload: dict[str, object]) -> bool:
-    for value in payload.values():
-        if value is None:
-            continue
-        if isinstance(value, str) and not value:
-            continue
-        if isinstance(value, (list, dict, tuple, set)) and not value:
-            continue
-        return True
-    return False
+def _agreement_from_enrichment(payload: object) -> AgreementView:
+    if not isinstance(payload, Mapping):
+        return AgreementView()
+    raw = payload.get("agreement")
+    if not isinstance(raw, Mapping):
+        return AgreementView()
+    try:
+        return msgspec.convert(raw, type=AgreementView, strict=False)
+    except (msgspec.ValidationError, TypeError, ValueError):
+        return AgreementView()
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,11 +172,11 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
     semantic_raw = incremental.semantic if incremental is not None else None
     semantic = semantic_raw if isinstance(semantic_raw, dict) else _EMPTY_OBJECT_PAYLOAD
     python_facts = python_enrichment_facts(match.python_enrichment)
-    python_payload = python_enrichment_payload(match.python_enrichment)
-    python_view = _payload_view(python_payload)
     resolution = ResolutionView()
     structural = StructuralView()
-    agreement = python_view.agreement
+    agreement = _agreement_from_enrichment(
+        match.python_enrichment.extras if match.python_enrichment is not None else None
+    )
     if python_facts is not None and python_facts.resolution is not None:
         resolution = ResolutionView(
             qualified_name_candidates=list(python_facts.resolution.qualified_name_candidates),
@@ -205,11 +192,6 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
             scope_kind=python_facts.structure.scope_kind,
             scope_chain=list(python_facts.structure.scope_chain),
         )
-    if python_facts is None:
-        if _mapping_has_signal(_struct_to_mapping(python_view.resolution)):
-            resolution = python_view.resolution
-        if _mapping_has_signal(_struct_to_mapping(python_view.structural)):
-            structural = python_view.structural
     return _PayloadViews(
         semantic=semantic,
         incremental=incremental,
@@ -563,8 +545,13 @@ def _resolution_has_tree_sitter_source(resolution: ResolutionView) -> bool:
 
 
 def _first_definition_target(payload: dict[str, object]) -> dict[str, object] | None:
-    payload_view = _payload_view(payload)
-    for row in payload_view.symbol_grounding.definition_targets:
+    symbol_grounding = payload.get("symbol_grounding")
+    if not isinstance(symbol_grounding, dict):
+        return None
+    definition_targets = symbol_grounding.get("definition_targets")
+    if not isinstance(definition_targets, list):
+        return None
+    for row in definition_targets:
         if isinstance(row, dict):
             return row
     return None

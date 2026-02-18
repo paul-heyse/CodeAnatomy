@@ -19,7 +19,7 @@ from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
 if TYPE_CHECKING:
     from tools.cq.core.front_door_schema import FrontDoorInsightV1
     from tools.cq.core.types import QueryLanguage
-    from tools.cq.macros.calls.entry import CallScanResult, CallsContext
+    from tools.cq.macros.calls.entry_runtime import CallScanResult, CallsContext
     from tools.cq.macros.calls.insight import CallsFrontDoorState
 
 __all__ = [
@@ -107,11 +107,15 @@ def build_calls_result(
         CqResult: Fully assembled calls result with front-door and semantic overlays.
     """
     from tools.cq.core.front_door_render import to_public_front_door_insight_dict
-    from tools.cq.macros.calls import entry as entry_impl
+    from tools.cq.macros.calls import entry_runtime as runtime_impl
 
-    result = entry_impl.init_calls_result(ctx, scan_result, started_ms=started_ms)
-    result, analysis, score = entry_impl.analyze_calls_sites(result, ctx=ctx, scan_result=scan_result)
-    result, state = entry_impl.build_calls_front_door_state(
+    result = runtime_impl.init_calls_result(ctx, scan_result, started_ms=started_ms)
+    result, analysis, score = runtime_impl.analyze_calls_sites(
+        result,
+        ctx=ctx,
+        scan_result=scan_result,
+    )
+    result, state = runtime_impl.build_calls_front_door_state(
         result,
         ctx=ctx,
         analysis=analysis,

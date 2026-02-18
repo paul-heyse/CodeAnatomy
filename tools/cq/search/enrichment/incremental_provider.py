@@ -17,6 +17,7 @@ from tools.cq.search.enrichment.incremental_compound_plane import build_compound
 from tools.cq.search.enrichment.incremental_dis_plane import build_dis_bundle
 from tools.cq.search.enrichment.incremental_inspect_plane import build_inspect_bundle
 from tools.cq.search.enrichment.incremental_symtable_plane import build_incremental_symtable_plane
+from tools.cq.search.enrichment.python_facts import PythonEnrichmentFacts
 from tools.cq.search.python.analysis_session import (
     PythonAnalysisSession,
     get_python_analysis_session,
@@ -36,7 +37,7 @@ class IncrementalAnchorRequestV1:
     col: int
     match_text: str
     mode: IncrementalEnrichmentModeV1
-    python_payload: dict[str, object] | None = None
+    python_facts: PythonEnrichmentFacts | None = None
     runtime_enrichment: bool = False
 
 
@@ -182,20 +183,14 @@ def _init_payload(
     return payload, stage_status, stage_errors
 
 
-def _node_kind_from_python_payload(python_payload: dict[str, object] | None) -> str | None:
-    if not isinstance(python_payload, dict):
+def _node_kind_from_python_facts(python_facts: PythonEnrichmentFacts | None) -> str | None:
+    if python_facts is None or python_facts.structure is None:
         return None
-    structural = python_payload.get("structural")
-    if not isinstance(structural, dict):
-        return None
-    kind = structural.get("node_kind")
-    if isinstance(kind, str):
-        return kind
-    return None
+    return python_facts.structure.node_kind
 
 
 def _initial_occurrence(request: IncrementalAnchorRequestV1) -> list[dict[str, object]]:
-    node_kind = _node_kind_from_python_payload(request.python_payload)
+    node_kind = _node_kind_from_python_facts(request.python_facts)
     return [
         {
             "line": request.line,

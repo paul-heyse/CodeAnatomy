@@ -27,13 +27,17 @@ def test_delta_file_column_conflict_raises(tmp_path: Path) -> None:
         register_dataset_df,
     )
     from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.session.runtime_ops import bind_delta_service
 
     table = pa.table({"__delta_rs_path": ["a", "b"], "value": [1, 2]})
+    seed_profile = df_profile()
+    bind_delta_service(seed_profile, service=DeltaService(profile=seed_profile))
     profile, ctx, delta_path = write_delta_table(
         tmp_path,
         table=table,
         options=DeltaSeedOptions(
-            profile=df_profile(),
+            profile=seed_profile,
             table_name="delta_table",
         ),
     )

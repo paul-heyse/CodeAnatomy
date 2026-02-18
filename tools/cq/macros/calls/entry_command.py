@@ -7,6 +7,8 @@ from pathlib import Path
 
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.schema import CqResult, assign_result_finding_ids, ms
+from tools.cq.macros.calls.entry_output import build_calls_result
+from tools.cq.macros.calls.entry_runtime import CallsContext, scan_call_sites
 from tools.cq.macros.contracts import CallsRequest
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 
@@ -19,8 +21,6 @@ def cmd_calls(request: CallsRequest) -> CqResult:
     Returns:
         Calls macro result with front-door insight and fallback policy applied.
     """
-    from tools.cq.macros.calls.entry import CallsContext, _build_calls_result, _scan_call_sites
-
     started = ms()
     ctx = CallsContext(
         tc=request.tc,
@@ -29,10 +29,10 @@ def cmd_calls(request: CallsRequest) -> CqResult:
         function_name=request.function_name,
     )
     logger.debug("Running calls macro function=%s root=%s", ctx.function_name, ctx.root)
-    scan_result = _scan_call_sites(ctx.root, ctx.function_name)
+    scan_result = scan_call_sites(ctx.root, ctx.function_name)
     if scan_result.used_fallback:
         logger.warning("Calls macro used ripgrep fallback for function=%s", ctx.function_name)
-    result = _build_calls_result(ctx, scan_result, started_ms=started)
+    result = build_calls_result(ctx, scan_result, started_ms=started)
     result = apply_rust_fallback_policy(
         result,
         root=ctx.root,

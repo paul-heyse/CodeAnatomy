@@ -19,11 +19,9 @@ from __future__ import annotations
 
 import ast
 import logging
-import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from time import perf_counter
 from typing import TYPE_CHECKING, cast
 
 import msgspec
@@ -74,7 +72,6 @@ from tools.cq.search.python.extractors_analysis import (
     extract_import_detail as _extract_import_detail,
 )
 from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function
-from tools.cq.search.python.extractors_budget import trim_payload_to_budget
 from tools.cq.search.python.extractors_classification import (
     _is_class_node,
     _is_function_node,
@@ -101,12 +98,10 @@ from tools.cq.search.python.extractors_structure import (
 from tools.cq.search.python.extractors_structure import (
     find_enclosing_class as _find_enclosing_class,
 )
-from tools.cq.search.python.resolution_index import enrich_python_resolution_by_byte_range
 from tools.cq.search.python.runtime_context import (
     ensure_python_cache_registered,
     get_default_python_runtime_context,
 )
-from tools.cq.search.tree_sitter.python_lane.facts_runtime import build_python_tree_sitter_facts
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
@@ -1258,16 +1253,14 @@ def _run_ast_grep_stage(
     node_kind: str,
     source_bytes: bytes,
 ) -> None:
-    ast_started = perf_counter()
-    sg_fields, degrade_reasons = _enrich_ast_grep_tier(
-        node, node_kind, source_bytes, context=state.context
+    from tools.cq.search.python.extractors_stage_runtime import run_ast_grep_stage
+
+    run_ast_grep_stage(
+        state,
+        node=node,
+        node_kind=node_kind,
+        source_bytes=source_bytes,
     )
-    stage_patch = _build_stage_fact_patch(sg_fields)
-    state.stage_timings_ms["ast_grep"] = (perf_counter() - ast_started) * 1000.0
-    state.stage_status["ast_grep"] = "degraded" if degrade_reasons else "applied"
-    _ingest_stage_fact_patch(state, stage_patch)
-    state.ast_stage = _build_stage_facts_from_enrichment(stage_patch.facts)
-    state.degrade_reasons.extend(degrade_reasons)
 
 
 def _run_python_ast_stage(
@@ -1277,18 +1270,14 @@ def _run_python_ast_stage(
     source_bytes: bytes,
     cache_key: str,
 ) -> None:
-    if not _is_function_node(node):
-        state.stage_status["python_ast"] = "skipped"
-        state.stage_timings_ms["python_ast"] = 0.0
-        return
+    from tools.cq.search.python.extractors_stage_runtime import run_python_ast_stage
 
-    py_ast_started = perf_counter()
-    ast_extra_fields, ast_extra_reasons = _enrich_python_ast_tier(node, source_bytes, cache_key)
-    stage_patch = _build_stage_fact_patch(ast_extra_fields)
-    state.stage_timings_ms["python_ast"] = (perf_counter() - py_ast_started) * 1000.0
-    _ingest_stage_fact_patch(state, stage_patch, source="python_ast")
-    state.degrade_reasons.extend(ast_extra_reasons)
-    state.stage_status["python_ast"] = "degraded" if ast_extra_reasons else "applied"
+    run_python_ast_stage(
+        state,
+        node=node,
+        source_bytes=source_bytes,
+        cache_key=cache_key,
+    )
 
 
 def _run_import_stage(
@@ -1300,18 +1289,16 @@ def _run_import_stage(
     cache_key: str,
     line: int,
 ) -> None:
-    if node_kind not in {"import_statement", "import_from_statement"}:
-        state.stage_status["import_detail"] = "skipped"
-        state.stage_timings_ms["import_detail"] = 0.0
-        return
+    from tools.cq.search.python.extractors_stage_runtime import run_import_stage
 
-    import_started = perf_counter()
-    imp_fields, imp_reasons = _enrich_import_tier(node, source_bytes, cache_key, line)
-    stage_patch = _build_stage_fact_patch(imp_fields)
-    state.stage_timings_ms["import_detail"] = (perf_counter() - import_started) * 1000.0
-    _ingest_stage_fact_patch(state, stage_patch, source="python_ast")
-    state.degrade_reasons.extend(imp_reasons)
-    state.stage_status["import_detail"] = "degraded" if imp_reasons else "applied"
+    run_import_stage(
+        state,
+        node=node,
+        node_kind=node_kind,
+        source_bytes=source_bytes,
+        cache_key=cache_key,
+        line=line,
+    )
 
 
 def _decode_python_source_text(
@@ -1319,7 +1306,9 @@ def _decode_python_source_text(
     source_bytes: bytes,
     session: PythonAnalysisSession | None,
 ) -> str:
-    return session.source if session is not None else source_bytes.decode("utf-8", errors="replace")
+    from tools.cq.search.python.extractors_stage_runtime import _decode_python_source_text
+
+    return _decode_python_source_text(source_bytes=source_bytes, session=session)
 
 
 def _run_python_resolution_stage(
@@ -1331,37 +1320,16 @@ def _run_python_resolution_stage(
     cache_key: str,
     session: PythonAnalysisSession | None,
 ) -> None:
-    if byte_start is None or byte_end is None:
-        state.stage_status["python_resolution"] = "skipped"
-        state.stage_timings_ms["python_resolution"] = 0.0
-        return
+    from tools.cq.search.python.extractors_stage_runtime import run_python_resolution_stage
 
-    resolution_started = perf_counter()
-    resolution_reasons: list[str] = []
-    resolution_payload: dict[str, object] = {}
-    try:
-        source_text = _decode_python_source_text(source_bytes=source_bytes, session=session)
-        resolution_payload = enrich_python_resolution_by_byte_range(
-            source_text,
-            source_bytes=source_bytes,
-            file_path=cache_key,
-            byte_start=byte_start,
-            byte_end=byte_end,
-            session=session,
-        )
-    except ENRICHMENT_ERRORS as exc:
-        logger.warning("Python resolution enrichment failed: %s", type(exc).__name__)
-        resolution_payload = {}
-        resolution_reasons.append(f"python_resolution: {type(exc).__name__}")
-    stage_patch = _build_stage_fact_patch(resolution_payload)
-    state.python_resolution_stage = _build_stage_facts_from_enrichment(stage_patch.facts)
-    state.stage_timings_ms["python_resolution"] = (perf_counter() - resolution_started) * 1000.0
-    state.degrade_reasons.extend(resolution_reasons)
-    if resolution_payload:
-        _ingest_stage_fact_patch(state, stage_patch, source="python_resolution")
-        state.stage_status["python_resolution"] = "applied"
-        return
-    state.stage_status["python_resolution"] = "degraded" if resolution_reasons else "skipped"
+    run_python_resolution_stage(
+        state,
+        source_bytes=source_bytes,
+        byte_start=byte_start,
+        byte_end=byte_end,
+        cache_key=cache_key,
+        session=session,
+    )
 
 
 def _run_tree_sitter_stage(
@@ -1373,89 +1341,24 @@ def _run_tree_sitter_stage(
     query_budget_ms: int | None,
     session: PythonAnalysisSession | None,
 ) -> None:
-    byte_start, byte_end = byte_span
-    if byte_start is None or byte_end is None:
-        state.stage_status["tree_sitter"] = "skipped"
-        state.stage_timings_ms["tree_sitter"] = 0.0
-        return
+    from tools.cq.search.python.extractors_stage_runtime import run_tree_sitter_stage
 
-    ts_started = perf_counter()
-    tree_sitter_reasons: list[str] = []
-    tree_sitter_payload: dict[str, object] = {}
-    try:
-        source_text = _decode_python_source_text(source_bytes=source_bytes, session=session)
-        ts_payload = build_python_tree_sitter_facts(
-            source_text,
-            byte_start=byte_start,
-            byte_end=byte_end,
-            cache_key=cache_key,
-            query_budget_ms=query_budget_ms,
-        )
-        if ts_payload:
-            tree_sitter_payload = {
-                key: value for key, value in ts_payload.items() if isinstance(key, str)
-            }
-            stage_patch = _build_stage_fact_patch(tree_sitter_payload)
-            state.tree_sitter_stage = _build_stage_facts_from_enrichment(stage_patch.facts)
-            _ingest_stage_fact_patch(state, stage_patch, source="tree_sitter")
-            ts_status = ts_payload.get("enrichment_status")
-            state.stage_status["tree_sitter"] = (
-                ts_status if isinstance(ts_status, str) else "applied"
-            )
-            ts_reason = ts_payload.get("degrade_reason")
-            if isinstance(ts_reason, str) and ts_reason:
-                tree_sitter_reasons.append(f"tree_sitter: {ts_reason}")
-        else:
-            state.stage_status["tree_sitter"] = "skipped"
-    except ENRICHMENT_ERRORS as exc:
-        logger.warning("Python tree-sitter enrichment stage failed: %s", type(exc).__name__)
-        state.stage_status["tree_sitter"] = "degraded"
-        tree_sitter_reasons.append(f"tree_sitter: {type(exc).__name__}")
-    if not tree_sitter_payload:
-        state.tree_sitter_stage = _PythonAgreementStage()
-    state.stage_timings_ms["tree_sitter"] = (perf_counter() - ts_started) * 1000.0
-    state.degrade_reasons.extend(tree_sitter_reasons)
+    run_tree_sitter_stage(
+        state,
+        source_bytes=source_bytes,
+        byte_span=byte_span,
+        cache_key=cache_key,
+        query_budget_ms=query_budget_ms,
+        session=session,
+    )
 
 
 def _finalize_python_enrichment_payload(state: _PythonEnrichmentState) -> dict[str, object]:
-    payload = {
-        **_flatten_python_enrichment_facts(state.facts),
-        **state.metadata,
-    }
-
-    agreement = _build_agreement_section(
-        ast_stage=state.ast_stage,
-        python_resolution_stage=state.python_resolution_stage,
-        tree_sitter_stage=state.tree_sitter_stage,
+    from tools.cq.search.python.extractors_stage_runtime import (
+        finalize_python_enrichment_payload,
     )
-    payload["agreement"] = agreement
-    if (
-        os.getenv(_PYTHON_ENRICHMENT_CROSSCHECK_ENV) == "1"
-        and agreement.get("status") == "conflict"
-    ):
-        conflicts = agreement.get("conflicts")
-        if isinstance(conflicts, list):
-            payload["crosscheck_mismatches"] = conflicts
-        state.degrade_reasons.append("crosscheck mismatch")
 
-    if state.degrade_reasons:
-        payload["enrichment_status"] = "degraded"
-        payload["degrade_reason"] = "; ".join(state.degrade_reasons)
-
-    payload["stage_status"] = state.stage_status
-    payload["stage_timings_ms"] = state.stage_timings_ms
-
-    if state.context.truncations:
-        payload["truncated_fields"] = list(state.context.truncations)
-
-    payload, dropped_fields, size_hint = trim_payload_to_budget(
-        payload,
-        max_payload_bytes=_MAX_PAYLOAD_BYTES,
-    )
-    payload["payload_size_hint"] = size_hint
-    if dropped_fields:
-        payload["dropped_fields"] = dropped_fields
-    return payload
+    return finalize_python_enrichment_payload(state)
 
 
 # ---------------------------------------------------------------------------

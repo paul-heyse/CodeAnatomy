@@ -520,6 +520,7 @@ def write_delta(
         storage_options=spec.storage_options,
         log_storage_options=spec.log_storage_options,
         gate=spec.feature_gate,
+        table_exists=existing_version is not None,
     )
     delta_result = write_delta_bootstrap(pipeline, result, spec=spec)
     feature_request = DeltaFeatureMutationRequest(

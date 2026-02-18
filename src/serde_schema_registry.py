@@ -220,7 +220,6 @@ def _delta_control_plane_schema_types() -> tuple[type[msgspec.Struct], ...]:
     from datafusion_engine.delta.control_plane_core import (
         DeltaAddConstraintsRequest,
         DeltaAddFeaturesRequest,
-        DeltaCdfProviderBundle,
         DeltaCdfRequest,
         DeltaCheckpointRequest,
         DeltaDeleteRequest,
@@ -228,7 +227,6 @@ def _delta_control_plane_schema_types() -> tuple[type[msgspec.Struct], ...]:
         DeltaFeatureEnableRequest,
         DeltaMergeRequest,
         DeltaOptimizeRequest,
-        DeltaProviderBundle,
         DeltaProviderRequest,
         DeltaRestoreRequest,
         DeltaSetPropertiesRequest,
@@ -241,8 +239,6 @@ def _delta_control_plane_schema_types() -> tuple[type[msgspec.Struct], ...]:
 
     return (
         DeltaTableRef,
-        DeltaProviderBundle,
-        DeltaCdfProviderBundle,
         DeltaSnapshotRequest,
         DeltaProviderRequest,
         DeltaCdfRequest,

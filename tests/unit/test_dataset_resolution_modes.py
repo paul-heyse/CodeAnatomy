@@ -79,7 +79,7 @@ def test_delta_provider_bundle_fails_fast_when_control_plane_fails(
         )
 
     assert excinfo.value.kind == ErrorKind.PLUGIN
-    assert "degraded Python fallback paths have been removed" in str(excinfo.value)
+    assert "degraded python fallback paths have been removed" in str(excinfo.value).lower()
 
 
 def test_resolve_delta_cdf_fails_fast_when_control_plane_fails(
@@ -115,4 +115,4 @@ def test_resolve_delta_cdf_fails_fast_when_control_plane_fails(
         _ = resolve_delta_cdf(location=location, name="events")
 
     assert excinfo.value.kind == ErrorKind.PLUGIN
-    assert "degraded Python fallback paths have been removed" in str(excinfo.value)
+    assert "degraded python fallback paths have been removed" in str(excinfo.value).lower()

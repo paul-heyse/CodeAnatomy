@@ -99,6 +99,22 @@ def _resolved_table_schema(ctx: SessionContext, name: str) -> pa.Schema | None:
     return None
 
 
+def _safe_table_pylist(ctx: SessionContext, name: str) -> tuple[list[dict[str, object]] | None, str | None]:
+    """Safely read a session table into Python rows for diagnostics payloads.
+
+    Returns:
+        tuple[list[dict[str, object]] | None, str | None]:
+            Rows when materialization succeeds, otherwise an error message.
+    """
+    if not ctx.table_exist(name):
+        return None, f"table '{name}' is unavailable"
+    try:
+        table = ctx.table(name).to_arrow_table()
+        return list(table.to_pylist()), None
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc)
+
+
 def _get_datafusion_schema_registry_validation_spec() -> ArtifactSpec:
     """Return DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SPEC (deferred import).
 
@@ -893,9 +909,15 @@ def _record_cst_schema_diagnostics(profile: DataFusionRuntimeProfile, ctx: Sessi
             payload,
         )
         return
+    rows, table_error = _safe_table_pylist(ctx, "cst_schema_diagnostics")
+    if table_error is not None:
+        payload["error"] = table_error
+        profile.record_artifact(
+            _get_datafusion_cst_schema_diagnostics_spec(),
+            payload,
+        )
+        return
     try:
-        table = ctx.table("cst_schema_diagnostics").to_arrow_table()
-        rows = table.to_pylist()
         schema = _resolved_table_schema(ctx, "libcst_files_v1")
         if schema is not None:
             payload["schema_identity_hash"] = schema_identity_hash(schema)
@@ -907,7 +929,7 @@ def _record_cst_schema_diagnostics(profile: DataFusionRuntimeProfile, ctx: Sessi
         payload["table_constraints"] = (
             list(introspector.table_constraints("libcst_files_v1")) or None
         )
-    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001
         payload["error"] = str(exc)
     profile.record_artifact(
         _get_datafusion_cst_schema_diagnostics_spec(),
@@ -928,9 +950,12 @@ def _record_tree_sitter_stats(profile: DataFusionRuntimeProfile, ctx: SessionCon
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset": "tree_sitter_files_v1",
     }
+    rows, table_error = _safe_table_pylist(ctx, "ts_stats")
+    if table_error is not None:
+        payload["error"] = table_error
+        profile.record_artifact(_get_datafusion_tree_sitter_stats_spec(), payload)
+        return
     try:
-        table = ctx.table("ts_stats").to_arrow_table()
-        rows = table.to_pylist()
         schema = _resolved_table_schema(ctx, "tree_sitter_files_v1")
         if schema is not None:
             payload["schema_identity_hash"] = schema_identity_hash(schema)
@@ -940,7 +965,7 @@ def _record_tree_sitter_stats(profile: DataFusionRuntimeProfile, ctx: SessionCon
         payload["table_constraints"] = (
             list(introspector.table_constraints("tree_sitter_files_v1")) or None
         )
-    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001
         payload["error"] = str(exc)
     profile.record_artifact(_get_datafusion_tree_sitter_stats_spec(), payload)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
+import msgspec
 from tree_sitter import Node
 
 from tools.cq.search.rust.extractors_shared import find_ancestor
@@ -235,4 +236,6 @@ def canonicalize_payload(payload: dict[str, object]) -> dict[str, object]:
     Returns:
         dict[str, object]: Canonicalized Rust lane enrichment payload.
     """
-    return canonicalize_rust_lane_payload(payload)
+    canonical = canonicalize_rust_lane_payload(payload)
+    builtins_value = msgspec.to_builtins(canonical, str_keys=True)
+    return builtins_value if isinstance(builtins_value, dict) else {}

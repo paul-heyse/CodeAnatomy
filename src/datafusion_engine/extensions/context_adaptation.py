@@ -87,15 +87,21 @@ def select_context_candidate(
     allow_fallback: bool = True,
     fallback_ctx: object | None = None,
 ) -> tuple[tuple[str, object], ...]:
-    """Return the canonical context candidate for extension entrypoints.
+    """Return ordered context candidates for extension entrypoints.
 
     Returns:
     -------
     tuple[tuple[str, object], ...]
-        Single canonical ``(kind, context)`` pair.
+        Ordered ``(kind, context)`` pairs.
     """
-    _ = (internal_ctx, allow_fallback, fallback_ctx)
-    return (("outer", ctx),)
+    candidates: list[tuple[str, object]] = [("outer", ctx)]
+    if internal_ctx is not None and internal_ctx is not ctx:
+        candidates.append(("internal", internal_ctx))
+    if allow_fallback and fallback_ctx is not None and all(
+        fallback_ctx is not candidate[1] for candidate in candidates
+    ):
+        candidates.append(("fallback", fallback_ctx))
+    return tuple(candidates)
 
 
 def invoke_entrypoint_with_adapted_context(
@@ -124,25 +130,36 @@ def invoke_entrypoint_with_adapted_context(
         msg = f"Extension entrypoint {entrypoint} is unavailable."
         raise TypeError(msg)
 
+    fallback_ctx: object | None = None
+    if invocation.allow_fallback and callable(invocation.fallback_ctx_factory):
+        fallback_ctx = invocation.fallback_ctx_factory(module)
+    candidates = select_context_candidate(
+        invocation.ctx,
+        internal_ctx=invocation.internal_ctx,
+        allow_fallback=invocation.allow_fallback,
+        fallback_ctx=fallback_ctx,
+    )
     resolved_kwargs: dict[str, object] = (
         {} if invocation.kwargs is None else dict(invocation.kwargs)
     )
-    try:
-        payload = fn(invocation.ctx, *invocation.args, **resolved_kwargs)
-    except (TypeError, RuntimeError, ValueError) as exc:
-        msg = (
-            f"Extension entrypoint {entrypoint} failed for canonical context candidate "
-            f"(outer: {exc})"
+    failures: list[str] = []
+    for ctx_kind, candidate_ctx in candidates:
+        try:
+            payload = fn(candidate_ctx, *invocation.args, **resolved_kwargs)
+        except (TypeError, RuntimeError, ValueError) as exc:
+            failures.append(f"{ctx_kind}: {exc}")
+            continue
+        selection = ExtensionContextSelection(
+            module_name=module_name,
+            module=module,
+            ctx_kind=ctx_kind,
+            ctx=candidate_ctx,
+            entrypoint=entrypoint,
         )
-        raise RuntimeError(msg) from exc
-    selection = ExtensionContextSelection(
-        module_name=module_name,
-        module=module,
-        ctx_kind="outer",
-        ctx=invocation.ctx,
-        entrypoint=entrypoint,
-    )
-    return selection, payload
+        return selection, payload
+    joined = "; ".join(failures) if failures else "no compatible context candidate"
+    msg = f"Extension entrypoint {entrypoint} failed for context candidates ({joined})"
+    raise RuntimeError(msg)
 
 
 __all__ = [

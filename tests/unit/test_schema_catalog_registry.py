@@ -25,5 +25,5 @@ def test_catalog_schema_resolves_nested_dataset() -> None:
     name = "cst_nodes"
     ctx = df_ctx()
     expected = _to_arrow_schema(ctx.table(name).schema())
-    resolved = _to_arrow_schema(dataset_schema_from_context(name))
+    resolved = _to_arrow_schema(dataset_schema_from_context(name, ctx=ctx))
     assert expected.equals(resolved)

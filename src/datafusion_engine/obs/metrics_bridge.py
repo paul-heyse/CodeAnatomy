@@ -18,7 +18,7 @@ import datafusion_engine.encoding.policy as df_encoding_policy
 import datafusion_engine.identity as df_identity
 from core_types import JsonDict, JsonValue, PathLike, RowStrict, ensure_path
 from obs import quality_metrics as _quality_metrics
-from obs.otel.metrics import set_dataset_stats
+from obs.otel import set_dataset_stats
 from serde_msgspec import MSGPACK_ENCODER
 
 QUALITY_SCHEMA = _quality_metrics.QUALITY_SCHEMA

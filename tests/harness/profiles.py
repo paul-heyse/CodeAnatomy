@@ -20,6 +20,32 @@ from datafusion_engine.session.runtime_profile_config import (
 from obs.diagnostics import DiagnosticsCollector
 
 
+def clone_profile_with_delta_service(
+    profile: DataFusionRuntimeProfile,
+    *,
+    diagnostics: DiagnosticsCollector | None = None,
+) -> DataFusionRuntimeProfile:
+    """Clone a runtime profile and bind a fresh Delta service."""
+    diagnostics_config = (
+        DiagnosticsConfig(diagnostics_sink=diagnostics)
+        if diagnostics is not None
+        else profile.diagnostics
+    )
+    cloned = DataFusionRuntimeProfile(
+        architecture_version=profile.architecture_version,
+        execution=profile.execution,
+        catalog=profile.catalog,
+        data_sources=profile.data_sources,
+        zero_row_bootstrap=profile.zero_row_bootstrap,
+        features=profile.features,
+        diagnostics=diagnostics_config,
+        policies=profile.policies,
+        view_registry=profile.view_registry,
+    )
+    bind_delta_service(cloned, service=DeltaService(profile=cloned))
+    return cloned
+
+
 def conformance_profile(
     *,
     diagnostics: DiagnosticsCollector | None = None,

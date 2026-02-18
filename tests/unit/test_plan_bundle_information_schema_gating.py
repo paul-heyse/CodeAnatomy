@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.plan import bundle_artifact as plan_bundle
+from datafusion_engine.plan import plan_introspection
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.session.runtime_profile_config import FeatureGatesConfig
 
@@ -60,10 +60,8 @@ def test_information_schema_snapshot_skips_udf_catalog_when_udfs_disabled(
             msg = "function_catalog_snapshot should be gated off when enable_udfs=False"
             raise AssertionError(msg)
 
-    monkeypatch.setattr(plan_bundle, "SchemaIntrospector", _FakeIntrospector)
-
-    snapshot_fn = plan_bundle.__dict__["_information_schema_snapshot"]
-    snapshot = snapshot_fn(ctx, session_runtime=runtime)
+    monkeypatch.setattr(plan_introspection, "SchemaIntrospector", _FakeIntrospector)
+    snapshot = plan_introspection.information_schema_snapshot(ctx, session_runtime=runtime)
     assert snapshot["routines"] == []
     assert snapshot["parameters"] == []
     assert snapshot["function_catalog"] == []

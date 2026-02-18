@@ -1862,20 +1862,20 @@ def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
 |---|---|---|
 | S1 | Complete | Frozen `Section`, tuple findings, copy-on-write report enrichment, macro struct freezing, `RunContext.argv` tuple migration, and SNB node-index hardening (`freeze_node_index` + immutable mapping at bundle construction) are all landed. |
 | S2 | Complete | Core dependency direction corrections are landed: core no longer imports search/query/macro/orchestration implementation modules directly, summary-contract serialization is wired through core-owned seams, and semantic front-door provider execution is registry-driven through injected boundaries. |
-| S3 | Partial | Counter/provenance/AST-parent dedup slices plus scope-filter wrapper consolidation landed; render-summary status derivation is consolidated, and `_pack_source_rows` now routes through `resolve_pack_source_rows`. Remaining DRY tail is concrete: `_pack_source_rows` wrappers are still duplicated across `python_lane/runtime_engine.py`, `python_lane/facts_runtime.py`, and `rust_lane/query_cache.py` (with only flag/profile variance). |
+| S3 | Partial | DRY tail advanced: lane-local `_pack_source_rows` wrappers now share cached planner ownership via `resolve_pack_source_rows_cached(...)`, but wrapper-level duplication still remains across python/rust lane modules (profile/dedupe/source-loader variance). |
 | S4 | Complete | Canonical enrichment telemetry accumulation module is live and duplicate adapter/pipeline accumulation functions are removed. |
 | S5 | Complete | CQS/public-surface cleanups are landed: `build_call_evidence` is pure, result-action is split into prepare/emit phases, summary contract rename is in place, symbol-resolver query/command split is landed, runtime guard asserts were replaced, and payload-budget flow is split into check/trim helpers. |
-| S6 | Partial | Rust-lane decomposition advanced materially: availability and extractor-dispatch slices are extracted, but `runtime_engine.py` still owns query-pack capture/payload/timing/pipeline internals, and the newer `runtime_query_execution.py`/`runtime_payload_builders.py`/`runtime_pipeline_stages.py` surfaces remain delegator facades back into `runtime_engine.py` rather than ownership modules. |
+| S6 | Complete | Rust-lane decomposition is complete for planned ownership slices: query-pack capture, payload assembly, and pipeline-stage execution now live in `runtime_query_execution.py`, `runtime_payload_builders.py`, and `runtime_pipeline_stages.py`; `runtime_engine.py` is reduced to boundary delegation + entrypoint wiring. |
 | S7 | Complete | Query runtime decomposition is now end-to-end for entity/pattern execution: `executor_runtime_entity.py` and `executor_runtime_pattern.py` own execution paths, while `executor_runtime.py` is reduced to orchestration/dispatch and shared prep helpers. |
-| S8 | Partial | Search/core decomposition advanced further: front-door search/entity/calls modules exist, calls-entry scan/output flows are extracted, and Rust call-site extraction moved out. Remaining decomposition is still substantial: `extractors_entrypoints.py` (1,647 LOC), `front_door_assembly.py` (760 LOC), and `macros/calls/analysis.py` (683 LOC) still retain broad mixed ownership instead of thin orchestration boundaries. |
-| S9 | Partial | Typed payload contracts are propagated through semantic/object-resolution primary paths, but typed-only closure is incomplete: mapping conversion helpers (`python_enrichment_payload`) still sit on primary paths in adapters/pipeline/object-resolution, and dict-shaped lane canonicalization contracts remain in `search/tree_sitter/contracts/lane_payloads.py`. |
+| S8 | Partial | Search/core decomposition advanced materially: `front_door_assembly.py` is now orchestration-focused with shared support in `front_door_support.py`, calls-entry orchestration moved to `entry_runtime.py`, and Python stage execution/finalization moved to `extractors_stage_runtime.py`. Remaining scope is deeper extraction from still ownership-heavy `extractors_entrypoints.py` and `macros/calls/analysis.py`. |
+| S9 | Complete | Typed enrichment payload migration is closed for planned paths: adapter/pipeline/object-resolution primary paths now consume typed facts directly (no `python_enrichment_payload(...)` dependency), object-resolution mapping fallback is removed, and lane canonicalization contracts now return typed lane structs before boundary conversion. |
 | S10 | Complete | Process-default singleton state-holder dict wrappers are eliminated from targeted runtime/registry/cache modules in favor of typed module-level singleton refs with lock-guarded getters/setters, and bootstrap reset hooks clear these defaults deterministically. |
 | S11 | Complete | `apply_in_dir_scope()`, query/search routing extraction, result-action command/query split, and shared macro scan helper adoption are landed across planned command/macro surfaces. |
 | S12 | Complete | Missing abstraction introduction is landed for planned boundaries: `LanguageEnrichmentProvider` protocol + registry wiring are canonical, and semantic provider execution now flows through these abstraction seams instead of direct concrete coupling. |
 | S13 | Complete | Tree-sitter lane decomposition modules are in place and legacy god modules (`python_lane/facts.py`, `python_lane/runtime.py`, `core/runtime.py`) are decommissioned. |
 | S14 | Complete | Collector/orchestration decomposition is landed and legacy modules (`neighborhood/tree_sitter_collector.py`, `orchestration/multilang_orchestrator.py`) are decommissioned. |
 | S15 | Complete | Core foundation split modules are canonical and legacy modules (`diskcache_backend.py`, `summary_contract.py`, `enrichment_facts.py`) are decommissioned. |
-| S16 | Partial | Periphery decomposition advanced materially (entry dispatch/output modules and extracted entity/pattern runtime ownership are landed), but `macros/calls/entry.py` (401 LOC) still owns scan/analyze/front-door/result assembly helpers instead of acting as a strict command boundary delegating to extracted modules. |
+| S16 | Complete | Macros/query periphery decomposition is complete for planned slices: `macros/calls/entry.py` is now command-boundary-only, with scan/analyze/front-door/result orchestration owned by `entry_runtime.py`/`entry_output.py` and command execution in `entry_command.py`. |
 | S17 | Complete | Domain visitors moved to `analysis/visitors/` and removed from macro modules. |
 | S18 | Complete | Quick-win contract/naming fixes are landed across the listed targets (`TreeSitterInputEditV1`, `RgProcessResultV1`, `AstAnchor`/`DefinitionSite`, frozen capability matrix, neighborhood schema/params alignment, and `compile_query()` param cleanup). |
 | S19 | Complete | Structured logging is landed across planned pipeline surfaces and macro/enrichment lanes, including `search/rg/adapter.py` timeout/branch/row-count instrumentation and key pipeline stage entry/exit/degradation logging. |
@@ -1894,7 +1894,7 @@ def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
 | D2 | Complete | `pipeline/enrichment_contracts.py` deleted and telemetry accumulation duplicates consolidated under `search/enrichment/telemetry.py`. |
 | D3 | Complete | Query facade cleanup and hard deletions are complete: `executor_runtime_impl.py`, `rust_lane/runtime_core.py`, and `search/python/extractors.py` are decommissioned with imports migrated to canonical modules. |
 | D4 | Complete | Follow-up alias deletion is complete and `_shared` wrapper re-export files (`timeout.py`, `rg_request.py`, `encoding.py`) are deleted. |
-| D5 | Partial | Major typed-payload helper cleanup is landed, but residual object-resolution mapping fallback helpers remain in active use (`objects/resolve.py`), so D5 is not fully closed. |
+| D5 | Complete | Typed-helper deletion batch is complete: primary-path mapping fallback helpers are removed from adapter/pipeline/object-resolution surfaces, and the legacy `python_enrichment_payload(...)` helper is decommissioned from active CQ code paths. |
 | D6 | Complete | `_SESSIONS`, `_GLOBAL_STATE_HOLDER`, and `_TREE_CACHE_EVICTIONS` globals are removed; cache clear/cache registration is now lazy via `ensure_*` paths in runtime/enrichment modules (`runtime_cache.py`, `query_cache.py`, `python/extractors_entrypoints.py`, `rust/enrichment.py`) rather than import-time side effects. |
 | D7 | Complete | S13/S14/S15/S16 deletion tranche is executed for planned hard-cut modules (`python_lane/facts.py`, `python_lane/runtime.py`, `core/runtime.py`, `tree_sitter_collector.py`, `multilang_orchestrator.py`, `diskcache_backend.py`, `summary_contract.py`, `enrichment_facts.py`, `calls_target.py`). |
 | D8 | Complete | `ExceptionVisitor`, `SideEffectVisitor`, and `ImportVisitor` classes removed from macro modules after relocation to `analysis/visitors`. |
@@ -1911,16 +1911,16 @@ Quality-check failure tracking is intentionally omitted from this scope-status a
 
 - [x] S1. Frozen struct integrity (frozen `Section`, COW enrichment flow, macro struct freezing, and SNB node-index immutability hardening landed)
 - [x] S5. CQS violations and public surface cleanup (call evidence purity, result-action split, symbol-resolver split, runtime-guard cleanup, and payload-budget check/trim split landed)
-- [ ] S3. DRY consolidation — small wins (partial: core dedup slices landed, but `_pack_source_rows` wrappers are still duplicated across python/rust lane modules with only profile/flag variance)
+- [ ] S3. DRY consolidation — small wins (shared cached planner helper is landed, but `_pack_source_rows` wrappers remain duplicated across python/rust lane modules)
 - [x] S2. Dependency direction corrections (core dependency inversion + summary serializer seam + semantic provider-registry wiring landed with registry-driven semantic provider execution)
 - [x] S4. Telemetry accumulation consolidation
 - [x] S20. Facade and alias eradication
 - [x] S11. Shell-layer domain logic extraction
 - [x] S12. Missing abstraction introduction (LanguageEnrichmentProvider protocol + registry seam are canonical)
-- [ ] S6. God module decomposition — tree-sitter (availability/extractor slices are extracted, but query-pack and pipeline ownership is still in `runtime_engine.py`, with new runtime submodules still delegating back to it)
+- [x] S6. God module decomposition — tree-sitter (query-pack capture, payload assembly, and pipeline-stage ownership moved into extracted runtime modules; `runtime_engine.py` is boundary-only)
 - [x] S7. God module decomposition — query engine (entity/pattern execution ownership now lives in extracted runtime modules; `executor_runtime.py` is dispatch/orchestration-focused)
-- [ ] S8. God module decomposition — search backends and core (front-door and calls-entry decomposition advanced, but `extractors_entrypoints.py`, `front_door_assembly.py`, and `macros/calls/analysis.py` remain ownership-heavy)
-- [ ] S9. Typed enrichment payload migration (typed-fact propagation is primary, but mapping conversion (`python_enrichment_payload`) and dict canonicalization helpers remain on primary adapter/pipeline/object-resolution paths)
+- [ ] S8. God module decomposition — search backends and core (front-door and calls-entry decomposition advanced and Python stage-runtime extraction landed; deeper extraction still pending in ownership-heavy modules)
+- [x] S9. Typed enrichment payload migration (primary adapter/pipeline/object-resolution flows now use typed facts directly; lane canonicalization contracts are typed)
 - [x] S22. Typed summary and macro payload contracts (typed summary-update boundaries are centralized and applied across query/calls/impact flows)
 - [x] S23. Query testability and rulepack registry injection (registry-only rulepack loading landed; inline execution-path `SymtableEnricher(...)` construction removed)
 - [x] S10. Mutable singleton elimination (process-default state-holder dict wrappers removed in targeted modules; typed singleton refs + lock-guarded accessors are canonical)
@@ -1930,7 +1930,7 @@ Quality-check failure tracking is intentionally omitted from this scope-status a
 - [x] S13. God module decomposition — tree-sitter lanes (facts.py, runtime.py, core/runtime.py hard-cut completed)
 - [x] S14. God module decomposition — CLI + orchestration (tree_sitter_collector.py, multilang_orchestrator.py hard-cut completed)
 - [x] S15. God module decomposition — core foundation (diskcache_backend.py, summary_contract.py, enrichment_facts.py hard-cut completed)
-- [ ] S16. God module decomposition — macros + query periphery (entry/output/dispatch and extracted query-runtime ownership are landed, but `macros/calls/entry.py` still owns substantial orchestration helpers instead of boundary-only delegation)
+- [x] S16. God module decomposition — macros + query periphery (`macros/calls/entry.py` is command-boundary-only with orchestration owned by extracted runtime/output modules)
 - [x] S17. Domain visitor extraction to analysis/ (ExceptionVisitor, SideEffectVisitor, ImportVisitor)
 - [x] S25. Fragment cache simplification and search artifact index extraction (fragment/runtime boundary and search artifact index ownership consolidation are landed)
 - [x] S19. Observability — structured logging (planned pipeline/macro/enrichment logging coverage and `search/rg/adapter.py` instrumentation are landed)
@@ -1938,7 +1938,7 @@ Quality-check failure tracking is intentionally omitted from this scope-status a
 - [x] D2. Cross-scope deletion batch (after S2, S4)
 - [x] D3. Cross-scope deletion batch (query facades + runtime_core/extractors/runtime_impl hard deletions completed)
 - [x] D4. Cross-scope deletion batch (`_shared` wrapper modules deleted and followups alias cleanup complete)
-- [ ] D5. Cross-scope deletion batch (major typed-helper cleanup landed, but residual `python_enrichment_payload` mapping helpers and payload-view fallback usage remain in adapters/pipeline/object-resolution)
+- [x] D5. Cross-scope deletion batch (typed-helper cleanup closed: residual `python_enrichment_payload`/payload-view fallback usage removed from primary CQ paths)
 - [x] D6. Cross-scope deletion batch (singleton globals removed and runtime/enrichment cache callback registrations converted to lazy `ensure_*` paths)
 - [x] D7. Cross-scope deletion batch (planned hard-cut module deletions completed)
 - [x] D8. Cross-scope deletion batch (after S17)

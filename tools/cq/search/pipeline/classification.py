@@ -21,7 +21,7 @@ from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentV1,
     PythonEnrichmentV1,
     RustTreeSitterEnrichmentV1,
-    python_enrichment_payload,
+    python_enrichment_facts,
     rust_enrichment_payload,
     wrap_incremental_enrichment,
     wrap_python_enrichment,
@@ -560,8 +560,8 @@ def _maybe_incremental_enrichment(
     source = get_cached_source(request.file_path, cache_context=cache_context)
     if source is None:
         return None
-    python_payload = (
-        normalize_python_payload(python_enrichment_payload(request.python_enrichment))
+    python_facts = (
+        python_enrichment_facts(request.python_enrichment)
         if request.python_enrichment is not None
         else None
     )
@@ -575,7 +575,7 @@ def _maybe_incremental_enrichment(
                 col=request.raw.col,
                 match_text=request.raw.match_text,
                 mode=request.mode,
-                python_payload=python_payload,
+                python_facts=python_facts,
                 runtime_enrichment=request.mode.includes_inspect,
             )
         )

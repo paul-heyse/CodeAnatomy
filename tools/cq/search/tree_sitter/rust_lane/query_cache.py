@@ -11,7 +11,7 @@ from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
 from tools.cq.search.tree_sitter.core.lane_support import ENRICHMENT_ERRORS
 from tools.cq.search.tree_sitter.query.planner import (
-    resolve_pack_source_rows,
+    resolve_pack_source_rows_cached,
 )
 from tools.cq.search.tree_sitter.rust_lane.bundle import load_rust_query_sources
 
@@ -26,9 +26,9 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
         Tuple of (pack_name, source, plan) sorted by pack priority.
     """
     ensure_query_cache_callback_registered()
-    return resolve_pack_source_rows(
+    return resolve_pack_source_rows_cached(
         language="rust",
-        source_rows=(
+        source_rows=tuple(
             (source.pack_name, source.source)
             for source in load_rust_query_sources(profile_name="rust_search_enriched")
         ),

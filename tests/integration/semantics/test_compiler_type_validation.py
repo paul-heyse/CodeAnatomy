@@ -6,7 +6,6 @@ DataFusion type system and UDF availability, focusing on error message quality.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
@@ -204,13 +203,7 @@ def test_udf_alias_resolution() -> None:
     alias_name = f"{canonical_name}__alias_for_integration_test"
 
     aliases: dict[str, object] = dict(raw_aliases)
-    existing = aliases.get(canonical_name)
-    if isinstance(existing, str):
-        aliases[canonical_name] = (existing, alias_name)
-    elif isinstance(existing, Sequence) and not isinstance(existing, (str, bytes, bytearray)):
-        aliases[canonical_name] = (*tuple(existing), alias_name)
-    else:
-        aliases[canonical_name] = (alias_name,)
+    aliases[alias_name] = canonical_name
     snapshot["aliases"] = aliases
 
     validate_required_udfs(snapshot, required=(alias_name,))

@@ -63,30 +63,20 @@ class TestCacheIntrospectionCapabilities:
 
     @staticmethod
     def test_missing_extension_raises_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify missing extension hook produces ImportError.
-
-        When neither datafusion._internal nor datafusion_ext can be imported,
-        register_cache_introspection_functions() should raise ImportError.
-        """
-        import importlib
-
+        """Verify missing extension hook fails registration deterministically."""
         from datafusion_engine.catalog.introspection import (
+            datafusion_ext,
             register_cache_introspection_functions,
         )
         from tests.test_helpers.datafusion_runtime import df_ctx
 
         ctx = df_ctx()
 
-        original_import = importlib.import_module
+        def _raise_missing_extension(*_args: object, **_kwargs: object) -> None:
+            msg = "Mocked: extension hook unavailable"
+            raise RuntimeError(msg)
 
-        def blocked_import(name: str) -> object:
-            blocked_modules = {"datafusion._internal", "datafusion_ext"}
-            if name in blocked_modules:
-                msg = f"Mocked: {name} unavailable"
-                raise ImportError(msg)
-            return original_import(name)
-
-        monkeypatch.setattr(importlib, "import_module", blocked_import)
+        monkeypatch.setattr(datafusion_ext, "register_cache_tables", _raise_missing_extension)
 
         try:
             register_cache_introspection_functions(ctx)

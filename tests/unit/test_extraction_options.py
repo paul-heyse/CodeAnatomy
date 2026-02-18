@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from extraction.options import ExtractionRunOptions, normalize_extraction_options
@@ -62,6 +64,7 @@ def test_normalize_extraction_options_maps_incremental_config_fields() -> None:
     """Test normalize extraction options maps incremental config fields."""
     incremental_config = SemanticIncrementalConfig(
         enabled=True,
+        state_dir=Path("/tmp/codeanatomy_incremental_state"),
         git_base_ref="origin/main",
         git_head_ref="HEAD",
         git_changed_only=True,
@@ -77,6 +80,7 @@ def test_normalize_extraction_options_top_level_overrides_incremental_config() -
     """Test normalize extraction options top level overrides incremental config."""
     incremental_config = SemanticIncrementalConfig(
         enabled=True,
+        state_dir=Path("/tmp/codeanatomy_incremental_state"),
         git_base_ref="old_base",
         git_head_ref="old_head",
         git_changed_only=True,

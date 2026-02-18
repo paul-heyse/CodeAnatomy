@@ -19,7 +19,7 @@ from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 
 if TYPE_CHECKING:
-    from tools.cq.macros.calls.entry import CallScanResult
+    from tools.cq.macros.calls.entry_runtime import CallScanResult
     from tools.cq.macros.contracts import CallsRequest
 
 __all__ = ["dispatch_call_analysis", "scan_call_sites"]
@@ -31,7 +31,7 @@ def scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
     Returns:
         CallScanResult with candidate/scanned files and discovered call sites.
     """
-    from tools.cq.macros.calls.entry import CallScanResult
+    from tools.cq.macros.calls.entry_runtime import CallScanResult
 
     search_name = function_name.rsplit(".", maxsplit=1)[-1]
     pattern = rf"\b{search_name}\s*\("

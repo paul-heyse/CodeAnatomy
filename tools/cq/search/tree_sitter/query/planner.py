@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from tools.cq.search.tree_sitter.contracts.query_models import (
@@ -241,6 +242,29 @@ def resolve_pack_source_rows(
     )
 
 
+@lru_cache(maxsize=32)
+def resolve_pack_source_rows_cached(
+    *,
+    language: str,
+    source_rows: tuple[tuple[str, str], ...],
+    dedupe_by_pack_name: bool = False,
+    request_surface: str = "artifact",
+    ignored_errors: tuple[type[Exception], ...] = (),
+) -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
+    """Cached wrapper for deterministic source-row planning.
+
+    Returns:
+        tuple[tuple[str, str, QueryPackPlanV1], ...]: Sorted planned pack rows.
+    """
+    return resolve_pack_source_rows(
+        language=language,
+        source_rows=source_rows,
+        dedupe_by_pack_name=dedupe_by_pack_name,
+        request_surface=request_surface,
+        ignored_errors=ignored_errors,
+    )
+
+
 def normalize_pack_source_rows(
     source_rows: Iterable[tuple[str, str]],
     *,
@@ -282,5 +306,6 @@ __all__ = [
     "compile_pack_source_rows",
     "normalize_pack_source_rows",
     "resolve_pack_source_rows",
+    "resolve_pack_source_rows_cached",
     "sort_pack_plans",
 ]

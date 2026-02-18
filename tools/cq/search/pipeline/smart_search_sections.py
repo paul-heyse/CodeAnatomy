@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import msgspec
+
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails, Section
 from tools.cq.core.types import is_python_language
 from tools.cq.search._shared.enrichment_contracts import (
     incremental_enrichment_payload,
-    python_enrichment_payload,
+    python_enrichment_facts,
     rust_enrichment_payload,
 )
 from tools.cq.search._shared.types import QueryMode
@@ -28,6 +30,11 @@ from tools.cq.search.pipeline.smart_search_followups import build_followups
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
 logger = logging.getLogger(__name__)
+
+
+def _to_mapping(value: object) -> dict[str, object]:
+    builtins_value = msgspec.to_builtins(value, str_keys=True)
+    return builtins_value if isinstance(builtins_value, dict) else {}
 
 
 def _evidence_to_bucket(evidence_kind: str) -> str:
@@ -83,7 +90,29 @@ def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) ->
         enrichment["rust"] = rust_enrichment_payload(match.rust_tree_sitter)
     python_payload: dict[str, object] | None = None
     if match.python_enrichment:
-        python_payload = python_enrichment_payload(match.python_enrichment)
+        python_payload = dict(match.python_enrichment.extras)
+        if match.python_enrichment.meta is not None:
+            python_payload["meta"] = _to_mapping(match.python_enrichment.meta)
+        python_facts = python_enrichment_facts(match.python_enrichment)
+        if python_facts is not None:
+            if python_facts.resolution is not None:
+                python_payload["resolution"] = _to_mapping(python_facts.resolution)
+            if python_facts.behavior is not None:
+                python_payload["behavior"] = _to_mapping(python_facts.behavior)
+            if python_facts.structure is not None:
+                python_payload["structural"] = _to_mapping(python_facts.structure)
+            if python_facts.signature is not None:
+                python_payload["signature"] = _to_mapping(python_facts.signature)
+            if python_facts.call is not None:
+                python_payload["call"] = _to_mapping(python_facts.call)
+            if python_facts.import_ is not None:
+                python_payload["import"] = _to_mapping(python_facts.import_)
+            if python_facts.class_shape is not None:
+                python_payload["class_shape"] = _to_mapping(python_facts.class_shape)
+            if python_facts.locals is not None:
+                python_payload["locals"] = _to_mapping(python_facts.locals)
+            if python_facts.parse_quality is not None:
+                python_payload["parse_quality"] = _to_mapping(python_facts.parse_quality)
     elif is_python_language(match.language):
         python_payload = {}
     if match.incremental_enrichment:

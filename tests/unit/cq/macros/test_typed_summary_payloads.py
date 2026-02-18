@@ -6,7 +6,7 @@ from pathlib import Path
 
 from tools.cq.core.summary_update_contracts import CallsSummaryUpdateV1, ImpactSummaryUpdateV1
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.macros.calls.entry import CallScanResult
+from tools.cq.macros.calls.entry_runtime import CallScanResult
 from tools.cq.macros.calls.entry_summary import build_calls_summary
 from tools.cq.macros.impact import ImpactRequest, _build_impact_summary
 

@@ -43,8 +43,8 @@ def collect_query_pack_captures(
     Returns:
         tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], tuple[TreeSitterQueryHitV1, ...], dict[str, object], tuple[InjectionPlanV1, ...], tuple[RustTagEventV1, ...]]: Aggregated capture and telemetry artifacts.
     """
-    from tools.cq.search.tree_sitter.rust_lane.runtime_query_execution import (
-        collect_query_pack_captures as collect_query_pack_captures_impl,
+    from tools.cq.search.tree_sitter.rust_lane.runtime_engine import (
+        _collect_query_pack_captures as collect_query_pack_captures_impl,
     )
 
     return collect_query_pack_captures_impl(
@@ -69,8 +69,8 @@ def collect_query_pack_payload(
     Returns:
         dict[str, object]: Aggregated query-pack payload for the requested span.
     """
-    from tools.cq.search.tree_sitter.rust_lane.runtime_payload_builders import (
-        collect_query_pack_payload as collect_query_pack_payload_impl,
+    from tools.cq.search.tree_sitter.rust_lane.runtime_engine import (
+        _collect_query_pack_payload as collect_query_pack_payload_impl,
     )
 
     return collect_query_pack_payload_impl(

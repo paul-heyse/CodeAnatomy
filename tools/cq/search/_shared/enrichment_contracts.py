@@ -304,41 +304,6 @@ def rust_enrichment_payload(payload: RustTreeSitterEnrichmentV1 | None) -> dict[
     return out
 
 
-def python_enrichment_payload(payload: PythonEnrichmentV1 | None) -> dict[str, object]:
-    """Convert typed Python wrapper into builtins mapping.
-
-    Returns:
-        Builtins mapping for the Python enrichment payload.
-    """
-    if payload is None:
-        return {}
-    out = dict(payload.extras)
-    if payload.meta is not None:
-        out["meta"] = _typed_row(payload.meta)
-    facts = payload.payload
-    if facts is None:
-        return out
-    if facts.resolution is not None:
-        out["resolution"] = _typed_row(facts.resolution)
-    if facts.behavior is not None:
-        out["behavior"] = _typed_row(facts.behavior)
-    if facts.structure is not None:
-        out["structural"] = _typed_row(facts.structure)
-    if facts.signature is not None:
-        out["signature"] = _typed_row(facts.signature)
-    if facts.call is not None:
-        out["call"] = _typed_row(facts.call)
-    if facts.import_ is not None:
-        out["import"] = _typed_row(facts.import_)
-    if facts.class_shape is not None:
-        out["class_shape"] = _typed_row(facts.class_shape)
-    if facts.locals is not None:
-        out["locals"] = _typed_row(facts.locals)
-    if facts.parse_quality is not None:
-        out["parse_quality"] = _typed_row(facts.parse_quality)
-    return out
-
-
 def incremental_enrichment_payload(payload: IncrementalEnrichmentV1 | None) -> dict[str, object]:
     """Convert typed incremental wrapper into builtins mapping.
 
@@ -388,7 +353,6 @@ __all__ = [
     "incremental_enrichment_payload",
     "parse_incremental_enrichment_mode",
     "python_enrichment_facts",
-    "python_enrichment_payload",
     "rust_enrichment_facts",
     "rust_enrichment_payload",
     "wrap_incremental_enrichment",

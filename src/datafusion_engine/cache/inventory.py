@@ -257,7 +257,7 @@ def _bootstrap_cache_inventory_table(
 ) -> None:
     _ = profile
     table_path.parent.mkdir(parents=True, exist_ok=True)
-    table = pa.Table.from_pylist([], schema=schema)
+    table = pa.Table.from_pylist([_bootstrap_cache_inventory_row(schema)], schema=schema)
     from datafusion_engine.delta.transactions import write_transaction
     from datafusion_engine.delta.write_ipc_payload import (
         DeltaWriteRequestOptions,
@@ -274,6 +274,28 @@ def _bootstrap_cache_inventory_table(
         ),
     )
     write_transaction(ctx, request=request)
+
+
+def _bootstrap_cache_inventory_row(schema: pa.Schema) -> dict[str, object]:
+    row: dict[str, object] = {}
+    for field in schema:
+        if field.nullable:
+            row[field.name] = None
+            continue
+        dtype = field.type
+        if pa.types.is_integer(dtype):
+            row[field.name] = 0
+        elif pa.types.is_string(dtype):
+            row[field.name] = "__bootstrap__"
+        elif pa.types.is_binary(dtype):
+            row[field.name] = b""
+        elif pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
+            row[field.name] = []
+        elif pa.types.is_map(dtype):
+            row[field.name] = {}
+        else:
+            row[field.name] = None
+    return row
 
 
 def _cache_inventory_root(profile: DataFusionRuntimeProfile) -> Path:

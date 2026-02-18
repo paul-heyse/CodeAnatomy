@@ -20,14 +20,18 @@ require_delta_extension()
 
 
 def _create_cdf_table(path: Path) -> None:
+    from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.session.runtime_ops import bind_delta_service
     from storage.deltalake.delta_write import DeltaFeatureMutationOptions, enable_delta_features
 
+    seed_profile = df_profile()
+    bind_delta_service(seed_profile, service=DeltaService(profile=seed_profile))
     table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
     _ = write_delta_table(
         path.parent,
         table=table,
         options=DeltaSeedOptions(
-            profile=df_profile(),
+            profile=seed_profile,
             table_name=path.name,
         ),
     )
@@ -40,13 +44,16 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
         register_dataset_df,
     )
     from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.delta.service import DeltaService
     from datafusion_engine.lineage.reporting import extract_lineage
     from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
+    from datafusion_engine.session.runtime_ops import bind_delta_service
     from storage.deltalake import DeltaCdfOptions
 
     table_path = tmp_path / "cdf_table"
     _create_cdf_table(table_path)
     runtime = df_profile()
+    bind_delta_service(runtime, service=DeltaService(profile=runtime))
     ctx = runtime.session_context()
     register_dataset_df(
         ctx,
@@ -84,8 +91,10 @@ def test_delta_cdf_facade_registration(tmp_path: Path) -> None:
         register_dataset_df,
     )
     from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.delta.service import DeltaService
     from datafusion_engine.session.facade import DataFusionExecutionFacade
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime_ops import bind_delta_service
     from datafusion_engine.session.runtime_profile_config import FeatureGatesConfig
     from semantics.compile_context import build_semantic_execution_context
     from storage.deltalake import DeltaCdfOptions
@@ -95,6 +104,7 @@ def test_delta_cdf_facade_registration(tmp_path: Path) -> None:
     profile = DataFusionRuntimeProfile(
         features=FeatureGatesConfig(enable_delta_cdf=True),
     )
+    bind_delta_service(profile, service=DeltaService(profile=profile))
     ctx = profile.session_context()
     register_dataset_df(
         ctx,

@@ -6,7 +6,7 @@ import msgspec
 from tools.cq.core.schema import mk_result, mk_runmeta
 from tools.cq.core.summary_types import apply_summary_mapping
 from tools.cq.core.summary_update_contracts import EntitySummaryUpdateV1
-from tools.cq.query.executor_runtime import _entity_summary_updates
+from tools.cq.query.executor_runtime_summary import entity_summary_updates
 
 EXPECTED_MATCHES = 7
 EXPECTED_TOTAL_DEFS = 5
@@ -36,7 +36,7 @@ def test_entity_summary_updates_returns_typed_contract() -> None:
         ),
     )
 
-    summary_update = _entity_summary_updates(result)
+    summary_update = entity_summary_updates(result)
 
     assert isinstance(summary_update, EntitySummaryUpdateV1)
     assert summary_update.matches == EXPECTED_MATCHES

@@ -6,7 +6,12 @@ from typing import cast
 
 import pyarrow as pa
 
-from semantics.ports import OutputWriterPort, SchemaProviderPort, SessionPort
+from semantics.ports import (
+    OutputWriterPort,
+    SchemaProviderPort,
+    SessionContextProviderPort,
+    SessionPort,
+)
 
 
 class _DataFrameImpl:
@@ -55,6 +60,12 @@ class _OutputWriterImpl:
         _ = (name, table)
 
 
+class _SessionContextProviderImpl:
+    @staticmethod
+    def session_context() -> object:
+        return object()
+
+
 def test_session_port_protocol() -> None:
     """Session and dataframe protocol implementations interoperate."""
     session = cast("SessionPort", _SessionImpl())
@@ -68,3 +79,9 @@ def test_schema_and_output_ports() -> None:
     writer = cast("OutputWriterPort", _OutputWriterImpl())
     schema = schema_provider.table_schema("t1")
     writer.write_table(name="t1", table=pa.table({"id": [1]}, schema=schema))
+
+
+def test_session_context_provider_port() -> None:
+    """Session-context provider port implementations expose session_context."""
+    provider = cast("SessionContextProviderPort", _SessionContextProviderImpl())
+    assert provider.session_context() is not None

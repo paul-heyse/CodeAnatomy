@@ -18,6 +18,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.summary_types import apply_summary_mapping
+from tools.cq.core.summary_update_contracts import SummaryUpdateV1, summary_update_mapping
 from tools.cq.macros.contracts import ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 
@@ -96,6 +97,15 @@ class MacroResultBuilder:
             MacroResultBuilder: Current builder for fluent chaining.
         """
         self._summary = apply_summary_mapping(self._summary, ((key, value),))
+        return self
+
+    def set_summary_update(self, update: SummaryUpdateV1) -> MacroResultBuilder:
+        """Apply one typed summary-update contract and return builder.
+
+        Returns:
+            Current builder for fluent chaining.
+        """
+        self._summary = apply_summary_mapping(self._summary, summary_update_mapping(update))
         return self
 
     def with_summary(self, summary: object) -> MacroResultBuilder:

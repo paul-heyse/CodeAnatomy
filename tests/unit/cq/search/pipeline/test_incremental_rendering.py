@@ -10,6 +10,7 @@ from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentModeV1,
     IncrementalEnrichmentV1,
 )
+from tools.cq.search.enrichment.incremental_facts import IncrementalFacts
 from tools.cq.search.pipeline.classifier import MatchCategory
 from tools.cq.search.pipeline.smart_search_sections import build_finding
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
@@ -27,7 +28,7 @@ def test_build_finding_embeds_incremental_payload(tmp_path: Path) -> None:
         language="python",
         incremental_enrichment=IncrementalEnrichmentV1(
             mode=IncrementalEnrichmentModeV1.TS_SYM,
-            payload={"sym": {"scope_graph": {"tables_count": 2}}},
+            payload=IncrementalFacts(sym={"scope_graph": {"tables_count": 2}}),
         ),
     )
     finding = build_finding(match, tmp_path)

@@ -10,7 +10,8 @@ import pyarrow.parquet as pq
 from datafusion_engine.dataset.registration_core import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.session.runtime_session import settings_snapshot_for_profile
-from schema_spec.dataset_spec import DataFusionScanOptions, table_spec_from_schema
+from schema_spec.dataset_spec import table_spec_from_schema
+from schema_spec.scan_options import DataFusionScanOptions
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion
 

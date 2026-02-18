@@ -40,14 +40,13 @@ from datafusion_engine.session.introspection import schema_introspector_for_prof
 from datafusion_engine.session.runtime_dataset_io import cache_prefix_for_delta_snapshot
 from datafusion_engine.tables.metadata import TableProviderCapsule
 from obs.otel import get_run_id
-from schema_spec.dataset_spec import (
-    DataFusionScanOptions,
+from schema_spec.dataset_contracts import TableSchemaContract
+from schema_spec.dataset_spec_runtime import (
     DatasetSpec,
-    DeltaScanOptions,
-    TableSchemaContract,
     dataset_spec_from_schema,
     make_dataset_spec,
 )
+from schema_spec.scan_options import DataFusionScanOptions, DeltaScanOptions
 from storage.deltalake import DeltaCdfOptions
 from utils.value_coercion import coerce_int
 

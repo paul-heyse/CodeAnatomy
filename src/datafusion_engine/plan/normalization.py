@@ -5,9 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
-import pyarrow as pa
 from datafusion import SessionContext
-from datafusion.dataframe import DataFrame
 
 from datafusion_engine.plan.walk import looks_like_plan, walk_logical_complete
 
@@ -42,18 +40,29 @@ def normalize_substrait_plan(
     -------
     DataFusionLogicalPlan
         Normalized logical plan ready for Substrait serialization.
+
+    Raises:
+        ValueError: If unsupported plan variants remain after wrapper stripping.
     """
+    _ = ctx
     normalized = _strip_substrait_wrappers(plan)
-    if not _contains_unsupported_substrait_nodes(normalized):
-        return normalized
-    return _fallback_substrait_plan(ctx, normalized)
+    unsupported = _unsupported_substrait_variants(normalized)
+    if unsupported:
+        msg = (
+            "Substrait normalization failed: unsupported logical-plan variants "
+            f"remain after wrapper stripping: {sorted(unsupported)}"
+        )
+        raise ValueError(msg)
+    return normalized
 
 
-def _contains_unsupported_substrait_nodes(plan: DataFusionLogicalPlan) -> bool:
+def _unsupported_substrait_variants(plan: DataFusionLogicalPlan) -> set[str]:
+    unsupported: set[str] = set()
     for node in walk_logical_complete(plan):
-        if _plan_variant_name(node) in _UNSUPPORTED_SUBSTRAIT_VARIANTS:
-            return True
-    return False
+        variant_name = _plan_variant_name(node)
+        if variant_name in _UNSUPPORTED_SUBSTRAIT_VARIANTS:
+            unsupported.add(variant_name)
+    return unsupported
 
 
 def _strip_substrait_wrappers(plan: DataFusionLogicalPlan) -> DataFusionLogicalPlan:
@@ -140,65 +149,6 @@ def _plan_variant_name(plan: object) -> str:
     except (RuntimeError, TypeError, ValueError):
         return type(plan).__name__
     return type(variant).__name__
-
-
-def _fallback_substrait_plan(
-    ctx: SessionContext,
-    plan: DataFusionLogicalPlan,
-) -> DataFusionLogicalPlan:
-    from datafusion_engine.lineage.reporting import referenced_tables_from_plan
-
-    tables = referenced_tables_from_plan(plan)
-    available = _available_substrait_tables(ctx, tables)
-    if available:
-        union_sql = " UNION ALL ".join(f"SELECT 1 AS _ FROM {name}" for name in available)
-        df = ctx.sql(union_sql)
-        normalized = _safe_optimized_logical_plan(df)
-        if normalized is not None:
-            return cast("DataFusionLogicalPlan", normalized)
-    probe_name = _ensure_substrait_probe_table(ctx)
-    df = ctx.table(probe_name)
-    normalized = _safe_optimized_logical_plan(df)
-    if normalized is not None:
-        return cast("DataFusionLogicalPlan", normalized)
-    return plan
-
-
-def _available_substrait_tables(
-    ctx: SessionContext,
-    tables: Sequence[str],
-) -> list[str]:
-    available: list[str] = []
-    for name in tables:
-        try:
-            _ = ctx.table(name)
-        except (KeyError, RuntimeError, TypeError, ValueError):
-            continue
-        available.append(name)
-    return available
-
-
-def _ensure_substrait_probe_table(ctx: SessionContext) -> str:
-    name = "__substrait_probe__"
-    try:
-        _ = ctx.table(name)
-    except (KeyError, RuntimeError, TypeError, ValueError):
-        pass
-    else:
-        return name
-    batch = pa.record_batch([pa.array([1], type=pa.int8())], names=["_probe"])
-    ctx.register_record_batches(name, [[batch]])
-    return name
-
-
-def _safe_optimized_logical_plan(df: DataFrame) -> object | None:
-    method = getattr(df, "optimized_logical_plan", None)
-    if not callable(method):
-        return None
-    try:
-        return method()
-    except (RuntimeError, TypeError, ValueError):
-        return None
 
 
 __all__ = ["normalize_substrait_plan"]

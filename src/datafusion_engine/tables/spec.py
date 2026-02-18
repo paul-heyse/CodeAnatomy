@@ -17,7 +17,7 @@ from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DataFusionProvider, DatasetLocation
-    from schema_spec.dataset_spec import DatasetSpec
+    from schema_spec.dataset_spec_runtime import DatasetSpec
     from schema_spec.scan_options import DataFusionScanOptions
     from storage.deltalake import DeltaCdfOptions
 

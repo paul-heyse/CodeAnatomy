@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import RecordType, SgRecord, filter_records_by_type, scan_files
 from tools.cq.core.pathing import is_relative_to, match_ordered_globs, normalize_repo_relative_path
+from tools.cq.core.run_context import SymtableEnricherPort
 from tools.cq.core.types import DEFAULT_QUERY_LANGUAGE, QueryLanguage
-from tools.cq.query.enrichment import SymtableEnricher
 from tools.cq.query.planner import scope_to_globs, scope_to_paths
 from tools.cq.query.scan import (
     EntityCandidates,
@@ -37,7 +37,7 @@ class BatchEntityQuerySession:
     records: list[SgRecord]
     scan: ScanContext
     candidates: EntityCandidates
-    symtable: SymtableEnricher
+    symtable: SymtableEnricherPort
 
 
 def build_batch_session(
@@ -47,7 +47,7 @@ def build_batch_session(
     paths: list[Path],
     record_types: Iterable[str] | Iterable[RecordType],
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    symtable: SymtableEnricher,
+    symtable: SymtableEnricherPort,
 ) -> BatchEntityQuerySession:
     """Build a shared scan session for multiple entity queries.
 

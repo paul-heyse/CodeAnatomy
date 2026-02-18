@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.core.run_context import SymtableEnricherPort
 from tools.cq.core.structs import CqStruct
 
 if TYPE_CHECKING:
     from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.cache.interface import CqCacheBackend
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.query.enrichment import SymtableEnricher
     from tools.cq.query.ir import Query
     from tools.cq.query.planner import ToolPlan
 
@@ -27,6 +27,6 @@ class QueryExecutionContext(CqStruct, frozen=True):
     started_ms: float
     run_id: str
     services: CqRuntimeServices
-    symtable_enricher: SymtableEnricher
+    symtable_enricher: SymtableEnricherPort
     query_text: str | None = None
     cache_backend: CqCacheBackend | None = None

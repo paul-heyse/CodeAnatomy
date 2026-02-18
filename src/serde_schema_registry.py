@@ -58,13 +58,12 @@ from schema_spec.arrow_types import (
     ArrowStructSpec,
     ArrowTimestampSpec,
 )
+from schema_spec.dataset_contracts import DedupeSpecSpec, SortKeySpec
 from schema_spec.dataset_spec import (
     ContractSpec,
     DatasetPolicies,
     DatasetSpec,
-    DedupeSpecSpec,
     DeltaPolicyBundle,
-    SortKeySpec,
     ValidationPolicySpec,
     VirtualFieldSpec,
 )

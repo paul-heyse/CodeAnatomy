@@ -46,7 +46,7 @@ Design stance: **hard-cutover, Rust-first convergence with dependency-safe incre
 - **`SchemaIntrospector`** at `schema/introspection_core.py` is 662 LOC after introspection helper extractions.
 - **`contracts.py`** at `datafusion_engine/schema/contracts.py` is 656 LOC after `constraints.py`, `divergence.py`, `contract_builders.py`, and `type_normalization.py` extraction.
 - **`finalize.py`** at `datafusion_engine/schema/finalize.py` is 458 LOC after `finalize_errors.py` extraction and runtime-validation extraction to `finalize_runtime.py`.
-- **`dataset_spec.py`** at `schema_spec/dataset_spec.py` is 183 LOC and now serves as a compatibility facade over split canonical modules.
+- **`dataset_spec.py`** at `schema_spec/dataset_spec.py` is 157 LOC and now serves as a compatibility facade over split canonical modules.
 - **`artifact_store_core.py`** is 645 LOC after persistence/tables extraction.
 - **`session/facade.py`** is 691 LOC after operation extraction to `session/facade_ops.py`.
 
@@ -60,27 +60,30 @@ Status legend for this revision:
 - `[ ]` pending / not started
 
 Evidence snapshot used for this refresh:
-- `wc -l`: `bundle_artifact.py` 188, `write_pipeline.py` 607, `materialization.py` 692, `delta/observability.py` 655, `introspection_core.py` 662, `contracts.py` 656, `finalize.py` 458, `dataset_spec.py` 183, `artifact_store_core.py` 645, `session/facade.py` 691, `obs/metrics.py` 23
+- `wc -l`: `bundle_artifact.py` 188, `write_pipeline.py` 607, `materialization.py` 692, `delta/observability.py` 655, `introspection_core.py` 662, `contracts.py` 656, `finalize.py` 458, `dataset_spec.py` 157, `artifact_store_core.py` 645, `session/facade.py` 691, `obs/metrics.py` 23
 - `rg "write_deltalake\\(" src` returns no matches; fallback symbols `_execute_delta_merge_fallback` and `_should_fallback_delta_merge` are absent
 - Rust plan/extraction bridge entrypoints are wired and invoked, with Python bridge modules in place (`plan/rust_bundle_bridge.py`, `extraction/rust_session_bridge.py`), and extraction session fallback branches have been removed from `engine_session_factory`
-- Substrait execution fallback branches (`_record_substrait_fallback`, `_rehydrate_from_proto`) are removed from `session/facade.py`; however `plan/normalization.py` still contains `_fallback_substrait_plan(...)`
+- Substrait execution fallback branches (`_record_substrait_fallback`, `_rehydrate_from_proto`) are removed from `session/facade.py`, and plan-level fallback helpers are removed from `plan/normalization.py`
 - Additional `bundle_artifact.py` decomposition landed via `plan_identity.py`, `planning_env.py`, `substrait_artifacts.py`, `plan_utils.py`, and `bundle_assembly.py`
 - `obs/` has zero direct `datafusion_engine` imports (`rg -n "from datafusion_engine|import datafusion_engine" src/obs` returns no matches)
-- Private-name exports in `__all__` are fully cleaned (`hits 0`)
+- Private-name exports in `__all__` remain in plan modules (`bundle_assembly.py`, `plan_proto.py`, `artifact_store_constants.py`, `artifact_store_persistence.py`) and require final S3/D2 cleanup.
 - Direct `DataFusionRuntimeProfile(...)` construction appears only in `session/profiles.py` factory helpers (2 hits)
-- Moved schema-spec concerns are still imported from `dataset_spec.py` at many callsites (`rg --multiline` hit count for moved symbols in `src/`: 59)
-- `views/cache_registration.py` and `lineage/diagnostics_payloads.py` are currently wrapper facades; primary cache/diagnostics implementations remain in `views/graph.py` and `lineage/diagnostics.py` with no in-tree imports of the extracted modules
-- Protocol-first adoption remains partial: `semantics/compiler.py` still casts `SessionPort` to `SessionContext`, and `relspec/contracts.py` request typing still requires concrete `DataFusionRuntimeProfile`
-- `plan/rust_bundle_bridge.py` still contains TypeError-based bridge signature fallback (`df`/`_df`/positional)
+- Moved schema-spec concerns are fully migrated off `dataset_spec.py` (`rg --multiline` hit count for moved symbols in `src/`: 0)
+- View cache registration functions (`_register_view_with_cache`, `_register_delta_staging_cache`, `_register_delta_output_cache`) now live in `views/cache_registration.py`; corresponding function definitions are removed from `views/graph.py`
+- Diagnostics payload builders are canonical in `lineage/diagnostics_payloads.py`; payload-callsite imports from `lineage/diagnostics` are removed
+- Protocol-first adoption closure: `semantics/compiler.py` resolves context via `SessionContextProviderPort`, `relspec/contracts.py` uses `RuntimeProfilePort`, and targeted deep policy chains are replaced with runtime-profile convenience helpers
+- `plan/rust_bundle_bridge.py` now uses a single strict bridge signature (`df=`) with no TypeError fallback dispatch
+- Canonical runtime install contract remains partially incomplete: session/runtime tests still fail because `invoke_entrypoint_with_adapted_context()` calls `install_codeanatomy_runtime` with positional args while `datafusion_ext.install_codeanatomy_runtime()` enforces keyword-only runtime args.
 
 ### Completed Scope Items
 
 - S1. Consolidate duplicated type aliases and helper functions
 - S2. Fix lying APIs and dead parameters
-- S3. Promote private exports and clean `__all__` lists
 - S4. Extract shared lazy-loading facade utility
 - S5. Replace unstructured multi-value returns with named types
 - S6. Fix dependency direction: move engine-dependent code from inner ring
+- S7. Reclassify `schema_spec` and split engine-dependent content
+- S8. Decompose `bundle_artifact.py`
 - S19. Extract/extraction package cleanup and dependency fixes
 - S20. Additional module decompositions (medium priority)
 - S9. Decompose `WritePipeline`
@@ -88,27 +91,28 @@ Evidence snapshot used for this refresh:
 - S11. Decompose `delta/observability.py`
 - S12. Decompose `SchemaIntrospector`
 - S13. Replace deferred import pattern with generic factory
+- S14. Define port protocols for semantics/relspec/storage decoupling
 - S15. Replace `self: Any` mixin anti-pattern with protocol
 - S16. Consolidate Arrow type mapping knowledge
 - S17. Address hidden `DataFusionRuntimeProfile` construction (DI)
+- S18. Demeter convenience methods and profile decomposition
 - S21. Correctness, testability, and observability improvements
 - S22. Bidirectional dependency resolution (Storage ↔ Engine)
+- S23. Rust-canonical plan bundle and Substrait artifact cutover
 - S24. Rust-native Delta write and mutation cutover
 - S25. Extension contract hardening and shim removal
 - S26. Rust-native extraction session and provider registration cutover
-- S27. Canonical Rust runtime install and UDF snapshot contract
 
 ### Partially Implemented Scope Items
 
-- S7. Reclassify `schema_spec` and split engine-dependent content (split modules landed; broad import migration from `dataset_spec.py` remains)
-- S8. Decompose `bundle_artifact.py` (bundle file decomposition complete; related `views`/`lineage` extraction items remain wrapper-level)
-- S14. Define port protocols for semantics/relspec/storage decoupling (ports exist; several core consumers remain concrete-typed)
-- S18. Demeter convenience methods and profile decomposition (partial helper adoption; residual deep policy access remains)
-- S23. Rust-canonical plan bundle and Substrait artifact cutover (Rust bridge is active; residual compatibility/fallback helpers remain)
+- S3. Promote private exports and clean `__all__` lists
+  - Remaining: remove `_`-prefixed exports from `__all__` in `src/datafusion_engine/plan/bundle_assembly.py`, `src/datafusion_engine/plan/plan_proto.py`, `src/datafusion_engine/plan/artifact_store_constants.py`, and `src/datafusion_engine/plan/artifact_store_persistence.py`.
+- S27. Canonical Rust runtime install and UDF snapshot contract
+  - Remaining: fix runtime entrypoint invocation in `src/datafusion_engine/extensions/context_adaptation.py` / `src/datafusion_engine/udf/extension_core.py` so `install_codeanatomy_runtime` receives keyword arguments (`enable_async_udfs`, `async_udf_timeout_ms`, `async_udf_batch_size`) instead of positional arguments.
 
 ### Pending / Not Started Scope Items
 
-- None newly identified as pending; remaining open work is tracked as partial items above.
+- None.
 
 ---
 
@@ -1966,7 +1970,7 @@ class RuntimeInstallSnapshot:
 ### Phase 1: Quick Wins
 - [x] S1. Consolidate duplicated type aliases and helper functions (all modules)
 - [x] S2. Fix lying APIs, dead parameters, and no-op stubs
-- [x] S3. Promote private exports and clean `__all__` lists (all packages)
+- [ ] S3. Promote private exports and clean `__all__` lists (all packages) — partial
 - [x] S5. Replace unstructured multi-value returns with named types
 - [x] S4. Extract shared lazy-loading facade utility
 - [x] S13. Replace deferred import pattern with generic factory
@@ -1975,14 +1979,14 @@ class RuntimeInstallSnapshot:
 
 ### Phase 2: Dependency Direction Fixes
 - [x] S6. Fix dependency direction: move engine-dependent code from inner ring
-- [ ] S7. Reclassify `schema_spec` and split engine-dependent content
+- [x] S7. Reclassify `schema_spec` and split engine-dependent content
 - [x] S19. Extract/extraction package cleanup and dependency fixes
 - [x] S22. Bidirectional dependency resolution (storage ↔ engine)
 
 ### Phase 3: Rust Convergence
 - [x] S25. Extension contract hardening and shim removal
-- [x] S27. Canonical Rust runtime install and UDF snapshot contract
-- [ ] S23. Rust-canonical plan bundle and Substrait artifact cutover
+- [ ] S27. Canonical Rust runtime install and UDF snapshot contract — partial
+- [x] S23. Rust-canonical plan bundle and Substrait artifact cutover
 - [x] S24. Rust-native Delta write and mutation cutover
 - [x] S26. Rust-native extraction session and provider registration cutover
 
@@ -1992,19 +1996,19 @@ class RuntimeInstallSnapshot:
 - [x] S10. Decompose `materialization.py` (1,075 LOC) + fix extract session duplication
 - [x] S20. Additional module decompositions (7 modules)
 - [x] S9. Decompose `WritePipeline` (1,417 LOC)
-- [ ] S8. Decompose `bundle_artifact.py` (2,552 LOC)
+- [x] S8. Decompose `bundle_artifact.py` (2,552 LOC)
 
 ### Phase 5: Architectural
 - [x] S15. Replace `self: Any` mixin anti-pattern with protocol
-- [ ] S18. Demeter convenience methods and profile decomposition
-- [ ] S14. Define port protocols for semantics/relspec/storage engine decoupling
+- [x] S18. Demeter convenience methods and profile decomposition
+- [x] S14. Define port protocols for semantics/relspec/storage engine decoupling
 - [x] S17. Address hidden DataFusionRuntimeProfile construction (10+ functions)
 
 ### Decommission Batches
 - [x] D1. Post-S1/S2 cleanup batch
-- [x] D2. Post-S3/S4 cleanup batch
+- [ ] D2. Post-S3/S4 cleanup batch — partial
 - [x] D3. Post-S6/S7/S19 cleanup batch
 - [x] D4. Post-decomposition verification batch
-- [ ] D5. Post-protocol cleanup batch
-- [ ] D6. Post-Rust plan/write cutover cleanup batch
-- [x] D7. Post-extension/runtime contract cleanup batch
+- [x] D5. Post-protocol cleanup batch
+- [x] D6. Post-Rust plan/write cutover cleanup batch
+- [ ] D7. Post-extension/runtime contract cleanup batch — partial

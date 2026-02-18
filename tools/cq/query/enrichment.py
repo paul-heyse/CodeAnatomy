@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.core.entity_kinds import ENTITY_KINDS
+from tools.cq.core.run_context import SymtableEnricherPort
 from tools.cq.introspection.symtable_extract import ScopeGraph, extract_scope_graph
 from tools.cq.query.shared_utils import extract_def_name
 
@@ -452,7 +453,7 @@ class SymtableEnricher:
 def filter_by_scope(
     findings: Sequence[Finding],
     scope_filter: ScopeFilter,
-    enricher: SymtableEnricher,
+    enricher: SymtableEnricherPort,
     records: Sequence[SgRecord],
 ) -> list[Finding]:
     """Filter findings by scope criteria.

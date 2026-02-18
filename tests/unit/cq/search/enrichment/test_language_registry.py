@@ -8,22 +8,37 @@ import pytest
 import tools.cq.search.enrichment.language_registry as registry
 from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.adapter_registry import LanguageAdapterRegistry
+from tools.cq.search.enrichment.contracts import (
+    EnrichmentMeta,
+    LanguageEnrichmentPayload,
+    PythonEnrichmentPayload,
+)
 
 
 class _Adapter:
     language: QueryLanguage = "python"
 
     @staticmethod
-    def payload_from_match(match: object) -> dict[str, object] | None:
-        return {"match": str(match)}
+    def payload_from_match(match: object) -> LanguageEnrichmentPayload | None:
+        return PythonEnrichmentPayload(
+            meta=EnrichmentMeta(language="python"),
+            raw={"match": str(match)},
+        )
 
     @staticmethod
-    def accumulate_telemetry(lang_bucket: dict[str, object], payload: dict[str, object]) -> None:
-        lang_bucket["seen"] = payload.get("match")
+    def accumulate_telemetry(
+        lang_bucket: dict[str, object],
+        payload: LanguageEnrichmentPayload,
+    ) -> None:
+        lang_bucket["seen"] = payload.raw.get("match")
 
     @staticmethod
-    def build_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]]:
-        return [dict(payload)]
+    def build_diagnostics(
+        payload: Mapping[str, object] | LanguageEnrichmentPayload,
+    ) -> list[dict[str, object]]:
+        if isinstance(payload, Mapping):
+            return [dict(payload)]
+        return [dict(payload.raw)]
 
 
 @pytest.fixture(autouse=True)

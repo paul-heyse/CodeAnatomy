@@ -6,10 +6,10 @@ from tools.cq.core.schema import CqResult
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import EntityQueryRequest
 from tools.cq.query.executor_runtime import EntityExecutionState
-from tools.cq.query.executor_runtime import (
+from tools.cq.query.executor_runtime_entity import (
     execute_entity_query as _execute_entity_query_impl,
 )
-from tools.cq.query.executor_runtime import (
+from tools.cq.query.executor_runtime_entity import (
     execute_entity_query_from_records as _execute_entity_query_from_records_impl,
 )
 

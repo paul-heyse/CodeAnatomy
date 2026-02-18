@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ from tools.cq.search.rg.contracts import RgRunSettingsV1
 from tools.cq.search.rg.runner import RgProcessResultV1, run_rg_json, run_with_settings
 
 _DEF_LINE_PATTERN = r"^\s*(def |async def |class |fn |pub fn |struct |enum |trait |impl )"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,7 @@ def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
             },
         )
     except TimeoutError:
+        logger.warning("rg.find_def_lines timeout file=%s", resolved)
         return []
 
     lines: list[tuple[int, int]] = []
@@ -87,7 +90,9 @@ def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
         stripped = text.lstrip()
         indent = len(text) - len(stripped)
         lines.append((line_number, indent))
-    return sorted(set(lines))
+    result = sorted(set(lines))
+    logger.debug("rg.find_def_lines file=%s rows=%d", resolved, len(result))
+    return result
 
 
 def find_files_with_pattern(
@@ -125,6 +130,11 @@ def find_files_with_pattern(
             },
         )
     except TimeoutError:
+        logger.warning(
+            "rg.find_files_with_pattern timeout root=%s lang_scope=%s",
+            root,
+            resolved.lang_scope,
+        )
         return []
     seen: set[Path] = set()
     for event in proc.events:
@@ -139,7 +149,14 @@ def find_files_with_pattern(
         seen.add((root / rel_path).resolve())
         if len(seen) >= limits.max_files:
             break
-    return sorted(seen)
+    rows = sorted(seen)
+    logger.debug(
+        "rg.find_files_with_pattern root=%s mode=%s files=%d",
+        root,
+        resolved.mode.value,
+        len(rows),
+    )
+    return rows
 
 
 def list_candidate_files(
@@ -167,9 +184,14 @@ def list_candidate_files(
     )
     result = run_with_settings(root=root, limits=limits or INTERACTIVE, settings=settings)
     if result.returncode not in {0, 1}:
+        logger.warning(
+            "rg.list_candidate_files failed root=%s returncode=%d", root, result.returncode
+        )
         return []
     rel_rows = [line.strip() for line in result.stdout_lines if line.strip()]
-    return sorted(_as_absolute(root, row) for row in rel_rows)
+    rows = sorted(_as_absolute(root, row) for row in rel_rows)
+    logger.debug("rg.list_candidate_files root=%s files=%d", root, len(rows))
+    return rows
 
 
 def find_call_candidates(
@@ -200,6 +222,7 @@ def find_call_candidates(
             lang_scope=lang_scope,
         )
     except TimeoutError:
+        logger.warning("rg.find_call_candidates timeout mode=identifier root=%s", root)
         return []
     identifier_rows = _collect_call_candidate_rows(
         proc,
@@ -209,6 +232,7 @@ def find_call_candidates(
         lang_scope=lang_scope,
     )
     if identifier_rows:
+        logger.debug("rg.find_call_candidates mode=identifier rows=%d", len(identifier_rows))
         return identifier_rows
     try:
         proc = _run_call_candidate_search(
@@ -219,14 +243,17 @@ def find_call_candidates(
             lang_scope=lang_scope,
         )
     except TimeoutError:
+        logger.warning("rg.find_call_candidates timeout mode=regex root=%s", root)
         return []
-    return _collect_call_candidate_rows(
+    rows = _collect_call_candidate_rows(
         proc,
         root=root,
         call_pattern=call_pattern,
         limits=limits,
         lang_scope=lang_scope,
     )
+    logger.debug("rg.find_call_candidates mode=regex rows=%d", len(rows))
+    return rows
 
 
 def _run_call_candidate_search(
@@ -329,6 +356,7 @@ def search_content(
             },
         )
     except TimeoutError:
+        logger.warning("rg.search_content timeout root=%s", root)
         return []
     results: list[tuple[Path, int, str]] = []
     for event in proc.events:
@@ -344,6 +372,7 @@ def search_content(
         results.append(((root / rel_path).resolve(), line, match_line_text(data)))
         if len(results) >= limits.max_total_matches:
             break
+    logger.debug("rg.search_content root=%s rows=%d", root, len(results))
     return results
 
 

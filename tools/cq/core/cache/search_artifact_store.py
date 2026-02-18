@@ -19,10 +19,6 @@ from tools.cq.core.cache.key_builder import build_cache_key
 from tools.cq.core.cache.namespaces import resolve_namespace_ttl_seconds
 from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
 from tools.cq.core.cache.search_artifact_index import (
-    SearchArtifactDequeLike,
-    SearchArtifactIndexLike,
-)
-from tools.cq.core.cache.search_artifact_index import (
     global_index_path as _global_index_path,
 )
 from tools.cq.core.cache.search_artifact_index import (
@@ -35,6 +31,12 @@ from tools.cq.core.cache.search_artifact_index import (
     open_artifact_index as _open_index,
 )
 from tools.cq.core.cache.search_artifact_index import (
+    rows_from_index as _rows_from_index,
+)
+from tools.cq.core.cache.search_artifact_index import (
+    rows_from_order as _rows_from_order,
+)
+from tools.cq.core.cache.search_artifact_index import (
     run_index_path as _run_index_path,
 )
 from tools.cq.core.cache.search_artifact_index import (
@@ -45,10 +47,7 @@ from tools.cq.core.cache.telemetry import (
     record_cache_get,
     record_cache_set,
 )
-from tools.cq.core.cache.typed_codecs import (
-    convert_mapping_typed,
-    encode_msgpack_into,
-)
+from tools.cq.core.cache.typed_codecs import encode_msgpack_into
 
 _NAMESPACE: Final[str] = "search_artifacts"
 _VERSION: Final[str] = "v2"
@@ -78,14 +77,6 @@ def _bundle_key(
         target=f"run:{run_id}",
         extras=identity,
     )
-
-
-def _decode_entry(value: object) -> SearchArtifactIndexEntryV1 | None:
-    if isinstance(value, SearchArtifactIndexEntryV1):
-        return value
-    if isinstance(value, dict):
-        return convert_mapping_typed(value, type_=SearchArtifactIndexEntryV1)
-    return None
 
 
 def _transaction_context(store: object | None) -> AbstractContextManager[object]:
@@ -207,9 +198,7 @@ def _list_run_entries(
     run_index = _open_index(_run_index_path(policy, run_id))
     if run_index is None:
         return []
-    rows = [entry for value in run_index.values() if (entry := _decode_entry(value)) is not None]
-    rows.sort(key=lambda row: row.created_ms, reverse=True)
-    return rows[:limit]
+    return _rows_from_index(index=run_index, limit=limit)
 
 
 def _list_global_entries(
@@ -222,43 +211,14 @@ def _list_global_entries(
     if global_order is None or global_index is None:
         return []
 
-    rows = _rows_from_global_order(
-        global_order=global_order, global_index=global_index, limit=limit
+    rows = _rows_from_order(
+        order=global_order,
+        index=global_index,
+        limit=limit,
     )
     if rows:
         return rows
-    return _rows_from_global_index(global_index=global_index, limit=limit)
-
-
-def _rows_from_global_order(
-    *,
-    global_order: SearchArtifactDequeLike,
-    global_index: SearchArtifactIndexLike,
-    limit: int,
-) -> list[SearchArtifactIndexEntryV1]:
-    rows: list[SearchArtifactIndexEntryV1] = []
-    seen: set[str] = set()
-    for cache_key in global_order:
-        if not isinstance(cache_key, str) or cache_key in seen:
-            continue
-        seen.add(cache_key)
-        entry = _decode_entry(global_index.get(cache_key))
-        if entry is None:
-            continue
-        rows.append(entry)
-        if len(rows) >= limit:
-            break
-    return rows
-
-
-def _rows_from_global_index(
-    *,
-    global_index: SearchArtifactIndexLike,
-    limit: int,
-) -> list[SearchArtifactIndexEntryV1]:
-    rows = [entry for value in global_index.values() if (entry := _decode_entry(value)) is not None]
-    rows.sort(key=lambda row: row.created_ms, reverse=True)
-    return rows[:limit]
+    return _rows_from_index(index=global_index, limit=limit)
 
 
 def _touch_cached_entry(*, root: Path, backend: CqCacheBackend, cache_key: str) -> None:

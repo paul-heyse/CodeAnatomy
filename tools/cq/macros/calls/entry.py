@@ -12,10 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import msgspec
-
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
-from tools.cq.core.contracts import require_mapping as require_contract_mapping
 from tools.cq.core.schema import (
     CqResult,
     Finding,
@@ -28,13 +25,14 @@ from tools.cq.core.schema import (
     update_result_summary,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.core.summary_types import build_semantic_telemetry, summary_from_mapping
-from tools.cq.core.summary_update_contracts import CallsSummaryUpdateV1
+from tools.cq.core.summary_types import build_semantic_telemetry
+from tools.cq.core.summary_update_contracts import summary_update_mapping
 from tools.cq.macros.calls.analysis import (
     CallSite,
     _analyze_sites,
     _collect_call_sites_from_records,
 )
+from tools.cq.macros.calls.entry_summary import build_calls_summary
 from tools.cq.macros.calls.insight import (
     CallsFrontDoorState,
     CallsInsightSummary,
@@ -194,26 +192,6 @@ def scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
     return _scan_call_sites(root_path, function_name)
 
 
-def _build_calls_summary(
-    function_name: str,
-    scan_result: CallScanResult,
-) -> CallsSummaryUpdateV1:
-    return CallsSummaryUpdateV1(
-        query=function_name,
-        mode="macro:calls",
-        function=function_name,
-        signature=scan_result.signature_info,
-        total_sites=len(scan_result.all_sites),
-        files_with_calls=scan_result.files_with_calls,
-        total_py_files=scan_result.total_py_files,
-        candidate_files=len(scan_result.candidate_files),
-        scanned_files=len(scan_result.scan_files),
-        call_records=len(scan_result.call_records),
-        rg_candidates=scan_result.rg_candidates,
-        scan_method="ast-grep" if not scan_result.used_fallback else "rg",
-    )
-
-
 def _summarize_sites(all_sites: list[CallSite]) -> CallAnalysisSummary:
     arg_shapes, kwarg_usage, forwarding_count, contexts, hazard_counts = _analyze_sites(all_sites)
     return CallAnalysisSummary(
@@ -279,16 +257,23 @@ def _init_calls_result(
         tc=ctx.tc,
         started_ms=started_ms,
     )
-    summary_mapping = msgspec.to_builtins(
-        _build_calls_summary(ctx.function_name, scan_result),
-        order="deterministic",
+    return update_result_summary(
+        builder.result,
+        summary_update_mapping(
+            build_calls_summary(
+                function_name=ctx.function_name,
+                signature=scan_result.signature_info,
+                total_sites=len(scan_result.all_sites),
+                files_with_calls=scan_result.files_with_calls,
+                total_py_files=scan_result.total_py_files,
+                candidate_files=len(scan_result.candidate_files),
+                scanned_files=len(scan_result.scan_files),
+                call_records=len(scan_result.call_records),
+                rg_candidates=scan_result.rg_candidates,
+                used_fallback=scan_result.used_fallback,
+            )
+        ),
     )
-    try:
-        summary_mapping_dict = require_contract_mapping(summary_mapping)
-    except TypeError:
-        summary_mapping_dict: dict[str, object] = {}
-    updated_summary = summary_from_mapping(summary_mapping_dict)
-    return update_result_summary(builder.result, updated_summary.to_dict())
 
 
 def _analyze_calls_sites(

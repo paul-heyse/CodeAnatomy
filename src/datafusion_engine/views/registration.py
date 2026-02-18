@@ -222,8 +222,8 @@ def ensure_view_graph(
     if registration.snapshot is None:
         msg = "UDF snapshot is required for view registration."
         raise RuntimeError(msg)
-    from datafusion_engine.lineage.diagnostics import (
-        record_artifact,
+    from datafusion_engine.lineage.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics_payloads import (
         rust_udf_snapshot_payload,
         view_fingerprint_payload,
         view_udf_parity_payload,

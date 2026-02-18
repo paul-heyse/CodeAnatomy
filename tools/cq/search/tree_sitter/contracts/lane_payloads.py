@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Literal
 
 import msgspec
 
@@ -17,9 +17,9 @@ class PythonTreeSitterPayloadV1(CqOutputStruct, frozen=True):
 
     language: Literal["python"] = "python"
     enrichment_status: EnrichmentStatus = "applied"
-    cst_diagnostics: list[dict[str, Any]] = msgspec.field(default_factory=list)
-    cst_query_hits: list[dict[str, Any]] = msgspec.field(default_factory=list)
-    query_runtime: dict[str, Any] = msgspec.field(default_factory=dict)
+    cst_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
+    cst_query_hits: list[dict[str, object]] = msgspec.field(default_factory=list)
+    query_runtime: dict[str, object] = msgspec.field(default_factory=dict)
 
 
 class RustTreeSitterPayloadV1(CqOutputStruct, frozen=True):
@@ -27,26 +27,26 @@ class RustTreeSitterPayloadV1(CqOutputStruct, frozen=True):
 
     language: Literal["rust"] = "rust"
     enrichment_status: EnrichmentStatus = "applied"
-    cst_diagnostics: list[dict[str, Any]] = msgspec.field(default_factory=list)
-    cst_query_hits: list[dict[str, Any]] = msgspec.field(default_factory=list)
-    query_runtime: dict[str, Any] = msgspec.field(default_factory=dict)
+    cst_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
+    cst_query_hits: list[dict[str, object]] = msgspec.field(default_factory=list)
+    query_runtime: dict[str, object] = msgspec.field(default_factory=dict)
 
 
-def _coerce_mapping_rows(value: object) -> list[dict[str, Any]]:
+def _coerce_mapping_rows(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     return [dict(row) for row in value if isinstance(row, Mapping)]
 
 
 def _canonicalize_lane_payload(
-    payload: dict[str, Any],
+    payload: dict[str, object],
     *,
     target_type: type[PythonTreeSitterPayloadV1 | RustTreeSitterPayloadV1],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Canonicalize tree-sitter lane payload diagnostics/query-hit keys.
 
     Returns:
-        dict[str, Any]: Canonicalized lane payload.
+        dict[str, object]: Canonicalized lane payload.
     """
     payload = dict(payload)
     legacy = payload.pop("tree_sitter_diagnostics", None)
@@ -58,20 +58,20 @@ def _canonicalize_lane_payload(
     return payload
 
 
-def canonicalize_python_lane_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def canonicalize_python_lane_payload(payload: dict[str, object]) -> dict[str, object]:
     """Canonicalize Python lane payload diagnostics/query-hit keys.
 
     Returns:
-        dict[str, Any]: Function return value.
+        dict[str, object]: Function return value.
     """
     return _canonicalize_lane_payload(payload, target_type=PythonTreeSitterPayloadV1)
 
 
-def canonicalize_rust_lane_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def canonicalize_rust_lane_payload(payload: dict[str, object]) -> dict[str, object]:
     """Canonicalize Rust lane payload diagnostics/query-hit keys.
 
     Returns:
-        dict[str, Any]: Function return value.
+        dict[str, object]: Function return value.
     """
     return _canonicalize_lane_payload(payload, target_type=RustTreeSitterPayloadV1)
 

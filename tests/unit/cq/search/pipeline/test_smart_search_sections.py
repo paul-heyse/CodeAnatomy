@@ -11,6 +11,7 @@ from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentV1,
 )
 from tools.cq.search._shared.types import QueryMode
+from tools.cq.search.enrichment.incremental_facts import IncrementalFacts
 from tools.cq.search.pipeline.classifier import MatchCategory
 from tools.cq.search.pipeline.smart_search_sections import build_finding, build_sections
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
@@ -20,7 +21,7 @@ def _match(category: str, *, with_incremental: bool = False) -> EnrichedMatch:
     incremental = (
         IncrementalEnrichmentV1(
             mode=IncrementalEnrichmentModeV1.TS_SYM_DIS,
-            payload={"sym": {"binding_id": "sample:1:2:target"}},
+            payload=IncrementalFacts(sym={"binding_id": "sample:1:2:target"}),
         )
         if with_incremental
         else None

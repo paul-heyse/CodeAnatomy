@@ -15,11 +15,9 @@ import msgspec
 from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
-from tools.cq.core.contracts import require_mapping as require_contract_mapping
-from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.core.result_factory import build_error_result
+from tools.cq.core.run_context import SymtableEnricherPort
 from tools.cq.core.schema import (
-    Anchor,
     CqResult,
     Finding,
     Section,
@@ -31,9 +29,11 @@ from tools.cq.core.schema import (
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.summary_types import (
     apply_summary_mapping,
-    as_search_summary,
 )
-from tools.cq.core.summary_update_contracts import EntitySummaryUpdateV1
+from tools.cq.core.summary_update_contracts import (
+    EntitySummaryUpdateV1,
+    summary_update_mapping,
+)
 from tools.cq.core.types import (
     QueryLanguage,
     QueryLanguageScope,
@@ -41,10 +41,9 @@ from tools.cq.core.types import (
     file_extensions_for_language,
 )
 from tools.cq.orchestration.language_scope import execute_by_language_scope
-from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
+from tools.cq.query.enrichment import filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import (
-    DefQueryContext,
     EntityQueryRequest,
     PatternQueryRequest,
 )
@@ -57,35 +56,8 @@ from tools.cq.query.executor_ast_grep import (
 from tools.cq.query.executor_ast_grep import (
     filter_records_by_spans as _filter_records_by_spans,
 )
-from tools.cq.query.executor_definitions import (
-    def_to_finding as _def_to_finding,
-)
-from tools.cq.query.executor_definitions import (
-    filter_to_matching as _filter_to_matching,
-)
-from tools.cq.query.executor_definitions import (
-    matches_name as _matches_name,
-)
-from tools.cq.query.executor_definitions import (
-    process_def_query as _process_def_query,
-)
-from tools.cq.query.executor_definitions import (
-    process_import_query as _process_import_query,
-)
-from tools.cq.query.finding_builders import (
-    build_call_evidence as _build_call_evidence,
-)
-from tools.cq.query.finding_builders import (
-    build_def_evidence_map as _build_def_evidence_map,
-)
-from tools.cq.query.finding_builders import (
-    call_to_finding as _call_to_finding,
-)
-from tools.cq.query.finding_builders import (
-    extract_call_target as _extract_call_target,
-)
-from tools.cq.query.finding_builders import (
-    record_key as _record_key,
+from tools.cq.query.executor_runtime_entity import (
+    apply_entity_handlers as _apply_entity_handlers_impl,
 )
 from tools.cq.query.planner import ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.query_scan import (
@@ -114,7 +86,6 @@ from tools.cq.query.scan import (
     build_scan_context as _build_scan_context,
 )
 from tools.cq.query.sg_parser import list_scan_files
-from tools.cq.query.shared_utils import extract_def_name
 from tools.cq.search._shared.types import SearchLimits
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
 from tools.cq.utils.uuid_factory import uuid7_str
@@ -137,18 +108,6 @@ from tools.cq.query.merge import (
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
 logger = logging.getLogger(__name__)
-
-
-def _summary_update_mapping(update: object) -> dict[str, object]:
-    """Convert one typed summary-update payload into a plain mapping.
-
-    Returns:
-        Decoded summary-update mapping, or an empty mapping on decode failure.
-    """
-    try:
-        return require_contract_mapping(update)
-    except TypeError:
-        return {}
 
 
 @dataclass
@@ -179,7 +138,7 @@ class ExecutePlanRequestV1(CqStruct, frozen=True):
     query: Query
     root: str
     services: CqRuntimeServices
-    symtable_enricher: SymtableEnricher
+    symtable_enricher: SymtableEnricherPort
     argv: tuple[str, ...] = ()
     query_text: str | None = None
     run_id: str | None = None
@@ -194,7 +153,7 @@ class _AutoScopePlanRequest:
     query_text: str | None
     run_id: str
     services: CqRuntimeServices
-    symtable_enricher: SymtableEnricher
+    symtable_enricher: SymtableEnricherPort
 
 
 def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
@@ -213,7 +172,7 @@ def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
     return assign_result_finding_ids(_finalize_single_scope_summary(ctx, result))
 
 
-def _resolve_symtable_enricher(ctx: QueryExecutionContext) -> SymtableEnricher:
+def _resolve_symtable_enricher(ctx: QueryExecutionContext) -> SymtableEnricherPort:
     return ctx.symtable_enricher
 
 
@@ -357,55 +316,9 @@ def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState 
 def _apply_entity_handlers(
     state: EntityExecutionState,
     *,
-    symtable: SymtableEnricher,
+    symtable: SymtableEnricherPort,
 ) -> tuple[list[Finding], list[Section], EntitySummaryUpdateV1]:
-    query = state.ctx.query
-    root = state.ctx.root
-    candidates = state.candidates
-
-    if query.entity == "import":
-        temp_result = mk_result(_build_runmeta(state.ctx))
-        temp_result = _process_import_query(
-            list(candidates.import_records),
-            query,
-            temp_result,
-            symtable=symtable,
-        )
-        return (
-            list(temp_result.key_findings),
-            list(temp_result.sections),
-            _entity_summary_updates(temp_result),
-        )
-    if query.entity == "decorator":
-        findings, summary_updates = process_decorator_query(
-            state.scan,
-            query,
-            root,
-            list(candidates.def_records),
-        )
-        return findings, [], summary_updates
-    if query.entity == "callsite":
-        findings, summary_updates = process_call_query(state.scan, query, root)
-        return findings, [], summary_updates
-
-    temp_result = mk_result(_build_runmeta(state.ctx))
-    def_ctx = DefQueryContext(state=state, result=temp_result, symtable=symtable)
-    temp_result = _process_def_query(def_ctx, query, list(candidates.def_records))
-    return (
-        list(temp_result.key_findings),
-        list(temp_result.sections),
-        _entity_summary_updates(temp_result),
-    )
-
-
-def _entity_summary_updates(result: CqResult) -> EntitySummaryUpdateV1:
-    summary = as_search_summary(result.summary)
-    return EntitySummaryUpdateV1(
-        matches=summary.matches,
-        total_defs=summary.total_defs,
-        total_calls=summary.total_calls,
-        total_imports=summary.total_imports,
-    )
+    return _apply_entity_handlers_impl(state, symtable=symtable)
 
 
 def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> CqResult:
@@ -524,14 +437,18 @@ def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
 
 
 def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
-    from tools.cq.query.executor_entity_impl import execute_entity_query
-    from tools.cq.query.executor_pattern_impl import execute_pattern_query
+    from tools.cq.query.executor_runtime_entity import (
+        execute_entity_query as execute_entity_query_impl,
+    )
+    from tools.cq.query.executor_runtime_pattern import (
+        execute_pattern_query as execute_pattern_query_impl,
+    )
 
     if ctx.plan.is_pattern_query:
         logger.debug("Dispatching pattern query execution for lang=%s", ctx.plan.lang)
-        return execute_pattern_query(ctx)
+        return execute_pattern_query_impl(ctx)
     logger.debug("Dispatching entity query execution for lang=%s", ctx.plan.lang)
-    return execute_entity_query(ctx)
+    return execute_entity_query_impl(ctx)
 
 
 def _execute_auto_scope_plan(request: _AutoScopePlanRequest) -> CqResult:
@@ -624,11 +541,11 @@ def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
 
     result = mk_result(_build_runmeta(ctx))
     summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    findings, sections, summary_updates = _apply_entity_handlers(
+    findings, sections, summary_updates = _apply_entity_handlers_impl(
         state,
         symtable=ctx.symtable_enricher,
     )
-    summary_mapping = _summary_update_mapping(summary_updates)
+    summary_mapping = summary_update_mapping(summary_updates)
     summary = apply_summary_mapping(
         summary,
         {
@@ -691,8 +608,10 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     )
     result = mk_result(_build_runmeta(ctx))
     summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    findings, sections, summary_updates = _apply_entity_handlers(state, symtable=request.symtable)
-    summary_mapping = _summary_update_mapping(summary_updates)
+    findings, sections, summary_updates = _apply_entity_handlers_impl(
+        state, symtable=request.symtable
+    )
+    summary_mapping = summary_update_mapping(summary_updates)
     summary = apply_summary_mapping(
         summary,
         {
@@ -867,83 +786,14 @@ def process_decorator_query(
     root: Path,
     def_candidates: list[SgRecord] | tuple[SgRecord, ...] | None = None,
 ) -> tuple[list[Finding], EntitySummaryUpdateV1]:
-    """Process a decorator entity query.
+    """Process a decorator query through extracted entity runtime helpers."""
+    from tools.cq.query.executor_runtime_entity import process_decorator_query as impl
 
-    Returns:
-        tuple[list[Finding], EntitySummaryUpdateV1]: Decorator findings and summary metrics.
-    """
-    from tools.cq.query.enrichment import enrich_with_decorators
-
-    # Look for decorated definitions
-    findings: list[Finding] = []
-
-    candidate_records = def_candidates if def_candidates is not None else ctx.def_records
-    for def_record in candidate_records:
-        # Skip non-function/class definitions
-        if def_record.kind not in ENTITY_KINDS.decorator_kinds:
-            continue
-
-        # Check if matches name pattern
-        if query.name and not _matches_name(def_record, query.name):
-            continue
-
-        # Read source to check for decorators
-        file_path = root / def_record.file
-        try:
-            source = file_path.read_text(encoding="utf-8")
-        except OSError:
-            logger.warning("Skipping unreadable file during decorator query: %s", file_path)
-            continue
-
-        decorator_info = enrich_with_decorators(
-            Finding(
-                category="definition",
-                message="",
-                anchor=Anchor(file=def_record.file, line=def_record.start_line),
-            ),
-            source,
-        )
-
-        decorators_value = decorator_info.get("decorators", [])
-        decorators: list[str] = (
-            [str(item) for item in decorators_value] if isinstance(decorators_value, list) else []
-        )
-        count = len(decorators)
-
-        # Apply decorator filter if present
-        if query.decorator_filter:
-            # Filter by decorated_by
-            if (
-                query.decorator_filter.decorated_by
-                and query.decorator_filter.decorated_by not in decorators
-            ):
-                continue
-
-            # Filter by count
-            if (
-                query.decorator_filter.decorator_count_min is not None
-                and count < query.decorator_filter.decorator_count_min
-            ):
-                continue
-            if (
-                query.decorator_filter.decorator_count_max is not None
-                and count > query.decorator_filter.decorator_count_max
-            ):
-                continue
-
-        # Only include if has decorators (for entity=decorator queries)
-        if count > 0:
-            finding = _def_to_finding(def_record, list(ctx.calls_by_def.get(def_record, ())))
-            details = finding.details.with_entry("decorators", decorators)
-            details = details.with_entry("decorator_count", count)
-            finding = msgspec.structs.replace(finding, details=details)
-            findings.append(finding)
-
-    return findings, EntitySummaryUpdateV1(
-        matches=len(findings),
-        total_defs=len(ctx.def_records),
-        total_calls=0,
-        total_imports=0,
+    return impl(
+        ctx=ctx,
+        query=query,
+        root=root,
+        def_candidates=def_candidates,
     )
 
 
@@ -952,38 +802,10 @@ def process_call_query(
     query: Query,
     root: Path,
 ) -> tuple[list[Finding], EntitySummaryUpdateV1]:
-    """Process a callsite entity query.
+    """Process a callsite query through extracted entity runtime helpers."""
+    from tools.cq.query.executor_runtime_entity import process_call_query as impl
 
-    Returns:
-        tuple[list[Finding], EntitySummaryUpdateV1]: Callsite findings and summary metrics.
-    """
-    matching_calls = _filter_to_matching(list(ctx.call_records), query)
-    call_contexts: list[tuple[SgRecord, SgRecord | None]] = []
-    for call_record in matching_calls:
-        containing = ctx.file_index.find_containing(call_record)
-        call_contexts.append((call_record, containing))
-
-    containing_defs = [containing for _, containing in call_contexts if containing is not None]
-    evidence_map = _build_def_evidence_map(containing_defs, root)
-
-    findings: list[Finding] = []
-    for call_record, containing in call_contexts:
-        details: dict[str, object] = {}
-        call_target = _extract_call_target(call_record)
-        if containing is not None:
-            caller_name = extract_def_name(containing) or "<module>"
-            details["caller"] = caller_name
-            evidence = evidence_map.get(_record_key(containing))
-            details.update(_build_call_evidence(evidence, call_target))
-        finding = _call_to_finding(call_record, extra_details=details)
-        findings.append(finding)
-
-    return findings, EntitySummaryUpdateV1(
-        matches=len(findings),
-        total_defs=0,
-        total_calls=len(ctx.call_records),
-        total_imports=0,
-    )
+    return impl(ctx=ctx, query=query, root=root)
 
 
 def rg_files_with_matches(

@@ -9,6 +9,9 @@ import msgspec
 
 from tools.cq.core.structs import CqOutputStruct
 from tools.cq.core.types import QueryLanguage
+from tools.cq.search.enrichment.incremental_facts import IncrementalFacts
+from tools.cq.search.enrichment.python_facts import PythonEnrichmentFacts
+from tools.cq.search.enrichment.rust_facts import RustEnrichmentFacts
 
 EnrichmentStatus = Literal["applied", "degraded", "skipped"]
 
@@ -29,14 +32,20 @@ class PythonEnrichmentPayload(CqOutputStruct, frozen=True):
     """Typed Python enrichment payload wrapper."""
 
     meta: EnrichmentMeta
-    data: dict[str, object] = msgspec.field(default_factory=dict)
+    facts: PythonEnrichmentFacts | None = None
+    incremental: IncrementalFacts | None = None
+    raw: dict[str, object] = msgspec.field(default_factory=dict)
 
 
 class RustEnrichmentPayload(CqOutputStruct, frozen=True):
     """Typed Rust enrichment payload wrapper."""
 
     meta: EnrichmentMeta
-    data: dict[str, object] = msgspec.field(default_factory=dict)
+    facts: RustEnrichmentFacts | None = None
+    raw: dict[str, object] = msgspec.field(default_factory=dict)
+
+
+type LanguageEnrichmentPayload = PythonEnrichmentPayload | RustEnrichmentPayload
 
 
 class LanguageEnrichmentPort(Protocol):
@@ -44,19 +53,22 @@ class LanguageEnrichmentPort(Protocol):
 
     language: QueryLanguage
 
-    def payload_from_match(self, match: object) -> dict[str, object] | None:
+    def payload_from_match(self, match: object) -> LanguageEnrichmentPayload | None:
         """Extract language-specific payload from an enriched match."""
         ...
 
     def accumulate_telemetry(
         self,
         lang_bucket: dict[str, object],
-        payload: dict[str, object],
+        payload: LanguageEnrichmentPayload,
     ) -> None:
         """Accumulate telemetry for one language payload."""
         ...
 
-    def build_diagnostics(self, payload: Mapping[str, object]) -> list[dict[str, object]]:
+    def build_diagnostics(
+        self,
+        payload: Mapping[str, object] | LanguageEnrichmentPayload,
+    ) -> list[dict[str, object]]:
         """Build diagnostics rows for semantic plane preview."""
         ...
 
@@ -64,6 +76,7 @@ class LanguageEnrichmentPort(Protocol):
 __all__ = [
     "EnrichmentMeta",
     "EnrichmentStatus",
+    "LanguageEnrichmentPayload",
     "LanguageEnrichmentPort",
     "PythonEnrichmentPayload",
     "RustEnrichmentPayload",

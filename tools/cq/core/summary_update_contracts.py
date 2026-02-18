@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+import msgspec
+
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.summary_types import SummaryEnvelopeV1, apply_summary_mapping
 
 
 class EntitySummaryUpdateV1(CqStruct, frozen=True, kw_only=True):
@@ -44,8 +49,38 @@ class ImpactSummaryUpdateV1(CqStruct, frozen=True, kw_only=True):
     callers_found: int
 
 
+type SummaryUpdateV1 = EntitySummaryUpdateV1 | CallsSummaryUpdateV1 | ImpactSummaryUpdateV1
+
+
+def summary_update_mapping(update: SummaryUpdateV1) -> dict[str, object]:
+    """Convert one typed summary-update contract to deterministic builtins mapping.
+
+    Returns:
+        Mapping payload for summary-merge application.
+    """
+    builtins = msgspec.to_builtins(update, order="deterministic", str_keys=True)
+    if not isinstance(builtins, Mapping):
+        return {}
+    return {key: value for key, value in builtins.items() if isinstance(key, str)}
+
+
+def apply_summary_update[SummaryEnvelopeT: SummaryEnvelopeV1](
+    summary: SummaryEnvelopeT,
+    update: SummaryUpdateV1,
+) -> SummaryEnvelopeT:
+    """Apply one typed summary-update payload onto a summary envelope.
+
+    Returns:
+        Updated summary envelope with ``update`` applied.
+    """
+    return apply_summary_mapping(summary, summary_update_mapping(update))
+
+
 __all__ = [
     "CallsSummaryUpdateV1",
     "EntitySummaryUpdateV1",
     "ImpactSummaryUpdateV1",
+    "SummaryUpdateV1",
+    "apply_summary_update",
+    "summary_update_mapping",
 ]

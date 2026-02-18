@@ -6,7 +6,9 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Protocol, cast
 
+from tools.cq.core.cache.contracts import SearchArtifactIndexEntryV1
 from tools.cq.core.cache.policy import CqCachePolicyV1
+from tools.cq.core.cache.typed_codecs import convert_mapping_typed
 
 _NAMESPACE = "search_artifacts"
 _MAX_INDEX_ROWS = 1000
@@ -95,13 +97,70 @@ def open_artifact_index(path: Path) -> SearchArtifactIndexLike | None:
     return cast("SearchArtifactIndexLike", Index(str(path)))
 
 
+def decode_index_entry(value: object) -> SearchArtifactIndexEntryV1 | None:
+    """Decode one index row from cached builtins payload.
+
+    Returns:
+        Decoded typed index entry when conversion succeeds.
+    """
+    if isinstance(value, SearchArtifactIndexEntryV1):
+        return value
+    if isinstance(value, dict):
+        return convert_mapping_typed(value, type_=SearchArtifactIndexEntryV1)
+    return None
+
+
+def rows_from_order(
+    *,
+    order: SearchArtifactDequeLike,
+    index: SearchArtifactIndexLike,
+    limit: int,
+) -> list[SearchArtifactIndexEntryV1]:
+    """Collect newest index rows by deque order with dedupe.
+
+    Returns:
+        Newest typed rows in deque order up to ``limit``.
+    """
+    rows: list[SearchArtifactIndexEntryV1] = []
+    seen: set[str] = set()
+    for cache_key in order:
+        if not isinstance(cache_key, str) or cache_key in seen:
+            continue
+        seen.add(cache_key)
+        entry = decode_index_entry(index.get(cache_key))
+        if entry is None:
+            continue
+        rows.append(entry)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def rows_from_index(
+    *,
+    index: SearchArtifactIndexLike,
+    limit: int,
+) -> list[SearchArtifactIndexEntryV1]:
+    """Collect newest index rows by index-value timestamps.
+
+    Returns:
+        Newest typed rows sorted by ``created_ms`` descending.
+    """
+    rows = [entry for value in index.values() if (entry := decode_index_entry(value)) is not None]
+    rows.sort(key=lambda row: row.created_ms, reverse=True)
+    return rows[:limit]
+
+
 __all__ = [
     "SearchArtifactDequeLike",
     "SearchArtifactIndexLike",
+    "decode_index_entry",
     "global_index_path",
     "global_order_path",
     "open_artifact_deque",
     "open_artifact_index",
+    "rows_from_index",
+    "rows_from_order",
     "run_index_path",
     "run_order_path",
     "store_root",

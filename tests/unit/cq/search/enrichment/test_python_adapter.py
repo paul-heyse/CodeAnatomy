@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from tools.cq.search._shared.enrichment_contracts import PythonEnrichmentV1
+from tools.cq.search.enrichment.contracts import EnrichmentMeta, PythonEnrichmentPayload
 from tools.cq.search.enrichment.python_adapter import PythonEnrichmentAdapter
 
 _TIMING_MS = 1.5
@@ -19,9 +20,13 @@ class _Match:
 def test_payload_from_match_extracts_python_payload() -> None:
     """Adapter should extract python_enrichment mapping from match object."""
     adapter = PythonEnrichmentAdapter()
-    payload = adapter.payload_from_match(_Match(PythonEnrichmentV1(payload={"meta": {}})))
+    payload = adapter.payload_from_match(
+        _Match(PythonEnrichmentV1(meta=EnrichmentMeta(language="python")))
+    )
 
-    assert payload == {"meta": {}}
+    assert payload is not None
+    assert payload.meta.language == "python"
+    assert payload.raw == {"meta": {"language": "python", "enrichment_status": "applied"}}
 
 
 def test_accumulate_telemetry_updates_stage_and_runtime_counters() -> None:
@@ -32,13 +37,16 @@ def test_accumulate_telemetry_updates_stage_and_runtime_counters() -> None:
         "timings_ms": {},
         "query_runtime": {"did_exceed_match_limit": 0, "cancelled": 0},
     }
-    payload: dict[str, object] = {
-        "meta": {
-            "stage_status": {"ast": "applied"},
-            "stage_timings_ms": {"ast": _TIMING_MS},
+    payload = PythonEnrichmentPayload(
+        meta=EnrichmentMeta(language="python"),
+        raw={
+            "meta": {
+                "stage_status": {"ast": "applied"},
+                "stage_timings_ms": {"ast": _TIMING_MS},
+            },
+            "query_runtime": {"did_exceed_match_limit": True, "cancelled": True},
         },
-        "query_runtime": {"did_exceed_match_limit": True, "cancelled": True},
-    }
+    )
 
     adapter.accumulate_telemetry(bucket, payload)
 

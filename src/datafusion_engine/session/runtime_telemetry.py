@@ -385,7 +385,8 @@ def _sql_policy_payload(profile: DataFusionRuntimeProfile) -> dict[str, bool] | 
 
 
 def _feature_gate_settings(profile: DataFusionRuntimeProfile) -> dict[str, str]:
-    return dict(profile.policies.feature_gates.settings())
+    feature_gates = profile.policies.feature_gates
+    return dict(feature_gates.settings())
 
 
 def _join_policy_settings(profile: DataFusionRuntimeProfile) -> dict[str, str] | None:

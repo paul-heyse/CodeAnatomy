@@ -9,7 +9,9 @@ from tools.cq.search.enrichment.adapter_registry import LanguageAdapterRegistry
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
 
 _DEFAULT_ADAPTER_REGISTRY_LOCK = threading.Lock()
-_DEFAULT_ADAPTER_REGISTRY_STATE: dict[str, LanguageAdapterRegistry | None] = {"registry": None}
+_DEFAULT_ADAPTER_REGISTRY_STATE: dict[str, LanguageAdapterRegistry | None] = {
+    "registry": None
+}
 
 
 def get_default_adapter_registry() -> LanguageAdapterRegistry:

@@ -1023,62 +1023,6 @@ _PY_METADATA_FIELDS: frozenset[str] = frozenset(
 )
 
 
-def _parse_struct_or_none[StructT](data: dict[str, object], type_: type[StructT]) -> StructT | None:
-    if not data:
-        return None
-    try:
-        return msgspec.convert(data, type=type_, strict=False)
-    except (msgspec.ValidationError, TypeError, ValueError):
-        return None
-
-
-def _facts_dict(section: object | None) -> dict[str, object]:
-    if section is None:
-        return {}
-    raw = msgspec.to_builtins(section, str_keys=True)
-    return raw if isinstance(raw, dict) else {}
-
-
-def _merge_string_key_mapping(target: dict[str, object], payload: object) -> None:
-    if not isinstance(payload, dict):
-        return
-    target.update({k: v for k, v in payload.items() if isinstance(k, str)})
-
-
-def _merge_import_payload(import_fields: dict[str, object], payload: object) -> None:
-    if not isinstance(payload, dict):
-        return
-    modules = payload.get("modules")
-    aliases = payload.get("aliases")
-    if isinstance(modules, list) and modules:
-        import_fields["import_module"] = next(
-            (item for item in modules if isinstance(item, str)),
-            import_fields.get("import_module"),
-        )
-    if isinstance(aliases, list):
-        import_fields["import_names"] = [item for item in aliases if isinstance(item, str)]
-
-
-def _normalize_resolution_fact_rows(value: object) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    if not isinstance(value, Sequence):
-        return rows
-    for item in value:
-        if isinstance(item, Mapping):
-            rows.append({k: v for k, v in item.items() if isinstance(k, str)})
-            continue
-        if isinstance(item, str) and item:
-            rows.append({"name": item})
-    return rows
-
-
-def _normalize_resolution_fact_fields(resolution: dict[str, object]) -> None:
-    for key in ("qualified_name_candidates", "binding_candidates", "import_alias_chain"):
-        if key not in resolution:
-            continue
-        resolution[key] = _normalize_resolution_fact_rows(resolution.get(key))
-
-
 def _assign_fact_field(
     key: str,
     value: object,
@@ -1148,6 +1092,21 @@ class _PythonStageFactPatch:
 
 
 def _build_stage_fact_patch(fields: Mapping[str, object]) -> _PythonStageFactPatch:
+    def _convert_section[StructT](
+        section: dict[str, object], type_: type[StructT]
+    ) -> StructT | None:
+        if not section:
+            return None
+        try:
+            return msgspec.convert(section, type=type_, strict=False)
+        except (msgspec.ValidationError, TypeError, ValueError):
+            return None
+
+    def _merge_mapping_fields(target: dict[str, object], payload: object) -> None:
+        if not isinstance(payload, Mapping):
+            return
+        target.update({key: value for key, value in payload.items() if isinstance(key, str)})
+
     resolution: dict[str, object] = {}
     behavior: dict[str, object] = {}
     structure: dict[str, object] = {}
@@ -1168,10 +1127,20 @@ def _build_stage_fact_patch(fields: Mapping[str, object]) -> _PythonStageFactPat
         "class_shape": class_shape,
     }
 
-    _merge_string_key_mapping(resolution, fields.get("resolution"))
-    _merge_string_key_mapping(locals_dict, fields.get("locals"))
-    _merge_string_key_mapping(parse_quality, fields.get("parse_quality"))
-    _merge_import_payload(import_, fields.get("imports"))
+    _merge_mapping_fields(resolution, fields.get("resolution"))
+    _merge_mapping_fields(locals_dict, fields.get("locals"))
+    _merge_mapping_fields(parse_quality, fields.get("parse_quality"))
+    imports_payload = fields.get("imports")
+    if isinstance(imports_payload, Mapping):
+        modules = imports_payload.get("modules")
+        aliases = imports_payload.get("aliases")
+        if isinstance(modules, list) and modules:
+            import_["import_module"] = next(
+                (item for item in modules if isinstance(item, str)),
+                import_.get("import_module"),
+            )
+        if isinstance(aliases, list):
+            import_["import_names"] = [item for item in aliases if isinstance(item, str)]
 
     for key, value in fields.items():
         if key in _PY_METADATA_FIELDS:
@@ -1182,7 +1151,17 @@ def _build_stage_fact_patch(fields: Mapping[str, object]) -> _PythonStageFactPat
             buckets=fact_buckets,
         )
 
-    _normalize_resolution_fact_fields(resolution)
+    for key in ("qualified_name_candidates", "binding_candidates", "import_alias_chain"):
+        raw = resolution.get(key)
+        if not isinstance(raw, Sequence):
+            continue
+        rows: list[dict[str, object]] = []
+        for item in raw:
+            if isinstance(item, Mapping):
+                rows.append({k: v for k, v in item.items() if isinstance(k, str)})
+            elif isinstance(item, str) and item:
+                rows.append({"name": item})
+        resolution[key] = rows
 
     if "error_nodes" in parse_quality and "error_count" not in parse_quality:
         nodes = parse_quality.get("error_nodes")
@@ -1190,15 +1169,15 @@ def _build_stage_fact_patch(fields: Mapping[str, object]) -> _PythonStageFactPat
 
     return _PythonStageFactPatch(
         facts=PythonEnrichmentFacts(
-            resolution=_parse_struct_or_none(resolution, PythonResolutionFacts),
-            behavior=_parse_struct_or_none(behavior, PythonBehaviorFacts),
-            structure=_parse_struct_or_none(structure, PythonStructureFacts),
-            signature=_parse_struct_or_none(signature, PythonSignatureFacts),
-            call=_parse_struct_or_none(call, PythonCallFacts),
-            import_=_parse_struct_or_none(import_, PythonImportFacts),
-            class_shape=_parse_struct_or_none(class_shape, PythonClassShapeFacts),
-            locals=_parse_struct_or_none(locals_dict, PythonLocalsFacts),
-            parse_quality=_parse_struct_or_none(parse_quality, PythonParseQualityFacts),
+            resolution=_convert_section(resolution, PythonResolutionFacts),
+            behavior=_convert_section(behavior, PythonBehaviorFacts),
+            structure=_convert_section(structure, PythonStructureFacts),
+            signature=_convert_section(signature, PythonSignatureFacts),
+            call=_convert_section(call, PythonCallFacts),
+            import_=_convert_section(import_, PythonImportFacts),
+            class_shape=_convert_section(class_shape, PythonClassShapeFacts),
+            locals=_convert_section(locals_dict, PythonLocalsFacts),
+            parse_quality=_convert_section(parse_quality, PythonParseQualityFacts),
         ),
         metadata=metadata,
     )
@@ -1210,15 +1189,24 @@ def _merge_fact_section[StructT](
     *,
     type_: type[StructT],
 ) -> StructT | None:
+    def _as_mapping(section: object | None) -> dict[str, object]:
+        if section is None:
+            return {}
+        raw = msgspec.to_builtins(section, str_keys=True)
+        return raw if isinstance(raw, dict) else {}
+
     if incoming is None:
         return current
     if current is None:
         return incoming
-    merged = _facts_dict(current)
-    for key, value in _facts_dict(incoming).items():
+    merged = _as_mapping(current)
+    for key, value in _as_mapping(incoming).items():
         if _has_enrichment_value(value):
             merged[key] = value
-    return _parse_struct_or_none(merged, type_)
+    try:
+        return msgspec.convert(merged, type=type_, strict=False)
+    except (msgspec.ValidationError, TypeError, ValueError):
+        return current
 
 
 def _merge_python_enrichment_stage_facts(

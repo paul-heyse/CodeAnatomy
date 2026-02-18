@@ -12,13 +12,13 @@ from pathlib import Path
 from tools.cq.core.cache.base_contracts import CacheRuntimeTuningV1
 from tools.cq.core.cache.cache_runtime_tuning import resolve_cache_runtime_tuning
 from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
+from tools.cq.core.parser_controls import (
+    ParserControlSettingsV1,
+    parser_controls_from_env,
+)
 from tools.cq.core.runtime.execution_policy import (
     RuntimeExecutionPolicy,
     default_runtime_execution_policy,
-)
-from tools.cq.search.tree_sitter.core.parser_controls import (
-    ParserControlSettingsV1,
-    parser_controls_from_env,
 )
 
 

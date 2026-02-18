@@ -10,6 +10,8 @@ from tools.cq.search._shared.enrichment_contracts import (
     wrap_python_enrichment,
     wrap_rust_enrichment,
 )
+from tools.cq.search.enrichment.python_facts import PythonEnrichmentFacts, PythonResolutionFacts
+from tools.cq.search.enrichment.rust_facts import RustEnrichmentFacts, RustStructureFacts
 
 
 def test_wrap_rust_enrichment_from_mapping() -> None:
@@ -19,12 +21,18 @@ def test_wrap_rust_enrichment_from_mapping() -> None:
     wrapped = wrap_rust_enrichment(raw)
 
     assert isinstance(wrapped, RustTreeSitterEnrichmentV1)
-    assert wrapped.payload == raw
+    assert wrapped.payload is not None
+    assert wrapped.payload.structure is not None
+    assert wrapped.payload.structure.scope_name == "build"
 
 
 def test_wrap_python_enrichment_preserves_typed_instance() -> None:
     """Typed payloads should pass through without rewrapping."""
-    wrapped = PythonEnrichmentV1(payload={"resolution": {"enclosing_class": "X"}})
+    wrapped = PythonEnrichmentV1(
+        payload=PythonEnrichmentFacts(
+            resolution=PythonResolutionFacts(enclosing_class="X"),
+        )
+    )
 
     same = wrap_python_enrichment(wrapped)
 
@@ -39,13 +47,23 @@ def test_payload_helpers_return_empty_mapping_for_none() -> None:
 
 def test_payload_helpers_return_copy() -> None:
     """Payload helpers should return detached mutable copies."""
-    rust_payload = RustTreeSitterEnrichmentV1(payload={"k": "v"})
-    python_payload = PythonEnrichmentV1(payload={"k": "v"})
+    rust_payload = RustTreeSitterEnrichmentV1(
+        payload=RustEnrichmentFacts(structure=RustStructureFacts(scope_name="v"))
+    )
+    python_payload = PythonEnrichmentV1(
+        payload=PythonEnrichmentFacts(
+            resolution=PythonResolutionFacts(enclosing_class="v"),
+        )
+    )
     rust = rust_enrichment_payload(rust_payload)
     python = python_enrichment_payload(python_payload)
 
-    rust["k"] = "changed"
-    python["k"] = "changed"
+    rust["scope_name"] = "changed"
+    python["resolution"] = {"enclosing_class": "changed"}
 
-    assert rust_payload.payload["k"] == "v"
-    assert python_payload.payload["k"] == "v"
+    assert rust_payload.payload is not None
+    assert rust_payload.payload.structure is not None
+    assert rust_payload.payload.structure.scope_name == "v"
+    assert python_payload.payload is not None
+    assert python_payload.payload.resolution is not None
+    assert python_payload.payload.resolution.enclosing_class == "v"

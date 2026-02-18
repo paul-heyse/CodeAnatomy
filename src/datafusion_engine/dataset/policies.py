@@ -7,15 +7,10 @@ from dataclasses import dataclass
 import msgspec
 
 from arrow_utils.core.ordering import OrderingLevel
-from schema_spec.dataset_spec import (
-    ArrowValidationOptions,
-    DataFusionScanOptions,
-    DatasetSpec,
-    DeltaPolicyBundle,
-    DeltaScanOptions,
-    ScanPolicyConfig,
-    ValidationPolicySpec,
-)
+from datafusion_engine.schema.validation import ArrowValidationOptions
+from schema_spec.dataset_spec_runtime import DatasetSpec, DeltaPolicyBundle, ValidationPolicySpec
+from schema_spec.scan_options import DataFusionScanOptions, DeltaScanOptions
+from schema_spec.scan_policy import ScanPolicyConfig
 from serde_msgspec import StructBaseStrict
 
 
@@ -176,9 +171,7 @@ def merge_delta_policy_bundle(
         return base
     if base is None:
         return override
-    from schema_spec.dataset_spec import DeltaPolicyBundle as _DeltaPolicyBundle
-
-    return _DeltaPolicyBundle(
+    return DeltaPolicyBundle(
         scan=override.scan or base.scan,
         cdf_policy=override.cdf_policy or base.cdf_policy,
         maintenance_policy=override.maintenance_policy or base.maintenance_policy,

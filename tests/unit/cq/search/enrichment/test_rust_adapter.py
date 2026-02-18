@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from tools.cq.search._shared.enrichment_contracts import RustTreeSitterEnrichmentV1
+from tools.cq.search.enrichment.contracts import EnrichmentMeta, RustEnrichmentPayload
 from tools.cq.search.enrichment.rust_adapter import RustEnrichmentAdapter
 
 _TAG_COUNT = 2
@@ -20,9 +21,12 @@ class _Match:
 def test_payload_from_match_extracts_rust_payload() -> None:
     """Adapter should extract rust_tree_sitter mapping from match object."""
     adapter = RustEnrichmentAdapter()
-    payload = adapter.payload_from_match(_Match(RustTreeSitterEnrichmentV1(payload={"kind": "ok"})))
+    payload = adapter.payload_from_match(
+        _Match(RustTreeSitterEnrichmentV1(meta=EnrichmentMeta(language="rust")))
+    )
 
-    assert payload == {"kind": "ok"}
+    assert payload is not None
+    assert payload.meta.language == "rust"
 
 
 def test_accumulate_telemetry_updates_drift_and_runtime_counters() -> None:
@@ -36,18 +40,21 @@ def test_accumulate_telemetry_updates_drift_and_runtime_counters() -> None:
         "drift_removed_node_kinds": 0,
         "drift_removed_fields": 0,
     }
-    payload: dict[str, object] = {
-        "query_pack_tags": ["defs", "calls"],
-        "query_runtime": {"did_exceed_match_limit": True, "cancelled": True},
-        "query_pack_bundle": {
-            "distribution_included": True,
-            "drift_compatible": False,
-            "drift_schema_diff": {
-                "removed_node_kinds": ["x"],
-                "removed_fields": ["y", "z"],
+    payload = RustEnrichmentPayload(
+        meta=EnrichmentMeta(language="rust"),
+        raw={
+            "query_pack_tags": ["defs", "calls"],
+            "query_runtime": {"did_exceed_match_limit": True, "cancelled": True},
+            "query_pack_bundle": {
+                "distribution_included": True,
+                "drift_compatible": False,
+                "drift_schema_diff": {
+                    "removed_node_kinds": ["x"],
+                    "removed_fields": ["y", "z"],
+                },
             },
         },
-    }
+    )
 
     adapter.accumulate_telemetry(bucket, payload)
 

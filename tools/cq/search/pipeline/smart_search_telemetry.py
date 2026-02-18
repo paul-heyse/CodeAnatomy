@@ -23,12 +23,18 @@ from tools.cq.search.enrichment.telemetry import (
 from tools.cq.search.enrichment.telemetry_schema import default_enrichment_telemetry_mapping
 
 if TYPE_CHECKING:
+    from tools.cq.search.enrichment.contracts import (
+        PythonEnrichmentPayload,
+        RustEnrichmentPayload,
+    )
     from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
 
 logger = logging.getLogger(__name__)
 
 
-def status_from_enrichment(payload: dict[str, object] | None) -> str:
+def status_from_enrichment(
+    payload: PythonEnrichmentPayload | RustEnrichmentPayload | None,
+) -> str:
     """Extract enrichment status from payload.
 
     Parameters
@@ -43,19 +49,15 @@ def status_from_enrichment(payload: dict[str, object] | None) -> str:
     """
     if payload is None:
         return "skipped"
-    meta = payload.get("meta")
-    status = None
-    if isinstance(meta, dict):
-        status = meta.get("enrichment_status")
-    if status is None:
-        status = payload.get("enrichment_status")
+    status = payload.meta.enrichment_status
     if status in {"applied", "degraded", "skipped"}:
         return str(status)
     return "applied"
 
 
 def accumulate_python_enrichment(
-    lang_bucket: dict[str, object], payload: dict[str, object]
+    lang_bucket: dict[str, object],
+    payload: PythonEnrichmentPayload,
 ) -> None:
     """Accumulate Python enrichment telemetry.
 
@@ -66,7 +68,7 @@ def accumulate_python_enrichment(
     payload
         Enrichment payload to accumulate from.
     """
-    meta = payload.get("meta")
+    meta = payload.raw.get("meta")
     if not isinstance(meta, dict):
         return
     stage_status = meta.get("stage_status")
@@ -77,7 +79,7 @@ def accumulate_python_enrichment(
     timings_bucket = lang_bucket.get("timings_ms")
     if isinstance(stage_timings, dict) and isinstance(timings_bucket, dict):
         _accumulate_stage_timings(timings_bucket=timings_bucket, stage_timings_ms=stage_timings)
-    runtime_payload = payload.get("query_runtime")
+    runtime_payload = payload.raw.get("query_runtime")
     runtime_bucket = lang_bucket.get("query_runtime")
     if isinstance(runtime_payload, dict) and isinstance(runtime_bucket, dict):
         if bool(runtime_payload.get("did_exceed_match_limit")):
@@ -113,7 +115,7 @@ def attach_enrichment_cache_stats(telemetry: dict[str, object]) -> None:
 
 def accumulate_rust_enrichment(
     lang_bucket: dict[str, object],
-    payload: dict[str, object],
+    payload: RustEnrichmentPayload,
 ) -> None:
     """Accumulate Rust enrichment telemetry.
 
@@ -124,12 +126,12 @@ def accumulate_rust_enrichment(
     payload
         Enrichment payload to accumulate from.
     """
-    tags = payload.get("query_pack_tags")
+    tags = payload.raw.get("query_pack_tags")
     if isinstance(tags, list):
         lang_bucket["query_pack_tags"] = safe_int_counter(lang_bucket.get("query_pack_tags")) + len(
             tags
         )
-    runtime_payload = payload.get("query_runtime")
+    runtime_payload = payload.raw.get("query_runtime")
     runtime_bucket = lang_bucket.get("query_runtime")
     if isinstance(runtime_payload, dict) and isinstance(runtime_bucket, dict):
         if bool(runtime_payload.get("did_exceed_match_limit")):
@@ -141,7 +143,7 @@ def accumulate_rust_enrichment(
 
     _accumulate_rust_bundle_drift(
         lang_bucket=lang_bucket,
-        bundle=payload.get("query_pack_bundle"),
+        bundle=payload.raw.get("query_pack_bundle"),
     )
 
 

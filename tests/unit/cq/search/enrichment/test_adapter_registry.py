@@ -7,6 +7,11 @@ from dataclasses import dataclass
 
 from tools.cq.core.types import QueryLanguage
 from tools.cq.search.enrichment.adapter_registry import LanguageAdapterRegistry
+from tools.cq.search.enrichment.contracts import (
+    EnrichmentMeta,
+    LanguageEnrichmentPayload,
+    PythonEnrichmentPayload,
+)
 
 
 @dataclass
@@ -14,20 +19,24 @@ class _Adapter:
     language: QueryLanguage
 
     @staticmethod
-    def payload_from_match(match: object) -> dict[str, object] | None:
+    def payload_from_match(match: object) -> LanguageEnrichmentPayload | None:
         del match
-        return {}
+        return PythonEnrichmentPayload(meta=EnrichmentMeta(language="python"), raw={})
 
     @staticmethod
     def accumulate_telemetry(
         lang_bucket: dict[str, object],
-        payload: dict[str, object],
+        payload: LanguageEnrichmentPayload,
     ) -> None:
-        lang_bucket.update(payload)
+        lang_bucket.update(payload.raw)
 
     @staticmethod
-    def build_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]]:
-        return [dict(payload)]
+    def build_diagnostics(
+        payload: Mapping[str, object] | LanguageEnrichmentPayload,
+    ) -> list[dict[str, object]]:
+        if isinstance(payload, Mapping):
+            return [dict(payload)]
+        return [dict(payload.raw)]
 
 
 def test_adapter_registry_register_and_get() -> None:

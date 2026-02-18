@@ -8,13 +8,22 @@ from tools.cq.core.types import QueryLanguage
 from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentV1,
     PythonEnrichmentV1,
+    incremental_enrichment_facts,
     incremental_enrichment_payload,
+    python_enrichment_facts,
     python_enrichment_payload,
 )
-from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
+from tools.cq.search.enrichment.contracts import (
+    EnrichmentMeta,
+    LanguageEnrichmentPayload,
+    LanguageEnrichmentPort,
+    PythonEnrichmentPayload,
+    RustEnrichmentPayload,
+)
 from tools.cq.search.enrichment.core import (
     accumulate_runtime_flags,
     build_tree_sitter_diagnostic_rows,
+    coerce_enrichment_status,
     string_or_none,
 )
 from tools.cq.search.enrichment.telemetry import (
@@ -28,46 +37,93 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
 
     language: QueryLanguage = "python"
 
-    def payload_from_match(self, match: object) -> dict[str, object] | None:
+    def payload_from_match(self, match: object) -> PythonEnrichmentPayload | None:
         """Extract normalized Python enrichment payload from an enriched match.
 
         Returns:
         -------
-        dict[str, object] | None
-            Enrichment payload mapping when available, otherwise ``None``.
+        PythonEnrichmentPayload | None
+            Typed enrichment payload when available.
         """
         _ = self
         python_payload = getattr(match, "python_enrichment", None)
         incremental_payload = getattr(match, "incremental_enrichment", None)
-        out: dict[str, object] = {}
-        if isinstance(python_payload, PythonEnrichmentV1):
-            out.update(python_enrichment_payload(python_payload))
+        if not isinstance(python_payload, PythonEnrichmentV1):
+            return None
+        raw = python_enrichment_payload(python_payload)
+        meta_raw = raw.get("meta")
+        if isinstance(meta_raw, Mapping):
+            status_raw = meta_raw.get("enrichment_status")
+            sources_raw = meta_raw.get("enrichment_sources")
+            degrade_reason_raw = meta_raw.get("degrade_reason")
+            payload_size_hint_raw = meta_raw.get("payload_size_hint")
+            dropped_raw = meta_raw.get("dropped_fields")
+            truncated_raw = meta_raw.get("truncated_fields")
+            meta = EnrichmentMeta(
+                language="python",
+                enrichment_status=coerce_enrichment_status(status_raw),
+                enrichment_sources=(
+                    [item for item in sources_raw if isinstance(item, str)]
+                    if isinstance(sources_raw, list)
+                    else []
+                ),
+                degrade_reason=degrade_reason_raw if isinstance(degrade_reason_raw, str) else None,
+                payload_size_hint=(
+                    payload_size_hint_raw if isinstance(payload_size_hint_raw, int) else None
+                ),
+                dropped_fields=(
+                    [item for item in dropped_raw if isinstance(item, str)]
+                    if isinstance(dropped_raw, list)
+                    else None
+                ),
+                truncated_fields=(
+                    [item for item in truncated_raw if isinstance(item, str)]
+                    if isinstance(truncated_raw, list)
+                    else None
+                ),
+            )
+        else:
+            meta = (
+                python_payload.meta
+                if python_payload.meta is not None
+                else EnrichmentMeta(language="python")
+            )
         if isinstance(incremental_payload, IncrementalEnrichmentV1):
-            out["incremental"] = incremental_enrichment_payload(incremental_payload)
-        return out or None
+            raw["incremental"] = incremental_enrichment_payload(incremental_payload)
+            incremental_facts = incremental_enrichment_facts(incremental_payload)
+        else:
+            incremental_facts = None
+        return PythonEnrichmentPayload(
+            meta=meta,
+            facts=python_enrichment_facts(python_payload),
+            incremental=incremental_facts,
+            raw=raw,
+        )
 
     def accumulate_telemetry(
         self,
         lang_bucket: dict[str, object],
-        payload: dict[str, object],
+        payload: LanguageEnrichmentPayload,
     ) -> None:
         """Accumulate Python enrichment telemetry counters into a language bucket."""
         _ = self
-        incremental = payload.get("incremental")
-        if isinstance(incremental, dict):
+        if not isinstance(payload, PythonEnrichmentPayload):
+            return
+        incremental = payload.incremental
+        if incremental is not None:
             stages_bucket = lang_bucket.get("stages")
             if isinstance(stages_bucket, dict):
                 accumulate_stage_status(
                     stages_bucket=stages_bucket,
-                    stage_status=incremental.get("stage_status"),
+                    stage_status=incremental.stage_status,
                 )
             timings_bucket = lang_bucket.get("timings_ms")
             if isinstance(timings_bucket, dict):
                 accumulate_stage_timings(
                     timings_bucket=timings_bucket,
-                    stage_timings_ms=incremental.get("timings_ms"),
+                    stage_timings_ms=incremental.timings_ms,
                 )
-        meta = payload.get("meta")
+        meta = payload.raw.get("meta")
         if isinstance(meta, dict):
             stages_bucket = lang_bucket.get("stages")
             if isinstance(stages_bucket, dict):
@@ -83,10 +139,13 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
                 )
         accumulate_runtime_flags(
             lang_bucket=lang_bucket,
-            runtime_payload=payload.get("query_runtime"),
+            runtime_payload=payload.raw.get("query_runtime"),
         )
 
-    def build_diagnostics(self, payload: Mapping[str, object]) -> list[dict[str, object]]:
+    def build_diagnostics(
+        self,
+        payload: Mapping[str, object] | LanguageEnrichmentPayload,
+    ) -> list[dict[str, object]]:
         """Build normalized diagnostics rows from a Python enrichment payload.
 
         Returns:
@@ -95,10 +154,13 @@ class PythonEnrichmentAdapter(LanguageEnrichmentPort):
             Diagnostic rows normalized for cross-language rendering.
         """
         _ = self
+        if isinstance(payload, RustEnrichmentPayload):
+            return []
+        raw = payload.raw if isinstance(payload, PythonEnrichmentPayload) else payload
         rows: list[dict[str, object]] = []
-        rows.extend(build_tree_sitter_diagnostic_rows(payload.get("cst_diagnostics")))
-        rows.extend(_parse_quality_diagnostics(payload.get("parse_quality")))
-        rows.extend(_degrade_reason_diagnostics(payload))
+        rows.extend(build_tree_sitter_diagnostic_rows(raw.get("cst_diagnostics")))
+        rows.extend(_parse_quality_diagnostics(raw.get("parse_quality")))
+        rows.extend(_degrade_reason_diagnostics(raw))
         return rows[:16]
 
 

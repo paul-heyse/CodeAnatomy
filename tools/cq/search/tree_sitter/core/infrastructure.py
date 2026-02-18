@@ -5,12 +5,12 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
-from tools.cq.search.tree_sitter.core.parallel import run_file_lanes_parallel
-from tools.cq.search.tree_sitter.core.parser_controls import (
+from tools.cq.core.parser_controls import (
     ParserControlSettingsV1,
     apply_parser_controls,
     parser_controls_from_env,
 )
+from tools.cq.search.tree_sitter.core.parallel import run_file_lanes_parallel
 from tools.cq.search.tree_sitter.core.streaming_parse import (
     build_stream_reader,
     parse_streaming_source,

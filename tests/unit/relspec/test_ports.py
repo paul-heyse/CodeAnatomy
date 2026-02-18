@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
-from relspec.ports import DatasetSpecProvider, LineagePort
+from relspec.ports import DatasetSpecProvider, LineagePort, RuntimeProfilePort
 
 
 class _LineageImpl:
@@ -28,6 +29,22 @@ class _DatasetSpecProviderImpl:
         return value
 
 
+@dataclass(frozen=True)
+class _PoliciesImpl:
+    write_policy: object | None = None
+
+
+@dataclass(frozen=True)
+class _FeaturesImpl:
+    enable_delta_cdf: bool = False
+
+
+@dataclass(frozen=True)
+class _RuntimeProfileImpl:
+    policies: _PoliciesImpl = _PoliciesImpl(write_policy={"mode": "delta"})
+    features: _FeaturesImpl = _FeaturesImpl(enable_delta_cdf=True)
+
+
 def test_lineage_port_protocol() -> None:
     """Lineage protocol implementation satisfies required methods."""
     lineage = cast("LineagePort", _LineageImpl())
@@ -40,3 +57,10 @@ def test_dataset_spec_provider_protocol() -> None:
     provider = cast("DatasetSpecProvider", _DatasetSpecProviderImpl())
     assert provider.extract_dataset_spec({"x": 1}) == {"x": 1}
     assert provider.normalize_dataset_spec({"x": 1}) == {"x": 1}
+
+
+def test_runtime_profile_port_protocol() -> None:
+    """Runtime profile protocol exposes policy and feature projections."""
+    profile = cast("RuntimeProfilePort", _RuntimeProfileImpl())
+    assert profile.policies.write_policy is not None
+    assert profile.features.enable_delta_cdf is True

@@ -18,7 +18,6 @@ from tools.cq.analysis.taint import (
     analyze_function_node,
     find_function_node,
 )
-from tools.cq.core.contracts import require_mapping as require_contract_mapping
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
@@ -470,20 +469,14 @@ def _build_impact_result(
     all_sites = _analyze_functions(ctx)
     caller_sites = _find_callers_via_search(request.function_name, request.root)
 
-    summary_mapping = msgspec.to_builtins(
+    builder.set_summary_update(
         _build_impact_summary(
             request,
             functions=ctx.functions,
             all_sites=all_sites,
             caller_sites=caller_sites,
-        ),
-        order="deterministic",
+        )
     )
-    try:
-        summary_mapping_dict = require_contract_mapping(summary_mapping)
-    except TypeError:
-        summary_mapping_dict: dict[str, object] = {}
-    builder.with_summary(summary_from_mapping(summary_mapping_dict))
 
     scoring_details, depth_counts, files_affected = _build_impact_scoring(all_sites)
     _append_depth_findings(

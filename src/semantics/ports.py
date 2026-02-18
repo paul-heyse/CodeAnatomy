@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import pyarrow as pa
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
 
 
 class DataFramePort(Protocol):
@@ -44,6 +47,15 @@ class SessionPort(Protocol):
 
     def table_names(self) -> list[str]:
         """List available table names."""
+        ...
+
+
+@runtime_checkable
+class SessionContextProviderPort(Protocol):
+    """Port for resolving a concrete SessionContext from a session wrapper."""
+
+    def session_context(self) -> SessionContext:
+        """Return the concrete DataFusion SessionContext."""
         ...
 
 

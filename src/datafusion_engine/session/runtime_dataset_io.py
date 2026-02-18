@@ -24,11 +24,8 @@ from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import planning_sql_options
 from datafusion_engine.tables.metadata import table_provider_metadata
-from schema_spec.dataset_spec import (
-    DatasetSpec,
-    DeltaScanOptions,
-    dataset_spec_from_schema,
-)
+from schema_spec.dataset_spec_runtime import DatasetSpec, dataset_spec_from_schema
+from schema_spec.scan_options import DeltaScanOptions
 from storage.cdf_cursor_protocol import CdfCursorStoreLike
 from utils.value_coercion import coerce_int
 

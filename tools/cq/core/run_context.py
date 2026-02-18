@@ -11,8 +11,21 @@ from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
 
 if TYPE_CHECKING:
     from tools.cq.core.bootstrap import CqRuntimeServices
+    from tools.cq.core.schema import Finding
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.query.enrichment import SymtableEnricher
+    from tools.cq.query.sg_parser import SgRecord
+
+
+class SymtableEnricherPort(Protocol):
+    """Minimal protocol surface required by run/query execution paths."""
+
+    def enrich_function_finding(
+        self,
+        finding: Finding,
+        record: SgRecord,
+    ) -> dict[str, object]:
+        """Return scope-enrichment payload for one finding."""
+        ...
 
 
 class RunContext(CqStruct, frozen=True):
@@ -102,7 +115,7 @@ class RunExecutionContext(Protocol):
         ...
 
     @property
-    def symtable_enricher(self) -> SymtableEnricher:
+    def symtable_enricher(self) -> SymtableEnricherPort:
         """Injected symtable enricher used by q execution paths."""
         ...
 
@@ -110,4 +123,5 @@ class RunExecutionContext(Protocol):
 __all__ = [
     "RunContext",
     "RunExecutionContext",
+    "SymtableEnricherPort",
 ]

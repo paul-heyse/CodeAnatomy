@@ -11,8 +11,10 @@ from tools.cq.search._shared.helpers import encode_mapping
 from tools.cq.search.enrichment.contracts import (
     EnrichmentMeta,
     EnrichmentStatus,
-    PythonEnrichmentPayload,
-    RustEnrichmentPayload,
+)
+from tools.cq.search.enrichment.incremental_facts import (
+    IncrementalAnchorFacts,
+    IncrementalFacts,
 )
 from tools.cq.search.enrichment.python_facts import (
     PythonBehaviorFacts,
@@ -20,11 +22,18 @@ from tools.cq.search.enrichment.python_facts import (
     PythonClassShapeFacts,
     PythonEnrichmentFacts,
     PythonImportFacts,
+    PythonLocalsFacts,
+    PythonParseQualityFacts,
     PythonResolutionFacts,
     PythonSignatureFacts,
     PythonStructureFacts,
 )
-from tools.cq.search.enrichment.rust_facts import RustEnrichmentFacts
+from tools.cq.search.enrichment.rust_facts import (
+    RustDefinitionFacts,
+    RustEnrichmentFacts,
+    RustMacroExpansionFacts,
+    RustStructureFacts,
+)
 
 _DEFAULT_METADATA_KEYS: frozenset[str] = frozenset(
     {"enrichment_status", "enrichment_sources", "degrade_reason", "language"}
@@ -61,6 +70,17 @@ def string_or_none(value: object) -> str | None:
         text = value.strip()
         return text if text else None
     return None
+
+
+def coerce_enrichment_status(value: object) -> EnrichmentStatus:
+    """Normalize enrichment status to the allowed literal domain.
+
+    Returns:
+        One of ``"applied"``, ``"degraded"``, or ``"skipped"``.
+    """
+    if isinstance(value, str) and value in {"applied", "degraded", "skipped"}:
+        return cast("EnrichmentStatus", value)
+    return "applied"
 
 
 def accumulate_runtime_flags(
@@ -104,7 +124,83 @@ def build_tree_sitter_diagnostic_rows(
     ]
 
 
-def parse_python_enrichment(raw: dict[str, object] | None) -> PythonEnrichmentFacts | None:
+def _mapping_or_none(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return {key: item for key, item in value.items() if isinstance(key, str)}
+
+
+def _convert_or_none[StructT](value: object, type_: type[StructT]) -> StructT | None:
+    mapped = _mapping_or_none(value)
+    if not mapped:
+        return None
+    try:
+        return msgspec.convert(mapped, type=type_, strict=False)
+    except (msgspec.ValidationError, TypeError, ValueError, RuntimeError):
+        return None
+
+
+def _python_fact_sections(raw: Mapping[str, object]) -> dict[str, dict[str, object]]:
+    sections: dict[str, dict[str, object]] = {}
+    for key in (
+        "resolution",
+        "behavior",
+        "structure",
+        "signature",
+        "call",
+        "import_",
+        "class_shape",
+        "locals",
+        "parse_quality",
+    ):
+        mapped = _mapping_or_none(raw.get(key))
+        if mapped:
+            sections[key] = mapped
+    if "structure" not in sections:
+        structural = _mapping_or_none(raw.get("structural"))
+        if structural:
+            sections["structure"] = structural
+    if "import_" not in sections:
+        import_payload = _mapping_or_none(raw.get("import"))
+        if import_payload:
+            sections["import_"] = import_payload
+    if sections:
+        return sections
+
+    flat_sections: dict[str, dict[str, object]] = {
+        "resolution": dict[str, object](),
+        "behavior": dict[str, object](),
+        "structure": dict[str, object](),
+        "signature": dict[str, object](),
+        "call": dict[str, object](),
+        "import_": dict[str, object](),
+        "class_shape": dict[str, object](),
+        "locals": dict[str, object](),
+        "parse_quality": dict[str, object](),
+    }
+    for key, value in raw.items():
+        if key in _PY_RESOLUTION_KEYS:
+            flat_sections["resolution"][key] = value
+        elif key in _PY_BEHAVIOR_KEYS:
+            flat_sections["behavior"][key] = value
+        elif key in _PY_STRUCTURAL_KEYS:
+            flat_sections["structure"][key] = value
+        elif key in PythonSignatureFacts.__struct_fields__:
+            flat_sections["signature"][key] = value
+        elif key in PythonCallFacts.__struct_fields__:
+            flat_sections["call"][key] = value
+        elif key in PythonImportFacts.__struct_fields__:
+            flat_sections["import_"][key] = value
+        elif key in PythonClassShapeFacts.__struct_fields__:
+            flat_sections["class_shape"][key] = value
+        elif key in PythonLocalsFacts.__struct_fields__:
+            flat_sections["locals"][key] = value
+        elif key in PythonParseQualityFacts.__struct_fields__:
+            flat_sections["parse_quality"][key] = value
+    return {key: value for key, value in flat_sections.items() if value}
+
+
+def parse_python_enrichment(raw: Mapping[str, object] | None) -> PythonEnrichmentFacts | None:
     """Parse Python enrichment payload into typed facts.
 
     Returns:
@@ -112,13 +208,23 @@ def parse_python_enrichment(raw: dict[str, object] | None) -> PythonEnrichmentFa
     """
     if raw is None:
         return None
-    try:
-        return msgspec.convert(raw, type=PythonEnrichmentFacts, strict=False)
-    except (msgspec.ValidationError, TypeError, ValueError, RuntimeError):
+    sections = _python_fact_sections(raw)
+    if not sections:
         return None
+    return PythonEnrichmentFacts(
+        resolution=_convert_or_none(sections.get("resolution"), PythonResolutionFacts),
+        behavior=_convert_or_none(sections.get("behavior"), PythonBehaviorFacts),
+        structure=_convert_or_none(sections.get("structure"), PythonStructureFacts),
+        signature=_convert_or_none(sections.get("signature"), PythonSignatureFacts),
+        call=_convert_or_none(sections.get("call"), PythonCallFacts),
+        import_=_convert_or_none(sections.get("import_"), PythonImportFacts),
+        class_shape=_convert_or_none(sections.get("class_shape"), PythonClassShapeFacts),
+        locals=_convert_or_none(sections.get("locals"), PythonLocalsFacts),
+        parse_quality=_convert_or_none(sections.get("parse_quality"), PythonParseQualityFacts),
+    )
 
 
-def parse_rust_enrichment(raw: dict[str, object] | None) -> RustEnrichmentFacts | None:
+def parse_rust_enrichment(raw: Mapping[str, object] | None) -> RustEnrichmentFacts | None:
     """Parse Rust enrichment payload into typed facts.
 
     Returns:
@@ -126,10 +232,76 @@ def parse_rust_enrichment(raw: dict[str, object] | None) -> RustEnrichmentFacts 
     """
     if raw is None:
         return None
-    try:
-        return msgspec.convert(raw, type=RustEnrichmentFacts, strict=False)
-    except (msgspec.ValidationError, TypeError, ValueError, RuntimeError):
+    structure = _mapping_or_none(raw.get("structure")) or {
+        key: value for key, value in raw.items() if key in RustStructureFacts.__struct_fields__
+    }
+    definition = _mapping_or_none(raw.get("definition")) or {
+        key: value for key, value in raw.items() if key in RustDefinitionFacts.__struct_fields__
+    }
+    macro_expansion = _mapping_or_none(raw.get("macro_expansion"))
+    macro_expansion_results = raw.get("macro_expansion_results")
+    if not macro_expansion and isinstance(macro_expansion_results, list):
+        macro_expansion = {
+            "macro_expansion_results": [
+                item for item in macro_expansion_results if isinstance(item, Mapping)
+            ]
+        }
+    if not structure and not definition and not macro_expansion:
         return None
+    return RustEnrichmentFacts(
+        structure=_convert_or_none(structure, RustStructureFacts),
+        definition=_convert_or_none(definition, RustDefinitionFacts),
+        macro_expansion=_convert_or_none(macro_expansion, RustMacroExpansionFacts),
+    )
+
+
+def parse_incremental_enrichment(raw: Mapping[str, object] | None) -> IncrementalFacts | None:
+    """Parse incremental enrichment payload into typed facts.
+
+    Returns:
+        Incremental facts payload when parseable; otherwise `None`.
+    """
+    if raw is None:
+        return None
+    anchor = _convert_or_none(raw.get("anchor"), IncrementalAnchorFacts)
+    details_raw = raw.get("details")
+    details = (
+        [
+            {key: value for key, value in item.items() if isinstance(key, str)}
+            for item in details_raw
+            if isinstance(item, Mapping)
+        ]
+        if isinstance(details_raw, list)
+        else []
+    )
+    facts = IncrementalFacts(
+        anchor=anchor,
+        semantic=_mapping_or_none(raw.get("semantic")) or {},
+        sym=_mapping_or_none(raw.get("sym")) or {},
+        dis=_mapping_or_none(raw.get("dis")) or {},
+        inspect=_mapping_or_none(raw.get("inspect")) or {},
+        compound=_mapping_or_none(raw.get("compound")) or {},
+        details=details,
+        stage_status=_mapping_or_none(raw.get("stage_status")) or {},
+        stage_errors=_mapping_or_none(raw.get("stage_errors")) or {},
+        timings_ms=_mapping_or_none(raw.get("timings_ms")) or {},
+        session_errors=_mapping_or_none(raw.get("session_errors")) or {},
+    )
+    if (
+        facts.anchor is None
+        and not facts.semantic
+        and not facts.sym
+        and not facts.dis
+        and not facts.inspect
+        and not facts.compound
+        and not facts.details
+        and not facts.stage_status
+        and not facts.stage_errors
+        and not facts.timings_ms
+        and not facts.session_errors
+    ):
+        return None
+    return facts
 
 
 def append_source(payload: dict[str, object], source: str) -> None:
@@ -217,12 +389,7 @@ def trim_payload_to_budget(
 
 
 def _meta_from_flat(payload: Mapping[str, object], *, language: str) -> EnrichmentMeta:
-    status_raw = payload.get("enrichment_status")
-    status: EnrichmentStatus = (
-        cast("EnrichmentStatus", status_raw)
-        if isinstance(status_raw, str) and status_raw in {"applied", "degraded", "skipped"}
-        else "applied"
-    )
+    status = coerce_enrichment_status(payload.get("enrichment_status"))
     sources_raw = payload.get("enrichment_sources")
     sources = (
         [item for item in sources_raw if isinstance(item, str)]
@@ -330,16 +497,14 @@ def normalize_python_payload(payload: dict[str, object] | None) -> dict[str, obj
     """
     if payload is None:
         return None
-    wrapper = PythonEnrichmentPayload(
-        meta=_meta_from_flat(payload, language="python"),
-        data=_to_python_wrapper_data(payload),
-    )
+    meta_contract = _meta_from_flat(payload, language="python")
+    wrapper_data = _to_python_wrapper_data(payload)
     resolution: dict[str, object] = {}
     behavior: dict[str, object] = {}
     structural: dict[str, object] = {}
     parse_quality: dict[str, object] = {}
     agreement: dict[str, object] = {"status": "partial", "conflicts": []}
-    for key, value in wrapper.data.items():
+    for key, value in wrapper_data.items():
         if key in _PY_RESOLUTION_KEYS:
             resolution[key] = value
             continue
@@ -357,7 +522,7 @@ def normalize_python_payload(payload: dict[str, object] | None) -> dict[str, obj
             continue
         structural[key] = value
     _derive_behavior_flags(behavior, structural)
-    meta = _build_python_meta(payload=payload, meta=wrapper.meta)
+    meta = _build_python_meta(payload=payload, meta=meta_contract)
 
     return {
         "meta": meta,
@@ -377,45 +542,44 @@ def normalize_rust_payload(payload: dict[str, object] | None) -> dict[str, objec
     """
     if payload is None:
         return None
-    wrapper = RustEnrichmentPayload(
-        meta=_meta_from_flat(payload, language="rust"),
-        data={
-            key: value
-            for key, value in payload.items()
-            if key
-            not in {
-                "language",
-                "enrichment_status",
-                "enrichment_sources",
-                "degrade_reason",
-                "payload_size_hint",
-                "dropped_fields",
-                "truncated_fields",
-            }
-        },
-    )
-    out = dict(wrapper.data)
-    out["language"] = wrapper.meta.language
-    out["enrichment_status"] = wrapper.meta.enrichment_status
-    out["enrichment_sources"] = wrapper.meta.enrichment_sources
-    if wrapper.meta.degrade_reason:
-        out["degrade_reason"] = wrapper.meta.degrade_reason
-    if wrapper.meta.payload_size_hint is not None:
-        out["payload_size_hint"] = wrapper.meta.payload_size_hint
-    if wrapper.meta.dropped_fields:
-        out["dropped_fields"] = wrapper.meta.dropped_fields
-    if wrapper.meta.truncated_fields:
-        out["truncated_fields"] = wrapper.meta.truncated_fields
+    meta = _meta_from_flat(payload, language="rust")
+    out = {
+        key: value
+        for key, value in payload.items()
+        if key
+        not in {
+            "language",
+            "enrichment_status",
+            "enrichment_sources",
+            "degrade_reason",
+            "payload_size_hint",
+            "dropped_fields",
+            "truncated_fields",
+        }
+    }
+    out["language"] = meta.language
+    out["enrichment_status"] = meta.enrichment_status
+    out["enrichment_sources"] = meta.enrichment_sources
+    if meta.degrade_reason:
+        out["degrade_reason"] = meta.degrade_reason
+    if meta.payload_size_hint is not None:
+        out["payload_size_hint"] = meta.payload_size_hint
+    if meta.dropped_fields:
+        out["dropped_fields"] = meta.dropped_fields
+    if meta.truncated_fields:
+        out["truncated_fields"] = meta.truncated_fields
     return out
 
 
 __all__ = [
     "append_source",
     "check_payload_budget",
+    "coerce_enrichment_status",
     "has_value",
     "merge_gap_fill_payload",
     "normalize_python_payload",
     "normalize_rust_payload",
+    "parse_incremental_enrichment",
     "parse_python_enrichment",
     "parse_rust_enrichment",
     "payload_size_hint",

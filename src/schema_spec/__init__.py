@@ -11,6 +11,12 @@ from typing import TYPE_CHECKING
 from utils.lazy_module import make_lazy_loader
 
 if TYPE_CHECKING:
+    from schema_spec.dataset_contracts import (
+        ContractRow,
+        DedupeSpecSpec,
+        SortKeySpec,
+        TableSchemaContract,
+    )
     from schema_spec.dataset_spec import (
         SCHEMA_EVOLUTION_PRESETS,
         ArrowValidationOptions,
@@ -19,12 +25,8 @@ if TYPE_CHECKING:
         DatasetKind,
         DatasetOpenSpec,
         DatasetSpec,
-        DedupeSpecSpec,
-        DeltaScanOptions,
         DeltaSchemaPolicy,
         DeltaWritePolicy,
-        SortKeySpec,
-        TableSchemaContract,
         TableSpecConstraints,
         ValidationPolicySpec,
         VirtualFieldSpec,
@@ -70,6 +72,18 @@ if TYPE_CHECKING:
         evidence_struct_type,
     )
     from schema_spec.field_spec import FieldSpec
+    from schema_spec.scan_options import (
+        DataFusionScanOptions,
+        DeltaScanOptions,
+        ParquetColumnOptions,
+    )
+    from schema_spec.scan_policy import (
+        DeltaScanPolicyDefaults,
+        ScanPolicyConfig,
+        ScanPolicyDefaults,
+        apply_delta_scan_policy,
+        apply_scan_policy,
+    )
     from schema_spec.specs import (
         DICT_STRING,
         ENCODING_DICTIONARY,
@@ -118,6 +132,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "SCHEMA_META_NAME": ("schema_spec.specs", "SCHEMA_META_NAME"),
     "SCHEMA_META_VERSION": ("schema_spec.specs", "SCHEMA_META_VERSION"),
     "FieldSpec": ("schema_spec.field_spec", "FieldSpec"),
+    "ContractRow": ("schema_spec.dataset_contracts", "ContractRow"),
     "ArrowValidationOptions": ("schema_spec.dataset_spec", "ArrowValidationOptions"),
     "ValidationPolicySpec": ("schema_spec.dataset_spec", "ValidationPolicySpec"),
     "ContractCatalogSpec": ("schema_spec.dataset_spec", "ContractCatalogSpec"),
@@ -125,13 +140,18 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DatasetKind": ("schema_spec.dataset_spec", "DatasetKind"),
     "DatasetOpenSpec": ("schema_spec.dataset_spec", "DatasetOpenSpec"),
     "DatasetSpec": ("schema_spec.dataset_spec", "DatasetSpec"),
+    "DataFusionScanOptions": ("schema_spec.scan_options", "DataFusionScanOptions"),
     "DedupeSpecSpec": ("schema_spec.dataset_contracts", "DedupeSpecSpec"),
     "DeltaScanOptions": ("schema_spec.scan_options", "DeltaScanOptions"),
+    "DeltaScanPolicyDefaults": ("schema_spec.scan_policy", "DeltaScanPolicyDefaults"),
     "DeltaSchemaPolicy": ("schema_spec.dataset_spec", "DeltaSchemaPolicy"),
     "DeltaWritePolicy": ("schema_spec.dataset_spec", "DeltaWritePolicy"),
     "DerivedFieldSpec": ("schema_spec.specs", "DerivedFieldSpec"),
     "FieldBundle": ("schema_spec.specs", "FieldBundle"),
     "NestedFieldSpec": ("schema_spec.specs", "NestedFieldSpec"),
+    "ParquetColumnOptions": ("schema_spec.scan_options", "ParquetColumnOptions"),
+    "ScanPolicyConfig": ("schema_spec.scan_policy", "ScanPolicyConfig"),
+    "ScanPolicyDefaults": ("schema_spec.scan_policy", "ScanPolicyDefaults"),
     "SortKeySpec": ("schema_spec.dataset_contracts", "SortKeySpec"),
     "TableSchemaSpec": ("schema_spec.specs", "TableSchemaSpec"),
     "TableSpecConstraints": ("schema_spec.dataset_spec", "TableSpecConstraints"),
@@ -210,6 +230,8 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "scip_range_bundle": ("schema_spec.specs", "scip_range_bundle"),
     "span_bundle": ("schema_spec.specs", "span_bundle"),
     "TableSchemaContract": ("schema_spec.dataset_contracts", "TableSchemaContract"),
+    "apply_delta_scan_policy": ("schema_spec.scan_policy", "apply_delta_scan_policy"),
+    "apply_scan_policy": ("schema_spec.scan_policy", "apply_scan_policy"),
     "validate_arrow_table": ("schema_spec.dataset_spec", "validate_arrow_table"),
 }
 
@@ -231,18 +253,24 @@ __all__ = [
     "SCHEMA_META_VERSION",
     "ArrowValidationOptions",
     "ContractCatalogSpec",
+    "ContractRow",
     "ContractSpec",
+    "DataFusionScanOptions",
     "DatasetKind",
     "DatasetOpenSpec",
     "DatasetSpec",
     "DedupeSpecSpec",
     "DeltaScanOptions",
+    "DeltaScanPolicyDefaults",
     "DeltaSchemaPolicy",
     "DeltaWritePolicy",
     "DerivedFieldSpec",
     "FieldBundle",
     "FieldSpec",
     "NestedFieldSpec",
+    "ParquetColumnOptions",
+    "ScanPolicyConfig",
+    "ScanPolicyDefaults",
     "SortKeySpec",
     "TableSchemaContract",
     "TableSchemaSpec",
@@ -251,6 +279,8 @@ __all__ = [
     "ViewSchemaMismatchError",
     "ViewSpec",
     "VirtualFieldSpec",
+    "apply_delta_scan_policy",
+    "apply_scan_policy",
     "call_span_bundle",
     "dataset_spec_contract",
     "dataset_spec_contract_spec_or_default",

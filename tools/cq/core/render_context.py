@@ -15,7 +15,9 @@ if TYPE_CHECKING:
 else:
     RenderEnrichmentFactory = Callable[[], object | None]
 _DEFAULT_ENRICHMENT_FACTORY_LOCK = threading.Lock()
-_DEFAULT_ENRICHMENT_FACTORY_STATE: dict[str, RenderEnrichmentFactory | None] = {"factory": None}
+_DEFAULT_ENRICHMENT_FACTORY_STATE: dict[str, RenderEnrichmentFactory | None] = {
+    "factory": None
+}
 
 
 def get_default_render_enrichment_factory() -> RenderEnrichmentFactory | None:

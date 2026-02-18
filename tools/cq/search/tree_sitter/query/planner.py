@@ -216,6 +216,31 @@ def compile_pack_source_rows(
     return sort_pack_plans(rows)
 
 
+def resolve_pack_source_rows(
+    *,
+    language: str,
+    source_rows: Iterable[tuple[str, str]],
+    dedupe_by_pack_name: bool = False,
+    request_surface: str = "artifact",
+    ignored_errors: tuple[type[Exception], ...] = (),
+) -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
+    """Normalize and compile pack-source rows into sorted plan rows.
+
+    Returns:
+        tuple[tuple[str, str, QueryPackPlanV1], ...]: Sorted pack rows.
+    """
+    normalized = normalize_pack_source_rows(
+        source_rows,
+        dedupe_by_pack_name=dedupe_by_pack_name,
+    )
+    return compile_pack_source_rows(
+        language=language,
+        source_rows=normalized,
+        request_surface=request_surface,
+        ignored_errors=ignored_errors,
+    )
+
+
 def normalize_pack_source_rows(
     source_rows: Iterable[tuple[str, str]],
     *,
@@ -256,5 +281,6 @@ __all__ = [
     "build_pattern_plan",
     "compile_pack_source_rows",
     "normalize_pack_source_rows",
+    "resolve_pack_source_rows",
     "sort_pack_plans",
 ]

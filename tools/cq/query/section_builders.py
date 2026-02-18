@@ -31,7 +31,7 @@ from tools.cq.query.scan import ScanContext
 from tools.cq.query.shared_utils import extract_def_name
 
 if TYPE_CHECKING:
-    from tools.cq.query.enrichment import SymtableEnricher
+    from tools.cq.core.run_context import SymtableEnricherPort
     from tools.cq.query.ir import Query
     from tools.cq.utils.interval_index import FileIntervalIndex
 
@@ -53,7 +53,7 @@ def append_def_query_sections(
     matching_defs: list[SgRecord],
     scan_ctx: ScanContext,
     root: Path,
-    symtable: SymtableEnricher,
+    symtable: SymtableEnricherPort,
 ) -> CqResult:
     """Append sections to definition query result.
 
@@ -108,7 +108,7 @@ def append_expander_sections(
     root: Path,
     query: Query,
     *,
-    symtable: SymtableEnricher,
+    symtable: SymtableEnricherPort,
 ) -> CqResult:
     """Append sections for requested expanders.
 
@@ -575,7 +575,7 @@ def build_scope_section(
     target_defs: Sequence[SgRecord],
     calls_by_def: Mapping[SgRecord, Sequence[SgRecord]],
     *,
-    symtable: SymtableEnricher,
+    symtable: SymtableEnricherPort,
 ) -> Section:
     """Build section showing scope details for target definitions.
 

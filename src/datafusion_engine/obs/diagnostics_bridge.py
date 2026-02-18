@@ -43,10 +43,8 @@ def record_view_fingerprints(
     view_nodes: Sequence[ViewNode],
 ) -> None:
     """Record policy-aware view fingerprints into diagnostics."""
-    from datafusion_engine.lineage.diagnostics import (
-        ensure_recorder_sink,
-        view_fingerprint_payload,
-    )
+    from datafusion_engine.lineage.diagnostics import ensure_recorder_sink
+    from datafusion_engine.lineage.diagnostics_payloads import view_fingerprint_payload
 
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
@@ -63,10 +61,8 @@ def record_view_udf_parity(
     ctx: SessionContext | None = None,
 ) -> None:
     """Record view/UDF parity diagnostics into the sink."""
-    from datafusion_engine.lineage.diagnostics import (
-        ensure_recorder_sink,
-        view_udf_parity_payload,
-    )
+    from datafusion_engine.lineage.diagnostics import ensure_recorder_sink
+    from datafusion_engine.lineage.diagnostics_payloads import view_udf_parity_payload
 
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
@@ -81,10 +77,8 @@ def record_rust_udf_snapshot(
     snapshot: Mapping[str, object],
 ) -> None:
     """Record a Rust UDF snapshot summary payload."""
-    from datafusion_engine.lineage.diagnostics import (
-        ensure_recorder_sink,
-        rust_udf_snapshot_payload,
-    )
+    from datafusion_engine.lineage.diagnostics import ensure_recorder_sink
+    from datafusion_engine.lineage.diagnostics_payloads import rust_udf_snapshot_payload
 
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(

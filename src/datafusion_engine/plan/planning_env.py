@@ -18,6 +18,7 @@ from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.runtime_session import SessionRuntime
 
 
@@ -71,13 +72,7 @@ def planning_env_snapshot(
         return {}
     profile = session_runtime.profile
     session_config = session_config_snapshot(session_runtime.ctx)
-    sql_policy_payload = None
-    if profile.policies.sql_policy is not None:
-        sql_policy_payload = {
-            "allow_ddl": profile.policies.sql_policy.allow_ddl,
-            "allow_dml": profile.policies.sql_policy.allow_dml,
-            "allow_statements": profile.policies.sql_policy.allow_statements,
-        }
+    sql_policy_payload = _sql_policy_payload(profile)
     schema_hardening = profile.policies.schema_hardening
     return {
         "datafusion_version": getattr(profile, "datafusion_version", None),
@@ -119,6 +114,17 @@ def planning_env_snapshot(
             "explain_format": schema_hardening.explain_format if schema_hardening else None,
             "enable_view_types": schema_hardening.enable_view_types if schema_hardening else None,
         },
+    }
+
+
+def _sql_policy_payload(profile: DataFusionRuntimeProfile) -> Mapping[str, bool] | None:
+    sql_policy = profile.policies.sql_policy
+    if sql_policy is None:
+        return None
+    return {
+        "allow_ddl": sql_policy.allow_ddl,
+        "allow_dml": sql_policy.allow_dml,
+        "allow_statements": sql_policy.allow_statements,
     }
 
 

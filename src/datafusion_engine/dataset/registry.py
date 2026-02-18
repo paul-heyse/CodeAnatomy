@@ -21,6 +21,9 @@ from datafusion_engine.dataset.policies import (
     resolve_dataset_policies as _resolve_dataset_policies,
 )
 from datafusion_engine.identity import schema_identity_hash
+from datafusion_engine.schema.validation import ArrowValidationOptions
+from schema_spec.scan_options import DataFusionScanOptions, DeltaScanOptions
+from schema_spec.scan_policy import ScanPolicyConfig
 from schema_spec.specs import TableSchemaSpec
 from serde_msgspec import StructBaseStrict, to_builtins
 from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest
@@ -30,31 +33,23 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.dataset_spec import (
-        ArrowValidationOptions,
-        DataFusionScanOptions,
         DatasetSpec,
         DeltaCdfPolicy,
         DeltaMaintenancePolicy,
         DeltaPolicyBundle,
-        DeltaScanOptions,
         DeltaSchemaPolicy,
         DeltaWritePolicy,
-        ScanPolicyConfig,
         ValidationPolicySpec,
     )
 else:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from schema_spec.dataset_spec import (
-        ArrowValidationOptions,
-        DataFusionScanOptions,
         DatasetSpec,
         DeltaCdfPolicy,
         DeltaMaintenancePolicy,
         DeltaPolicyBundle,
-        DeltaScanOptions,
         DeltaSchemaPolicy,
         DeltaWritePolicy,
-        ScanPolicyConfig,
         ValidationPolicySpec,
     )
 

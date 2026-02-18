@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import atexit
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.cache.backend_core import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.interface import CqCacheBackend
+from tools.cq.core.contracts import set_summary_contract_serializer
 from tools.cq.core.render_context import (
     get_default_render_enrichment_factory,
     set_default_render_enrichment_factory,
@@ -28,6 +30,7 @@ from tools.cq.core.settings_factory import SettingsFactory
 
 if TYPE_CHECKING:
     from tools.cq.core.ports import RenderEnrichmentPort
+    from tools.cq.search._shared.search_contracts import SearchSummaryContract
 
 
 @dataclass(frozen=True)
@@ -79,12 +82,15 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
     from tools.cq.core.enrichment_mode import parse_incremental_enrichment_mode
     from tools.cq.macros.calls import cmd_calls
     from tools.cq.query.entity_front_door import attach_entity_front_door_insight
+    from tools.cq.search._shared.search_contracts import summary_contract_to_dict
     from tools.cq.search._shared.types import QueryMode
     from tools.cq.search.pipeline.smart_search import smart_search
     from tools.cq.search.python.extractors_entrypoints import (
         ensure_python_clear_callback_registered,
     )
     from tools.cq.search.rust.enrichment import ensure_rust_clear_callback_registered
+    from tools.cq.search.semantic.front_door import build_default_language_provider_registry
+    from tools.cq.search.semantic.registry import set_default_language_provider_registry
     from tools.cq.search.tree_sitter.rust_lane.query_cache import (
         ensure_query_cache_callback_registered,
     )
@@ -96,6 +102,19 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
     ensure_rust_clear_callback_registered()
     ensure_query_cache_callback_registered()
     ensure_runtime_cache_callback_registered()
+
+    def _serialize_summary_contract(
+        contract: object,
+        *,
+        common: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        return summary_contract_to_dict(
+            contract=cast("SearchSummaryContract", contract),
+            common=common,
+        )
+
+    set_summary_contract_serializer(_serialize_summary_contract)
+    set_default_language_provider_registry(build_default_language_provider_registry())
 
     def _attach_front_door(request: EntityFrontDoorRequest) -> CqResult:
         return attach_entity_front_door_insight(
@@ -196,13 +215,20 @@ def reset_runtime_services() -> None:
     from tools.cq.search.pipeline.object_view_registry import (
         set_default_search_object_view_registry,
     )
+    from tools.cq.search.python.runtime_context import set_default_python_runtime_context
+    from tools.cq.search.rust.runtime_context import set_default_rust_runtime_context
+    from tools.cq.search.semantic.registry import set_default_language_provider_registry
     from tools.cq.search.tree_sitter.core.runtime_context import set_default_context
 
     clear_runtime_services()
+    set_summary_contract_serializer(None)
     set_default_backend_registry(None)
     set_default_cache_telemetry_store(None)
     set_default_adapter_registry(None)
+    set_default_language_provider_registry(None)
     set_default_search_object_view_registry(None)
+    set_default_python_runtime_context(None)
+    set_default_rust_runtime_context(None)
     set_default_context(None)
     set_rulepack_registry(None)
 

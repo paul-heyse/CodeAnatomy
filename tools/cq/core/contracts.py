@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import msgspec
 
@@ -20,10 +20,27 @@ from tools.cq.core.toolchain import Toolchain
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding, RunMeta
-    from tools.cq.search._shared.search_contracts import SearchSummaryContract
 
 LanguageToken = Literal["python", "rust"]
 LanguageScopeToken = Literal["auto", "python", "rust"]
+
+
+class SummaryContractSerializer(Protocol):
+    """Callable serializer protocol for summary contracts."""
+
+    def __call__(
+        self,
+        contract: object,
+        *,
+        common: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        """Serialize a summary contract into a mapping."""
+        ...
+
+
+_SUMMARY_CONTRACT_SERIALIZER_STATE: dict[str, SummaryContractSerializer | None] = {
+    "serializer": None
+}
 
 
 class ContractEnvelope(CqOutputStruct, frozen=True):
@@ -59,12 +76,25 @@ def summary_contract_to_mapping(
     Returns:
         dict[str, object]: Summary mapping with deterministic, renderer-ready fields.
     """
-    from tools.cq.search._shared.search_contracts import summary_contract_to_dict
+    serializer = _SUMMARY_CONTRACT_SERIALIZER_STATE["serializer"]
+    if serializer is not None:
+        return serializer(contract, common=common)
+    summary = require_mapping(contract_to_builtins(contract))
+    merged: dict[str, object] = dict(common) if common is not None else {}
+    merged.update(summary)
+    return merged
 
-    return summary_contract_to_dict(
-        cast("SearchSummaryContract", contract),
-        common=common,
-    )
+
+def set_summary_contract_serializer(
+    serializer: SummaryContractSerializer | None,
+) -> None:
+    """Configure process-default serializer for summary contracts."""
+    _SUMMARY_CONTRACT_SERIALIZER_STATE["serializer"] = serializer
+
+
+def get_summary_contract_serializer() -> SummaryContractSerializer | None:
+    """Return process-default serializer for summary contracts."""
+    return _SUMMARY_CONTRACT_SERIALIZER_STATE["serializer"]
 
 
 def require_mapping(value: object) -> dict[str, object]:
@@ -133,6 +163,8 @@ __all__ = [
     "SummaryBuildRequest",
     "UuidIdentityContractV1",
     "contract_to_builtins",
+    "get_summary_contract_serializer",
     "require_mapping",
+    "set_summary_contract_serializer",
     "summary_contract_to_mapping",
 ]

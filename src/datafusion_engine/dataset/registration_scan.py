@@ -13,10 +13,7 @@ from datafusion_engine.dataset.registry import (
     DatasetLocationOverrides,
     resolve_dataset_schema,
 )
-from schema_spec.dataset_spec import (
-    DataFusionScanOptions,
-    ParquetColumnOptions,
-)
+from schema_spec.scan_options import DataFusionScanOptions, ParquetColumnOptions
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
 

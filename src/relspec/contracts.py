@@ -19,13 +19,13 @@ from relspec.metadata import (
     relation_output_metadata_spec,
     relspec_metadata_spec,
 )
+from relspec.ports import RuntimeProfilePort
 from semantics.output_names import RELATION_OUTPUT_NAME, RELATION_OUTPUT_ORDERING_KEYS
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
     from relspec.pipeline_policy import DiagnosticsPolicy
     from semantics.ir import SemanticIR
@@ -54,7 +54,7 @@ class CompileExecutionPolicyRequestV1(msgspec.Struct, frozen=True):
 
     task_graph: TaskGraphLike
     output_locations: dict[str, DatasetLocation]
-    runtime_profile: DataFusionRuntimeProfile
+    runtime_profile: RuntimeProfilePort
     view_nodes: tuple[ViewNode, ...] | None = None
     semantic_ir: SemanticIR | None = None
     scan_overrides: tuple[ScanOverrideLike, ...] = ()

@@ -20,12 +20,12 @@ from relspec.compiled_policy import (
     JsonValue,
 )
 from relspec.contracts import CompileExecutionPolicyRequestV1, ScanOverrideLike, TaskGraphLike
+from relspec.ports import RuntimeProfilePort
 from serde_msgspec import to_builtins
 from utils.hashing import hash_json_canonical
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
     from relspec.pipeline_policy import DiagnosticsPolicy
     from semantics.ir import SemanticIR
@@ -513,7 +513,7 @@ def _derive_maintenance_policies(
 def _derive_materialization_strategy(
     *,
     output_locations: Mapping[str, DatasetLocation],
-    runtime_profile: DataFusionRuntimeProfile,
+    runtime_profile: RuntimeProfilePort,
     workload_class: str | None = None,
 ) -> str | None:
     """Derive a high-level materialization strategy identifier.

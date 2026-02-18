@@ -6,7 +6,6 @@ Handles entity queries for definitions, imports, decorators, and calls.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 import msgspec
@@ -14,32 +13,25 @@ import msgspec
 from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.core.schema import (
-    Anchor,
     CqResult,
     Finding,
     extend_result_key_findings,
     update_result_summary,
 )
-from tools.cq.core.scoring import (
-    ConfidenceSignals,
-    ImpactSignals,
-    build_detail_payload,
-    build_score_details,
-)
 from tools.cq.core.structs import CqStruct
-from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
-from tools.cq.query.import_utils import (
-    extract_from_import_alias,
-    extract_from_import_name,
-    extract_from_module_name,
-    extract_rust_use_import_name,
-    extract_simple_import_alias,
-    extract_simple_import_name,
+from tools.cq.query.enrichment import filter_by_scope
+from tools.cq.query.executor_definitions_findings import def_to_finding
+from tools.cq.query.executor_definitions_imports import (
+    dedupe_import_matches,
+    extract_import_name,
+    import_match_key,
+    import_to_finding,
 )
 from tools.cq.query.scan import ScanContext
 from tools.cq.query.shared_utils import extract_def_name
 
 if TYPE_CHECKING:
+    from tools.cq.core.run_context import SymtableEnricherPort
     from tools.cq.query.execution_requests import DefQueryContext
     from tools.cq.query.ir import Query
 
@@ -57,7 +49,7 @@ def process_import_query(
     query: Query,
     result: CqResult,
     *,
-    symtable: SymtableEnricher,
+    symtable: SymtableEnricherPort,
 ) -> CqResult:
     """Process an import entity query.
 
@@ -382,202 +374,6 @@ def matches_name(record: SgRecord, name: str) -> bool:
 
     # Exact match otherwise
     return extracted_name == name
-
-
-def import_match_key(import_record: SgRecord) -> tuple[str, int, int, int, int, str]:
-    """Build a stable dedupe key for import-query findings.
-
-    Parameters
-    ----------
-    import_record
-        Import record
-
-    Returns:
-    -------
-    tuple[str, int, int, int, int, str]
-        Dedupe key
-    """
-    return (
-        import_record.file,
-        import_record.start_line,
-        import_record.start_col,
-        import_record.end_line,
-        import_record.end_col,
-        extract_import_name(import_record) or import_record.text.strip(),
-    )
-
-
-def dedupe_import_matches(import_records: list[SgRecord]) -> list[SgRecord]:
-    """Drop duplicate import records emitted by overlapping ast-grep import rules.
-
-    Parameters
-    ----------
-    import_records
-        Import records to dedupe
-
-    Returns:
-    -------
-    list[SgRecord]
-        Deduped records
-    """
-    deduped: dict[tuple[str, int, int, int, int, str], SgRecord] = {}
-    for import_record in import_records:
-        key = import_match_key(import_record)
-        if key not in deduped:
-            deduped[key] = import_record
-    return list(deduped.values())
-
-
-def extract_import_name(record: SgRecord) -> str | None:
-    """Extract the imported name from an import record.
-
-    For single imports, returns the imported name or alias.
-    For multi-imports (comma-separated or parenthesized), returns the module name.
-
-    Parameters
-    ----------
-    record
-        Import record
-
-    Returns:
-    -------
-    str | None
-        Imported name or module name when extractable
-    """
-    text = record.text.strip()
-    kind = record.kind
-
-    extractor_by_kind: dict[str, Callable[[str], str | None]] = {
-        "import": extract_simple_import_name,
-        "import_as": extract_simple_import_alias,
-        "from_import": extract_from_import_name,
-        "from_import_as": extract_from_import_alias,
-        "from_import_multi": extract_from_module_name,
-        "from_import_paren": extract_from_module_name,
-        "use_declaration": extract_rust_use_import_name,
-    }
-    extractor = extractor_by_kind.get(kind)
-    if extractor is None:
-        return None
-    return extractor(text)
-
-
-def def_to_finding(
-    def_record: SgRecord,
-    calls_within: Sequence[SgRecord],
-    *,
-    caller_count: int = 0,
-    callee_count: int | None = None,
-    enclosing_scope: str | None = None,
-) -> Finding:
-    """Convert a definition record to a Finding.
-
-    Parameters
-    ----------
-    def_record
-        Definition record
-    calls_within
-        Calls within the definition
-    caller_count
-        Number of callers
-    callee_count
-        Number of callees
-    enclosing_scope
-        Enclosing scope name
-
-    Returns:
-    -------
-    Finding
-        Finding describing the definition record
-    """
-    def_name = extract_def_name(def_record) or "unknown"
-
-    # Build anchor
-    anchor = Anchor(
-        file=def_record.file,
-        line=def_record.start_line,
-        col=def_record.start_col,
-        end_line=def_record.end_line,
-        end_col=def_record.end_col,
-    )
-
-    # Calculate scores
-    effective_callee_count = len(calls_within) if callee_count is None else callee_count
-    scope_label = enclosing_scope or "<module>"
-    impact_signals = ImpactSignals(
-        sites=max(caller_count, effective_callee_count),
-        files=1,
-        depth=1,
-    )
-    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
-
-    score = build_score_details(impact=impact_signals, confidence=conf_signals)
-    return Finding(
-        category="definition",
-        message=f"{def_record.kind}: {def_name}",
-        anchor=anchor,
-        severity="info",
-        details=build_detail_payload(
-            data={
-                "kind": def_record.kind,
-                "name": def_name,
-                "calls_within": len(calls_within),
-                "caller_count": caller_count,
-                "callee_count": effective_callee_count,
-                "enclosing_scope": scope_label,
-            },
-            score=score,
-        ),
-    )
-
-
-def import_to_finding(import_record: SgRecord) -> Finding:
-    """Convert an import record to a Finding.
-
-    Parameters
-    ----------
-    import_record
-        Import record
-
-    Returns:
-    -------
-    Finding
-        Finding describing the import record
-    """
-    import_name = extract_import_name(import_record) or "unknown"
-
-    anchor = Anchor(
-        file=import_record.file,
-        line=import_record.start_line,
-        col=import_record.start_col,
-        end_line=import_record.end_line,
-        end_col=import_record.end_col,
-    )
-
-    # Determine category based on import kind
-    if import_record.kind in {
-        "from_import",
-        "from_import_as",
-        "from_import_multi",
-        "from_import_paren",
-    }:
-        category = "from_import"
-    else:
-        category = "import"
-
-    return Finding(
-        category=category,
-        message=f"{category}: {import_name}",
-        anchor=anchor,
-        severity="info",
-        details=build_detail_payload(
-            data={
-                "kind": import_record.kind,
-                "name": import_name,
-                "text": import_record.text.strip(),
-            }
-        ),
-    )
 
 
 __all__ = [

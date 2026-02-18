@@ -49,8 +49,7 @@ from tools.cq.search.tree_sitter.python_lane.runtime_engine import (
 )
 from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.planner import (
-    compile_pack_source_rows,
-    normalize_pack_source_rows,
+    resolve_pack_source_rows,
 )
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
@@ -237,13 +236,13 @@ def _parse_quality(captures: dict[str, list[Node]], source_bytes: bytes) -> dict
 
 @lru_cache(maxsize=1)
 def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    source_rows = normalize_pack_source_rows(
-        (source.pack_name, source.source)
-        for source in load_query_pack_sources("python", include_distribution=False)
-    )
-    return compile_pack_source_rows(
+    return resolve_pack_source_rows(
         language="python",
-        source_rows=source_rows,
+        source_rows=(
+            (source.pack_name, source.source)
+            for source in load_query_pack_sources("python", include_distribution=False)
+        ),
+        dedupe_by_pack_name=False,
         request_surface="artifact",
     )
 

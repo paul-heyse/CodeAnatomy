@@ -10,7 +10,7 @@ import pytest
 
 from datafusion_engine.dataset.registration_core import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
-from schema_spec.dataset_spec import DataFusionScanOptions
+from schema_spec.scan_options import DataFusionScanOptions
 from tests.test_helpers.diagnostics import diagnostic_profile
 from tests.test_helpers.optional_deps import require_datafusion_udfs
 

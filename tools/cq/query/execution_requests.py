@@ -6,13 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.core.run_context import SymtableEnricherPort
+
 if TYPE_CHECKING:
     from tools.cq.astgrep.sgpy_scanner import SgRecord
     from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.schema import CqResult
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.index.files import FileFilterDecision
-    from tools.cq.query.enrichment import SymtableEnricher
     from tools.cq.query.executor_entity_impl import EntityExecutionState
     from tools.cq.query.ir import Query
     from tools.cq.query.planner import ToolPlan
@@ -31,7 +32,7 @@ class EntityQueryRequest:
     scope_globs: list[str] | None
     argv: list[str]
     services: CqRuntimeServices
-    symtable: SymtableEnricher
+    symtable: SymtableEnricherPort
     run_id: str | None = None
     query_text: str | None = None
     match_spans: dict[str, list[tuple[int, int]]] | None = None
@@ -48,7 +49,7 @@ class PatternQueryRequest:
     files: list[Path]
     argv: list[str]
     services: CqRuntimeServices
-    symtable: SymtableEnricher
+    symtable: SymtableEnricherPort
     run_id: str | None = None
     query_text: str | None = None
     decisions: list[FileFilterDecision] | None = None
@@ -60,7 +61,7 @@ class DefQueryContext:
 
     state: EntityExecutionState
     result: CqResult
-    symtable: SymtableEnricher
+    symtable: SymtableEnricherPort
 
 
 __all__ = [

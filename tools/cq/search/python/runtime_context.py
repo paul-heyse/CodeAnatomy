@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import msgspec
 
 from tools.cq.search._shared.bounded_cache import BoundedCache
@@ -19,6 +21,7 @@ class PythonEnrichmentRuntimeContext(msgspec.Struct):
     cache_registered: bool = False
 
 
+_DEFAULT_PYTHON_RUNTIME_CONTEXT_LOCK = threading.Lock()
 _DEFAULT_PYTHON_RUNTIME_CONTEXT_STATE: dict[str, PythonEnrichmentRuntimeContext | None] = {
     "context": None
 }
@@ -26,11 +29,18 @@ _DEFAULT_PYTHON_RUNTIME_CONTEXT_STATE: dict[str, PythonEnrichmentRuntimeContext 
 
 def get_default_python_runtime_context() -> PythonEnrichmentRuntimeContext:
     """Return process-default runtime context for Python enrichment."""
-    context = _DEFAULT_PYTHON_RUNTIME_CONTEXT_STATE["context"]
-    if context is None:
-        context = PythonEnrichmentRuntimeContext()
+    with _DEFAULT_PYTHON_RUNTIME_CONTEXT_LOCK:
+        context = _DEFAULT_PYTHON_RUNTIME_CONTEXT_STATE["context"]
+        if context is None:
+            context = PythonEnrichmentRuntimeContext()
+            _DEFAULT_PYTHON_RUNTIME_CONTEXT_STATE["context"] = context
+        return context
+
+
+def set_default_python_runtime_context(context: PythonEnrichmentRuntimeContext | None) -> None:
+    """Install or clear process-default Python runtime context."""
+    with _DEFAULT_PYTHON_RUNTIME_CONTEXT_LOCK:
         _DEFAULT_PYTHON_RUNTIME_CONTEXT_STATE["context"] = context
-    return context
 
 
 def ensure_python_cache_registered(ctx: PythonEnrichmentRuntimeContext) -> None:
@@ -45,4 +55,5 @@ __all__ = [
     "PythonEnrichmentRuntimeContext",
     "ensure_python_cache_registered",
     "get_default_python_runtime_context",
+    "set_default_python_runtime_context",
 ]

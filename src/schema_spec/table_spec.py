@@ -5,12 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from datafusion_engine.arrow.interop import SchemaLike
-from schema_spec.dataset_spec import (
-    ContractRow,
-    SortKeySpec,
-    TableSchemaContract,
-    TableSpecConstraints,
-)
+from schema_spec.dataset_contracts import ContractRow, SortKeySpec, TableSchemaContract
+from schema_spec.dataset_spec import TableSpecConstraints
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import FieldBundle, TableSchemaSpec
 

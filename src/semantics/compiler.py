@@ -44,6 +44,7 @@ from relspec.inference_confidence import InferenceConfidence
 from semantics.config import SemanticConfig
 from semantics.join_helpers import join_by_span_contains, join_by_span_overlap
 from semantics.joins import JoinStrategy, JoinStrategyType
+from semantics.ports import SessionContextProviderPort
 from semantics.schema import SemanticSchema, SemanticSchemaError
 from semantics.types.core import (
     CompatibilityGroup,
@@ -185,6 +186,18 @@ class JoinInputs:
     right_sem: SemanticSchema
 
 
+def _resolve_session_context(ctx: SessionContext | SessionPort) -> SessionContext:
+    if isinstance(ctx, SessionContext):
+        return ctx
+    if isinstance(ctx, SessionContextProviderPort):
+        return ctx.session_context()
+    msg = (
+        "SemanticCompiler requires a SessionContext or a session port "
+        "implementing session_context()."
+    )
+    raise TypeError(msg)
+
+
 class SemanticCompiler:
     """Compiles semantic operations to DataFusion plans.
 
@@ -205,7 +218,7 @@ class SemanticCompiler:
             Optional semantic configuration overrides.
         """
         self._ctx = ctx
-        self.ctx = cast("SessionContext", ctx)
+        self.ctx = _resolve_session_context(ctx)
         self._tables: dict[str, TableInfo] = {}
         self._udf_snapshot: dict[str, object] | None = None
         self._config = config or SemanticConfig()

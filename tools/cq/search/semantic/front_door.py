@@ -30,10 +30,6 @@ from tools.cq.core.cache.telemetry import (
 )
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.search._shared.helpers import line_col_to_byte_offset
-from tools.cq.search.semantic.helpers import (
-    run_python_byte_range_enrichment,
-    run_rust_byte_range_enrichment,
-)
 from tools.cq.search.semantic.models import (
     LanguageSemanticEnrichmentOutcome,
     LanguageSemanticEnrichmentRequest,
@@ -46,7 +42,14 @@ from tools.cq.search.semantic.models import (
     enrich_with_language_semantics,
     resolve_language_provider_root,
 )
-from tools.cq.search.semantic.registry import LanguageProviderRegistry
+from tools.cq.search.semantic.registry import (
+    LanguageProviderRegistry,
+    get_default_language_provider_registry,
+    register_default_language_providers,
+    run_python_byte_range_provider,
+    run_rust_byte_range_provider,
+    set_default_language_provider_registry,
+)
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 
 
@@ -67,15 +70,30 @@ class _PipelineContext:
     lane_ttl_seconds: int
 
 
+def build_default_language_provider_registry() -> LanguageProviderRegistry:
+    """Build default registry for semantic enrichment language providers.
+
+    Returns:
+        Registry pre-populated with Python and Rust providers.
+    """
+    return register_default_language_providers(
+        registry=LanguageProviderRegistry(),
+        python_provider=_execute_python_provider,
+        rust_provider=_execute_rust_provider,
+    )
+
+
 def _resolve_provider_registry(
     registry: LanguageProviderRegistry | None,
 ) -> LanguageProviderRegistry:
     if registry is not None:
         return registry
-    default_registry = LanguageProviderRegistry()
-    default_registry.register("python", _execute_python_provider)
-    default_registry.register("rust", _execute_rust_provider)
-    return default_registry
+    default_registry = get_default_language_provider_registry()
+    if default_registry is not None:
+        return default_registry
+    resolved_registry = build_default_language_provider_registry()
+    set_default_language_provider_registry(resolved_registry)
+    return resolved_registry
 
 
 def run_language_semantic_enrichment(
@@ -314,7 +332,7 @@ def _python_payload(
         language="python",
         fallback_budget_ms=query_budget_ms,
     )
-    payload = run_python_byte_range_enrichment(
+    payload = run_python_byte_range_provider(
         target_file_path=context.target_file_path,
         source_bytes=source_bytes,
         byte_start=byte_start,
@@ -400,7 +418,7 @@ def _rust_payload(
         language="rust",
         fallback_budget_ms=query_budget_ms,
     )
-    payload = run_rust_byte_range_enrichment(
+    payload = run_rust_byte_range_provider(
         source=source,
         target_file_path=context.target_file_path,
         byte_start=byte_start,
@@ -544,6 +562,7 @@ def enrich_semantics(request: LanguageSemanticEnrichmentRequest) -> SemanticOutc
 
 
 __all__ = [
+    "build_default_language_provider_registry",
     "enrich_semantics",
     "enrich_with_language_semantics",
     "fail_open",

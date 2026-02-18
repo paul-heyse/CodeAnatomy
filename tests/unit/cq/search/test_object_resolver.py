@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tools.cq.core.locations import SourceSpan
-from tools.cq.search._shared.enrichment_contracts import PythonEnrichmentV1
+from tools.cq.search._shared.enrichment_contracts import wrap_python_enrichment
 from tools.cq.search.objects.resolve import build_object_resolved_view
 from tools.cq.search.pipeline.context_window import ContextWindow
 from tools.cq.search.pipeline.smart_search import EnrichedMatch
@@ -34,8 +34,8 @@ def test_object_resolver_groups_occurrences_by_qualified_name() -> None:
             category="callsite",
             confidence=0.9,
             evidence_kind="resolved_ast",
-            python_enrichment=PythonEnrichmentV1(
-                payload={
+            python_enrichment=wrap_python_enrichment(
+                {
                     "resolution": {
                         "qualified_name_candidates": [{"name": "pkg.core.build_graph"}],
                     }
@@ -51,8 +51,8 @@ def test_object_resolver_groups_occurrences_by_qualified_name() -> None:
             category="callsite",
             confidence=0.8,
             evidence_kind="resolved_ast",
-            python_enrichment=PythonEnrichmentV1(
-                payload={
+            python_enrichment=wrap_python_enrichment(
+                {
                     "resolution": {
                         "qualified_name_candidates": [{"name": "pkg.core.build_graph"}],
                     }
@@ -84,8 +84,8 @@ def test_object_resolver_marks_non_callable_applicability() -> None:
         category="reference",
         confidence=0.7,
         evidence_kind="resolved_ast",
-        python_enrichment=PythonEnrichmentV1(
-            payload={
+        python_enrichment=wrap_python_enrichment(
+            {
                 "structural": {"item_role": "attribute"},
                 "resolution": {"binding_candidates": [{"name": "stable_id"}]},
             }

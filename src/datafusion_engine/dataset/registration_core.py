@@ -118,9 +118,7 @@ from datafusion_engine.tables.metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
 )
-from schema_spec.dataset_spec import (
-    DataFusionScanOptions,
-)
+from schema_spec.scan_options import DataFusionScanOptions
 from storage.deltalake import DeltaCdfOptions
 
 if TYPE_CHECKING:

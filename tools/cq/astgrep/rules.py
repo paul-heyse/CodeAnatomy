@@ -9,7 +9,9 @@ from tools.cq.astgrep.sgpy_scanner import RecordType, RuleSpec
 from tools.cq.core.types import QueryLanguage
 
 _DEFAULT_RULEPACK_REGISTRY_LOCK = threading.Lock()
-_DEFAULT_RULEPACK_REGISTRY_STATE: dict[str, RulePackRegistry | None] = {"registry": None}
+_DEFAULT_RULEPACK_REGISTRY_STATE: dict[str, RulePackRegistry | None] = {
+    "registry": None
+}
 
 
 def _filter_rules_for_types(

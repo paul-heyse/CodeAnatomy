@@ -33,3 +33,22 @@ class DatasetSpecProvider(Protocol):
     def normalize_dataset_spec(self, value: object) -> object | None:
         """Normalize extracted dataset spec payload."""
         ...
+
+
+class RuntimeProfilePoliciesPort(Protocol):
+    """Policy projection used by relspec policy compilation."""
+
+    write_policy: object | None
+
+
+class RuntimeProfileFeaturesPort(Protocol):
+    """Feature-gates projection used by relspec policy compilation."""
+
+    enable_delta_cdf: bool
+
+
+class RuntimeProfilePort(Protocol):
+    """Runtime-profile projection used by relspec policy compilation."""
+
+    policies: RuntimeProfilePoliciesPort
+    features: RuntimeProfileFeaturesPort

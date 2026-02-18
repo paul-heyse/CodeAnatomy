@@ -12,10 +12,10 @@ import msgspec
 from tools.cq.core.id import stable_digest24
 from tools.cq.search._shared.enrichment_contracts import (
     incremental_enrichment_payload,
+    python_enrichment_facts,
     python_enrichment_payload,
     rust_enrichment_payload,
 )
-from tools.cq.search.enrichment.core import parse_python_enrichment
 from tools.cq.search.objects.payload_views import (
     EnrichmentPayloadView,
     ResolutionView,
@@ -188,7 +188,7 @@ def _payload_views(match: EnrichedMatch) -> _PayloadViews:
     semantic = semantic_raw if isinstance(semantic_raw, dict) else _EMPTY_OBJECT_PAYLOAD
     python = python_enrichment_payload(match.python_enrichment)
     python_view = _payload_view(python)
-    python_facts = parse_python_enrichment(python) if python else None
+    python_facts = python_enrichment_facts(match.python_enrichment)
     resolution_raw: dict[str, object] = _struct_to_mapping(python_view.resolution)
     if (
         not _mapping_has_signal(resolution_raw)

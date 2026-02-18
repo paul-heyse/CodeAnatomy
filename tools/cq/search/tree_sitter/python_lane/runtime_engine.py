@@ -47,8 +47,7 @@ from tools.cq.search.tree_sitter.python_lane.constants import (
 )
 from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.planner import (
-    compile_pack_source_rows,
-    normalize_pack_source_rows,
+    resolve_pack_source_rows,
 )
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
@@ -204,16 +203,13 @@ def get_tree_sitter_python_cache_stats() -> dict[str, int]:
 
 @lru_cache(maxsize=1)
 def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    deduped_sources = normalize_pack_source_rows(
-        (
+    return resolve_pack_source_rows(
+        language="python",
+        source_rows=(
             (source.pack_name, source.source)
             for source in load_query_pack_sources("python", include_distribution=False)
         ),
         dedupe_by_pack_name=True,
-    )
-    return compile_pack_source_rows(
-        language="python",
-        source_rows=deduped_sources,
         request_surface="artifact",
     )
 

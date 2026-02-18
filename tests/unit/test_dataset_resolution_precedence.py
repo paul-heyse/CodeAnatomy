@@ -17,12 +17,10 @@ from schema_spec.dataset_spec import (
     DatasetPolicies,
     DatasetSpec,
     DeltaPolicyBundle,
-    DeltaScanPolicyDefaults,
-    ScanPolicyConfig,
-    ScanPolicyDefaults,
     dataset_spec_schema,
 )
 from schema_spec.field_spec import FieldSpec
+from schema_spec.scan_policy import DeltaScanPolicyDefaults, ScanPolicyConfig, ScanPolicyDefaults
 from schema_spec.specs import TableSchemaSpec
 from storage.deltalake.config import DeltaSchemaPolicy
 

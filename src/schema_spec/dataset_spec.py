@@ -6,20 +6,6 @@ from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.schema.validation import ArrowValidationOptions
-from schema_spec.dataset_contracts import (
-    ContractRow,
-    DedupeSpecSpec,
-    SortKeySpec,
-    TableSchemaContract,
-)
-from schema_spec.scan_options import DataFusionScanOptions, DeltaScanOptions, ParquetColumnOptions
-from schema_spec.scan_policy import (
-    DeltaScanPolicyDefaults,
-    ScanPolicyConfig,
-    ScanPolicyDefaults,
-    apply_delta_scan_policy,
-    apply_scan_policy,
-)
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
@@ -115,34 +101,22 @@ __all__ = [
     "ArrowValidationOptions",
     "ContractCatalogSpec",
     "ContractKwargs",
-    "ContractRow",
     "ContractSpec",
     "ContractSpecKwargs",
-    "DataFusionScanOptions",
     "DatasetKind",
     "DatasetOpenSpec",
     "DatasetPolicies",
     "DatasetSpec",
     "DatasetSpecKwargs",
-    "DedupeSpecSpec",
     "DeltaCdfPolicy",
     "DeltaMaintenancePolicy",
     "DeltaPolicyBundle",
-    "DeltaScanOptions",
-    "DeltaScanPolicyDefaults",
     "DeltaSchemaPolicy",
     "DeltaSchemaRequest",
     "DeltaWritePolicy",
-    "ParquetColumnOptions",
-    "ScanPolicyConfig",
-    "ScanPolicyDefaults",
-    "SortKeySpec",
-    "TableSchemaContract",
     "TableSpecConstraints",
     "ValidationPolicySpec",
     "VirtualFieldSpec",
-    "apply_delta_scan_policy",
-    "apply_scan_policy",
     "dataset_spec_contract",
     "dataset_spec_contract_spec_or_default",
     "dataset_spec_datafusion_scan",

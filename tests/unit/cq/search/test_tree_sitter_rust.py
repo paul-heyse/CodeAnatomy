@@ -8,7 +8,7 @@ import pytest
 from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.tree_sitter.core.runtime_context import get_default_context
 from tools.cq.search.tree_sitter.rust_lane import runtime as tree_sitter_rust
-from tools.cq.search.tree_sitter.rust_lane import runtime_core as tree_sitter_rust_core
+from tools.cq.search.tree_sitter.rust_lane import runtime_engine as tree_sitter_rust_core
 from tools.cq.search.tree_sitter.rust_lane.enrichment_extractors import _MAX_FIELDS_SHOWN
 from tools.cq.search.tree_sitter.rust_lane.runtime import MAX_SOURCE_BYTES
 

@@ -7,6 +7,7 @@ This is the CANONICAL schema authority for all downstream SNB operations.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Literal
 
 from tools.cq.core.structs import CqStruct
@@ -309,6 +310,15 @@ class SemanticNeighborhoodBundleV1(CqStruct, frozen=True):
     schema_version: str = "cq.snb.v1"
 
 
+def freeze_node_index(
+    node_index: Mapping[str, SemanticNodeRefV1] | None,
+) -> Mapping[str, SemanticNodeRefV1] | None:
+    """Return an immutable copy of node-index mapping payload."""
+    if node_index is None:
+        return None
+    return MappingProxyType(dict(node_index))
+
+
 __all__ = [
     "ArtifactPointerV1",
     "BundleMetaV1",
@@ -320,4 +330,5 @@ __all__ = [
     "SemanticNeighborhoodBundleRefV1",
     "SemanticNeighborhoodBundleV1",
     "SemanticNodeRefV1",
+    "freeze_node_index",
 ]

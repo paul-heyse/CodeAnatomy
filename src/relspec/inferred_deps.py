@@ -139,10 +139,8 @@ class _DefaultDatasetSpecProvider:
     def extract_dataset_spec(value: object) -> object | None:
         if not isinstance(value, str):
             return None
-        try:
-            from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
-        except (ImportError, RuntimeError, TypeError, ValueError):
-            return None
+        from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
+
         try:
             return extract_dataset_spec(value)
         except KeyError:
@@ -152,10 +150,8 @@ class _DefaultDatasetSpecProvider:
     def normalize_dataset_spec(value: object) -> object | None:
         if not isinstance(value, str):
             return None
-        try:
-            from semantics.catalog.dataset_specs import dataset_spec as normalize_dataset_spec
-        except (ImportError, RuntimeError, TypeError, ValueError):
-            return None
+        from semantics.catalog.dataset_specs import dataset_spec as normalize_dataset_spec
+
         try:
             return normalize_dataset_spec(value)
         except KeyError:
@@ -218,6 +214,32 @@ def infer_deps_from_plan_bundle(
         dataset_spec_provider=inputs.dataset_spec_provider,
     )
 
+    resolved_udfs = _resolve_required_udfs(
+        inputs=inputs,
+        plan_bundle=plan_bundle,
+        lineage_port=lineage_port,
+    )
+
+    return InferredDeps(
+        task_name=inputs.task_name,
+        output=inputs.output,
+        inputs=tables,
+        required_columns=columns_by_table,
+        required_types=required_types,
+        required_metadata=required_metadata,
+        plan_fingerprint=plan_bundle.plan_fingerprint,
+        required_udfs=resolved_udfs,
+        required_rewrite_tags=lineage.required_rewrite_tags,
+        scans=getattr(lineage, "scans", ()),
+    )
+
+
+def _resolve_required_udfs(
+    *,
+    inputs: InferredDepsInputs,
+    plan_bundle: DataFusionPlanArtifact,
+    lineage_port: LineagePort,
+) -> tuple[str, ...]:
     snapshot = inputs.snapshot or plan_bundle.artifacts.udf_snapshot
     resolved_snapshot = snapshot if isinstance(snapshot, Mapping) else {}
     resolved_udfs = tuple(sorted(lineage_port.resolve_required_udfs(plan_bundle)))
@@ -233,27 +255,11 @@ def infer_deps_from_plan_bundle(
                 "Ignoring explicit required_udfs not present in plan bundle: %s",
                 sorted(set(extra)),
             )
-
     if resolved_udfs:
         from datafusion_engine.udf.extension_core import validate_required_udfs
 
         validate_required_udfs(resolved_snapshot, required=resolved_udfs)
-
-    # Use plan fingerprint from bundle
-    fingerprint = plan_bundle.plan_fingerprint
-
-    return InferredDeps(
-        task_name=inputs.task_name,
-        output=inputs.output,
-        inputs=tables,
-        required_columns=columns_by_table,
-        required_types=required_types,
-        required_metadata=required_metadata,
-        plan_fingerprint=fingerprint,
-        required_udfs=resolved_udfs,
-        required_rewrite_tags=lineage.required_rewrite_tags,
-        scans=getattr(lineage, "scans", ()),
-    )
+    return resolved_udfs
 
 
 def _expand_nested_inputs(inputs: Sequence[str]) -> tuple[str, ...]:
@@ -395,10 +401,7 @@ def _schema_contract_for_table(
     )
     if spec is None:
         return None
-    try:
-        from datafusion_engine.schema.contracts import schema_contract_from_dataset_spec
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None
+    from datafusion_engine.schema.contracts import schema_contract_from_dataset_spec
 
     return schema_contract_from_dataset_spec(name=dataset_spec_name(spec), spec=spec)
 

@@ -11,7 +11,7 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryWindowV1,
 )
 from tools.cq.search.tree_sitter.core.language_registry import load_language_registry
-from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches
+from tools.cq.search.tree_sitter.core.runtime_engine import run_bounded_query_matches
 from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.registry import load_distribution_query_source
 

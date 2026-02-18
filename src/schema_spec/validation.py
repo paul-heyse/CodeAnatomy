@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, Literal
 
 from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.schema.validation import ArrowValidationOptions, validate_table
-from schema_spec.dataset_spec import ValidationPolicySpec
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from schema_spec.dataset_spec_runtime import ValidationPolicySpec
 
 
 def validation_policy_to_arrow_options(

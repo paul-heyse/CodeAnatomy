@@ -7,8 +7,8 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
-from tools.cq.macros.calls_target import (
+from tools.cq.core.cache.backend_core import close_cq_cache_backend
+from tools.cq.macros.calls.target_runtime import (
     AttachTargetMetadataRequestV1,
     resolve_target_metadata,
 )

@@ -8,16 +8,16 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tools.cq.orchestration import (
         bundles,
-        multilang_orchestrator,
         multilang_summary,
+        orchestrator,
         request_factory,
         schema_export,
     )
 
 __all__ = [
     "bundles",
-    "multilang_orchestrator",
     "multilang_summary",
+    "orchestrator",
     "request_factory",
     "schema_export",
 ]

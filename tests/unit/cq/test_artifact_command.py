@@ -11,7 +11,7 @@ from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.artifacts import save_search_artifact_bundle_cache
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 
 
 def _seed_search_artifact(tmp_path: Path) -> None:

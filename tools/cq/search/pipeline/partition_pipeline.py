@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,8 +10,8 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.content_hash import file_content_hash
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import (
     decode_fragment_payload,
     encode_fragment_payload,
@@ -50,6 +51,9 @@ from tools.cq.search.tree_sitter.core.infrastructure import run_file_lanes_paral
 
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.contracts import SearchConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +109,12 @@ def run_search_partition(
         LanguageSearchResult: Language-search result payload for this partition.
     """
     lang = plan.language
+    logger.debug(
+        "partition.start lang=%s mode=%s query=%s",
+        lang,
+        mode.value,
+        ctx.query,
+    )
     scope = _scope_context(ctx, lang, mode)
     raw_matches, stats, pattern = _candidate_phase(
         ctx=ctx,
@@ -119,7 +129,7 @@ def run_search_partition(
         plan=plan,
         scope=scope,
     )
-    return LanguageSearchResult(
+    result = LanguageSearchResult(
         lang=lang,
         raw_matches=raw_matches,
         stats=stats,
@@ -127,6 +137,15 @@ def run_search_partition(
         enriched_matches=enriched,
         dropped_by_scope=int(getattr(stats, "dropped_by_scope", 0)),
     )
+    logger.debug(
+        "partition.done lang=%s raw=%d enriched=%d matched_files=%d total=%d",
+        lang,
+        len(raw_matches),
+        len(enriched),
+        stats.matched_files,
+        stats.total_matches,
+    )
+    return result
 
 
 def _scope_context(
@@ -264,10 +283,17 @@ def _candidate_payload_from_cache(
         except (RuntimeError, TypeError, ValueError):
             record_cache_decode_failure(namespace="search_candidates")
         else:
+            logger.debug(
+                "partition.candidate_cache_hit lang=%s mode=%s count=%d",
+                lang,
+                mode.value,
+                len(raw_matches),
+            )
             return raw_matches, stats, payload.pattern, True
     elif is_fragment_cache_payload(cached):
         record_cache_decode_failure(namespace="search_candidates")
 
+    logger.debug("partition.candidate_cache_miss lang=%s mode=%s", lang, mode.value)
     raw_matches, stats, pattern = run_candidate_phase(ctx, lang=lang, mode=mode)
     return raw_matches, stats, pattern, False
 
@@ -305,6 +331,13 @@ def _enrichment_phase(
     enriched_results, misses = _probe_enrichment_cache(
         raw_matches=raw_matches,
         context=context,
+    )
+    logger.debug(
+        "partition.enrichment_probe lang=%s raw=%d misses=%d cache_enabled=%s",
+        lang,
+        len(raw_matches),
+        len(misses),
+        context.cache_enabled,
     )
     if misses:
         _compute_and_persist_enrichment_misses(
@@ -474,6 +507,12 @@ def _classify_enrichment_misses(
         TypeError,
         ValueError,
     ):
+        logger.warning(
+            "partition.enrichment_parallel_fallback lang=%s workers=%d misses=%d",
+            context.lang,
+            workers,
+            len(misses),
+        )
         rows = _classify_enrichment_miss_batch(
             _EnrichmentMissTask(
                 root=str(ctx.root),

@@ -42,7 +42,7 @@ from tools.cq.search.tree_sitter.core.query_pack_executor import (
     QueryPackExecutionContextV1,
     execute_pack_rows_with_matches,
 )
-from tools.cq.search.tree_sitter.core.runtime import (
+from tools.cq.search.tree_sitter.core.runtime_engine import (
     QueryExecutionCallbacksV1,
 )
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows

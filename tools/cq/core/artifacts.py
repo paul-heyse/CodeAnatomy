@@ -6,8 +6,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1, SearchArtifactIndexEntryV1
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.policy import default_cache_policy
 from tools.cq.core.cache.run_lifecycle import CacheWriteTagRequestV1, resolve_write_cache_tag
 from tools.cq.core.cache.search_artifact_store import (

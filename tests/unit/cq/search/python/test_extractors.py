@@ -9,7 +9,7 @@ from tools.cq.search._shared.requests import (
     PythonByteRangeEnrichmentRequest,
     PythonNodeEnrichmentRequest,
 )
-from tools.cq.search.python import extractors as extractors_module
+from tools.cq.search.python import extractors_entrypoints as extractors_module
 
 
 def test_extract_python_node_delegates(monkeypatch: pytest.MonkeyPatch) -> None:

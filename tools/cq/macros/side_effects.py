@@ -22,7 +22,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy

@@ -29,7 +29,7 @@ from tools.cq.core.schema import (
     update_result_summary,
 )
 from tools.cq.core.structs import CqStruct
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     apply_summary_mapping,
     as_search_summary,
 )

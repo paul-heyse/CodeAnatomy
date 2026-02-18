@@ -37,7 +37,7 @@ from tools.cq.core.semantic_contracts import (
     derive_semantic_contract_state,
 )
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
-from tools.cq.core.summary_contract import coerce_semantic_telemetry
+from tools.cq.core.summary_types import coerce_semantic_telemetry
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import Finding

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from tools.cq.core.front_door_contracts import InsightNeighborhoodV1
     from tools.cq.core.schema import Finding, Section
     from tools.cq.core.semantic_contracts import SemanticProvider
-    from tools.cq.core.summary_contract import SearchSummaryV1
+    from tools.cq.core.summary_types import SearchSummaryV1
     from tools.cq.search.objects.resolve import ObjectResolutionRuntime
     from tools.cq.search.pipeline.contracts import SearchConfig
 

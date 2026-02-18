@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from tools.cq.search.python.extractors import _build_agreement_section, _build_stage_facts
+from tools.cq.search.python.extractors_entrypoints import (
+    _build_agreement_section,
+    _build_stage_facts,
+)
 
 
 def test_agreement_full_with_python_resolution_source() -> None:

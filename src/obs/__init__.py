@@ -1,4 +1,4 @@
-"""Observation utilities for manifests, stats, and reproducibility."""
+"""Observation utilities for quality diagnostics and runtime metrics."""
 
 from __future__ import annotations
 
@@ -6,17 +6,24 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    column_stats_table: object
+    from obs.quality_metrics import (
+        QualityPlanSpec,
+        concat_quality_tables,
+        empty_quality_table,
+        quality_from_ids,
+        quality_issue_rows,
+        record_quality_issue_counts,
+    )
+
     datafusion_engine_runtime_metrics: object
-    dataset_stats_table: object
-    schema_identity_hash: object
-    table_summary: object
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
-    "column_stats_table": ("obs.metrics", "column_stats_table"),
-    "dataset_stats_table": ("obs.metrics", "dataset_stats_table"),
-    "schema_identity_hash": ("datafusion_engine.identity", "schema_identity_hash"),
-    "table_summary": ("obs.metrics", "table_summary"),
+    "QualityPlanSpec": ("obs.quality_metrics", "QualityPlanSpec"),
+    "concat_quality_tables": ("obs.quality_metrics", "concat_quality_tables"),
+    "empty_quality_table": ("obs.quality_metrics", "empty_quality_table"),
+    "quality_from_ids": ("obs.quality_metrics", "quality_from_ids"),
+    "quality_issue_rows": ("obs.quality_metrics", "quality_issue_rows"),
+    "record_quality_issue_counts": ("obs.quality_metrics", "record_quality_issue_counts"),
 }
 
 _MODULE_EXPORTS: dict[str, str] = {
@@ -46,9 +53,11 @@ def __dir__() -> list[str]:
 
 
 __all__ = (
-    "column_stats_table",
+    "QualityPlanSpec",
+    "concat_quality_tables",
     "datafusion_engine_runtime_metrics",
-    "dataset_stats_table",
-    "schema_identity_hash",
-    "table_summary",
+    "empty_quality_table",
+    "quality_from_ids",
+    "quality_issue_rows",
+    "record_quality_issue_counts",
 )

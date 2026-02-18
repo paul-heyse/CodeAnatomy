@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 from tools.cq.core.locations import SourceSpan
-from tools.cq.core.summary_contract import SemanticTelemetryV1
+from tools.cq.core.summary_types import SemanticTelemetryV1
 from tools.cq.search.pipeline.classification import classify_match
 from tools.cq.search.pipeline.classifier import QueryMode, clear_caches
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext

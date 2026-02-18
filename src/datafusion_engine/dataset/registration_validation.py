@@ -24,7 +24,7 @@ from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registration_core import DataFusionRegistrationContext
-    from schema_spec.dataset_spec import DataFusionScanOptions
+    from schema_spec.scan_options import DataFusionScanOptions
 
 
 def _apply_scan_settings(

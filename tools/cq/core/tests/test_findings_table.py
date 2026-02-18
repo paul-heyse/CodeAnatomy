@@ -15,7 +15,7 @@ from tools.cq.core.findings_table import (
     rehydrate_result,
 )
 from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 
 _TEST_IMPACT_SCORE_HIGH = 0.75
 _TEST_CONFIDENCE_SCORE_HIGH = 0.95

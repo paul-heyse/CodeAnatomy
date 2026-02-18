@@ -5,7 +5,7 @@ from __future__ import annotations
 import msgspec
 from tools.cq.core.render_summary import render_summary, summary_string
 from tools.cq.core.schema import CqResult, mk_result, mk_runmeta
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     CallsSummaryV1,
     ImpactSummaryV1,
     NeighborhoodSummaryV1,

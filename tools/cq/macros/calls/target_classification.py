@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.macros.calls_target import infer_target_language
+from tools.cq.macros.calls.target_runtime import infer_target_language
 
 __all__ = ["classify_call_target_language"]
 

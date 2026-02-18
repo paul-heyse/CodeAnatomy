@@ -12,7 +12,7 @@ from tools.cq.core.artifacts import (
 )
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 from tools.cq.search.objects.render import ResolvedObjectRef, SearchObjectSummaryV1
 
 

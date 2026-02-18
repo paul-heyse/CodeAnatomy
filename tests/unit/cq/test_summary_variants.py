@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tools.cq.core.schema import mk_result, mk_runmeta
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     CallsSummaryV1,
     ImpactSummaryV1,
     NeighborhoodSummaryV1,

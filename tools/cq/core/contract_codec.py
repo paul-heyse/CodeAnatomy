@@ -9,7 +9,7 @@ import msgspec
 
 from tools.cq.core.contracts_constraints import enforce_mapping_constraints
 from tools.cq.core.schema import Artifact, CqResult, Finding, RunMeta, Section
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     SummaryV1,
     SummaryVariantName,
     resolve_summary_variant_name,

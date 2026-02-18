@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.core.summary_contract import SummaryEnvelopeV1
+from tools.cq.core.summary_types import SummaryEnvelopeV1
 
 
 def summary_with_render_enrichment_metrics(

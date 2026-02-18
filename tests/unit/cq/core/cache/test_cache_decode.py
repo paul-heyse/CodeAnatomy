@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import msgspec
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.blob_store import encode_blob_pointer, write_blob
 from tools.cq.core.cache.cache_decode import decode_cached_payload
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 
 
 class _Payload(msgspec.Struct, frozen=True):

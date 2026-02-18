@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from tools.cq.core.schema import CqResult, Finding
-from tools.cq.core.summary_contract import SummaryEnvelopeV1
+from tools.cq.core.summary_types import SummaryEnvelopeV1
 
 
 def na(reason: str) -> str:

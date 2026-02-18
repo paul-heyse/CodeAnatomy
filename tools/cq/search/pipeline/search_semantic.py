@@ -14,7 +14,7 @@ from tools.cq.core.semantic_contracts import (
     SemanticProvider,
     derive_semantic_contract_state,
 )
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     SemanticTelemetryV1,
     SummaryEnvelopeV1,
     build_semantic_telemetry,

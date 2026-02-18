@@ -1,7 +1,4 @@
-"""Unified execution facade for DataFusion compilation and execution.
-
-Internal execution paths use builder/plan-based approaches only.
-"""
+"""Unified execution facade for DataFusion compilation and execution."""
 
 from __future__ import annotations
 
@@ -10,7 +7,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import msgspec
 from datafusion import DataFrame, SessionContext
 from opentelemetry.semconv.attributes import db_attributes
 
@@ -20,7 +16,7 @@ from datafusion_engine.io.write_core import (
     WriteRequest,
     WriteViewRequest,
 )
-from datafusion_engine.lineage.diagnostics import DiagnosticsRecorder, recorder_for_profile
+from datafusion_engine.lineage.diagnostics import DiagnosticsRecorder
 from datafusion_engine.plan.bundle_artifact import (
     DataFusionPlanArtifact,
     PlanBundleOptions,
@@ -31,14 +27,13 @@ from datafusion_engine.plan.result_types import (
     ExecutionResult,
     ExecutionResultKind,
 )
-from datafusion_engine.session.runtime_session import session_runtime_for_context
+from datafusion_engine.session import facade_ops
 from obs.otel import (
     SCOPE_DATAFUSION,
     get_tracer,
     record_datafusion_duration,
     record_error,
     record_exception,
-    record_write_duration,
     set_span_attributes,
     span_attributes,
 )
@@ -56,7 +51,6 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.runtime_session import SessionRuntime
     from semantics.program_manifest import ManifestDatasetResolver, SemanticProgramManifest
-
 
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
 
@@ -145,55 +139,7 @@ class DataFusionExecutionFacade:
         plan-bundle construction.
 
         """
-        from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
-        from datafusion_engine.udf.extension_validation import extension_capabilities_report
-        from datafusion_engine.udf.platform import (
-            RustUdfPlatformOptions,
-            install_rust_udf_platform,
-        )
-
-        try:
-            capabilities = extension_capabilities_report()
-        except (RuntimeError, TypeError, ValueError):
-            capabilities = {"available": False, "compatible": False}
-        platform_strict = bool(capabilities.get("available")) and bool(
-            capabilities.get("compatible")
-        )
-
-        if self.runtime_profile is None:
-            # Default configuration: enable all planner extensions
-            options = RustUdfPlatformOptions(
-                enable_udfs=True,
-                enable_function_factory=True,
-                enable_expr_planners=True,
-                expr_planner_names=("codeanatomy_domain",),
-                strict=platform_strict,
-            )
-            install_rust_udf_platform(
-                InstallRustUdfPlatformRequestV1(options=msgspec.to_builtins(options)),
-                ctx=self.ctx,
-            )
-            return
-
-        # Profile-driven configuration with strict validation
-        features = self.runtime_profile.features
-        policies = self.runtime_profile.policies
-        options = RustUdfPlatformOptions(
-            enable_udfs=features.enable_udfs,
-            enable_async_udfs=features.enable_async_udfs,
-            async_udf_timeout_ms=policies.async_udf_timeout_ms,
-            async_udf_batch_size=policies.async_udf_batch_size,
-            enable_function_factory=features.enable_function_factory,
-            enable_expr_planners=features.enable_expr_planners,
-            function_factory_hook=policies.function_factory_hook,
-            expr_planner_hook=policies.expr_planner_hook,
-            expr_planner_names=policies.expr_planner_names,
-            strict=platform_strict,
-        )
-        install_rust_udf_platform(
-            InstallRustUdfPlatformRequestV1(options=msgspec.to_builtins(options)),
-            ctx=self.ctx,
-        )
+        facade_ops.install_planner_extensions(self.ctx, self.runtime_profile)
 
     def io_adapter(self) -> DataFusionIOAdapter:
         """Return a DataFusionIOAdapter for the session context.
@@ -218,9 +164,10 @@ class DataFusionExecutionFacade:
         DiagnosticsRecorder | None
             Recorder if a runtime profile is configured.
         """
-        if self.runtime_profile is None:
-            return None
-        return recorder_for_profile(self.runtime_profile, operation_id=operation_id)
+        return facade_ops.diagnostics_recorder(
+            self.runtime_profile,
+            operation_id=operation_id,
+        )
 
     def write_pipeline(self) -> WritePipeline:
         """Return a WritePipeline bound to this facade.
@@ -230,17 +177,7 @@ class DataFusionExecutionFacade:
         WritePipeline
             Write pipeline configured for the session context.
         """
-        recorder = None
-        if self.runtime_profile is not None:
-            recorder = recorder_for_profile(self.runtime_profile, operation_id="write_pipeline")
-        return WritePipeline(
-            ctx=self.ctx,
-            sql_options=self.runtime_profile.sql_options()
-            if self.runtime_profile is not None
-            else None,
-            recorder=recorder,
-            runtime_profile=self.runtime_profile,
-        )
+        return facade_ops.write_pipeline(self.ctx, self.runtime_profile)
 
     def _session_runtime(self) -> SessionRuntime | None:
         """Return the planning-ready SessionRuntime when it matches the context.
@@ -250,12 +187,7 @@ class DataFusionExecutionFacade:
         SessionRuntime | None
             Session runtime when the profile matches the session context.
         """
-        if self.runtime_profile is None:
-            return None
-        session_runtime = self.runtime_profile.session_runtime()
-        if session_runtime.ctx is self.ctx:
-            return session_runtime
-        return session_runtime_for_context(self.runtime_profile, self.ctx)
+        return facade_ops.session_runtime(self.ctx, self.runtime_profile)
 
     def compile_to_bundle(
         self,
@@ -582,44 +514,7 @@ class DataFusionExecutionFacade:
         ExecutionResult
             Unified execution result for the write operation.
         """
-        tracer = get_tracer(SCOPE_DATAFUSION)
-        start = time.perf_counter()
-        with tracer.start_as_current_span(
-            "datafusion.write",
-            attributes=span_attributes(
-                attrs={
-                    db_attributes.DB_SYSTEM_NAME: "datafusion",
-                    db_attributes.DB_OPERATION_NAME: "write",
-                    "destination": request.destination,
-                    "mode": request.mode,
-                    "format": request.format,
-                }
-            ),
-        ) as span:
-            try:
-                pipeline = self.write_pipeline()
-                result = pipeline.write(request)
-            except (
-                Exception
-            ) as exc:  # intentionally broad: write pipeline backend errors are dynamic
-                record_exception(span, exc)
-                duration_s = time.perf_counter() - start
-                record_error("datafusion", type(exc).__name__)
-                record_write_duration(
-                    duration_s,
-                    status="error",
-                    destination=request.destination,
-                )
-                set_span_attributes(span, {"duration_s": duration_s, "status": "error"})
-                raise
-            duration_s = time.perf_counter() - start
-            record_write_duration(
-                duration_s,
-                status="ok",
-                destination=request.destination,
-            )
-            set_span_attributes(span, {"duration_s": duration_s, "status": "ok"})
-            return ExecutionResult.from_write(result)
+        return facade_ops.write(self.ctx, self.runtime_profile, request)
 
     def write_view(
         self,
@@ -637,44 +532,7 @@ class DataFusionExecutionFacade:
         ExecutionResult
             Execution result wrapping the write metadata.
         """
-        tracer = get_tracer(SCOPE_DATAFUSION)
-        start = time.perf_counter()
-        with tracer.start_as_current_span(
-            "datafusion.write_view",
-            attributes=span_attributes(
-                attrs={
-                    db_attributes.DB_SYSTEM_NAME: "datafusion",
-                    db_attributes.DB_OPERATION_NAME: "write_view",
-                    "destination": request.destination,
-                    "view_name": request.view_name,
-                    "mode": request.mode,
-                }
-            ),
-        ) as span:
-            try:
-                pipeline = self.write_pipeline()
-                result = pipeline.write_view(request)
-            except (
-                Exception
-            ) as exc:  # intentionally broad: write pipeline backend errors are dynamic
-                record_exception(span, exc)
-                duration_s = time.perf_counter() - start
-                record_error("datafusion", type(exc).__name__)
-                record_write_duration(
-                    duration_s,
-                    status="error",
-                    destination=request.destination,
-                )
-                set_span_attributes(span, {"duration_s": duration_s, "status": "error"})
-                raise
-            duration_s = time.perf_counter() - start
-            record_write_duration(
-                duration_s,
-                status="ok",
-                destination=request.destination,
-            )
-            set_span_attributes(span, {"duration_s": duration_s, "status": "ok"})
-            return ExecutionResult.from_write(result)
+        return facade_ops.write_view(self.ctx, self.runtime_profile, request)
 
     def ensure_view_graph(
         self,
@@ -695,18 +553,10 @@ class DataFusionExecutionFacade:
         Returns:
             Mapping[str, object]: Rust UDF snapshot used for view registration.
 
-        Raises:
-            ValueError: If no runtime profile is configured.
         """
-        from datafusion_engine.views.registration import ensure_view_graph
-
-        if self.runtime_profile is None:
-            msg = "Runtime profile is required for view registration."
-            raise ValueError(msg)
-
-        return ensure_view_graph(
+        return facade_ops.ensure_view_graph(
             self.ctx,
-            runtime_profile=self.runtime_profile,
+            self.runtime_profile,
             scan_units=tuple(scan_units),
             semantic_manifest=semantic_manifest,
             dataset_resolver=dataset_resolver,
@@ -731,21 +581,10 @@ class DataFusionExecutionFacade:
         Returns:
             DataFrame: Result.
 
-        Raises:
-            ValueError: If runtime profile is unavailable.
         """
-        if self.runtime_profile is None:
-            msg = "Runtime profile is required for dataset registration."
-            raise ValueError(msg)
-        from datafusion_engine.registry_facade import registry_facade_for_context
-        from semantics.program_manifest import ManifestDatasetBindings
-
-        registry_facade = registry_facade_for_context(
+        return facade_ops.register_dataset(
             self.ctx,
-            runtime_profile=self.runtime_profile,
-            dataset_resolver=ManifestDatasetBindings(locations={}),
-        )
-        return registry_facade.register_dataset_df(
+            self.runtime_profile,
             name=name,
             location=location,
             cache_policy=cache_policy,
@@ -767,18 +606,8 @@ class DataFusionExecutionFacade:
         Returns:
             Mapping[str, str]: Result.
 
-        Raises:
-            ValueError: If the operation cannot be completed.
         """
-        if self.runtime_profile is None:
-            msg = "Runtime profile is required for CDF registration."
-            raise ValueError(msg)
-        if not self.runtime_profile.features.enable_delta_cdf:
-            msg = "Delta CDF registration requires enable_delta_cdf to be True."
-            raise ValueError(msg)
-        from datafusion_engine.delta.cdf import register_cdf_inputs
-
-        return register_cdf_inputs(
+        return facade_ops.register_cdf_inputs(
             self.ctx,
             self.runtime_profile,
             table_names=table_names,
@@ -802,15 +631,11 @@ class DataFusionExecutionFacade:
         ZeroRowBootstrapReport
             Bootstrap validation and materialization report.
 
-        Raises:
-            ValueError: If runtime profile is unavailable.
         """
-        if self.runtime_profile is None:
-            msg = "Runtime profile is required for zero-row bootstrap validation."
-            raise ValueError(msg)
-        return self.runtime_profile.run_zero_row_bootstrap_validation(
+        return facade_ops.run_zero_row_bootstrap_validation(
+            self.ctx,
+            self.runtime_profile,
             request=request,
-            ctx=self.ctx,
         )
 
     def schema_introspector(self) -> SchemaIntrospector:
@@ -821,12 +646,7 @@ class DataFusionExecutionFacade:
         SchemaIntrospector
             Introspector for information_schema queries.
         """
-        from datafusion_engine.schema.introspection_core import SchemaIntrospector
-
-        sql_options = (
-            self.runtime_profile.sql_options() if self.runtime_profile is not None else None
-        )
-        return SchemaIntrospector(self.ctx, sql_options=sql_options)
+        return facade_ops.schema_introspector(self.ctx, self.runtime_profile)
 
     def build_plan_artifact(
         self,

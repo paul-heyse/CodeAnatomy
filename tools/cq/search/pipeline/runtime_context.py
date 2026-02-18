@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
 from tools.cq.search.pipeline.contracts import SearchConfig

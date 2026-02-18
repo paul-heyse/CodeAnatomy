@@ -10,7 +10,10 @@ from functools import lru_cache
 from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
 from tools.cq.search.tree_sitter.core.lane_support import ENRICHMENT_ERRORS
-from tools.cq.search.tree_sitter.query.planner import compile_pack_source_rows
+from tools.cq.search.tree_sitter.query.planner import (
+    compile_pack_source_rows,
+    normalize_pack_source_rows,
+)
 from tools.cq.search.tree_sitter.rust_lane.bundle import load_rust_query_sources
 
 
@@ -24,10 +27,9 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
         Tuple of (pack_name, source, plan) sorted by pack priority.
     """
     ensure_query_cache_callback_registered()
-    source_rows = tuple(
+    source_rows = normalize_pack_source_rows(
         (source.pack_name, source.source)
         for source in load_rust_query_sources(profile_name="rust_search_enriched")
-        if source.pack_name.endswith(".scm")
     )
     return compile_pack_source_rows(
         language="rust",

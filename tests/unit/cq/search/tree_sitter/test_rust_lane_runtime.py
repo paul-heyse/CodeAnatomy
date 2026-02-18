@@ -18,7 +18,7 @@ def test_rust_lane_runtime_availability_symbol_present() -> None:
 def test_rust_lane_required_payload_keys_guard() -> None:
     """Required payload-key guard accepts complete payload and rejects missing keys."""
     try:
-        from tools.cq.search.tree_sitter.rust_lane import runtime_core as runtime_module
+        from tools.cq.search.tree_sitter.rust_lane import runtime_engine as runtime_module
     except ImportError as exc:
         pytest.skip(f"rust runtime import unavailable in isolated scope: {exc}")
 

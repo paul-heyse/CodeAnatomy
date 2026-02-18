@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
@@ -22,6 +23,8 @@ from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.pipeline.smart_search_types import RawMatch, SearchStats
 from tools.cq.search.rg.collector import RgCollector
 from tools.cq.search.rg.runner import RgCountRequest, run_rg_count, run_rg_json
+
+logger = logging.getLogger(__name__)
 
 
 def _identifier_pattern(query: str) -> str:
@@ -166,6 +169,13 @@ def run_candidate_phase(
         Raw matches, stats, and effective search pattern.
     """
     pattern = _identifier_pattern(config.query) if mode == QueryMode.IDENTIFIER else config.query
+    logger.debug(
+        "Running candidate phase: root=%s lang=%s mode=%s pattern=%r",
+        config.root,
+        lang,
+        mode.value,
+        pattern,
+    )
     include_globs = constrain_include_globs_for_language(config.include_globs, lang)
     exclude_globs = list(config.exclude_globs or [])
     exclude_globs.extend(language_extension_exclude_globs(lang))

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.core.summary_contract import as_neighborhood_summary, summary_from_mapping
+from tools.cq.core.summary_types import as_neighborhood_summary, summary_from_mapping
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.neighborhood.executor import NeighborhoodExecutionRequestV1, execute_neighborhood
 from tools.cq.neighborhood.snb_renderer import RenderSnbRequest

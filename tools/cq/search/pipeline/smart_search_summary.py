@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.schema import Finding
 from tools.cq.core.scoring import build_detail_payload
@@ -34,6 +36,8 @@ from tools.cq.search.semantic.diagnostics import (
     is_python_oriented_query_text,
 )
 from tools.cq.search.tree_sitter.query.lint import lint_search_query_packs
+
+logger = logging.getLogger(__name__)
 
 
 def build_language_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
@@ -123,7 +127,7 @@ def build_language_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         common["rg_pcre2_version"] = getattr(config.tc, "rg_pcre2_version", None)
     if isinstance(inputs.stats.rg_stats, dict):
         common["rg_stats"] = inputs.stats.rg_stats.copy()
-    return build_multilang_summary(
+    summary = build_multilang_summary(
         SummaryBuildRequest(
             common=common,
             lang_scope=config.lang_scope,
@@ -133,6 +137,13 @@ def build_language_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
             language_capabilities=build_language_capabilities(lang_scope=config.lang_scope),
         )
     )
+    logger.debug(
+        "summary.language_built query=%s scope=%s languages=%d",
+        config.query,
+        config.lang_scope,
+        len(inputs.languages),
+    )
+    return summary
 
 
 def _build_cross_language_diagnostics_for_search(
@@ -268,6 +279,10 @@ def build_search_summary(
         "errors": list(query_pack_lint.errors),
     }
     if query_pack_lint.status != "ok":
+        logger.warning(
+            "summary.query_pack_lint_failed error_count=%d",
+            len(query_pack_lint.errors),
+        )
         all_diagnostics.append(
             Finding(
                 category="query_pack_lint",
@@ -296,6 +311,13 @@ def build_search_summary(
     if dropped_by_scope:
         summary["dropped_by_scope"] = dropped_by_scope
     assert_multilang_summary(summary)
+    logger.debug(
+        "summary.built query=%s matches=%d diagnostics=%d dropped_scope=%d",
+        ctx.query,
+        len(enriched_matches),
+        len(all_diagnostics),
+        len(dropped_by_scope),
+    )
     return summary, all_diagnostics
 
 

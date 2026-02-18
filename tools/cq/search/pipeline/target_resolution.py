@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -30,6 +31,8 @@ _TARGET_CANDIDATE_KINDS: frozenset[str] = frozenset(
         "callable",
     }
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_target_candidate_kind(kind: str | None) -> str:
@@ -120,6 +123,10 @@ def collect_definition_candidates(
             break
 
     if candidate_findings:
+        logger.debug(
+            "target_resolution.candidates_built count=%d",
+            len(candidate_findings),
+        )
         return definition_matches, candidate_findings
 
     if not object_runtime.view.summaries:
@@ -133,6 +140,7 @@ def collect_definition_candidates(
     candidate_findings.append(
         _build_object_candidate_finding(summary=fallback_summary, representative=representative)
     )
+    logger.debug("target_resolution.fallback_candidate_built")
     return definition_matches, candidate_findings
 
 
@@ -153,16 +161,21 @@ def resolve_primary_target_match(
         if isinstance(object_id, str):
             representative = object_runtime.representative_matches.get(object_id)
             if representative is not None:
+                logger.debug("target_resolution.primary_from_candidate")
                 return representative
     if definition_matches:
+        logger.debug("target_resolution.primary_from_definitions")
         return definition_matches[0]
     if object_runtime.view.summaries:
         object_id = object_runtime.view.summaries[0].object_ref.object_id
         representative = object_runtime.representative_matches.get(object_id)
         if representative is not None:
+            logger.debug("target_resolution.primary_from_summary")
             return representative
     if enriched_matches:
+        logger.debug("target_resolution.primary_from_enriched_fallback")
         return enriched_matches[0]
+    logger.debug("target_resolution.primary_missing")
     return None
 
 

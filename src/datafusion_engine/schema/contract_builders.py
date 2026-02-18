@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from schema_spec.arrow_types import arrow_type_from_pyarrow
-from schema_spec.dataset_spec import ContractSpec, DatasetSpec, TableSchemaContract
+from schema_spec.dataset_contracts import TableSchemaContract
+from schema_spec.dataset_spec import ContractSpec, DatasetSpec
 from schema_spec.field_spec import FieldSpec
 
 if TYPE_CHECKING:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter.core import runtime as runtime_module
+from tools.cq.search.tree_sitter.core import runtime_engine as runtime_module
 
 
 def test_core_runtime_exports_callable_functions() -> None:

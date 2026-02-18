@@ -20,7 +20,7 @@ def test_collect_query_pack_payload_delegates(monkeypatch: pytest.MonkeyPatch) -
         return sentinel
 
     monkeypatch.setattr(
-        "tools.cq.search.tree_sitter.rust_lane.runtime_core._collect_query_pack_payload",
+        "tools.cq.search.tree_sitter.rust_lane.runtime_engine._collect_query_pack_payload",
         fake_collect_query_pack_payload,
     )
 
@@ -56,7 +56,7 @@ def test_collect_query_pack_captures_delegates(monkeypatch: pytest.MonkeyPatch) 
         return sentinel
 
     monkeypatch.setattr(
-        "tools.cq.search.tree_sitter.rust_lane.runtime_core._collect_query_pack_captures",
+        "tools.cq.search.tree_sitter.rust_lane.runtime_engine._collect_query_pack_captures",
         fake_collect_query_pack_captures,
     )
 

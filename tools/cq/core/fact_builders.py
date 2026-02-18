@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from tools.cq.core.enrichment_facts import (
+from tools.cq.core.fact_types import (
     resolve_fact_clusters as _resolve_fact_clusters,
 )
-from tools.cq.core.enrichment_facts import resolve_fact_context, resolve_primary_language_payload
+from tools.cq.core.fact_types import resolve_fact_context, resolve_primary_language_payload
 
 __all__ = ["build_fact_clusters", "build_primary_language_payload"]
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
+from tools.cq.core.cache.backend_core import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.render_context import (
     get_default_render_enrichment_factory,
@@ -81,7 +81,9 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
     from tools.cq.query.entity_front_door import attach_entity_front_door_insight
     from tools.cq.search._shared.types import QueryMode
     from tools.cq.search.pipeline.smart_search import smart_search
-    from tools.cq.search.python.extractors import ensure_python_clear_callback_registered
+    from tools.cq.search.python.extractors_entrypoints import (
+        ensure_python_clear_callback_registered,
+    )
     from tools.cq.search.rust.enrichment import ensure_rust_clear_callback_registered
     from tools.cq.search.tree_sitter.rust_lane.query_cache import (
         ensure_query_cache_callback_registered,
@@ -181,6 +183,30 @@ def clear_runtime_services() -> None:
     close_cq_cache_backend()
 
 
+def reset_runtime_services() -> None:
+    """Reset runtime services and process-default mutable registries.
+
+    This is primarily a deterministic test seam that clears workspace service
+    bundles and resets default singleton registries used by CQ runtime helpers.
+    """
+    from tools.cq.astgrep.rules import set_rulepack_registry
+    from tools.cq.core.cache.backend_lifecycle import set_default_backend_registry
+    from tools.cq.core.cache.telemetry import set_default_cache_telemetry_store
+    from tools.cq.search.enrichment.language_registry import set_default_adapter_registry
+    from tools.cq.search.pipeline.object_view_registry import (
+        set_default_search_object_view_registry,
+    )
+    from tools.cq.search.tree_sitter.core.runtime_context import set_default_context
+
+    clear_runtime_services()
+    set_default_backend_registry(None)
+    set_default_cache_telemetry_store(None)
+    set_default_adapter_registry(None)
+    set_default_search_object_view_registry(None)
+    set_default_context(None)
+    set_rulepack_registry(None)
+
+
 atexit.register(clear_runtime_services)
 
 
@@ -189,5 +215,6 @@ __all__ = [
     "RuntimeServicesRegistry",
     "build_runtime_services",
     "clear_runtime_services",
+    "reset_runtime_services",
     "resolve_runtime_services",
 ]

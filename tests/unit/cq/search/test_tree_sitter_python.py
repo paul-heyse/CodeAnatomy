@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search.tree_sitter.python_lane.runtime import (
+from tools.cq.search.tree_sitter.python_lane.runtime_engine import (
     clear_tree_sitter_python_cache,
     enrich_python_context_by_byte_range,
     is_tree_sitter_python_available,

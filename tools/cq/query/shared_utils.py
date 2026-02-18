@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tools.cq.astgrep.sgpy_scanner import SgRecord
     from tools.cq.core.schema import CqResult
-    from tools.cq.core.summary_contract import SummaryEnvelopeV1
+    from tools.cq.core.summary_types import SummaryEnvelopeV1
 
 
 def count_result_matches(result: CqResult | None) -> int:

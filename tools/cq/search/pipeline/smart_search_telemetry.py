@@ -6,6 +6,7 @@ from smart_search.py for better modularity.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from tools.cq.search._shared.helpers import safe_int_counter
@@ -23,6 +24,8 @@ from tools.cq.search.enrichment.telemetry_schema import default_enrichment_telem
 
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
+
+logger = logging.getLogger(__name__)
 
 
 def status_from_enrichment(payload: dict[str, object] | None) -> str:
@@ -100,11 +103,12 @@ def attach_enrichment_cache_stats(telemetry: dict[str, object]) -> None:
         rust_bucket.update(get_tree_sitter_rust_cache_stats())
     python_bucket = telemetry.get("python")
     if isinstance(python_bucket, dict):
-        from tools.cq.search.tree_sitter.python_lane.runtime import (
+        from tools.cq.search.tree_sitter.python_lane.runtime_engine import (
             get_tree_sitter_python_cache_stats,
         )
 
         python_bucket["tree_sitter_cache"] = get_tree_sitter_python_cache_stats()
+    logger.debug("telemetry.cache_stats_attached")
 
 
 def accumulate_rust_enrichment(
@@ -172,6 +176,12 @@ def build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, object
         adapter.accumulate_telemetry(lang_bucket, payload)
 
     attach_enrichment_cache_stats(telemetry)
+    logger.debug(
+        "telemetry.built matches=%d python=%s rust=%s",
+        len(matches),
+        telemetry.get("python"),
+        telemetry.get("rust"),
+    )
     return telemetry
 
 

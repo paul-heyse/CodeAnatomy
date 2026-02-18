@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     SummaryV1,
     resolve_summary_variant_name,
     summary_for_variant,

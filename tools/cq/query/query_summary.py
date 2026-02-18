@@ -7,7 +7,7 @@ import msgspec
 from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     build_semantic_telemetry,
     summary_from_mapping,
 )

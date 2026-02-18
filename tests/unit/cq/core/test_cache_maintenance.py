@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
+from tools.cq.core.cache.backend_core import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.maintenance import maintenance_tick
 
 

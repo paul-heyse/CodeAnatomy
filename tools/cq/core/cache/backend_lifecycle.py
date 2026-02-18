@@ -49,7 +49,7 @@ def _build_workspace_backend(*, root: Path) -> CqCacheBackend:
     policy = default_cache_policy(root=root)
     if not policy.enabled:
         return NoopCacheBackend()
-    from tools.cq.core.cache.diskcache_backend import _build_diskcache_backend
+    from tools.cq.core.cache.backend_core import _build_diskcache_backend
 
     return _build_diskcache_backend(policy)
 

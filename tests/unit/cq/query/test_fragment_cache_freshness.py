@@ -7,7 +7,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
+from tools.cq.core.cache.backend_core import close_cq_cache_backend
 from tools.cq.core.cache.telemetry import reset_cache_telemetry, snapshot_cache_telemetry
 from tools.cq.query.executor_ast_grep import execute_ast_grep_rules as _execute_ast_grep_rules
 from tools.cq.query.parser import parse_query

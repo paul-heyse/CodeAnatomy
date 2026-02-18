@@ -8,7 +8,7 @@ from types import MappingProxyType
 import msgspec
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.schema import Anchor, Finding, mk_result
-from tools.cq.core.summary_contract import apply_summary_mapping
+from tools.cq.core.summary_types import apply_summary_mapping
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.enrichment import SymtableEnricher
 from tools.cq.query.execution_context import QueryExecutionContext

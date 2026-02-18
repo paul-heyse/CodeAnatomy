@@ -46,7 +46,10 @@ from tools.cq.search.tree_sitter.python_lane.constants import (
     get_python_field_ids,
 )
 from tools.cq.search.tree_sitter.query.compiler import compile_query
-from tools.cq.search.tree_sitter.query.planner import compile_pack_source_rows
+from tools.cq.search.tree_sitter.query.planner import (
+    compile_pack_source_rows,
+    normalize_pack_source_rows,
+)
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
     make_query_predicate,
@@ -201,14 +204,16 @@ def get_tree_sitter_python_cache_stats() -> dict[str, int]:
 
 @lru_cache(maxsize=1)
 def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    deduped_sources: dict[str, str] = {
-        source.pack_name: source.source
-        for source in load_query_pack_sources("python", include_distribution=False)
-        if source.pack_name.endswith(".scm")
-    }
+    deduped_sources = normalize_pack_source_rows(
+        (
+            (source.pack_name, source.source)
+            for source in load_query_pack_sources("python", include_distribution=False)
+        ),
+        dedupe_by_pack_name=True,
+    )
     return compile_pack_source_rows(
         language="python",
-        source_rows=sorted(deduped_sources.items()),
+        source_rows=deduped_sources,
         request_surface="artifact",
     )
 
@@ -226,7 +231,7 @@ def _safe_cursor_captures(
     predicate_callback: object | None = None,
     budget_ms: int | None = None,
 ) -> tuple[dict[str, list[Node]], QueryExecutionTelemetryV1]:
-    from tools.cq.search.tree_sitter.core.runtime import (
+    from tools.cq.search.tree_sitter.core.runtime_engine import (
         QueryExecutionCallbacksV1,
         run_bounded_query_captures,
     )

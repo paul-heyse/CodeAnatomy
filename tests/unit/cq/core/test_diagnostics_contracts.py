@@ -5,7 +5,7 @@ from __future__ import annotations
 import msgspec
 from tools.cq.core.diagnostics_contracts import build_diagnostics_artifact_payload
 from tools.cq.core.schema import CqResult, RunMeta, mk_result
-from tools.cq.core.summary_contract import apply_summary_mapping
+from tools.cq.core.summary_types import apply_summary_mapping
 
 SEMANTIC_TOKEN_COUNT = 2
 

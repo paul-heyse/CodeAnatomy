@@ -7,7 +7,7 @@ from typing import cast
 import pytest
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query import executor_plan_dispatch
-from tools.cq.query.executor_runtime_impl import ExecutePlanRequestV1
+from tools.cq.query.executor_runtime import ExecutePlanRequestV1
 
 
 def test_execute_plan_delegates(monkeypatch: pytest.MonkeyPatch) -> None:

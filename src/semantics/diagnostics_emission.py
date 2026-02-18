@@ -16,8 +16,8 @@ from obs.diagnostics import (
     record_semantic_quality_artifact,
     record_semantic_quality_events,
 )
-from obs.metrics import record_quality_issue_counts
 from obs.otel import get_run_id, reset_run_id, set_run_id
+from obs.quality_metrics import record_quality_issue_counts
 from semantics.diagnostics import (
     DEFAULT_MAX_ISSUE_ROWS,
     SEMANTIC_DIAGNOSTIC_VIEW_NAMES,

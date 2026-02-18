@@ -28,7 +28,7 @@ from tools.cq.core.schema import (
     ms,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 from tools.cq.core.summary_update_contracts import ImpactSummaryUpdateV1
 from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_bound_call
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
@@ -482,7 +482,7 @@ def _build_impact_result(
     try:
         summary_mapping_dict = require_contract_mapping(summary_mapping)
     except TypeError:
-        summary_mapping_dict = {}
+        summary_mapping_dict: dict[str, object] = {}
     builder.with_summary(summary_from_mapping(summary_mapping_dict))
 
     scoring_details, depth_counts, files_affected = _build_impact_scoring(all_sites)

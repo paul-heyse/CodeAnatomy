@@ -39,8 +39,8 @@ from datafusion_engine.session.runtime_config_policies import (
     SchemaHardeningProfile,
 )
 from datafusion_engine.views.artifacts import CachePolicy
-from schema_spec.dataset_spec import ScanPolicyConfig
 from schema_spec.policies import DataFusionWritePolicy
+from schema_spec.scan_policy import ScanPolicyConfig
 from serde_msgspec import StructBaseStrict
 from storage.cdf_cursor_protocol import CdfCursorStoreLike
 from storage.deltalake.config import DeltaMutationPolicy

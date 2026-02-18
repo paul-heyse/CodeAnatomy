@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from tools.cq.core.cache.backend_core import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.blob_store import (
     decode_blob_pointer,
     drop_tag_index,
@@ -12,7 +13,6 @@ from tools.cq.core.cache.blob_store import (
     read_blob,
     write_blob,
 )
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.interface import NoopCacheBackend
 
 

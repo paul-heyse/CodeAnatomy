@@ -19,15 +19,17 @@ class PythonEnrichmentRuntimeContext(msgspec.Struct):
     cache_registered: bool = False
 
 
-_DEFAULT_CONTEXT_STATE: dict[str, PythonEnrichmentRuntimeContext | None] = {"context": None}
+_DEFAULT_PYTHON_RUNTIME_CONTEXT_STATE: dict[str, PythonEnrichmentRuntimeContext | None] = {
+    "context": None
+}
 
 
 def get_default_python_runtime_context() -> PythonEnrichmentRuntimeContext:
     """Return process-default runtime context for Python enrichment."""
-    context = _DEFAULT_CONTEXT_STATE["context"]
+    context = _DEFAULT_PYTHON_RUNTIME_CONTEXT_STATE["context"]
     if context is None:
         context = PythonEnrichmentRuntimeContext()
-        _DEFAULT_CONTEXT_STATE["context"] = context
+        _DEFAULT_PYTHON_RUNTIME_CONTEXT_STATE["context"] = context
     return context
 
 

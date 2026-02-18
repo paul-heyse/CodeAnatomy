@@ -1,6 +1,6 @@
 """Minimal cache package surface; import specific submodules for extended APIs."""
 
-from tools.cq.core.cache.diskcache_backend import (
+from tools.cq.core.cache.backend_core import (
     close_cq_cache_backend,
     get_cq_cache_backend,
     set_cq_cache_backend,

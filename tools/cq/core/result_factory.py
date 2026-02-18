@@ -8,7 +8,7 @@ import msgspec
 
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, mk_result
-from tools.cq.core.summary_contract import apply_summary_mapping
+from tools.cq.core.summary_types import apply_summary_mapping
 from tools.cq.core.toolchain import Toolchain
 
 

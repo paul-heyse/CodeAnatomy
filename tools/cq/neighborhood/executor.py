@@ -20,7 +20,7 @@ from tools.cq.core.schema import (
     update_result_summary,
 )
 from tools.cq.core.structs import CqStruct
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     NeighborhoodSummaryV1,
     apply_summary_mapping,
     summary_for_variant,

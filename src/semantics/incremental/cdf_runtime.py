@@ -16,7 +16,7 @@ from datafusion_engine.dataset.registry import (
 )
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
-from schema_spec.dataset_spec import DeltaScanOptions
+from schema_spec.scan_options import DeltaScanOptions
 from semantics.incremental.cdf_core import CanonicalCdfReadRequest, read_cdf_table
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_types import CdfFilterPolicy

@@ -8,13 +8,14 @@ from tools.cq.search.enrichment.contracts import (
 )
 from tools.cq.search.enrichment.core import (
     append_source,
-    enforce_payload_budget,
+    check_payload_budget,
     has_value,
     merge_gap_fill_payload,
     normalize_python_payload,
     normalize_rust_payload,
     payload_size_hint,
     set_degraded,
+    trim_payload_to_budget,
 )
 from tools.cq.search.enrichment.incremental_compound_plane import (
     build_binding_join,
@@ -44,7 +45,7 @@ __all__ = [
     "build_incremental_symtable_plane",
     "build_inspect_bundle",
     "build_sym_scope_graph",
-    "enforce_payload_budget",
+    "check_payload_budget",
     "enrich_incremental_anchor",
     "has_value",
     "inspect_object_inventory",
@@ -54,4 +55,5 @@ __all__ = [
     "payload_size_hint",
     "resolve_binding_id",
     "set_degraded",
+    "trim_payload_to_budget",
 ]

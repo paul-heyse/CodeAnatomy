@@ -28,7 +28,7 @@ from tools.cq.core.schema import (
     update_result_summary,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.core.summary_contract import build_semantic_telemetry, summary_from_mapping
+from tools.cq.core.summary_types import build_semantic_telemetry, summary_from_mapping
 from tools.cq.core.summary_update_contracts import CallsSummaryUpdateV1
 from tools.cq.macros.calls.analysis import (
     CallSite,
@@ -56,7 +56,7 @@ from tools.cq.macros.calls.neighborhood import (
 )
 from tools.cq.macros.calls.scanning import _group_candidates, _rg_find_candidates
 from tools.cq.macros.calls.semantic import CallsSemanticRequest, _apply_calls_semantic
-from tools.cq.macros.calls_target import (
+from tools.cq.macros.calls.target_runtime import (
     AttachTargetMetadataRequestV1,
     apply_target_metadata,
     infer_target_language,
@@ -286,7 +286,7 @@ def _init_calls_result(
     try:
         summary_mapping_dict = require_contract_mapping(summary_mapping)
     except TypeError:
-        summary_mapping_dict = {}
+        summary_mapping_dict: dict[str, object] = {}
     updated_summary = summary_from_mapping(summary_mapping_dict)
     return update_result_summary(builder.result, updated_summary.to_dict())
 

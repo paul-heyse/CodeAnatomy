@@ -19,10 +19,10 @@ from tools.cq.core.schema import (
     update_result_summary,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     coerce_semantic_telemetry as coerce_summary_semantic_telemetry,
 )
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     extract_match_count,
     summary_from_mapping,
 )
@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from tools.cq.core.front_door_contracts import FrontDoorInsightV1
     from tools.cq.core.schema import RunMeta
     from tools.cq.core.toolchain import Toolchain
+
 
 def _finding_score(finding: Finding) -> float:
     score = finding.details.score

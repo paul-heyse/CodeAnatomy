@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter.rust_lane.runtime_core import (
+from tools.cq.search.tree_sitter.rust_lane.runtime_engine import (
     MAX_SOURCE_BYTES,
     RustLaneEnrichmentSettingsV1,
     RustLaneRuntimeDepsV1,

@@ -17,7 +17,7 @@ from tools.cq.core.schema import (
     mk_result,
     ms,
 )
-from tools.cq.core.summary_contract import apply_summary_mapping
+from tools.cq.core.summary_types import apply_summary_mapping
 from tools.cq.macros.contracts import ScoringDetailsV1
 from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 

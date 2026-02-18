@@ -9,7 +9,7 @@ import msgspec
 import pytest
 from tools.cq.cli_app.context import CliContext
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.core.summary_contract import SemanticTelemetryV1, summary_from_mapping
+from tools.cq.core.summary_types import SemanticTelemetryV1, summary_from_mapping
 from tools.cq.run.run_summary import populate_run_summary_metadata
 from tools.cq.run.runner import execute_run_plan
 from tools.cq.run.spec import QStep, RunPlan

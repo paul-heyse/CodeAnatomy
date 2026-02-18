@@ -16,13 +16,15 @@ from datafusion import SessionContext
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
-from datafusion_engine.plan.artifact_store_core import (
+from datafusion_engine.plan.artifact_store_constants import (
     _ARTIFACTS_DIRNAME,
     _DEFAULT_ARTIFACTS_ROOT,
     _LOCAL_ARTIFACTS_DIRNAME,
     _PIPELINE_EVENTS_DIRNAME,
     PIPELINE_EVENTS_TABLE_NAME,
     PLAN_ARTIFACTS_TABLE_NAME,
+)
+from datafusion_engine.plan.artifact_store_persistence import (
     _ArtifactTableWriteRequest,
     _write_artifact_table,
 )

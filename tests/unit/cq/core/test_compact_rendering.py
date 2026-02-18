@@ -10,7 +10,7 @@ from tools.cq.core.front_door_contracts import (
 )
 from tools.cq.core.report import ARTIFACT_ONLY_KEYS, compact_summary_for_rendering, render_markdown
 from tools.cq.core.schema import CqResult, Finding, RunMeta, Section
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 
 
 def _run_meta() -> RunMeta:

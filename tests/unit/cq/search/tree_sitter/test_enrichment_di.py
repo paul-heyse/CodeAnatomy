@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from tools.cq.search.tree_sitter.python_lane import runtime as py_runtime
-from tools.cq.search.tree_sitter.rust_lane import runtime_core as rust_runtime
+from tools.cq.search.tree_sitter.python_lane import runtime_engine as py_runtime
+from tools.cq.search.tree_sitter.rust_lane import runtime_engine as rust_runtime
 
 
 def test_python_enrichment_accepts_parse_session_override(monkeypatch: pytest.MonkeyPatch) -> None:

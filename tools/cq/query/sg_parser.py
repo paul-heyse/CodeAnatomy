@@ -17,7 +17,7 @@ from tools.cq.astgrep.sgpy_scanner import (
     group_records_by_file,
     scan_files,
 )
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import (
     decode_fragment_payload,
     encode_fragment_payload,

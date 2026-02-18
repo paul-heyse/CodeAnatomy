@@ -5,11 +5,11 @@ from __future__ import annotations
 from tools.cq.core.schema import CqResult
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import PatternQueryRequest
-from tools.cq.query.executor_runtime_impl import PatternExecutionState
-from tools.cq.query.executor_runtime_impl import (
+from tools.cq.query.executor_runtime import PatternExecutionState
+from tools.cq.query.executor_runtime import (
     execute_pattern_query as _execute_pattern_query_impl,
 )
-from tools.cq.query.executor_runtime_impl import (
+from tools.cq.query.executor_runtime import (
     execute_pattern_query_with_files as _execute_pattern_query_with_files_impl,
 )
 

@@ -26,7 +26,7 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
-from tools.cq.core.summary_contract import SummaryEnvelopeV1, coerce_semantic_telemetry
+from tools.cq.core.summary_types import SummaryEnvelopeV1, coerce_semantic_telemetry
 from tools.cq.macros.constants import FRONT_DOOR_PREVIEW_PER_SLICE
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern

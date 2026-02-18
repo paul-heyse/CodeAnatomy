@@ -11,7 +11,7 @@ from tools.cq.core.render_enrichment_orchestrator import (
 )
 from tools.cq.core.report import render_markdown
 from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 
 _RenderEnrichTask = RenderEnrichmentTask
 

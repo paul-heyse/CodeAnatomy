@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter.python_lane import runtime as runtime_module
+from tools.cq.search.tree_sitter.python_lane import runtime_engine as runtime_module
 
 
 def test_python_lane_runtime_availability_symbol_present() -> None:

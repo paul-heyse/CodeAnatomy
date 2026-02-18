@@ -17,7 +17,7 @@ from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
-    from tools.cq.core.summary_contract import SummaryEnvelopeV1
+    from tools.cq.core.summary_types import SummaryEnvelopeV1
 
 
 def _attach_insight_artifact_refs(

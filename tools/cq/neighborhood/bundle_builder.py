@@ -15,14 +15,15 @@ from tools.cq.core.snb_schema import (
     NeighborhoodSliceV1,
     SemanticNeighborhoodBundleV1,
     SemanticNodeRefV1,
+    freeze_node_index,
 )
 from tools.cq.core.structs import CqStruct
+from tools.cq.neighborhood.collector import (
+    collect_tree_sitter_neighborhood,
+)
 from tools.cq.neighborhood.contracts import (
     TreeSitterNeighborhoodCollectRequest,
     plan_feasible_slices,
-)
-from tools.cq.neighborhood.tree_sitter_collector import (
-    collect_tree_sitter_neighborhood,
 )
 
 
@@ -84,6 +85,7 @@ def build_neighborhood_bundle(
     subject = collect_result.subject or _build_fallback_subject_node(request)
     graph = _build_graph_summary(tuple(merged_slices))
     artifacts = _store_artifacts_with_preview(request.artifact_dir, merged_slices)
+    node_index = freeze_node_index(_build_node_index(tuple(merged_slices), subject))
 
     return SemanticNeighborhoodBundleV1(
         bundle_id=_generate_bundle_id(request),
@@ -92,7 +94,7 @@ def build_neighborhood_bundle(
         meta=_build_meta(request, started),
         slices=tuple(merged_slices),
         graph=graph,
-        node_index=None,
+        node_index=node_index,
         artifacts=tuple(artifacts),
         diagnostics=tuple(diagnostics),
         schema_version="cq.snb.v1",
@@ -185,6 +187,19 @@ def _build_graph_summary(
         edge_count=len(edge_ids),
         full_graph_artifact=None,
     )
+
+
+def _build_node_index(
+    slices: tuple[NeighborhoodSliceV1, ...],
+    subject: SemanticNodeRefV1 | None,
+) -> dict[str, SemanticNodeRefV1]:
+    node_index: dict[str, SemanticNodeRefV1] = {}
+    if subject is not None:
+        node_index[subject.node_id] = subject
+    for slice_item in slices:
+        for node in slice_item.preview:
+            node_index.setdefault(node.node_id, node)
+    return node_index
 
 
 def _store_artifacts_with_preview(

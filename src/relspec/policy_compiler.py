@@ -89,6 +89,20 @@ class _CompiledPolicyComponents:
     workload_class: str | None
 
 
+def _component_counts(components: _CompiledPolicyComponents) -> dict[str, int | str | None]:
+    return {
+        "cache_policies": len(components.cache_policies),
+        "scan_policy_overrides": len(components.scan_policy_map),
+        "maintenance_policy_overrides": len(components.maintenance_policy_map),
+        "udf_requirement_sets": len(components.udf_requirements),
+        "join_strategies": len(components.join_strategies),
+        "inference_confidence_entries": len(components.inference_confidence),
+        "diagnostics_flags": len(components.diagnostics_flags),
+        "materialization_strategy": components.materialization_strategy,
+        "workload_class": components.workload_class,
+    }
+
+
 def compile_execution_policy(request: CompileExecutionPolicyRequestV1) -> CompiledExecutionPolicy:
     """Compile all execution policy from plan artifacts.
 
@@ -117,6 +131,12 @@ def compile_execution_policy(request: CompileExecutionPolicyRequestV1) -> Compil
         Frozen policy artifact ready for downstream consumption.
     """
     components = _derive_policy_components(request)
+    _LOGGER.debug(
+        "Derived execution-policy component sets.",
+        extra={
+            "codeanatomy.policy_components": _component_counts(components),
+        },
+    )
     preliminary = CompiledExecutionPolicy(
         cache_policy_by_view=components.cache_policies,
         scan_policy_overrides=components.scan_policy_map,
@@ -129,6 +149,13 @@ def compile_execution_policy(request: CompileExecutionPolicyRequestV1) -> Compil
         workload_class=components.workload_class,
     )
     fingerprint = _compute_policy_fingerprint(preliminary)
+    _LOGGER.debug(
+        "Compiled execution policy fingerprint.",
+        extra={
+            "codeanatomy.policy_fingerprint": fingerprint,
+            "codeanatomy.policy_components": _component_counts(components),
+        },
+    )
 
     return CompiledExecutionPolicy(
         cache_policy_by_view=components.cache_policies,

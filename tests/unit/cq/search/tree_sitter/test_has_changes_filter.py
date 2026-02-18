@@ -11,7 +11,7 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryExecutionSettingsV1,
     QueryWindowV1,
 )
-from tools.cq.search.tree_sitter.core import runtime as runtime_module
+from tools.cq.search.tree_sitter.core import runtime_engine as runtime_module
 
 FILTERED_CAPTURE_COUNT = 2
 

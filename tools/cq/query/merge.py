@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, cast
 from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.schema import CqResult, update_result_summary
 from tools.cq.core.services import EntityFrontDoorRequest
-from tools.cq.core.summary_contract import SummaryEnvelopeV1, coerce_semantic_telemetry
+from tools.cq.core.summary_types import SummaryEnvelopeV1, coerce_semantic_telemetry
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.core.types import QueryLanguage
-from tools.cq.orchestration.multilang_orchestrator import (
+from tools.cq.orchestration.orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )

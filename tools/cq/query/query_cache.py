@@ -8,9 +8,9 @@ from pathlib import Path
 
 import msgspec
 
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.cache_decode import decode_cached_payload
 from tools.cq.core.cache.content_hash import file_content_hash
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_contracts import (
     FragmentEntryV1,
     FragmentMissV1,

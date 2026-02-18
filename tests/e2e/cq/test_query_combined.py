@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from tools.cq.core.summary_contract import SummaryEnvelopeV1
+from tools.cq.core.summary_types import SummaryEnvelopeV1
 
 if TYPE_CHECKING:
     from collections.abc import Callable

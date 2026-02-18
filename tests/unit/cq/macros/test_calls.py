@@ -334,7 +334,7 @@ def test_build_calls_neighborhood_uses_rust_language_for_rs_targets(
         return TreeSitterNeighborhoodCollectResult()
 
     monkeypatch.setattr(
-        "tools.cq.neighborhood.tree_sitter_collector.collect_tree_sitter_neighborhood",
+        "tools.cq.neighborhood.collector.collect_tree_sitter_neighborhood",
         _fake_collect,
     )
 
@@ -371,7 +371,7 @@ def test_build_calls_neighborhood_defaults_to_python_for_py_targets(
         return TreeSitterNeighborhoodCollectResult()
 
     monkeypatch.setattr(
-        "tools.cq.neighborhood.tree_sitter_collector.collect_tree_sitter_neighborhood",
+        "tools.cq.neighborhood.collector.collect_tree_sitter_neighborhood",
         _fake_collect,
     )
 

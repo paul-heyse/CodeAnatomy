@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from tools.cq.search.pipeline.smart_search_types import (
     RawMatch,
 )
 from tools.cq.search.pipeline.worker_policy import resolve_search_worker_count
+
+logger = logging.getLogger(__name__)
 
 
 def _classify_partition_batch(
@@ -61,6 +64,12 @@ def run_classify_phase(
     filtered_raw_matches = [m for m in raw_matches if is_path_in_lang_scope(m.file, lang)]
     if not filtered_raw_matches:
         return []
+    logger.debug(
+        "Running classify phase: root=%s lang=%s matches=%d",
+        config.root,
+        lang,
+        len(filtered_raw_matches),
+    )
     options = MatchClassifyOptions(
         incremental_enabled=config.incremental_enrichment_enabled,
         incremental_mode=config.incremental_enrichment_mode,

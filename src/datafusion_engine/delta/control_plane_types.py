@@ -14,7 +14,7 @@ from datafusion_engine.delta.specs import (
     DeltaCommitOptionsSpec as DeltaCommitOptions,
 )
 from datafusion_engine.generated.delta_types import DeltaFeatureGate
-from schema_spec.dataset_spec import DeltaScanOptions
+from schema_spec.scan_options import DeltaScanOptions
 from serde_msgspec import StructBaseStrict, ensure_raw
 
 

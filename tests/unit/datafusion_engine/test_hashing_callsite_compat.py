@@ -9,16 +9,16 @@ from typing import cast
 
 from datafusion_engine.delta.scan_config import delta_scan_identity_hash
 from datafusion_engine.plan.artifact_store_core import _plan_identity_payload
-from datafusion_engine.plan.bundle_artifact import (
-    DataFusionPlanArtifact,
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
+from datafusion_engine.plan.bundle_environment import (
+    information_schema_hash as _information_schema_hash,
+)
+from datafusion_engine.plan.plan_fingerprint import (
     PlanFingerprintInputs,
-    _information_schema_hash,
+    compute_plan_fingerprint,
 )
 from datafusion_engine.plan.plan_fingerprint import (
     _delta_protocol_payload as plan_delta_protocol_payload,
-)
-from datafusion_engine.plan.plan_fingerprint import (
-    compute_plan_fingerprint,
 )
 from datafusion_engine.plan.planning_env import planning_env_hash as _planning_env_hash
 from datafusion_engine.plan.planning_env import rulepack_hash as _rulepack_hash

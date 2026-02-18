@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
+from tools.cq.core.cache.backend_core import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.interface import CqCacheStreamingBackend
 from tools.cq.core.cache.key_builder import (
     build_cache_key,
@@ -217,7 +217,7 @@ def test_cache_backend_fails_open_on_corrupt_diskcache(
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
 
-    from tools.cq.core.cache import diskcache_backend
+    from tools.cq.core.cache import backend_core
 
     attempts = {"count": 0}
 
@@ -226,7 +226,7 @@ def test_cache_backend_fails_open_on_corrupt_diskcache(
         msg = "database disk image is malformed"
         raise sqlite3.DatabaseError(msg)
 
-    monkeypatch.setattr(diskcache_backend, "FanoutCache", _raise_corrupt)
+    monkeypatch.setattr(backend_core, "FanoutCache", _raise_corrupt)
     backend = get_cq_cache_backend(root=tmp_path)
     assert backend.set("k", {"v": 1}) is False
     assert backend.get("k") is None

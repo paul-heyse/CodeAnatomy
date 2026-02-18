@@ -146,7 +146,7 @@ def collect_tree_sitter_diagnostics(
     query = _diagnostic_query(language)
     if query is None:
         return ()
-    from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches
+    from tools.cq.search.tree_sitter.core.runtime_engine import run_bounded_query_matches
 
     matches, _telemetry = run_bounded_query_matches(
         query,

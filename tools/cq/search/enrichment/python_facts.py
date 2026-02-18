@@ -125,7 +125,7 @@ class PythonClassShapeFacts(CqStruct, frozen=True):
 class PythonLocalsFacts(CqStruct, frozen=True):
     """Local bindings from tree-sitter enrichment.
 
-    Fields populated by tree_sitter/python_lane/facts.py.
+    Fields populated by tree_sitter/python_lane/facts_runtime.py.
     """
 
     definitions: list[str] = msgspec.field(default_factory=list)

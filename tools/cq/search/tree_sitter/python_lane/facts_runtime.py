@@ -43,12 +43,15 @@ from tools.cq.search.tree_sitter.python_lane.locals_index import (
     build_locals_index,
     scope_chain_for_anchor,
 )
-from tools.cq.search.tree_sitter.python_lane.runtime import (
+from tools.cq.search.tree_sitter.python_lane.runtime_engine import (
     is_tree_sitter_python_available,
     parse_python_tree_with_ranges,
 )
 from tools.cq.search.tree_sitter.query.compiler import compile_query
-from tools.cq.search.tree_sitter.query.planner import compile_pack_source_rows
+from tools.cq.search.tree_sitter.query.planner import (
+    compile_pack_source_rows,
+    normalize_pack_source_rows,
+)
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
     make_query_predicate,
@@ -234,10 +237,9 @@ def _parse_quality(captures: dict[str, list[Node]], source_bytes: bytes) -> dict
 
 @lru_cache(maxsize=1)
 def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    source_rows = tuple(
+    source_rows = normalize_pack_source_rows(
         (source.pack_name, source.source)
         for source in load_query_pack_sources("python", include_distribution=False)
-        if source.pack_name.endswith(".scm")
     )
     return compile_pack_source_rows(
         language="python",
@@ -262,7 +264,7 @@ def _collect_query_pack_captures(
     dict[str, object],
     tuple[TreeSitterQueryHitV1, ...],
 ]:
-    from tools.cq.search.tree_sitter.core.runtime import QueryExecutionCallbacksV1
+    from tools.cq.search.tree_sitter.core.runtime_engine import QueryExecutionCallbacksV1
 
     all_captures: dict[str, list[Node]] = {}
     all_rows: list[ObjectEvidenceRowV1] = []

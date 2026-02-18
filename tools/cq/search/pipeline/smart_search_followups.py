@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from tools.cq.core.schema import Finding
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
+
+logger = logging.getLogger(__name__)
 
 
 def build_followups(
@@ -75,6 +79,13 @@ def build_followups(
                 )
             )
 
+    logger.debug(
+        "followups.built mode=%s query=%s matches=%d followups=%d",
+        mode.value,
+        query,
+        len(matches),
+        len(findings),
+    )
     return findings
 
 

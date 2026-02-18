@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
@@ -29,6 +30,8 @@ from tools.cq.search.pipeline.smart_search_types import (
 )
 from tools.cq.search.rg.runner import build_rg_command
 from tools.cq.utils.uuid_factory import uuid7_str
+
+logger = logging.getLogger(__name__)
 
 
 def identifier_pattern(query: str) -> str:
@@ -104,6 +107,12 @@ def build_candidate_searcher_for_config(config: SearchConfig) -> tuple[list[str]
             limits=config.limits,
         )
     )
+    logger.debug(
+        "runtime.build_candidate_searcher mode=%s scope=%s pattern=%s",
+        config.mode.value,
+        config.lang_scope,
+        pattern,
+    )
     return command, pattern
 
 
@@ -124,7 +133,7 @@ def build_search_context(
     argv = request.argv or ["search", request.query]
 
     actual_mode = detect_query_mode(request.query, force_mode=request.mode)
-    return SearchConfig(
+    config = SearchConfig(
         root=request.root,
         query=request.query,
         mode=actual_mode,
@@ -146,6 +155,13 @@ def build_search_context(
             request.incremental_enrichment_mode
         ),
     )
+    logger.debug(
+        "runtime.context_built mode=%s scope=%s run_id=%s",
+        config.mode.value,
+        config.lang_scope,
+        config.run_id,
+    )
+    return config
 
 
 def partition_total_matches(partition_results: list[LanguageSearchResult]) -> int:

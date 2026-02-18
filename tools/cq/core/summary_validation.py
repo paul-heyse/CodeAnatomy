@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.core.summary_contract import SummaryEnvelopeV1
+from tools.cq.core.summary_types import SummaryEnvelopeV1
 
 __all__ = ["validate_summary_envelope", "validate_summary_sections"]
 

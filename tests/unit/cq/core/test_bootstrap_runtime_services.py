@@ -6,6 +6,7 @@ from pathlib import Path
 
 from tools.cq.core.bootstrap import (
     clear_runtime_services,
+    reset_runtime_services,
     resolve_runtime_services,
 )
 from tools.cq.core.contracts import CallsMacroRequestV1
@@ -60,3 +61,14 @@ def test_service_request_contracts_are_constructible(tmp_path: Path) -> None:
     assert search.query == "foo"
     assert calls.request.function_name == "foo"
     assert entity.result is not None
+
+
+def test_reset_runtime_services_clears_cached_service_bundle(tmp_path: Path) -> None:
+    """Reset should clear workspace-scoped runtime bundle cache."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    service_before_reset = resolve_runtime_services(workspace)
+    reset_runtime_services()
+    service_after_reset = resolve_runtime_services(workspace)
+    assert service_before_reset is not service_after_reset
+    clear_runtime_services()

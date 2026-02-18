@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from tree_sitter import Node, Query
 
     from tools.cq.search.tree_sitter.contracts.core_models import ObjectEvidenceRowV1
-    from tools.cq.search.tree_sitter.core.runtime import QueryExecutionCallbacksV1
+    from tools.cq.search.tree_sitter.core.runtime_engine import QueryExecutionCallbacksV1
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +41,7 @@ def run_bounded_query_captures(
     settings: QueryExecutionSettingsV1 | None = None,
     callbacks: QueryExecutionCallbacksV1 | None = None,
 ) -> tuple[dict[str, list[Node]], QueryExecutionTelemetryV1]:
-    from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_captures as _impl
+    from tools.cq.search.tree_sitter.core.runtime_engine import run_bounded_query_captures as _impl
 
     return _impl(
         query=query,
@@ -62,7 +62,7 @@ def run_bounded_query_matches(
     settings: QueryExecutionSettingsV1 | None = None,
     callbacks: QueryExecutionCallbacksV1 | None = None,
 ) -> tuple[list[tuple[int, dict[str, list[Node]]]], QueryExecutionTelemetryV1]:
-    from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches as _impl
+    from tools.cq.search.tree_sitter.core.runtime_engine import run_bounded_query_matches as _impl
 
     return _impl(
         query=query,

@@ -12,7 +12,7 @@ from tools.cq.core.render_utils import na as _na
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding
-    from tools.cq.core.summary_contract import SummaryEnvelopeV1
+    from tools.cq.core.summary_types import SummaryEnvelopeV1
 
 
 MAX_CODE_OVERVIEW_ITEMS = 5

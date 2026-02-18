@@ -9,7 +9,7 @@ from tools.cq.core.front_door_contracts import (
     InsightTargetV1,
 )
 from tools.cq.core.schema import CqResult, Finding, Section, mk_result, mk_runmeta
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 from tools.cq.ldmd.writer import render_ldmd_from_cq_result
 
 

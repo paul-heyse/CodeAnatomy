@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.core.enrichment_facts import (
+from tools.cq.core.fact_types import (
     resolve_fact_clusters,
     resolve_fact_context,
     resolve_primary_language_payload,

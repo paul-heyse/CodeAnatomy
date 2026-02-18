@@ -14,7 +14,7 @@ from tools.cq.core.merge import merge_step_results
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, mk_result, ms, update_result_summary
 from tools.cq.core.scope_filter import filter_findings_by_scope
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 from tools.cq.core.target_specs import BundleTargetKind, TargetSpecV1
 from tools.cq.macros.bytecode import cmd_bytecode_surface
 from tools.cq.macros.exceptions import cmd_exceptions

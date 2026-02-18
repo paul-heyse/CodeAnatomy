@@ -22,12 +22,12 @@ from datafusion_engine.session.runtime_hooks import (
     PlanArtifactsHook,
     SemanticDiffHook,
     SqlIngestHook,
-    SubstraitFallbackHook,
+    SubstraitReplayErrorHook,
     _chain_cache_hooks,
     _chain_explain_hooks,
     _chain_plan_artifacts_hooks,
     _chain_sql_ingest_hooks,
-    _chain_substrait_fallback_hooks,
+    _chain_substrait_replay_error_hooks,
     apply_execution_label,
     apply_execution_policy,
     diagnostics_cache_hook,
@@ -35,7 +35,7 @@ from datafusion_engine.session.runtime_hooks import (
     diagnostics_plan_artifacts_hook,
     diagnostics_semantic_diff_hook,
     diagnostics_sql_ingest_hook,
-    diagnostics_substrait_fallback_hook,
+    diagnostics_substrait_replay_error_hook,
 )
 
 if TYPE_CHECKING:
@@ -83,7 +83,7 @@ def resolve_compile_hooks(
         "semantic_diff": resolved.semantic_diff_hook,
         "sql_ingest": resolved.sql_ingest_hook,
         "cache_event": resolved.cache_event_hook,
-        "substrait_fallback": resolved.substrait_fallback_hook,
+        "substrait_replay_error": resolved.substrait_replay_error_hook,
     }
     if (
         hooks["explain"] is None
@@ -124,9 +124,9 @@ def resolve_compile_hooks(
             cast("CacheEventHook", hooks["cache_event"]),
             diagnostics_cache_hook(profile.diagnostics.diagnostics_sink),
         )
-        hooks["substrait_fallback"] = _chain_substrait_fallback_hooks(
-            cast("SubstraitFallbackHook", hooks["substrait_fallback"]),
-            diagnostics_substrait_fallback_hook(profile.diagnostics.diagnostics_sink),
+        hooks["substrait_replay_error"] = _chain_substrait_replay_error_hooks(
+            cast("SubstraitReplayErrorHook", hooks["substrait_replay_error"]),
+            diagnostics_substrait_replay_error_hook(profile.diagnostics.diagnostics_sink),
         )
     return _ResolvedCompileHooks(
         explain_hook=cast("ExplainHook | None", hooks["explain"]),
@@ -134,7 +134,9 @@ def resolve_compile_hooks(
         semantic_diff_hook=cast("SemanticDiffHook | None", hooks["semantic_diff"]),
         sql_ingest_hook=cast("SqlIngestHook | None", hooks["sql_ingest"]),
         cache_event_hook=cast("CacheEventHook | None", hooks["cache_event"]),
-        substrait_fallback_hook=cast("SubstraitFallbackHook | None", hooks["substrait_fallback"]),
+        substrait_replay_error_hook=cast(
+            "SubstraitReplayErrorHook | None", hooks["substrait_replay_error"]
+        ),
     )
 
 
@@ -263,7 +265,7 @@ def compile_options_for_profile(
         semantic_diff_hook=hooks.semantic_diff_hook,
         sql_ingest_hook=hooks.sql_ingest_hook,
         cache_event_hook=hooks.cache_event_hook,
-        substrait_fallback_hook=hooks.substrait_fallback_hook,
+        substrait_replay_error_hook=hooks.substrait_replay_error_hook,
         sql_policy=resolution.sql_policy,
         sql_policy_name=resolution.sql_policy_name,
         prepared_param_types=resolution.prepared_param_types,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.policy import default_cache_policy
 from tools.cq.core.cache.telemetry import snapshot_cache_telemetry
 from tools.cq.core.runtime.env_namespace import env_bool

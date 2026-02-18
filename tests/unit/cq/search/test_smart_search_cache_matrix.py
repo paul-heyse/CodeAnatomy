@@ -8,7 +8,7 @@ from pathlib import Path
 
 import msgspec
 import pytest
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
+from tools.cq.core.cache.backend_core import close_cq_cache_backend
 from tools.cq.core.cache.telemetry import reset_cache_telemetry, snapshot_cache_telemetry
 from tools.cq.search.pipeline.smart_search import smart_search
 

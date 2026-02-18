@@ -8,6 +8,7 @@ import pytest
 from tools.cq.search.tree_sitter.query.planner import (
     build_pack_plan,
     build_pattern_plan,
+    normalize_pack_source_rows,
     sort_pack_plans,
 )
 
@@ -116,3 +117,27 @@ def test_build_pattern_plan_handles_invalid_capture_quantifier() -> None:
     plans = build_pattern_plan(cast("Any", _FakeQuery()))
     assert len(plans) == 1
     assert plans[0].capture_quantifiers == ("none", "one")
+
+
+def test_normalize_pack_source_rows_filters_non_scm_rows() -> None:
+    """Normalization should drop non-`.scm` rows in non-dedupe mode."""
+    rows = normalize_pack_source_rows(
+        (
+            ("defs.scm", "(identifier) @name"),
+            ("readme.txt", "ignored"),
+        )
+    )
+    assert rows == (("defs.scm", "(identifier) @name"),)
+
+
+def test_normalize_pack_source_rows_dedupes_and_sorts() -> None:
+    """Dedupe mode should keep one row per pack in deterministic order."""
+    rows = normalize_pack_source_rows(
+        (
+            ("b.scm", "old"),
+            ("a.scm", "first"),
+            ("b.scm", "new"),
+        ),
+        dedupe_by_pack_name=True,
+    )
+    assert rows == (("a.scm", "first"), ("b.scm", "new"))

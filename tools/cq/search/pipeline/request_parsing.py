@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
 
 __all__ = ["coerce_search_request"]
 
+logger = logging.getLogger(__name__)
+
 
 def coerce_search_request(
     *,
@@ -31,7 +34,7 @@ def coerce_search_request(
     Returns:
         SearchRequest: Typed request contract for smart-search orchestration.
     """
-    return SearchRequest(
+    request = SearchRequest(
         root=root,
         query=query,
         mode=_coerce_query_mode(kwargs.get("mode")),
@@ -52,6 +55,15 @@ def coerce_search_request(
             kwargs.get("incremental_enrichment_mode")
         ),
     )
+    logger.debug(
+        "request.coerced query=%s mode=%s scope=%s with_neighborhood=%s include_strings=%s",
+        request.query,
+        request.mode.value if request.mode is not None else "auto",
+        request.lang_scope,
+        request.with_neighborhood,
+        request.include_strings,
+    )
+    return request
 
 
 def _coerce_query_mode(mode_value: object) -> QueryMode | None:

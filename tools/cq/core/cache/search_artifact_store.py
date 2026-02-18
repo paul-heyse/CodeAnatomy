@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, ExitStack, nullcontext
 from pathlib import Path
-from typing import Final, Protocol, cast
+from typing import Final, cast
 
 import msgspec
 
@@ -20,10 +19,20 @@ from tools.cq.core.cache.key_builder import build_cache_key
 from tools.cq.core.cache.namespaces import resolve_namespace_ttl_seconds
 from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
 from tools.cq.core.cache.search_artifact_index import (
+    SearchArtifactDequeLike,
+    SearchArtifactIndexLike,
+)
+from tools.cq.core.cache.search_artifact_index import (
     global_index_path as _global_index_path,
 )
 from tools.cq.core.cache.search_artifact_index import (
     global_order_path as _global_order_path,
+)
+from tools.cq.core.cache.search_artifact_index import (
+    open_artifact_deque as _open_deque,
+)
+from tools.cq.core.cache.search_artifact_index import (
+    open_artifact_index as _open_index,
 )
 from tools.cq.core.cache.search_artifact_index import (
     run_index_path as _run_index_path,
@@ -41,42 +50,9 @@ from tools.cq.core.cache.typed_codecs import (
     encode_msgpack_into,
 )
 
-try:
-    from diskcache import Deque, Index
-except ImportError:  # pragma: no cover - optional dependency
-    Deque = None
-    Index = None
-
-
-class _SearchArtifactIndexLike(Protocol):
-    def __setitem__(self, key: str, value: object) -> None: ...
-    def get(self, key: str, default: object | None = None) -> object | None: ...
-    def values(self) -> Iterable[object]: ...
-
-
-class _SearchArtifactDequeLike(Protocol):
-    def appendleft(self, item: str) -> None: ...
-    def __iter__(self) -> Iterator[str]: ...
-
-
 _NAMESPACE: Final[str] = "search_artifacts"
 _VERSION: Final[str] = "v2"
-_MAX_INDEX_ROWS: Final[int] = 1000
 _BLOB_THRESHOLD_BYTES: Final[int] = 64 * 1024
-
-
-def _open_deque(path: Path) -> _SearchArtifactDequeLike | None:
-    if Deque is None:
-        return None
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return cast("_SearchArtifactDequeLike", Deque(str(path), maxlen=_MAX_INDEX_ROWS))
-
-
-def _open_index(path: Path) -> _SearchArtifactIndexLike | None:
-    if Index is None:
-        return None
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return cast("_SearchArtifactIndexLike", Index(str(path)))
 
 
 def _bundle_key(
@@ -256,8 +232,8 @@ def _list_global_entries(
 
 def _rows_from_global_order(
     *,
-    global_order: _SearchArtifactDequeLike,
-    global_index: _SearchArtifactIndexLike,
+    global_order: SearchArtifactDequeLike,
+    global_index: SearchArtifactIndexLike,
     limit: int,
 ) -> list[SearchArtifactIndexEntryV1]:
     rows: list[SearchArtifactIndexEntryV1] = []
@@ -277,7 +253,7 @@ def _rows_from_global_order(
 
 def _rows_from_global_index(
     *,
-    global_index: _SearchArtifactIndexLike,
+    global_index: SearchArtifactIndexLike,
     limit: int,
 ) -> list[SearchArtifactIndexEntryV1]:
     rows = [entry for value in global_index.values() if (entry := _decode_entry(value)) is not None]

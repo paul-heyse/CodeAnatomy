@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from tools.cq.search.tree_sitter.rust_lane import runtime_core
+from tools.cq.search.tree_sitter.rust_lane import runtime_engine
 
 
 def test_rust_pipeline_emits_stage_timings_and_status(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -21,12 +21,12 @@ def test_rust_pipeline_emits_stage_timings_and_status(monkeypatch: pytest.Monkey
         return SimpleNamespace(root_node=object()), b"x", ()
 
     monkeypatch.setattr(
-        runtime_core,
+        runtime_engine,
         "_parse_with_session",
         _fake_parse_with_session,
     )
     monkeypatch.setattr(
-        runtime_core,
+        runtime_engine,
         "_collect_payload_with_timings",
         lambda _request: {
             "language": "rust",
@@ -37,7 +37,7 @@ def test_rust_pipeline_emits_stage_timings_and_status(monkeypatch: pytest.Monkey
         },
     )
 
-    request_type = runtime_core.__dict__["_RustPipelineRequestV1"]
+    request_type = runtime_engine.__dict__["_RustPipelineRequestV1"]
     request = request_type(
         source="fn target() {}",
         cache_key="k",
@@ -48,7 +48,7 @@ def test_rust_pipeline_emits_stage_timings_and_status(monkeypatch: pytest.Monkey
         error_prefix="test",
     )
 
-    run_pipeline = runtime_core.__dict__["_run_rust_enrichment_pipeline"]
+    run_pipeline = runtime_engine.__dict__["_run_rust_enrichment_pipeline"]
     payload = run_pipeline(request)
 
     assert isinstance(payload, dict)

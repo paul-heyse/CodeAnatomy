@@ -6,7 +6,7 @@ from pathlib import Path
 
 from tools.cq.core.schema import Anchor, CqResult, Finding, RunMeta, Section
 from tools.cq.core.scope_filter import filter_findings_by_scope
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 
 
 def _result_with_files() -> CqResult:

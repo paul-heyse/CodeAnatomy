@@ -373,54 +373,70 @@ def _supports_explain_analyze_level() -> bool:
     return DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
 
 
+def _sql_policy_payload(profile: DataFusionRuntimeProfile) -> dict[str, bool] | None:
+    sql_policy = profile.policies.sql_policy
+    if sql_policy is None:
+        return None
+    return {
+        "allow_ddl": sql_policy.allow_ddl,
+        "allow_dml": sql_policy.allow_dml,
+        "allow_statements": sql_policy.allow_statements,
+    }
+
+
+def _feature_gate_settings(profile: DataFusionRuntimeProfile) -> dict[str, str]:
+    return dict(profile.policies.feature_gates.settings())
+
+
+def _join_policy_settings(profile: DataFusionRuntimeProfile) -> dict[str, str] | None:
+    join_policy = profile.policies.join_policy
+    if join_policy is None:
+        return None
+    return dict(join_policy.settings())
+
+
+def _external_table_options_payload(
+    profile: DataFusionRuntimeProfile,
+) -> dict[str, object] | None:
+    options = profile.policies.external_table_options
+    if not options:
+        return None
+    return {str(key): value for key, value in options.items()}
+
+
 # ---------------------------------------------------------------------------
 # Telemetry Builder Functions
 # ---------------------------------------------------------------------------
 def _telemetry_common_payload(profile: DataFusionRuntimeProfile) -> dict[str, object]:
     policies = profile.policies
+    sql_policy_payload = _sql_policy_payload(profile)
     return {
         "profile_name": policies.config_policy_name,
         "sql_policy_name": policies.sql_policy_name,
         "cache_profile_name": policies.cache_profile_name,
         "settings_hash": profile.settings_hash(),
-        "external_table_options": (
-            dict(policies.external_table_options) if policies.external_table_options else None
-        ),
-        "sql_policy": (
-            {
-                "allow_ddl": policies.sql_policy.allow_ddl,
-                "allow_dml": policies.sql_policy.allow_dml,
-                "allow_statements": policies.sql_policy.allow_statements,
-            }
-            if policies.sql_policy is not None
-            else None
-        ),
+        "external_table_options": _external_table_options_payload(profile),
+        "sql_policy": sql_policy_payload,
         "param_identifier_allowlist": (
             list(policies.param_identifier_allowlist)
             if policies.param_identifier_allowlist
             else None
         ),
         "write_policy": _datafusion_write_policy_payload(policies.write_policy),
-        "feature_gates": dict(policies.feature_gates.settings()),
+        "feature_gates": _feature_gate_settings(profile),
         "cache_profile_settings": (
             _cache_profile_settings(profile) if policies.cache_profile_name is not None else None
         ),
-        "join_policy": (
-            policies.join_policy.settings() if policies.join_policy is not None else None
-        ),
+        "join_policy": _join_policy_settings(profile),
     }
 
 
 def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str, object]:
     settings = profile.settings_payload()
-    sql_policy_payload = None
-    if profile.policies.sql_policy is not None:
-        sql_policy_payload = {
-            "allow_ddl": profile.policies.sql_policy.allow_ddl,
-            "allow_dml": profile.policies.sql_policy.allow_dml,
-            "allow_statements": profile.policies.sql_policy.allow_statements,
-        }
+    sql_policy_payload = _sql_policy_payload(profile)
     write_policy_payload = _datafusion_write_policy_payload(profile.policies.write_policy)
+    external_table_options = _external_table_options_payload(profile)
+    join_policy_settings = _join_policy_settings(profile)
     delta_mutation_policy = profile.policies.delta_mutation_policy
     delta_mutation_policy_hash = (
         delta_mutation_policy.fingerprint() if delta_mutation_policy is not None else None
@@ -454,9 +470,7 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         "session_config": _map_entries(settings),
         "settings_hash": profile.settings_hash(),
         "external_table_options": (
-            _map_entries(profile.policies.external_table_options)
-            if profile.policies.external_table_options
-            else None
+            _map_entries(external_table_options) if external_table_options is not None else None
         ),
         "delta_store_policy_hash": delta_store_policy_hash(profile.policies.delta_store_policy),
         "delta_store_policy": _delta_store_policy_payload(profile.policies.delta_store_policy),
@@ -469,17 +483,15 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
             else None
         ),
         "write_policy": write_policy_payload,
-        "feature_gates": _map_entries(profile.policies.feature_gates.settings()),
+        "feature_gates": _map_entries(_feature_gate_settings(profile)),
         "cache_profile_settings": (
             _map_entries(_cache_profile_settings(profile))
             if profile.policies.cache_profile_name is not None
             else None
         ),
-        "join_policy": (
-            _map_entries(profile.policies.join_policy.settings())
-            if profile.policies.join_policy is not None
-            else None
-        ),
+        "join_policy": _map_entries(join_policy_settings)
+        if join_policy_settings is not None
+        else None,
         "parquet_read": _map_entries(parquet_read),
         "listing_table": _map_entries(listing_table),
         "spill": {
@@ -612,9 +624,10 @@ def _extra_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]
         payload["datafusion.catalog.location"] = catalog_location
     if catalog_format is not None:
         payload["datafusion.catalog.format"] = catalog_format
-    payload.update(profile.policies.feature_gates.settings())
-    if profile.policies.join_policy is not None:
-        payload.update(profile.policies.join_policy.settings())
+    payload.update(_feature_gate_settings(profile))
+    join_policy_settings = _join_policy_settings(profile)
+    if join_policy_settings is not None:
+        payload.update(join_policy_settings)
     if profile.diagnostics.explain_analyze_level is not None and _supports_explain_analyze_level():
         payload["datafusion.explain.analyze_level"] = profile.diagnostics.explain_analyze_level
     return payload

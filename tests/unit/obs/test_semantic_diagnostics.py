@@ -8,7 +8,7 @@ from obs.diagnostics import (
     record_semantic_quality_artifact,
     record_semantic_quality_events,
 )
-from obs.metrics import quality_issue_rows
+from obs.quality_metrics import quality_issue_rows
 
 EXPECTED_ROW_COUNT = 10
 

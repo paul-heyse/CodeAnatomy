@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tools.cq.search.python.evidence import build_agreement_summary
-from tools.cq.search.python.extractors import (
+from tools.cq.search.python.extractors_entrypoints import (
     extract_python_byte_range,
     extract_python_node,
 )

@@ -12,7 +12,8 @@ def test_query_package_exposes_core_ir_and_parser_symbols() -> None:
 
 
 def test_query_package_does_not_export_runtime_facade_modules() -> None:
-    """Verify runtime facade modules remain internal-only imports."""
-    assert not hasattr(query_pkg, "executor_runtime")
-    assert not hasattr(query_pkg, "executor_entity")
-    assert not hasattr(query_pkg, "executor_pattern")
+    """Verify runtime facade modules remain outside the explicit public API."""
+    public_api = set(getattr(query_pkg, "__all__", ()))
+    assert "executor_runtime" not in public_api
+    assert "executor_entity" not in public_api
+    assert "executor_pattern" not in public_api

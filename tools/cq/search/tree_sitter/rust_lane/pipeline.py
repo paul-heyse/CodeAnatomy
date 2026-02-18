@@ -14,7 +14,7 @@ def collect_payload_with_timings(request: object) -> dict[str, object]:
     Returns:
         dict[str, object]: Payload and timing envelope from runtime implementation.
     """
-    from tools.cq.search.tree_sitter.rust_lane.runtime_core import (
+    from tools.cq.search.tree_sitter.rust_lane.runtime_engine import (
         collect_payload_with_timings as collect_payload_with_timings_impl,
     )
 
@@ -27,7 +27,7 @@ def run_rust_enrichment_pipeline(request: object) -> dict[str, object] | None:
     Returns:
         dict[str, object] | None: Enrichment payload, or None on fail-open paths.
     """
-    from tools.cq.search.tree_sitter.rust_lane.runtime_core import (
+    from tools.cq.search.tree_sitter.rust_lane.runtime_engine import (
         run_rust_enrichment_pipeline as run_rust_enrichment_pipeline_impl,
     )
 

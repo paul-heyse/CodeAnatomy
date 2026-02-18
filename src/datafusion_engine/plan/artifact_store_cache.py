@@ -24,6 +24,14 @@ from datafusion_engine.plan.artifact_store_tables import (
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
+def _plan_artifacts_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
+    return plan_artifacts_location(profile)
+
+
+def _pipeline_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
+    return pipeline_events_location(profile)
+
+
 def ensure_plan_artifacts_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
@@ -35,7 +43,7 @@ def ensure_plan_artifacts_table(
     DatasetLocation | None
         Resolved artifacts table location when configured.
     """
-    location = plan_artifacts_location(profile)
+    location = _plan_artifacts_location(profile)
     if location is None:
         return None
     table_path = Path(location.path)
@@ -72,7 +80,7 @@ def ensure_pipeline_events_table(
     DatasetLocation | None
         Resolved pipeline-events table location when configured.
     """
-    location = pipeline_events_location(profile)
+    location = _pipeline_events_location(profile)
     if location is None:
         return None
     table_path = Path(location.path)

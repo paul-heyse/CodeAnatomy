@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.core.summary_contract import summary_for_variant
+from tools.cq.core.summary_types import summary_for_variant
 from tools.cq.core.summary_validation import validate_summary_envelope, validate_summary_sections
 
 

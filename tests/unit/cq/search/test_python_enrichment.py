@@ -11,7 +11,7 @@ from tools.cq.search._shared.requests import (
     PythonNodeEnrichmentRequest,
 )
 from tools.cq.search.cache.registry import CACHE_REGISTRY
-from tools.cq.search.python.extractors import (
+from tools.cq.search.python.extractors_entrypoints import (
     _classify_item_role,
     _extract_behavior_summary,
     _extract_call_target,

@@ -74,7 +74,7 @@ from tools.cq.search.python.extractors_analysis import (
     extract_import_detail as _extract_import_detail,
 )
 from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function
-from tools.cq.search.python.extractors_budget import enforce_payload_budget
+from tools.cq.search.python.extractors_budget import trim_payload_to_budget
 from tools.cq.search.python.extractors_classification import (
     _is_class_node,
     _is_function_node,
@@ -100,7 +100,7 @@ from tools.cq.search.python.runtime_context import (
     ensure_python_cache_registered,
     get_default_python_runtime_context,
 )
-from tools.cq.search.tree_sitter.python_lane.facts import build_python_tree_sitter_facts
+from tools.cq.search.tree_sitter.python_lane.facts_runtime import build_python_tree_sitter_facts
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
@@ -1548,7 +1548,7 @@ def _finalize_python_enrichment_payload(state: _PythonEnrichmentState) -> dict[s
     if state.context.truncations:
         payload["truncated_fields"] = list(state.context.truncations)
 
-    dropped_fields, size_hint = enforce_payload_budget(
+    payload, dropped_fields, size_hint = trim_payload_to_budget(
         payload,
         max_payload_bytes=_MAX_PAYLOAD_BYTES,
     )

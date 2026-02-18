@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from tools.cq.search.enrichment.core import (
-    enforce_payload_budget as enforce_shared_payload_budget,
+    check_payload_budget as check_shared_payload_budget,
 )
 from tools.cq.search.enrichment.core import payload_size_hint as shared_payload_size_hint
+from tools.cq.search.enrichment.core import trim_payload_to_budget as trim_shared_payload_to_budget
 
 _DEFAULT_DROP_ORDER: tuple[str, ...] = (
     "scope_chain",
@@ -19,7 +20,7 @@ _DEFAULT_DROP_ORDER: tuple[str, ...] = (
 )
 
 
-__all__ = ["enforce_payload_budget", "payload_size_hint"]
+__all__ = ["check_payload_budget", "payload_size_hint", "trim_payload_to_budget"]
 
 
 def payload_size_hint(payload: dict[str, object]) -> int:
@@ -31,18 +32,32 @@ def payload_size_hint(payload: dict[str, object]) -> int:
     return shared_payload_size_hint(payload)
 
 
-def enforce_payload_budget(
+def check_payload_budget(
+    payload: dict[str, object],
+    *,
+    max_payload_bytes: int,
+) -> tuple[bool, int]:
+    """Check if payload already fits the configured size budget.
+
+    Returns:
+        tuple[bool, int]: ``(fits_budget, size_hint)``.
+    """
+    return check_shared_payload_budget(payload, max_payload_bytes=max_payload_bytes)
+
+
+def trim_payload_to_budget(
     payload: dict[str, object],
     *,
     max_payload_bytes: int,
     drop_order: tuple[str, ...] = _DEFAULT_DROP_ORDER,
-) -> tuple[list[str], int]:
-    """Prune optional fields when payload exceeds max size.
+) -> tuple[dict[str, object], list[str], int]:
+    """Return trimmed payload copy when payload exceeds max size.
 
     Returns:
-        tuple[list[str], int]: Removed field names and final payload size estimate.
+        tuple[dict[str, object], list[str], int]:
+            Trimmed payload, removed field names, and final payload size estimate.
     """
-    return enforce_shared_payload_budget(
+    return trim_shared_payload_to_budget(
         payload,
         max_payload_bytes=max_payload_bytes,
         drop_order=drop_order,

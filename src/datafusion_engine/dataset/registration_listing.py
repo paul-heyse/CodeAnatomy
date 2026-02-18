@@ -56,7 +56,7 @@ if TYPE_CHECKING:
         DataFusionRegistrationContext,
         DatasetCaches,
     )
-    from schema_spec.dataset_spec import DataFusionScanOptions
+    from schema_spec.scan_options import DataFusionScanOptions
 
 
 def _ddl_identifier_part(name: str) -> str:

@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.maintenance import maintenance_tick
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, Section, assign_result_finding_ids
-from tools.cq.core.summary_contract import as_search_summary, summary_from_mapping
+from tools.cq.core.summary_types import as_search_summary, summary_from_mapping
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.neighborhood_preview import (
     build_tree_sitter_neighborhood_preview as _build_tree_sitter_neighborhood_preview,
@@ -36,6 +37,8 @@ if TYPE_CHECKING:
         InsightNeighborhoodV1,
         InsightRiskV1,
     )
+
+logger = logging.getLogger(__name__)
 
 # Evidence disclosure cap to keep output high-signal
 MAX_EVIDENCE = 100
@@ -311,6 +314,11 @@ def assemble_smart_search_result(
     CqResult
         Assembled search result with sections and insights.
     """
+    logger.debug(
+        "Assembling smart-search result: root=%s partitions=%d",
+        ctx.root,
+        len(partition_results),
+    )
     return _assemble_smart_search_result(ctx, partition_results)
 
 

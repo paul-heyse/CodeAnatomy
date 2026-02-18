@@ -174,31 +174,46 @@ def merge_gap_fill_payload(
     return merged
 
 
-def enforce_payload_budget(
-    payload: dict[str, object],
+def check_payload_budget(
+    payload: Mapping[str, object],
+    *,
+    max_payload_bytes: int,
+) -> tuple[bool, int]:
+    """Check whether payload fits size budget without mutating it.
+
+    Returns:
+        ``(fits_budget, size_hint)``.
+    """
+    size = payload_size_hint(payload)
+    return size <= max_payload_bytes, size
+
+
+def trim_payload_to_budget(
+    payload: Mapping[str, object],
     *,
     max_payload_bytes: int,
     drop_order: Sequence[str],
-) -> tuple[list[str], int]:
-    """Prune optional keys until payload fits the size budget.
+) -> tuple[dict[str, object], list[str], int]:
+    """Return trimmed payload copy that fits budget when possible.
 
     Returns:
-        Dropped keys and resulting payload size in bytes.
+        ``(trimmed_payload, dropped_keys, size_hint)``.
     """
-    dropped: list[str] = []
-    size = payload_size_hint(payload)
-    if size <= max_payload_bytes:
-        return dropped, size
+    trimmed = dict(payload)
+    fits_budget, size = check_payload_budget(trimmed, max_payload_bytes=max_payload_bytes)
+    if fits_budget:
+        return trimmed, [], size
 
+    dropped: list[str] = []
     for key in drop_order:
-        if key not in payload:
+        if key not in trimmed:
             continue
-        payload.pop(key, None)
+        trimmed.pop(key, None)
         dropped.append(key)
-        size = payload_size_hint(payload)
-        if size <= max_payload_bytes:
+        fits_budget, size = check_payload_budget(trimmed, max_payload_bytes=max_payload_bytes)
+        if fits_budget:
             break
-    return dropped, size
+    return trimmed, dropped, size
 
 
 def _meta_from_flat(payload: Mapping[str, object], *, language: str) -> EnrichmentMeta:
@@ -396,7 +411,7 @@ def normalize_rust_payload(payload: dict[str, object] | None) -> dict[str, objec
 
 __all__ = [
     "append_source",
-    "enforce_payload_budget",
+    "check_payload_budget",
     "has_value",
     "merge_gap_fill_payload",
     "normalize_python_payload",
@@ -406,4 +421,5 @@ __all__ = [
     "payload_size_hint",
     "set_degraded",
     "string_or_none",
+    "trim_payload_to_budget",
 ]

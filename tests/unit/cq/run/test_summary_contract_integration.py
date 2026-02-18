@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tools.cq.core.schema import CqResult, mk_result, mk_runmeta, update_result_summary
-from tools.cq.core.summary_contract import SemanticTelemetryV1
+from tools.cq.core.summary_types import SemanticTelemetryV1
 from tools.cq.run.run_summary import populate_run_summary_metadata
 
 EXPECTED_ATTEMPTED = 3

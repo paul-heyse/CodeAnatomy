@@ -13,7 +13,7 @@ from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
-    from tools.cq.core.summary_contract import SummaryEnvelopeV1
+    from tools.cq.core.summary_types import SummaryEnvelopeV1
 
 
 def render_ldmd_document(

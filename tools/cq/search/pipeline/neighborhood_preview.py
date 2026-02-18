@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
 
 __all__ = ["build_tree_sitter_neighborhood_preview"]
 
+logger = logging.getLogger(__name__)
+
 
 def _normalize_neighborhood_file_path(path: str) -> str:
     normalized = path.strip()
@@ -36,10 +39,11 @@ def _build_structural_neighborhood_preview(
     definition_matches: list[EnrichedMatch],
 ) -> tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]:
     from tools.cq.core.front_door_search import build_neighborhood_from_slices
+    from tools.cq.neighborhood.collector import collect_tree_sitter_neighborhood
     from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectRequest
-    from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
 
     if primary_target_finding is None or primary_target_finding.anchor is None:
+        logger.debug("neighborhood.preview_skipped reason=no_anchor")
         return None, [], []
 
     target_name = (
@@ -67,6 +71,11 @@ def _build_structural_neighborhood_preview(
             )
         )
     except (OSError, RuntimeError, TimeoutError, ValueError, TypeError) as exc:
+        logger.warning(
+            "neighborhood.preview_unavailable language=%s reason=%s",
+            collector_language,
+            type(exc).__name__,
+        )
         return None, [], [f"tree_sitter_neighborhood_unavailable:{type(exc).__name__}"]
 
     slices = tuple(collect_result.slices)
@@ -103,6 +112,12 @@ def _build_structural_neighborhood_preview(
             )
         )
     notes = [f"{degrade.stage}:{degrade.category or degrade.severity}" for degrade in degrades]
+    logger.debug(
+        "neighborhood.preview_built slices=%d diagnostics=%d findings=%d",
+        len(slices),
+        len(degrades),
+        len(findings),
+    )
     return neighborhood, findings, list(dict.fromkeys(notes))
 
 
@@ -126,6 +141,7 @@ def build_tree_sitter_neighborhood_preview(
         "mode": "opt_in",
     }
     if not ctx.with_neighborhood:
+        logger.debug("neighborhood.preview_disabled")
         return None, ["tree_sitter_neighborhood_disabled_by_default"], neighborhood_summary
 
     scope_paths = candidate_scope_paths_for_neighborhood(
@@ -144,5 +160,10 @@ def build_tree_sitter_neighborhood_preview(
         sections,
         findings=neighborhood_findings,
         has_target_candidates=inputs.has_target_candidates,
+    )
+    logger.debug(
+        "neighborhood.preview_inserted findings=%d notes=%d",
+        len(neighborhood_findings),
+        len(neighborhood_notes),
     )
     return insight_neighborhood, neighborhood_notes, neighborhood_summary

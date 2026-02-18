@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter.python_lane.runtime import enrich_python_context_by_byte_range
+from tools.cq.search.tree_sitter.python_lane.runtime_engine import (
+    enrich_python_context_by_byte_range,
+)
 
 __all__ = ["dispatch_python_enrichment"]
 

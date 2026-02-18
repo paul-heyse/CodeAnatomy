@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.core.enrichment_facts import additional_language_payload, has_fact_value
+from tools.cq.core.fact_types import additional_language_payload, has_fact_value
 
 __all__ = ["get_additional_language_payload", "is_fact_value_present"]
 

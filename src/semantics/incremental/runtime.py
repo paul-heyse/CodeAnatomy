@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.store_policy import DeltaStorePolicy
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.registry_facade import RegistryFacade
-    from schema_spec.dataset_spec import ScanPolicyConfig
+    from schema_spec.scan_policy import ScanPolicyConfig
     from semantics.program_manifest import ManifestDatasetResolver
 
 

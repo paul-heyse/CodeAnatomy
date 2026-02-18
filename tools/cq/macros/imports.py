@@ -27,7 +27,7 @@ from tools.cq.core.schema import (
     update_result_summary,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 from tools.cq.index.graph_utils import find_sccs
 from tools.cq.macros.contracts import ScopedMacroRequestBase, ScoringDetailsV1
 from tools.cq.macros.result_builder import MacroResultBuilder

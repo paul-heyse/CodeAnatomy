@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from tools.cq.core.bootstrap import resolve_runtime_services
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend
+from tools.cq.core.cache import close_cq_cache_backend
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.enrichment import SymtableEnricher
 from tools.cq.query.executor_plan_dispatch import ExecutePlanRequestV1, execute_plan

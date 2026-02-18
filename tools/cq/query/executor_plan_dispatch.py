@@ -6,11 +6,11 @@ from pathlib import Path
 
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor_runtime_impl import (
+from tools.cq.query.executor_runtime import (
     ExecutePlanRequestV1,
     rg_files_with_matches,
 )
-from tools.cq.query.executor_runtime_impl import (
+from tools.cq.query.executor_runtime import (
     execute_plan as execute_plan_impl,
 )
 from tools.cq.query.ir import Scope

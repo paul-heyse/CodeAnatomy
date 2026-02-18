@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Protocol
 
 import pyarrow as pa
+
+if TYPE_CHECKING:
+    from serde_schema_registry import ArtifactSpec
 
 
 class DiagnosticsPort(Protocol):
     """Port for recording diagnostics events and artifacts."""
 
-    def record_event(self, name: str, properties: dict[str, object]) -> None:
+    def record_event(self, name: str, properties: Mapping[str, object]) -> None:
         """Record one diagnostics event payload."""
         ...
 
-    def record_events(self, name: str, rows: list[dict[str, object]]) -> None:
+    def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
         """Record multiple diagnostics event payloads."""
+        ...
+
+    def record_artifact(self, name: ArtifactSpec, payload: Mapping[str, object]) -> None:
+        """Record one diagnostics artifact payload."""
         ...
 
 

@@ -13,7 +13,7 @@ from tools.cq.core.schema import (
     extend_result_evidence,
     extend_result_key_findings,
 )
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 from tools.cq.macros._rust_fallback import rust_fallback_search
 from tools.cq.orchestration.multilang_summary import (
     build_multilang_summary,

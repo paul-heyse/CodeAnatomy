@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     SemanticTelemetryV1,
     SummaryEnvelopeV1,
     apply_summary_mapping,

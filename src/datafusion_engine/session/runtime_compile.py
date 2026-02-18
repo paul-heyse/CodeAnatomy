@@ -16,7 +16,7 @@ from datafusion_engine.compile.options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
     DataFusionSqlPolicy,
-    DataFusionSubstraitFallbackEvent,
+    DataFusionSubstraitReplayErrorEvent,
 )
 from datafusion_engine.lineage.diagnostics import record_artifact as _lineage_record_artifact
 from datafusion_engine.session.contracts import IdentifierNormalizationMode
@@ -207,7 +207,7 @@ class _ResolvedCompileHooks:
     semantic_diff_hook: Callable[[Mapping[str, object]], None] | None
     sql_ingest_hook: Callable[[Mapping[str, object]], None] | None
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None
-    substrait_fallback_hook: Callable[[DataFusionSubstraitFallbackEvent], None] | None
+    substrait_replay_error_hook: Callable[[DataFusionSubstraitReplayErrorEvent], None] | None
 
 
 @dataclass(frozen=True)

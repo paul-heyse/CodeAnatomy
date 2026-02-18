@@ -220,8 +220,6 @@ def delta_write_spec(
         extra_metadata=commit_metadata,
     )
     commit_metadata = commit_metadata_from_properties(commit_properties)
-    commit_app_id = idempotent.app_id if idempotent is not None else None
-    commit_version = idempotent.version if idempotent is not None else None
     return DeltaWriteSpec(
         table_uri=request.destination,
         mode=mode,
@@ -245,8 +243,8 @@ def delta_write_spec(
         ),
         writer_properties=policy_ctx.writer_properties,
         stats_decision=stats_decision,
-        commit_app_id=commit_app_id,
-        commit_version=commit_version,
+        commit_app_id=idempotent.app_id if idempotent is not None else None,
+        commit_version=idempotent.version if idempotent is not None else None,
         commit_run=commit_run,
         storage_options=policy_ctx.storage_options,
         log_storage_options=policy_ctx.log_storage_options,
@@ -317,7 +315,7 @@ def persist_write_artifact(
     """Persist write metadata to the plan artifact store."""
     if pipeline.runtime_profile is None:
         return
-    from datafusion_engine.plan.artifact_store_core import (
+    from datafusion_engine.plan.artifact_store_persistence import (
         WriteArtifactRequest,
         persist_write_artifact,
     )

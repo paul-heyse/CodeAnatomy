@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.core.summary_contract import summary_from_mapping
+from tools.cq.core.summary_types import summary_from_mapping
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.neighborhood.bundle_builder import BundleBuildRequest
 from tools.cq.neighborhood.executor import NeighborhoodExecutionRequestV1, execute_neighborhood

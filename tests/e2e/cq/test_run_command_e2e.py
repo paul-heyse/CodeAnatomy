@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 from tools.cq.core.schema import CqResult
-from tools.cq.core.summary_contract import SemanticTelemetryV1
+from tools.cq.core.summary_types import SemanticTelemetryV1
 
 from tests.e2e.cq._support.goldens import assert_json_snapshot_data, load_golden_spec
 from tests.e2e.cq._support.projections import result_snapshot_projection

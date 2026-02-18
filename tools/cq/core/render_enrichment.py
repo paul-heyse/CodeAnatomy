@@ -11,7 +11,7 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.enrichment_facts import (
+from tools.cq.core.fact_types import (
     additional_language_payload,
     resolve_fact_clusters,
     resolve_fact_context,

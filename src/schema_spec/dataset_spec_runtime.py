@@ -6,7 +6,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Literal, TypedDict, Unpack, cast
 
 import msgspec
-import pyarrow as pa
 import pyarrow.dataset as ds
 
 from arrow_utils.core.ordering import Ordering, OrderingLevel
@@ -26,22 +25,27 @@ from datafusion_engine.kernels import DedupeSpec, SortKey
 from datafusion_engine.schema.alignment import SchemaEvolutionSpec
 from datafusion_engine.schema.finalize import Contract
 from datafusion_engine.schema.validation import ArrowValidationOptions
-from schema_spec.dataset_spec import (
+from schema_spec.dataset_contracts import (
     ContractRow,
-    DataFusionScanOptions,
     DedupeSpecSpec,
-    DeltaScanPolicyDefaults,
-    ParquetColumnOptions,
-    ScanPolicyConfig,
-    ScanPolicyDefaults,
     SortKeySpec,
     TableSchemaContract,
-    apply_delta_scan_policy,
-    apply_scan_policy,
-    validate_arrow_table,
 )
 from schema_spec.field_spec import FieldSpec
+from schema_spec.scan_options import (
+    DataFusionScanOptions,
+    DeltaScanOptions,
+    ParquetColumnOptions,
+)
+from schema_spec.scan_policy import (
+    DeltaScanPolicyDefaults,
+    ScanPolicyConfig,
+    ScanPolicyDefaults,
+    apply_delta_scan_policy,
+    apply_scan_policy,
+)
 from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
+from schema_spec.validation import validate_arrow_table
 from schema_spec.view_specs import ViewSpec
 from serde_msgspec import StructBaseStrict
 from storage.dataset_sources import (
@@ -52,39 +56,6 @@ from storage.dataset_sources import (
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from utils.validation import validate_required_items
-
-
-class DeltaScanOptions(StructBaseStrict, frozen=True):
-    """Delta-specific scan configuration.
-
-    Delta table registration uses DataFusion's native Delta TableProvider.
-    All IO contracts for Delta tables are specified through DataFusion
-    registration and catalog metadata.
-
-    Notes:
-    -----
-    Delta CDF configuration is handled via DatasetLocation.delta_cdf_options
-    to keep change-data-feed registration separate from standard scans.
-
-    Attributes:
-    ----------
-    file_column_name : str | None
-        Column name for source file metadata in Delta scans.
-    enable_parquet_pushdown : bool
-        Enable predicate pushdown to underlying Parquet files.
-    schema_force_view_types : bool | None
-        Force schema types to match view definitions.
-    wrap_partition_values : bool
-        Wrap partition values in structs for nested access.
-    schema : pa.Schema | None
-        Optional schema override for Delta table registration.
-    """
-
-    file_column_name: str | None = None
-    enable_parquet_pushdown: bool = True
-    schema_force_view_types: bool | None = None
-    wrap_partition_values: bool = False
-    schema: pa.Schema | None = None
 
 
 class DeltaCdfPolicy(StructBaseStrict, frozen=True):

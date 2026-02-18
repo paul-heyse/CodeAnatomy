@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails, Section
@@ -25,6 +26,8 @@ from tools.cq.search.objects.resolve import ObjectResolutionRuntime, build_objec
 from tools.cq.search.pipeline.classifier import MatchCategory
 from tools.cq.search.pipeline.smart_search_followups import build_followups
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch
+
+logger = logging.getLogger(__name__)
 
 
 def _evidence_to_bucket(evidence_kind: str) -> str:
@@ -205,6 +208,14 @@ def build_sections(
     if followups_section is not None:
         sections.append(followups_section)
 
+    logger.debug(
+        "sections.built query=%s mode=%s matches=%d sections=%d include_strings=%s",
+        query,
+        mode.value,
+        len(matches),
+        len(sections),
+        include_strings,
+    )
     return sections
 
 

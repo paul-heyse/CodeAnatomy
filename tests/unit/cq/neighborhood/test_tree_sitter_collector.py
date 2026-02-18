@@ -5,15 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tools.cq.neighborhood import tree_sitter_collector
+from tools.cq.neighborhood import collector
+from tools.cq.neighborhood.collector import collect_tree_sitter_neighborhood
 from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectRequest
-from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
 from tools.cq.search.tree_sitter.core.infrastructure import parse_streaming_source
 
 
 def test_collector_uses_infrastructure_parse_streaming_source() -> None:
     """Regression: collector parse path should use consolidated infrastructure helper."""
-    assert tree_sitter_collector.parse_streaming_source is parse_streaming_source
+    assert collector.parse_streaming_source is parse_streaming_source
 
 
 @pytest.mark.skipif(

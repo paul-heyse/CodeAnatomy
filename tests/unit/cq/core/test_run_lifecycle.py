@@ -6,7 +6,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tools.cq.core.cache.diskcache_backend import close_cq_cache_backend, get_cq_cache_backend
+from tools.cq.core.cache.backend_core import close_cq_cache_backend, get_cq_cache_backend
 from tools.cq.core.cache.key_builder import (
     build_namespace_cache_tag,
     build_run_cache_tag,

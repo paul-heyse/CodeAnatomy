@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 from datafusion import col, lit
 from datafusion import functions as f
 
-from obs.metrics import quality_issue_rows
 from obs.otel import SCOPE_SEMANTICS, stage_span
+from obs.quality_metrics import quality_issue_rows
 from semantics.diagnostics.builder_base import DiagnosticBatchBuilder
 from semantics.diagnostics.coverage import MIN_EXTRACTION_COUNT
 from semantics.diagnostics.quality_metrics import build_relationship_quality_metrics

@@ -26,7 +26,7 @@ def test_assemble_query_pack_payload_delegates_to_runtime(
         return expected
 
     monkeypatch.setattr(
-        "tools.cq.search.tree_sitter.rust_lane.runtime_core._collect_query_pack_payload",
+        "tools.cq.search.tree_sitter.rust_lane.runtime_engine._collect_query_pack_payload",
         _fake_collect,
     )
 

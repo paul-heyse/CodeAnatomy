@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
+from tools.cq.core.types import QueryLanguage
 from tools.cq.orchestration.language_scope import (
     execute_by_language_scope,
     language_priority,
@@ -31,19 +33,23 @@ def test_execute_by_language_scope_single_language() -> None:
 
 def test_merge_partitioned_items_orders_by_scope_then_score() -> None:
     """Merged rows should prioritize language order, then descending score."""
+
     @dataclass(frozen=True)
     class _Row:
-        lang: str
+        lang: QueryLanguage
         score: float
         loc: tuple[str, int, int]
 
-    partitions = {
-        "rust": [_Row(lang="rust", score=0.2, loc=("b.rs", 3, 1))],
-        "python": [
-            _Row(lang="python", score=0.1, loc=("a.py", 2, 1)),
-            _Row(lang="python", score=0.9, loc=("a.py", 1, 1)),
-        ],
-    }
+    partitions = cast(
+        "dict[QueryLanguage, list[_Row]]",
+        {
+            "rust": [_Row(lang="rust", score=0.2, loc=("b.rs", 3, 1))],
+            "python": [
+                _Row(lang="python", score=0.1, loc=("a.py", 2, 1)),
+                _Row(lang="python", score=0.9, loc=("a.py", 1, 1)),
+            ],
+        },
+    )
     merged = merge_partitioned_items(
         partitions=partitions,
         scope="auto",

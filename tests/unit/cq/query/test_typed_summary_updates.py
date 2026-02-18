@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import msgspec
 from tools.cq.core.schema import mk_result, mk_runmeta
-from tools.cq.core.summary_contract import apply_summary_mapping
+from tools.cq.core.summary_types import apply_summary_mapping
 from tools.cq.core.summary_update_contracts import EntitySummaryUpdateV1
-from tools.cq.query.executor_runtime_impl import _entity_summary_updates
+from tools.cq.query.executor_runtime import _entity_summary_updates
 
 EXPECTED_MATCHES = 7
 EXPECTED_TOTAL_DEFS = 5

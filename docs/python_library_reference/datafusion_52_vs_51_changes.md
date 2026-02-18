@@ -5041,3 +5041,670 @@ The next “physical optimizer extension” topic with high leverage is **`Execu
 [5]: https://docs.rs/crate/datafusion-physical-optimizer/latest/source/src/coalesce_batches.rs "datafusion-physical-optimizer 52.1.0 - Docs.rs"
 [6]: https://docs.rs/crate/datafusion-physical-optimizer/latest/source/src/pushdown_sort.rs "datafusion-physical-optimizer 52.1.0 - Docs.rs"
 
+According to a document from **Mon 12 January 2026**, DataFusion 52 introduces **sort pushdown to scans** (and related physical-optimizer wiring) as a first-class performance feature, especially for **Top-K** patterns on pre-sorted data. ([Apache DataFusion][1])
+Building on your DF52↔DF51 change catalog, the high-leverage “physical optimizer extension” surface is now the **`ExecutionPlan::try_pushdown_sort` / `SortOrderPushdownResult`** contract, because DF52’s **`PushdownSort`** rule calls it directly and expects custom nodes to participate correctly. 
+
+
+
+--/ ult` (DF52 contract for custom physical nodes)
+
+### M.7.1 What changed in DF52 (why this is now “central”)
+
+Your doc already notes DF52 adds **`PushdownSort`** to the default physical optimizer pipeline. 
+That rule:
+
+* finds `Sor the *input*
+* rewrites the plan based on `SortOrderPushdownResult::{Exact|Inexact|Unsupported}` (Exact → remove Sort; Inexact → keep Sort but swap in an “optimized” input). 
+
+This is **gated by** `data:contentReference[oaicite:8]{index=8}ult `true`). :contentReference[oaicite:9]{index=9}  
+Practical implication: **any custom `ExecutionPlan`node you insert between`SortExec` and the leaf** can now become the difference between “DF52 gets the win” vs “DF52 can’t reach the source and does nothing.”
+
+---
+
+### M.7.2 Public surface (exact signatures + default behavior)
+
+#### ExecutionPlan hook
+
+```rust
+fn try_pushdown_sort(
+    &self,
+    order: &[PhysicalSortExpr],
+) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>, DataFusionError>;
+```
+
+The trait doc is explicit about semantics, and the **default implementation returns `Unsupported`**. ([Docs.rs][2])
+So: **no compile break** for existing custom nodes, but also **no participation** unless you override.
+
+#### Result type and helper methods
+
+```rust
+pub enum SortOrderPushdownResult<T> {
+    Exact { inner: T },
+    Inexact { inner: T },
+    Unsupported,
+}
+```
+
+([Docs.rs][3])
+
+Key helper methods you should treat as part of the contract surface:
+
+* `map(...)` / `try_map(...)`: transform `inner` while preserving `Exact` vs `Inexact` vs `Unsupported`. ([Docs.rs][3])
+* `into_inexact()`: **downgrade Exact → Inexact** when a wrapper cannot preserve “perfect ordering” even if the child can. ([Docs.rs][3])
+
+---
+
+### M.7.3 Semantics: what “Exact” vs “Inexact” really promises
+
+#### `Exact`
+
+* Meaning: this node can **guarantee** the requested ordering (“data is perfectly sorted” for the request). ([Docs.rs][3])
+* Optimizer consequence: **it may remove `SortExec`** above this subtree. ([Docs.rs][3])
+
+This aligns with DF’s broader ordering analysis: if the input is already ordered for the requirement, you can remove a sort and still be correct. ([Apache DataFusion][4])
+
+#### `Inexact`
+
+* Meaning: this node applied a **real optimization** for the requested ordering, but **cannot guarantee perfect sorting**. ([Docs.rs][3])
+* Optimizer consequence: **keep the Sort** for correctness, but use the optimized input (so Top-K can “terminate earlier” / scan less). ([Docs.rs][3])
+
+#### `Unsupported`
+
+* Meaning: do nothing; stop the pushdown chain at this node. ([Docs.rs][3])
+
+---
+
+### M.7.4 Transparent vs blocking nodes (the contract classification)
+
+The `PushdownSort` module-level docs (from the PR) define the core taxonomy you want your own nodes to fit into:
+
+* **Transparent nodes**: delegate to children and wrap the result.
+* **Data sources**: decide whether they can optimize for ordering.
+* **Blocking nodes**: return `Unsupported` to stop pushdown. ([Mail Archive][5])
+
+This matches the `ExecutionPlan` trait guidance: “For transparent nodes (that preserve ordering), implement this to delegate to children and wrap the result.” ([Docs.rs][2])
+
+#### Concrete “blocking” example (don’t guess — use the docs)
+
+`CoalescePartitionsExec` is explicitly **not order-preserving**: it merges partitions and makes **no guarantees** about output order. ([Docs.rs][6])
+That should strongly bias you toward `Unsupported` (or, if you’re doing something exotic, at least downgrading via `into_inexact()`).
+
+#### Concrete “conditionally blocking” example: repartition
+
+`RepartitionExec` states that when more than one stream is repartitioned, output is “some arbitrary interleaving (and thus unordered) unless … preserve order” is enabled. ([Docs.rs][7])
+So for sort pushdown: `RepartitionExec` is **only “transparent” under preserve-order semantics**; otherwise it is blocking.
+
+---
+
+### M.7.5 Implementation patterns for custom nodes (copy/paste templates)
+
+#### Pattern A — “Pure wrapper” (transparent, schema-preserving)
+
+Use this for: tracing wrappers, metrics wrappers, cooperative wrappers, “decorator” nodes.
+
+**Rule:** delegate `try_pushdown_sort` to the child and re-wrap `inner` using `map/try_map`.
+
+```rust
+use std::sync::Arc;
+use datafusion_common::Result;
+use datafusion_physical_plan::{ExecutionPlan, SortOrderPushdownResult};
+use datafusion_physical_expr::PhysicalSortExpr;
+
+impl ExecutionPlan for MyWrapperExec {
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // Delegate to child; preserve variant using try_map
+        self.input
+            .try_pushdown_sort(order)?
+            .try_map(|new_child| {
+                Ok(Arc::new(Self::new(new_child, self.wrapper_config.clone()))
+                    as Arc<dyn ExecutionPlan>)
+            })
+    }
+
+    // (Also: maintains_input_order should be true for this child;
+    // and output_ordering should track input if you truly preserve order.)
+}
+```
+
+Why this matters: without this, your wrapper becomes an “accidental blocker” and DF52 can’t reach the leaf even though your node *doesn’t actually disturb ordering*. ([Docs.rs][2])
+
+#### Pattern B — “Wrapper that may break exactness” (downgrade)
+
+Use this when your node *can still benefit* from a child optimization but cannot promise “perfect ordering” itself.
+
+```rust
+fn try_pushdown_sort(&self, order: &[PhysicalSortExpr]) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+    let res = self.input.try_pushdown_sort(order)?;
+    // This wrapper makes exactness unsafe → downgrade
+    let res = res.into_inexact(); // Exact→Inexact, others unchanged
+    res.try_map(|new_child| Ok(Arc::new(Self::new(new_child)) as Arc<dyn ExecutionPlan>))
+}
+```
+
+`into_inexact()` exists *specifically* for this “wrapper degrades exactness” situation. ([Docs.rs][3])
+
+#### Pattern C — “Schema-shaping wrapper” (projection/rename/derive): only delegate when you can rewrite the ordering safely
+
+If your node changes the schema, you must ensure the pushed order is expressed in terms of what the child can produce. If you *don’t* adjust, you can create an invalid plan (this happened historically when join nodes pushed a `SortExec` “as-is” and the sort expression no longer referenced valid columns). ([GitHub][8])
+
+**Minimum safe rule (practical):**
+*Only delegate sort pushdown when the ordering is a pure `Column` reference that you can map 1:1 through your wrapper.*
+
+Pseudo-structure:
+
+```rust
+fn try_pushdown_sort(&self, order: &[PhysicalSortExpr]) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+    let Some(mapped) = self.try_map_ordering_to_input(order) else {
+        return Ok(SortOrderPushdownResult::Unsupported);
+    };
+
+    self.input.try_pushdown_sort(&mapped)?
+        .try_map(|new_child| Ok(Arc::new(Self::with_new_child(new_child)) as Arc<dyn ExecutionPlan>))
+}
+```
+
+**Don’t cheat here.** If your wrapper rewrites expressions, you also need to keep `equivalence_properties` consistent; DataFusion warns that incorrect equivalence propagation can cause unnecessary resorting (or worse, wrong assumptions). ([Docs.rs][9])
+
+#### Pattern D — “Blocking node” (reorders/merges)
+
+```rust
+fn try_pushdown_sort(&self, _order: &[PhysicalSortExpr]) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+    Ok(SortOrderPushdownResult::Unsupported)
+}
+```
+
+Use this when your node can reorder rows/partitions in ways that cannot respect a downstream sort optimization (e.g., uncontrolled interleaving, nondeterministic merge, etc.). ([Docs.rs][6])
+
+---
+
+### M.7.6 Interaction with TopK, partitioning, and “why Inexact still wins”
+
+DataFusion’s config docs explicitly say: the optimization often returns **inexact ordering** and keeps the Sort for correctness, but optimized inputs can enable **early termination for Top-K**. ([Apache DataFusion][10])
+
+This matches how TopK appears in physical plans:
+
+* `SortExec` can run as `TopK(fetch=10)` (keeps only top N in memory)
+* it can run per-partition (`preserve_partitioning=[true]`)
+* then a `SortPreservingMergeExec` merges sorted streams
+* a `GlobalLimitExec` enforces the final limit. ([Apache DataFusion][11])
+
+So even if your source can only do an **inexact** optimization (e.g., reorder file/row-group reads), it can still materially reduce work in the `ORDER BY … LIMIT N` pipeline.
+
+---
+
+### M.7.7 “Correctness at risk” checklist (what to unit test)
+
+1. **Sort expression validity after rewrite**
+
+   * If you push a sort below a node that changes column layout, you must rewrite sort expressions accordingly. The failure mode is “invalid plan / wrong column index”, and it’s real. ([GitHub][8])
+
+2. **Ordering guarantees vs claims**
+
+   * Only return `Exact` if you truly guarantee the full ordering. Otherwise, your node can cause the optimizer to remove a required `SortExec`. ([Docs.rs][3])
+
+3. **Partitioning semantics**
+
+   * Nodes like `RepartitionExec` can destroy ordering unless preserve-order is enabled. Make the pushdown behavior conditional on that. ([Docs.rs][7])
+   * Likewise, merging partitions can destroy ordering; use `into_inexact()` when appropriate. ([Docs.rs][3])
+
+4. **Property propagation**
+
+   * If your node is order-preserving, its `output_ordering` should reflect that. DataFusion notes that even “less obvious” nodes like `Projection` can still produce sorted output if the input is sorted (because it doesn’t reorder rows). ([Docs.rs][9])
+   * Preserve `equivalence_properties` when valid; otherwise DataFusion may “unnecessarily resort data.” ([Docs.rs][9])
+
+---
+
+### M.7.8 Upgrade guidance for LLM agents (DF51 → DF52, custom nodes)
+
+**If your codebase implements custom `ExecutionPlan` nodes:**
+
+1. **Audit which nodes are “decorators”**
+
+   * If the node doesn’t reorder rows, implement `try_pushdown_sort` as a delegating wrapper (Pattern A). ([Docs.rs][2])
+
+2. **Audit schema-changing nodes**
+
+   * Either implement safe “column-only” mapping for sort expressions, or explicitly block with `Unsupported` until you can do correct expression rewriting (Pattern C). ([GitHub][8])
+
+3. **Golden-plan diffs**
+
+   * With `datafusion.optimizer.enable_sort_pushdown=true` (default), expect physical plan deltas around `SortExec` placement/removal. ([Apache DataFusion][10])
+   * Keep a regression test that toggles the flag and asserts plan stability (on/off). ([Apache DataFusion][10])
+
+4. **Don’t forget the “bridge” layer**
+
+   * DF52’s rule literally calls `try_pushdown_sort` on the *SortExec input* and rewrites based on `Exact/Inexact/Unsupported`. If your node blocks, the optimizer stops at your node. 
+
+---
+
+If you want the next increment in the same doc style: I can produce a **concrete “node taxonomy” checklist** (by DataFusion built-in exec type: which ones are transparent vs blocking today, and which already implement sort pushdown) plus a **minimal integration test harness** that builds a physical plan tree with your custom node inserted and asserts the `PushdownSort` rewrite behavior under `enable_sort_pushdown` toggles.
+
+
+
+[1]: https://datafusion.apache.org/blog/2026/01/12/datafusion-52.0.0 "Apache DataFusion 52.0.0 Released - Apache DataFusion Blog"
+[2]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html "ExecutionPlan in datafusion::physical_plan - Rust"
+[3]: https://docs.rs/datafusion/latest/datafusion/physical_plan/enum.SortOrderPushdownResult.html "SortOrderPushdownResult in datafusion::physical_plan - Rust"
+[4]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/ "Using Ordering for Better Plans in Apache DataFusion - Apache DataFusion Blog"
+[5]: https://www.mail-archive.com/github%40datafusion.apache.org/msg90789.html "Re: [PR] Establish the high level API for sort pushdown and the optimizer rule and support reverse files and row groups  [datafusion]"
+[6]: https://docs.rs/datafusion/latest/datafusion/physical_plan/coalesce_partitions/struct.CoalescePartitionsExec.html "CoalescePartitionsExec in datafusion::physical_plan::coalesce_partitions - Rust"
+[7]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html "RepartitionExec in datafusion::physical_plan::repartition - Rust"
+[8]: https://github.com/apache/datafusion/issues/12558 " Sort Pushdown Causes an Invalid Plan · Issue #12558 · apache/datafusion · GitHub"
+[9]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlanProperties.html "ExecutionPlanProperties in datafusion::physical_plan - Rust"
+[10]: https://datafusion.apache.org/user-guide/configs.html "Configuration Settings — Apache DataFusion  documentation"
+[11]: https://datafusion.apache.org/user-guide/explain-usage.html "Reading Explain Plans — Apache DataFusion  documentation"
+
+## M.7.9 Node taxonomy checklist (DF52+): “transparent vs blocking” + who actually participates in sort pushdown
+
+### M.7.9.1 Ground truth: the contract and the default
+
+`ExecutionPlan::try_pushdown_sort` is the hook; **default implementation returns `SortOrderPushdownResult::Unsupported`** and the trait docs explicitly say transparent nodes should delegate+wrap. ([Docs.rs][1])
+
+So the practical taxonomy is:
+
+* **Participating transparent**: overrides `try_pushdown_sort` and delegates (optionally rewriting sort exprs)
+* **Participating but exactness-breaking**: delegates but **downgrades `Exact → Inexact`** (or always returns `Inexact`)
+* **Blocking**: returns `Unsupported` (explicitly or by inheriting the default)
+
+---
+
+### M.7.9.2 “Participation inventory” (what DF52.1.0 *actually implements* in core physical-plan)
+
+Below are the **built-in Exec nodes in `datafusion-physical-plan`** you’ll actually see in most plans (full inventory is on the crate “all items” page). ([Docs.rs][2])
+
+#### A) Transparent nodes that **already implement** `try_pushdown_sort` (delegate/wrap)
+
+1. **`ProjectionExec`** (transparent *with expression rewrite constraints*)
+
+* Rewrites the requested ordering through the projection mapping.
+* **Only pushes down when each sort key maps to a “simple child column”**; if projection contains computed expressions, it returns `Unsupported`.
+* Delegates to child and wraps `Exact`/`Inexact` accordingly. ([Docs.rs][3])
+
+2. **`CoalesceBatchesExec`** (transparent)
+
+* Declares itself transparent and delegates to child; wraps result. ([Docs.rs][4])
+
+3. **`RepartitionExec`** (conditionally transparent)
+
+* Delegates only when `maintains_input_order()[0]` is true (i.e., **`preserve_order` enabled or only one partition**).
+* Otherwise returns `Unsupported` (blocking). ([Docs.rs][5])
+
+#### B) Nodes that implement `try_pushdown_sort` but **must degrade exactness** (partition merge destroys global order)
+
+4. **`CoalescePartitionsExec`** (partition merge)
+
+* Important nuance: it *can* still push down for **per-partition** optimization, but global order is not preserved.
+* Implementation delegates to child, but if the input has multiple partitions it **downgrades `Exact → Inexact`** (`into_inexact()`), because merging partitions destroys global ordering. ([Docs.rs][6])
+
+This is the canonical example of a **“blocking for Exact, but still useful for Inexact”** node.
+
+---
+
+### M.7.9.3 Scans / sources: where “real” sort pushdown happens
+
+#### `DataSourceExec` (physical scan wrapper)
+
+`DataSourceExec` is the scan-side `ExecutionPlan` wrapper that ties into `DataSource` / `FileSource` for file-backed reads. It has its own `try_pushdown_sort(...)` entrypoint. ([Docs.rs][7])
+
+#### `FileScanConfig::try_pushdown_sort` (DataSource-level negotiation)
+
+At the DataSource layer, `FileScanConfig` exposes `try_pushdown_sort` returning `SortOrderPushdownResult<Arc<dyn DataSource>>`, i.e., “rebuild the source to produce a desired order” (or partially match it). ([Docs.rs][8])
+
+#### Config: on/off switch
+
+The top-level config knob is `datafusion.optimizer.enable_sort_pushdown` (default `true`). ([Apache DataFusion][9])
+Additionally, `SessionConfig::with_enable_sort_pushdown(enabled)` exists and notes it **currently only applies to Parquet** (i.e., built-in pushdown support is Parquet-focused today). ([Docs.rs][10])
+
+---
+
+### M.7.9.4 Common “accidental blockers” (order-preserving nodes that still stop pushdown unless they override)
+
+Because the trait default is `Unsupported`, any unary node that does not override becomes a pushdown barrier even if it **does not reorder rows**. ([Docs.rs][1])
+
+Concrete examples visible in docs:
+
+* **`FilterExec`** shows `try_pushdown_sort(&self, _order: ...)` (underscore param), strongly indicating it’s using the default (i.e., blocks). ([Docs.rs][11])
+* **`GlobalLimitExec`** likewise shows `_order` in its `try_pushdown_sort` signature in docs snippets. ([Docs.rs][12])
+
+If you’re building custom decorator nodes (metrics, tracing, policy gates, etc.), treat these as “what happens if you forget to override.”
+
+---
+
+### M.7.9.5 Joins and other multi-input nodes (treat as blocking unless explicitly implemented)
+
+A representative example: **`SortMergeJoinExec`** shows `try_pushdown_sort(&self, _order: ...)`, again consistent with inheriting the default (blocking). ([Docs.rs][13])
+
+Guideline: for *most* multi-input nodes, pushing down a global ordering requirement is either not meaningful or requires sophisticated rewrite; so expect them to be blockers unless a specific node explicitly participates.
+
+---
+
+### M.7.9.6 Optimizer context: sort pushdown is a dedicated physical rule
+
+The physical optimizer pipeline description explicitly calls out a **sort-pushdown phase** that works top-down (“push down sort operators as deep as possible”). ([Docs.rs][14])
+The concrete rule is `physical_optimizer::pushdown_sort::PushdownSort`. ([Docs.rs][15])
+
+---
+
+## M.7.10 Minimal integration test harness (custom node inserted; asserts PushdownSort rewrite under toggle)
+
+This harness:
+
+* builds a physical plan tree: `SortExec → (custom wrapper) → (source that claims Exact)`
+* runs `PushdownSort` with `enable_sort_pushdown` on/off
+* asserts whether `SortExec` is removed (Exact path) or preserved (blocked / disabled path)
+
+### M.7.10.1 Test prerequisites
+
+* Uses `MockExec::new(...)` from `datafusion_physical_plan::test::exec` to emit a known, already-sorted batch. ([Docs.rs][16])
+* Uses `PushdownSort` optimizer rule. ([Docs.rs][15])
+* Uses the config knob `datafusion.optimizer.enable_sort_pushdown`. ([Apache DataFusion][9])
+
+### M.7.10.2 Code (drop into `tests/pushdown_sort_contract.rs`)
+
+```rust
+use std::any::Any;
+use std::fmt;
+use std::sync::Arc;
+
+use arrow::array::Int32Array;
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Result;
+use datafusion_execution::TaskContext;
+
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+use datafusion_physical_plan::display::{DisplayAs, DisplayFormatType};
+use datafusion_physical_plan::sort_pushdown::SortOrderPushdownResult;
+use datafusion_physical_plan::ExecutionPlan;
+
+// Optimizer rule + trait
+use datafusion::physical_optimizer::pushdown_sort::PushdownSort;
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
+
+// SortExec
+use datafusion_physical_plan::sorts::sort::SortExec;
+
+// Test data source
+use datafusion_physical_plan::test::exec::MockExec;
+
+/// A “source-ish” wrapper that CLAIMS it can produce any requested ordering exactly.
+/// In a real implementation you would verify `order` matches your intrinsic ordering,
+/// and/or rebuild the scan.
+/// For this harness, we ensure the underlying MockExec emits already-sorted data.
+#[derive(Debug, Clone)]
+struct ExactSortCapableExec {
+    input: Arc<dyn ExecutionPlan>,
+}
+
+impl ExactSortCapableExec {
+    fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+        Self { input }
+    }
+}
+
+impl DisplayAs for ExactSortCapableExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ExactSortCapableExec")
+    }
+}
+
+impl ExecutionPlan for ExactSortCapableExec {
+    fn name(&self) -> &str {
+        "ExactSortCapableExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &datafusion_physical_plan::PlanProperties {
+        // Keep it simple: reuse the child’s properties.
+        // (If you want invariants + ordering analysis to “see” the ordering, compute your own PlanProperties.)
+        self.input.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self::new(children[0].clone())) as Arc<dyn ExecutionPlan>)
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
+        self.input.execute(partition, context)
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // Exact: optimizer may remove a SortExec above us
+        Ok(SortOrderPushdownResult::Exact {
+            inner: Arc::new(self.clone()) as Arc<dyn ExecutionPlan>,
+        })
+    }
+}
+
+/// Custom wrapper node (transparent): delegates sort pushdown to its child and wraps the result.
+#[derive(Debug, Clone)]
+struct MyTransparentWrapperExec {
+    input: Arc<dyn ExecutionPlan>,
+}
+
+impl MyTransparentWrapperExec {
+    fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+        Self { input }
+    }
+}
+
+impl DisplayAs for MyTransparentWrapperExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MyTransparentWrapperExec")
+    }
+}
+
+impl ExecutionPlan for MyTransparentWrapperExec {
+    fn name(&self) -> &str {
+        "MyTransparentWrapperExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &datafusion_physical_plan::PlanProperties {
+        self.input.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self::new(children[0].clone())) as Arc<dyn ExecutionPlan>)
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
+        self.input.execute(partition, context)
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // Delegate + wrap, preserving Exact vs Inexact vs Unsupported
+        self.input.try_pushdown_sort(order)?.try_map(|new_input| {
+            Ok(Arc::new(Self::new(new_input)) as Arc<dyn ExecutionPlan>)
+        })
+    }
+}
+
+/// Custom wrapper node (blocking): stops pushdown.
+#[derive(Debug, Clone)]
+struct MyBlockingWrapperExec {
+    input: Arc<dyn ExecutionPlan>,
+}
+
+impl MyBlockingWrapperExec {
+    fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+        Self { input }
+    }
+}
+
+impl DisplayAs for MyBlockingWrapperExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MyBlockingWrapperExec")
+    }
+}
+
+impl ExecutionPlan for MyBlockingWrapperExec {
+    fn name(&self) -> &str {
+        "MyBlockingWrapperExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &datafusion_physical_plan::PlanProperties {
+        self.input.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self::new(children[0].clone())) as Arc<dyn ExecutionPlan>)
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
+        self.input.execute(partition, context)
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
+}
+
+fn sort_expr_a() -> PhysicalSortExpr {
+    PhysicalSortExpr {
+        expr: Arc::new(Column::new("a", 0)),
+        options: SortOptions::default(),
+    }
+}
+
+fn make_sorted_mock_source() -> Arc<dyn ExecutionPlan> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4]))],
+    )
+    .unwrap();
+
+    // MockExec::new returns a single partition of specified batches
+    // (we already supply them sorted)
+    let mock = MockExec::new(vec![Ok(batch)], schema);
+    Arc::new(mock) as Arc<dyn ExecutionPlan>
+}
+
+fn make_sort_plan(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    let ordering = vec![sort_expr_a()];
+    Arc::new(SortExec::new(ordering.into(), input)) as Arc<dyn ExecutionPlan>
+}
+
+#[test]
+fn pushdown_sort_respects_toggle_and_wrapper_contracts() -> Result<()> {
+    // Base source that claims Exact sort capability
+    let source = Arc::new(ExactSortCapableExec::new(make_sorted_mock_source())) as Arc<dyn ExecutionPlan>;
+
+    // Case 1: sort pushdown DISABLED => SortExec remains
+    {
+        let plan = make_sort_plan(Arc::new(MyTransparentWrapperExec::new(source.clone())) as Arc<dyn ExecutionPlan>);
+        let mut cfg = ConfigOptions::new();
+        cfg.optimizer.enable_sort_pushdown = false;
+
+        let optimized = PushdownSort::new().optimize(plan.clone(), &cfg)?;
+        assert!(optimized.as_any().downcast_ref::<SortExec>().is_some());
+    }
+
+    // Case 2: sort pushdown ENABLED + transparent wrapper => SortExec removed
+    {
+        let plan = make_sort_plan(Arc::new(MyTransparentWrapperExec::new(source.clone())) as Arc<dyn ExecutionPlan>);
+        let mut cfg = ConfigOptions::new();
+        cfg.optimizer.enable_sort_pushdown = true;
+
+        let optimized = PushdownSort::new().optimize(plan.clone(), &cfg)?;
+        assert!(optimized.as_any().downcast_ref::<SortExec>().is_none());
+    }
+
+    // Case 3: sort pushdown ENABLED + blocking wrapper => SortExec stays
+    {
+        let plan = make_sort_plan(Arc::new(MyBlockingWrapperExec::new(source.clone())) as Arc<dyn ExecutionPlan>);
+        let mut cfg = ConfigOptions::new();
+        cfg.optimizer.enable_sort_pushdown = true;
+
+        let optimized = PushdownSort::new().optimize(plan.clone(), &cfg)?;
+        assert!(optimized.as_any().downcast_ref::<SortExec>().is_some());
+    }
+
+    Ok(())
+}
+```
+
+### M.7.10.3 What this harness asserts (and why it’s the right minimal test)
+
+* **Toggle coverage**: `enable_sort_pushdown=false` should keep the original plan (rule checks the config before rewriting). ([Apache DataFusion][9])
+* **Contract coverage**: a transparent custom node must delegate+wrap, otherwise it becomes a barrier (mirrors how built-ins like `CoalesceBatchesExec` delegate). ([Docs.rs][4])
+* **Blocking semantics**: returning `Unsupported` blocks pushdown (same ultimate effect as inheriting the default). ([Docs.rs][1])
+
+If you want one more micro-test for the **Inexact path**, add a source wrapper that returns `SortOrderPushdownResult::Inexact { inner: ... }` and assert `SortExec` remains but its child changes (PushdownSort keeps Sort for correctness on Inexact). ([Docs.rs][1])
+
+[1]: https://docs.rs/datafusion-physical-plan/52.1.0/x86_64-unknown-linux-gnu/src/datafusion_physical_plan/execution_plan.rs.html "execution_plan.rs - source"
+[2]: https://docs.rs/datafusion-physical-plan/latest/datafusion_physical_plan/all.html "List of all items in this crate"
+[3]: https://docs.rs/datafusion-physical-plan/52.1.0/x86_64-unknown-linux-gnu/src/datafusion_physical_plan/projection.rs.html "projection.rs - source"
+[4]: https://docs.rs/crate/datafusion-physical-plan/latest/source/src/coalesce_batches.rs "https://docs.rs/crate/datafusion-physical-plan/latest/source/src/coalesce_batches.rs"
+[5]: https://docs.rs/datafusion-physical-plan/52.1.0/x86_64-unknown-linux-gnu/src/datafusion_physical_plan/repartition/mod.rs.html "mod.rs - source"
+[6]: https://docs.rs/crate/datafusion-physical-plan/latest/source/src/coalesce_partitions.rs "https://docs.rs/crate/datafusion-physical-plan/latest/source/src/coalesce_partitions.rs"
+[7]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.DataSourceExec.html "DataSourceExec in datafusion::datasource::memory - Rust"
+[8]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html "FileScanConfig in datafusion::datasource::physical_plan - Rust"
+[9]: https://datafusion.apache.org/user-guide/configs.html?utm_source=chatgpt.com "Configuration Settings — Apache DataFusion documentation"
+[10]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionConfig.html?utm_source=chatgpt.com "SessionConfig in datafusion::execution::context - Rust"
+[11]: https://docs.rs/datafusion/latest/datafusion/physical_plan/filter/struct.FilterExec.html?utm_source=chatgpt.com "FilterExec in datafusion::physical_plan::filter - Rust"
+[12]: https://docs.rs/datafusion/latest/datafusion/physical_plan/limit/struct.GlobalLimitExec.html?utm_source=chatgpt.com "GlobalLimitExec in datafusion::physical_plan::limit - Rust"
+[13]: https://docs.rs/datafusion/latest/datafusion/physical_plan/joins/struct.SortMergeJoinExec.html "SortMergeJoinExec in datafusion::physical_plan::joins - Rust"
+[14]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html "https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html"
+[15]: https://docs.rs/datafusion/latest/datafusion/all.html "https://docs.rs/datafusion/latest/datafusion/all.html"
+[16]: https://docs.rs/datafusion-physical-plan/latest/datafusion_physical_plan/test/exec/struct.MockExec.html "https://docs.rs/datafusion-physical-plan/latest/datafusion_physical_plan/test/exec/struct.MockExec.html"

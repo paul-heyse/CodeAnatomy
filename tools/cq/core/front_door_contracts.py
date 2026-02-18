@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Literal
 from tools.cq.core.semantic_contracts import SemanticStatus
 from tools.cq.core.snb_schema import SemanticNodeRefV1
 from tools.cq.core.structs import CqStruct
-from tools.cq.core.summary_contract import SummaryEnvelopeV1
+from tools.cq.core.summary_types import SummaryEnvelopeV1
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import Finding

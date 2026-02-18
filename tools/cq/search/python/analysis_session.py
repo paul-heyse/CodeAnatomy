@@ -253,7 +253,7 @@ class PythonAnalysisSession:
             return self.tree_sitter_tree
         started = perf_counter()
         try:
-            from tools.cq.search.tree_sitter.python_lane.runtime import parse_python_tree
+            from tools.cq.search.tree_sitter.python_lane.runtime_engine import parse_python_tree
 
             self.tree_sitter_tree = parse_python_tree(self.source, cache_key=str(self.file_path))
         except (RuntimeError, TypeError, ValueError, AttributeError, ImportError) as exc:

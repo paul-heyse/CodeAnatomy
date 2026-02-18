@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.contracts import CallsTargetCacheV1
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import build_cache_key, build_scope_hash
 from tools.cq.core.cache.namespaces import (

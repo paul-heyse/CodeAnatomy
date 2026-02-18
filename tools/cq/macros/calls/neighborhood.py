@@ -115,10 +115,10 @@ def _build_calls_neighborhood(
         build_neighborhood_from_slices,
     )
     from tools.cq.core.snb_schema import SemanticNodeRefV1
+    from tools.cq.neighborhood.collector import collect_tree_sitter_neighborhood
     from tools.cq.neighborhood.contracts import (
         TreeSitterNeighborhoodCollectRequest,
     )
-    from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
 
     neighborhood = InsightNeighborhoodV1()
     neighborhood_findings: list[Finding] = []

@@ -15,7 +15,7 @@ from utils.hashing import hash_msgpack_canonical
 from utils.value_coercion import coerce_int
 
 if TYPE_CHECKING:
-    from schema_spec.dataset_spec import DeltaScanOptions
+    from schema_spec.scan_options import DeltaScanOptions
 
 
 class DeltaProviderBuildResult(StructBaseStrict, frozen=True):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter.python_lane.facts import build_python_tree_sitter_facts
+from tools.cq.search.tree_sitter.python_lane.facts_runtime import build_python_tree_sitter_facts
 
 __all__ = ["run_python_query_pack"]
 

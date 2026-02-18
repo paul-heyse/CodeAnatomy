@@ -6,7 +6,7 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.search.tree_sitter.contracts.core_models import QueryWindowV1, TreeSitterWorkItemV1
 
 _QUEUE_TTL_SECONDS = 900

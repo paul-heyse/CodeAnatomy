@@ -6,10 +6,10 @@ from tools.cq.search._shared.requests import (
     PythonByteRangeEnrichmentRequest,
     PythonNodeEnrichmentRequest,
 )
-from tools.cq.search.python.extractors import (
+from tools.cq.search.python.extractors_entrypoints import (
     enrich_python_context as _enrich_python_context,
 )
-from tools.cq.search.python.extractors import (
+from tools.cq.search.python.extractors_entrypoints import (
     enrich_python_context_by_byte_range as _enrich_python_context_by_byte_range,
 )
 

@@ -216,9 +216,45 @@ def compile_pack_source_rows(
     return sort_pack_plans(rows)
 
 
+def normalize_pack_source_rows(
+    source_rows: Iterable[tuple[str, str]],
+    *,
+    dedupe_by_pack_name: bool = False,
+) -> tuple[tuple[str, str], ...]:
+    """Normalize raw query-pack source rows before compilation.
+
+    Parameters
+    ----------
+    source_rows
+        Raw ``(pack_name, source)`` rows.
+    dedupe_by_pack_name
+        When true, keep one row per pack name (last row wins) and return rows in
+        deterministic sorted order.
+
+    Returns:
+    -------
+    tuple[tuple[str, str], ...]
+        Filtered/normalized rows for ``compile_pack_source_rows``.
+    """
+    if dedupe_by_pack_name:
+        deduped: dict[str, str] = {}
+        for pack_name, source in source_rows:
+            if not pack_name.endswith(".scm"):
+                continue
+            deduped[pack_name] = source
+        return tuple(sorted(deduped.items()))
+
+    rows: list[tuple[str, str]] = []
+    for pack_name, source in source_rows:
+        if pack_name.endswith(".scm"):
+            rows.append((pack_name, source))
+    return tuple(rows)
+
+
 __all__ = [
     "build_pack_plan",
     "build_pattern_plan",
     "compile_pack_source_rows",
+    "normalize_pack_source_rows",
     "sort_pack_plans",
 ]

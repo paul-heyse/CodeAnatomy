@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.key_builder import (
     build_namespace_cache_tag,
     build_run_cache_tag,

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.dataset_spec import DeltaScanOptions
+    from schema_spec.scan_options import DeltaScanOptions
 
 
 @dataclass(frozen=True)

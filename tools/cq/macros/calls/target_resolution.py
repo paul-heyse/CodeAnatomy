@@ -5,11 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.macros.calls_target import resolve_target_definition, resolve_target_metadata
+from tools.cq.macros.calls.target_runtime import resolve_target_definition, resolve_target_metadata
 
 if TYPE_CHECKING:
     from tools.cq.core.types import QueryLanguage
-    from tools.cq.macros.calls_target import AttachTargetMetadataRequestV1, TargetMetadataResultV1
+    from tools.cq.macros.calls.target_runtime import (
+        AttachTargetMetadataRequestV1,
+        TargetMetadataResultV1,
+    )
 
 __all__ = ["resolve_call_target", "resolve_call_target_metadata"]
 

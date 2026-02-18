@@ -16,7 +16,7 @@ from tools.cq.core.render_utils import iter_result_findings
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding
 from tools.cq.core.structs import CqStruct
-from tools.cq.core.summary_contract import SummaryV1
+from tools.cq.core.summary_types import SummaryV1
 from tools.cq.core.type_coercion import coerce_float_optional
 from tools.cq.core.types import QueryLanguage
 

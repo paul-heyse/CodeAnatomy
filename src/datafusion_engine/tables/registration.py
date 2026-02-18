@@ -32,7 +32,7 @@ if TYPE_CHECKING:
         DataFusionRegistryOptions,
     )
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.dataset_spec import DataFusionScanOptions
+    from schema_spec.scan_options import DataFusionScanOptions
 
 
 class ListingRegistrationContext(Protocol):

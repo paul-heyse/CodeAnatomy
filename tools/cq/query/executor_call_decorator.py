@@ -7,10 +7,10 @@ from pathlib import Path
 from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.core.schema import Finding
 from tools.cq.core.summary_update_contracts import EntitySummaryUpdateV1
-from tools.cq.query.executor_runtime_impl import (
+from tools.cq.query.executor_runtime import (
     process_call_query as process_call_query_impl,
 )
-from tools.cq.query.executor_runtime_impl import (
+from tools.cq.query.executor_runtime import (
     process_decorator_query as process_decorator_query_impl,
 )
 from tools.cq.query.ir import Query

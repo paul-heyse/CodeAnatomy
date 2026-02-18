@@ -32,7 +32,7 @@ from tools.cq.core.semantic_contracts import (
     derive_semantic_contract_state,
 )
 from tools.cq.core.snb_schema import SemanticNodeRefV1
-from tools.cq.core.summary_contract import SummaryV1, build_semantic_telemetry
+from tools.cq.core.summary_types import SummaryV1, build_semantic_telemetry
 from tools.cq.core.types import QueryLanguage
 from tools.cq.query.shared_utils import extract_missing_languages
 from tools.cq.search.semantic.models import (

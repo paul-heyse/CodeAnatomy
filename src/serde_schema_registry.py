@@ -29,27 +29,6 @@ from core.config_specs import (
 )
 from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 from datafusion_engine.compile.options import DataFusionCompileOptionsSpec
-from datafusion_engine.delta.control_plane_core import (
-    DeltaAddConstraintsRequest,
-    DeltaAddFeaturesRequest,
-    DeltaCdfProviderBundle,
-    DeltaCdfRequest,
-    DeltaCheckpointRequest,
-    DeltaDeleteRequest,
-    DeltaDropConstraintsRequest,
-    DeltaFeatureEnableRequest,
-    DeltaMergeRequest,
-    DeltaOptimizeRequest,
-    DeltaProviderBundle,
-    DeltaProviderRequest,
-    DeltaRestoreRequest,
-    DeltaSetPropertiesRequest,
-    DeltaSnapshotRequest,
-    DeltaTableRef,
-    DeltaUpdateRequest,
-    DeltaVacuumRequest,
-    DeltaWriteRequest,
-)
 from datafusion_engine.delta.protocol import DeltaProtocolCompatibility, DeltaProtocolSnapshot
 from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
 from datafusion_engine.expr.spec import ExprIR, ExprSpec
@@ -213,26 +192,6 @@ _SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
     DocstringsPolicyConfigSpec,
     DocstringsConfigSpec,
     RootConfigSpec,
-    # Delta control-plane contracts
-    DeltaTableRef,
-    DeltaProviderBundle,
-    DeltaCdfProviderBundle,
-    DeltaSnapshotRequest,
-    DeltaProviderRequest,
-    DeltaCdfRequest,
-    DeltaWriteRequest,
-    DeltaDeleteRequest,
-    DeltaUpdateRequest,
-    DeltaMergeRequest,
-    DeltaOptimizeRequest,
-    DeltaVacuumRequest,
-    DeltaRestoreRequest,
-    DeltaSetPropertiesRequest,
-    DeltaAddFeaturesRequest,
-    DeltaFeatureEnableRequest,
-    DeltaAddConstraintsRequest,
-    DeltaDropConstraintsRequest,
-    DeltaCheckpointRequest,
     # Plan/cache/registry contracts
     PlanProtoCacheEntry,
     PlanCacheKey,
@@ -250,6 +209,59 @@ _SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
     RelationshipSpec,
     InferredDeps,
 )
+
+
+def _delta_control_plane_schema_types() -> tuple[type[msgspec.Struct], ...]:
+    """Return Delta control-plane schema types lazily.
+
+    Importing ``datafusion_engine.delta.control_plane_core`` pulls a large
+    dependency graph. Keep those imports localized so callers that only need
+    core schema helpers can avoid that cost.
+    """
+    from datafusion_engine.delta.control_plane_core import (
+        DeltaAddConstraintsRequest,
+        DeltaAddFeaturesRequest,
+        DeltaCdfProviderBundle,
+        DeltaCdfRequest,
+        DeltaCheckpointRequest,
+        DeltaDeleteRequest,
+        DeltaDropConstraintsRequest,
+        DeltaFeatureEnableRequest,
+        DeltaMergeRequest,
+        DeltaOptimizeRequest,
+        DeltaProviderBundle,
+        DeltaProviderRequest,
+        DeltaRestoreRequest,
+        DeltaSetPropertiesRequest,
+        DeltaSnapshotRequest,
+        DeltaTableRef,
+        DeltaUpdateRequest,
+        DeltaVacuumRequest,
+        DeltaWriteRequest,
+    )
+
+    return (
+        DeltaTableRef,
+        DeltaProviderBundle,
+        DeltaCdfProviderBundle,
+        DeltaSnapshotRequest,
+        DeltaProviderRequest,
+        DeltaCdfRequest,
+        DeltaWriteRequest,
+        DeltaDeleteRequest,
+        DeltaUpdateRequest,
+        DeltaMergeRequest,
+        DeltaOptimizeRequest,
+        DeltaVacuumRequest,
+        DeltaRestoreRequest,
+        DeltaSetPropertiesRequest,
+        DeltaAddFeaturesRequest,
+        DeltaFeatureEnableRequest,
+        DeltaAddConstraintsRequest,
+        DeltaDropConstraintsRequest,
+        DeltaCheckpointRequest,
+    )
+
 
 _SCHEMA_TAGS: dict[type[msgspec.Struct], dict[str, object]] = {
     PlanArtifacts: {"x-codeanatomy-domain": "artifact", "x-codeanatomy-scope": "plan"},
@@ -577,7 +589,7 @@ def get_artifact_spec(name: str) -> ArtifactSpec | None:
 
 
 _SCHEMA_REGISTRY = SchemaTypeRegistry()
-for _schema_type in _SCHEMA_TYPES:
+for _schema_type in (*_SCHEMA_TYPES, *_delta_control_plane_schema_types()):
     _SCHEMA_REGISTRY.register(
         _schema_type.__name__,
         SchemaTypeSpec(_schema_type, tags=_SCHEMA_TAGS.get(_schema_type, {})),

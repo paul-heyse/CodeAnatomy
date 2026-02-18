@@ -24,8 +24,8 @@ def test_no_private_cross_module_imports() -> None:
         # Internal type imports within same subsystem (TYPE_CHECKING blocks)
         "tools/cq/search/python/resolution_index.py:194:    from tools.cq.search.python.analysis_session import PythonAnalysisSession as _Session",
         # Runtime query execution delegation (same subsystem)
-        "tools/cq/search/tree_sitter/core/query_pack_executor.py:44:    from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_captures as _impl",
-        "tools/cq/search/tree_sitter/core/query_pack_executor.py:65:    from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches as _impl",
+        "tools/cq/search/tree_sitter/core/query_pack_executor.py:44:    from tools.cq.search.tree_sitter.core.runtime_engine import run_bounded_query_captures as _impl",
+        "tools/cq/search/tree_sitter/core/query_pack_executor.py:65:    from tools.cq.search.tree_sitter.core.runtime_engine import run_bounded_query_matches as _impl",
         # Legacy index module constants (deprecated subsystem)
         "tools/cq/index/arg_binder.py:11:from tools.cq.index.def_index import _SELF_CLS, FnDecl, ParamInfo",
         "tools/cq/index/call_resolver.py:10:from tools.cq.index.def_index import _SELF_CLS, DefIndex, FnDecl",
@@ -60,7 +60,7 @@ def test_no_private_cross_module_imports() -> None:
         "tools/cq/search/pipeline/smart_search_sections.py:45:    from tools.cq.search.pipeline.smart_search import build_finding as _build_finding",
         "tools/cq/search/pipeline/smart_search_summary.py:24:    from tools.cq.search.pipeline.smart_search import _build_search_summary",
         # Python extractor decomposition (S29) - intra-subsystem imports
-        "tools/cq/search/python/extractors.py:58:from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function",
+        "tools/cq/search/python/extractors_entrypoints.py:58:from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function",
         "tools/cq/search/python/extractors_structure.py:15:from tools.cq.search.python.extractors_classification import _unwrap_decorated",
         # Rust package lazy proxies to avoid circular import (S30)
         "tools/cq/search/rust/__init__.py:29:    from tools.cq.search.rust.enrichment import enrich_context_by_byte_range as _fn",
@@ -70,10 +70,10 @@ def test_no_private_cross_module_imports() -> None:
         "tools/cq/search/tree_sitter/rust_lane/role_classification.py:12:from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _rust_field_ids",
         "tools/cq/search/tree_sitter/rust_lane/runtime.py:75:from tools.cq.search.tree_sitter.rust_lane.query_cache import _pack_sources",
         "tools/cq/search/tree_sitter/rust_lane/runtime.py:76:from tools.cq.search.tree_sitter.rust_lane.role_classification import _classify_item_role",
-        "tools/cq/search/tree_sitter/rust_lane/runtime_core.py:79:from tools.cq.search.tree_sitter.rust_lane.query_cache import _pack_sources",
+        "tools/cq/search/tree_sitter/rust_lane/runtime_engine.py:79:from tools.cq.search.tree_sitter.rust_lane.query_cache import _pack_sources",
         "tools/cq/search/tree_sitter/rust_lane/enrichment_extractors.py:14:from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _rust_field_ids",
-        "tools/cq/search/tree_sitter/rust_lane/query_orchestration.py:37:    from tools.cq.search.tree_sitter.rust_lane import runtime_core as _runtime_core",
-        "tools/cq/search/tree_sitter/rust_lane/payload_assembly.py:25:    from tools.cq.search.tree_sitter.rust_lane import runtime_core as _runtime_core",
+        "tools/cq/search/tree_sitter/rust_lane/query_orchestration.py:37:    from tools.cq.search.tree_sitter.rust_lane import runtime_engine as _runtime_core",
+        "tools/cq/search/tree_sitter/rust_lane/payload_assembly.py:25:    from tools.cq.search.tree_sitter.rust_lane import runtime_engine as _runtime_core",
         # Query/run decomposition - intra-subsystem call delegation helpers
         "tools/cq/query/symbol_resolver.py:11:from tools.cq.query.finding_builders import extract_call_target as _extract_call_target",
         "tools/cq/run/runner.py:21:from tools.cq.run.helpers import error_result as _error_result",
@@ -85,7 +85,7 @@ def test_no_private_cross_module_imports() -> None:
         "tools/cq/search/pipeline/smart_search.py:338:    from tools.cq.search.pipeline.smart_search_followups import build_followups as _build_followups",
         "tools/cq/search/pipeline/smart_search.py:358:    from tools.cq.search.pipeline.smart_search_sections import build_sections as _build_sections",
         # Cache backend lifecycle loader
-        "tools/cq/core/cache/backend_lifecycle.py:42:    from tools.cq.core.cache.diskcache_backend import _build_diskcache_backend",
+        "tools/cq/core/cache/backend_lifecycle.py:42:    from tools.cq.core.cache.backend_core import _build_diskcache_backend",
         # Shared/enrichment adapters
         "tools/cq/search/rust/extensions.py:11:from tools.cq.search.enrichment.core import string_or_none as _string",
         "tools/cq/search/semantic/models.py:17:from tools.cq.search.enrichment.core import string_or_none as _string",

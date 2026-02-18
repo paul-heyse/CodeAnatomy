@@ -230,7 +230,7 @@ def apply_scan_policy_defaults(
     """
     if policy is None:
         return datafusion_scan, delta_scan
-    from schema_spec.dataset_spec import apply_delta_scan_policy, apply_scan_policy
+    from schema_spec.scan_policy import apply_delta_scan_policy, apply_scan_policy
 
     datafusion_scan = apply_scan_policy(
         datafusion_scan,

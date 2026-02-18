@@ -8,7 +8,7 @@ from typing import Any
 
 from tools.cq.core.front_door_render import coerce_front_door_insight
 from tools.cq.core.schema import CqResult
-from tools.cq.core.summary_contract import SemanticTelemetryV1, SummaryEnvelopeV1
+from tools.cq.core.summary_types import SemanticTelemetryV1, SummaryEnvelopeV1
 
 _DURATION_PATTERN = re.compile(r"(\*\*(?:Created|Elapsed):\*\*)\s+[0-9]+(?:\.[0-9]+)?ms")
 _BUNDLE_ID_PATTERN = re.compile(r"(\*\*Bundle ID:\*\*)\s+\S+")
@@ -134,18 +134,18 @@ def _project_front_door_insight(
 
 def _project_step_summaries(summary: SummaryEnvelopeV1 | Mapping[str, object]) -> dict[str, Any]:
     step_summaries = _summary_mapping(summary).get("step_summaries")
-    if not isinstance(step_summaries, dict):
+    if not isinstance(step_summaries, Mapping):
         return {}
     projected: dict[str, Any] = {}
     for step_id, step_summary in step_summaries.items():
-        if not isinstance(step_id, str) or not isinstance(step_summary, dict):
+        if not isinstance(step_id, str) or not isinstance(step_summary, Mapping):
             continue
         insight = step_summary.get("front_door_insight")
         degradation: dict[str, object] = {}
-        if isinstance(insight, dict):
+        if isinstance(insight, Mapping):
             maybe_degradation = insight.get("degradation")
-            if isinstance(maybe_degradation, dict):
-                degradation = maybe_degradation
+            if isinstance(maybe_degradation, Mapping):
+                degradation = dict(maybe_degradation)
         projected[step_id] = {
             "mode": step_summary.get("mode"),
             "query": step_summary.get("query"),

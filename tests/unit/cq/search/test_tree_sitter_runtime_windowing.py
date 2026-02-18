@@ -12,7 +12,7 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryPointWindowV1,
     QueryWindowV1,
 )
-from tools.cq.search.tree_sitter.core import runtime as tree_sitter_runtime
+from tools.cq.search.tree_sitter.core import runtime_engine as tree_sitter_runtime
 
 if TYPE_CHECKING:
     from tree_sitter import Node, Query

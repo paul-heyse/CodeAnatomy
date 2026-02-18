@@ -35,7 +35,7 @@ def test_orchestrate_query_packs_delegates_to_runtime(
         return expected
 
     monkeypatch.setattr(
-        "tools.cq.search.tree_sitter.rust_lane.runtime_core._collect_query_pack_captures",
+        "tools.cq.search.tree_sitter.rust_lane.runtime_engine._collect_query_pack_captures",
         _fake_collect,
     )
 

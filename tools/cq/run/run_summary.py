@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from tools.cq.core.schema import CqResult, update_result_summary
-from tools.cq.core.summary_contract import SemanticTelemetryV1, build_semantic_telemetry
+from tools.cq.core.summary_types import SemanticTelemetryV1, build_semantic_telemetry
 from tools.cq.core.types import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,

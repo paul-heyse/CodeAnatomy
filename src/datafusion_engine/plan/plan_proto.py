@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 
-def proto_serialization_enabled() -> bool:
+def _proto_serialization_enabled() -> bool:
     """Return True when plan proto serialization should be attempted."""
     try:
         from datafusion_engine.extensions import datafusion_ext
@@ -14,15 +14,10 @@ def proto_serialization_enabled() -> bool:
     return not bool(getattr(datafusion_ext, "IS_STUB", False))
 
 
-def plan_to_proto_bytes(plan: object | None, *, enabled: bool) -> bytes | None:
-    """Serialize a plan object to proto bytes when supported.
-
-    Returns:
-        bytes | None: Serialized proto bytes when available, otherwise `None`.
-    """
+def _plan_proto_bytes(plan: object) -> bytes | None:
     if plan is None:
         return None
-    if not enabled or not proto_serialization_enabled():
+    if not _proto_serialization_enabled():
         return None
     method = getattr(plan, "to_proto", None)
     if not callable(method):
@@ -35,6 +30,24 @@ def plan_to_proto_bytes(plan: object | None, *, enabled: bool) -> bytes | None:
     if isinstance(payload, (bytes, bytearray, memoryview)):
         return bytes(payload)
     return None
+
+
+def proto_serialization_enabled() -> bool:
+    """Return True when plan proto serialization should be attempted."""
+    return _proto_serialization_enabled()
+
+
+def plan_to_proto_bytes(plan: object | None, *, enabled: bool) -> bytes | None:
+    """Serialize a plan object to proto bytes when supported.
+
+    Returns:
+        bytes | None: Serialized proto bytes when available, otherwise `None`.
+    """
+    if plan is None:
+        return None
+    if not enabled:
+        return None
+    return _plan_proto_bytes(plan)
 
 
 def plan_proto_payload[T](
@@ -54,4 +67,10 @@ def plan_proto_payload[T](
     return wrapper(payload)
 
 
-__all__ = ["plan_proto_payload", "plan_to_proto_bytes", "proto_serialization_enabled"]
+__all__ = [
+    "_plan_proto_bytes",
+    "_proto_serialization_enabled",
+    "plan_proto_payload",
+    "plan_to_proto_bytes",
+    "proto_serialization_enabled",
+]

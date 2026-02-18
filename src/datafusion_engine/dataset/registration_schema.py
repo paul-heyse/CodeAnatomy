@@ -17,7 +17,8 @@ from datafusion_engine.schema.contracts import (
 from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from datafusion_engine.session.introspection import schema_introspector_for_profile
 from datafusion_engine.sql.options import sql_options_for_profile
-from schema_spec.dataset_spec import DataFusionScanOptions, TableSchemaContract
+from schema_spec.dataset_contracts import TableSchemaContract
+from schema_spec.scan_options import DataFusionScanOptions
 from utils.validation import find_missing
 
 if TYPE_CHECKING:

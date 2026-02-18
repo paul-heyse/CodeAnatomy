@@ -16,7 +16,7 @@ from tools.cq import SCHEMA_VERSION
 from tools.cq.core.contracts_constraints import NonEmptyStr, NonNegativeFloat
 from tools.cq.core.id import stable_digest24
 from tools.cq.core.locations import SourceSpan
-from tools.cq.core.summary_contract import (
+from tools.cq.core.summary_types import (
     SearchSummaryV1,
     SummaryV1,
     apply_summary_mapping,

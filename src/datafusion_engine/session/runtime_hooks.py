@@ -17,7 +17,7 @@ from datafusion import RuntimeEnvBuilder
 from datafusion_engine.compile.options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
-    DataFusionSubstraitFallbackEvent,
+    DataFusionSubstraitReplayErrorEvent,
 )
 from datafusion_engine.lineage.diagnostics import DiagnosticsSink, ensure_recorder_sink
 from datafusion_engine.session._session_identity import RUNTIME_SESSION_ID
@@ -47,7 +47,7 @@ PlanArtifactsHook = Callable[[Mapping[str, object]], None]
 SemanticDiffHook = Callable[[Mapping[str, object]], None]
 SqlIngestHook = Callable[[Mapping[str, object]], None]
 CacheEventHook = Callable[[DataFusionCacheEvent], None]
-SubstraitFallbackHook = Callable[[DataFusionSubstraitFallbackEvent], None]
+SubstraitReplayErrorHook = Callable[[DataFusionSubstraitReplayErrorEvent], None]
 
 
 def _apply_builder(
@@ -86,9 +86,9 @@ def _chain_cache_hooks(
     return chain_optional_hooks(*hooks)
 
 
-def _chain_substrait_fallback_hooks(
-    *hooks: Callable[[DataFusionSubstraitFallbackEvent], None] | None,
-) -> Callable[[DataFusionSubstraitFallbackEvent], None] | None:
+def _chain_substrait_replay_error_hooks(
+    *hooks: Callable[[DataFusionSubstraitReplayErrorEvent], None] | None,
+) -> Callable[[DataFusionSubstraitReplayErrorEvent], None] | None:
     return chain_optional_hooks(*hooks)
 
 
@@ -147,21 +147,21 @@ def diagnostics_cache_hook(
     return _hook
 
 
-def diagnostics_substrait_fallback_hook(
+def diagnostics_substrait_replay_error_hook(
     sink: DiagnosticsSink,
-) -> Callable[[DataFusionSubstraitFallbackEvent], None]:
+) -> Callable[[DataFusionSubstraitReplayErrorEvent], None]:
     """Return a Substrait fallback hook that records diagnostics rows.
 
     Returns:
     -------
-    Callable[[DataFusionSubstraitFallbackEvent], None]
+    Callable[[DataFusionSubstraitReplayErrorEvent], None]
         Hook that records Substrait fallback events in the diagnostics sink.
     """
 
-    def _hook(event: DataFusionSubstraitFallbackEvent) -> None:
+    def _hook(event: DataFusionSubstraitReplayErrorEvent) -> None:
         recorder_sink = ensure_recorder_sink(sink, session_id=RUNTIME_SESSION_ID)
         recorder_sink.record_events(
-            "substrait_fallbacks_v1",
+            "substrait_replay_errors_v1",
             [
                 {
                     "event_time_unix_ms": int(time.time() * 1000),
@@ -408,7 +408,7 @@ __all__ = [
     "PlanArtifactsHook",
     "SemanticDiffHook",
     "SqlIngestHook",
-    "SubstraitFallbackHook",
+    "SubstraitReplayErrorHook",
     "apply_execution_label",
     "apply_execution_policy",
     "diagnostics_arrow_ingest_hook",
@@ -418,6 +418,6 @@ __all__ = [
     "diagnostics_plan_artifacts_hook",
     "diagnostics_semantic_diff_hook",
     "diagnostics_sql_ingest_hook",
-    "diagnostics_substrait_fallback_hook",
+    "diagnostics_substrait_replay_error_hook",
     "labeled_explain_hook",
 ]

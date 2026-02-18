@@ -7,14 +7,14 @@ from typing import cast
 from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.run_context import RunExecutionContext
 from tools.cq.core.schema import CqResult, Finding, update_result_summary
-from tools.cq.core.summary_contract import extract_match_count
+from tools.cq.core.summary_types import extract_match_count
 from tools.cq.core.types import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
     QueryLanguageScope,
     expand_language_scope,
 )
-from tools.cq.orchestration.multilang_orchestrator import (
+from tools.cq.orchestration.orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )

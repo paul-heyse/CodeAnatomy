@@ -48,7 +48,7 @@ from tools.cq.core.render_utils import clean_scalar as _clean_scalar
 from tools.cq.core.render_utils import format_location as _format_location
 from tools.cq.core.render_utils import safe_int as _safe_int
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
-from tools.cq.core.summary_contract import SummaryV1
+from tools.cq.core.summary_types import SummaryV1
 
 if TYPE_CHECKING:
     from tools.cq.core.ports import RenderEnrichmentPort

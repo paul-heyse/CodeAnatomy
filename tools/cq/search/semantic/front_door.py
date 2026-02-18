@@ -7,9 +7,9 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.cq.core.cache.backend_core import get_cq_cache_backend
 from tools.cq.core.cache.content_hash import file_content_hash
 from tools.cq.core.cache.coordination import publish_once_per_barrier, tree_sitter_lane_guard
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.fragment_codecs import (
     decode_fragment_payload,
     encode_fragment_payload,
@@ -30,8 +30,10 @@ from tools.cq.core.cache.telemetry import (
 )
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.search._shared.helpers import line_col_to_byte_offset
-from tools.cq.search._shared.requests import PythonByteRangeEnrichmentRequest
-from tools.cq.search.pipeline.classifier import get_sg_root
+from tools.cq.search.semantic.helpers import (
+    run_python_byte_range_enrichment,
+    run_rust_byte_range_enrichment,
+)
 from tools.cq.search.semantic.models import (
     LanguageSemanticEnrichmentOutcome,
     LanguageSemanticEnrichmentRequest,
@@ -305,16 +307,6 @@ def _python_payload(
     byte_start: int,
     byte_end: int,
 ) -> dict[str, object] | None:
-    from tools.cq.search.pipeline.classifier_runtime import ClassifierCacheContext
-    from tools.cq.search.python.extractors_orchestrator import (
-        enrich_python_context_by_byte_range,
-    )
-
-    sg_root = get_sg_root(
-        context.target_file_path,
-        lang="python",
-        cache_context=ClassifierCacheContext(),
-    )
     query_budget_ms = int(
         1000.0 * (context.budget.startup_timeout_seconds + context.budget.probe_timeout_seconds)
     )
@@ -322,20 +314,17 @@ def _python_payload(
         language="python",
         fallback_budget_ms=query_budget_ms,
     )
-    payload = enrich_python_context_by_byte_range(
-        PythonByteRangeEnrichmentRequest(
-            sg_root=sg_root,
-            source_bytes=source_bytes,
-            byte_start=byte_start,
-            byte_end=byte_end,
-            cache_key=str(context.target_file_path),
-            query_budget_ms=query_budget_ms,
-        )
+    payload = run_python_byte_range_enrichment(
+        target_file_path=context.target_file_path,
+        source_bytes=source_bytes,
+        byte_start=byte_start,
+        byte_end=byte_end,
+        query_budget_ms=query_budget_ms,
     )
-    if not isinstance(payload, dict):
+    if payload is None:
         return None
 
-    merged = dict(payload)
+    merged = payload
     merged["semantic_planes"] = build_static_semantic_planes(language="python", payload=merged)
     merged["source_attribution"] = {
         "language": "python",
@@ -404,8 +393,6 @@ def _rust_payload(
     byte_start: int,
     byte_end: int,
 ) -> dict[str, object] | None:
-    from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
-
     query_budget_ms = int(
         1000.0 * (context.budget.startup_timeout_seconds + context.budget.probe_timeout_seconds)
     )
@@ -413,17 +400,17 @@ def _rust_payload(
         language="rust",
         fallback_budget_ms=query_budget_ms,
     )
-    payload = enrich_rust_context_by_byte_range(
-        source,
+    payload = run_rust_byte_range_enrichment(
+        source=source,
+        target_file_path=context.target_file_path,
         byte_start=byte_start,
         byte_end=byte_end,
-        cache_key=str(context.target_file_path),
         query_budget_ms=query_budget_ms,
     )
-    if not isinstance(payload, dict):
+    if payload is None:
         return None
 
-    merged = dict(payload)
+    merged = payload
     merged["semantic_planes"] = build_static_semantic_planes(language="rust", payload=merged)
     merged["source_attribution"] = {
         "language": "rust",

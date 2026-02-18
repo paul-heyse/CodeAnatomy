@@ -6,8 +6,13 @@ from pathlib import Path
 
 from extract.extractors.scip.config import ScipIndexConfig
 
+_EXPECTED_TIMEOUT_SECONDS = 42
+_EXPECTED_OVERRIDE_TIMEOUT_SECONDS = 7
+_EXPECTED_NODE_MEMORY_MB = 2048
+
 
 def test_from_cli_overrides_merges_config_and_paths() -> None:
+    """CLI overrides should merge with config defaults and relative paths."""
     repo_root = Path("/tmp/repo")
     config = {
         "scip": {
@@ -42,11 +47,12 @@ def test_from_cli_overrides_merges_config_and_paths() -> None:
     assert settings.env_json_path == "cfg/env.json"
     assert settings.scip_python_bin == "scip-python-custom"
     assert settings.target_only == "pkg/module"
-    assert settings.timeout_s == 42
+    assert settings.timeout_s == _EXPECTED_TIMEOUT_SECONDS
     assert settings.extra_args == ("--foo", "--bar")
 
 
 def test_from_cli_overrides_disable_and_python_override() -> None:
+    """Disable flag and explicit python binary should override config defaults."""
     settings = ScipIndexConfig.from_cli_overrides(
         {"scip": {"enabled": True, "scip_python_bin": "cfg-python"}},
         repo_root=Path("/repo"),
@@ -64,6 +70,6 @@ def test_from_cli_overrides_disable_and_python_override() -> None:
 
     assert settings.enabled is False
     assert settings.scip_python_bin == "cli-python"
-    assert settings.timeout_s == 7
-    assert settings.node_max_old_space_mb == 2048
+    assert settings.timeout_s == _EXPECTED_OVERRIDE_TIMEOUT_SECONDS
+    assert settings.node_max_old_space_mb == _EXPECTED_NODE_MEMORY_MB
     assert settings.extra_args == ("--fast",)

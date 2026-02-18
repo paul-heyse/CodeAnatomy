@@ -10,13 +10,14 @@ use codeanatomy_engine::compiler::scheduling::{
     derive_cache_policies as derive_cache_policies_native, CachePolicyRequest,
 };
 use codeanatomy_engine::providers::{execute_interval_align, IntervalAlignProviderConfig};
-use codeanatomy_engine::python::tree_sitter_extractor::extract_tree_sitter_batch as extract_ts_native;
+use codeanatomy_engine::python::tree_sitter_extractor::{
+    extract_tree_sitter_row as extract_ts_native, TreeSitterExtractRequest,
+};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyList};
 use serde::Deserialize;
-
-use super::helpers::{parse_python_payload, runtime};
+use super::helpers::{json_to_py, parse_python_payload, runtime};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
@@ -95,10 +96,14 @@ pub(crate) fn extract_tree_sitter_batch(
     file_path: String,
     payload: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
-    let _ = payload;
-    let batch = extract_ts_native(source.as_str(), file_path.as_str())
+    let request = if let Some(value) = payload {
+        parse_python_payload::<TreeSitterExtractRequest>(py, value, "tree-sitter extract payload")?
+    } else {
+        TreeSitterExtractRequest::default()
+    };
+    let row = extract_ts_native(source.as_str(), file_path.as_str(), &request)
         .map_err(|err| PyRuntimeError::new_err(format!("tree-sitter extraction failed: {err}")))?;
-    Ok(batch.to_pyarrow(py)?.unbind())
+    json_to_py(py, &row)
 }
 
 #[pyfunction]

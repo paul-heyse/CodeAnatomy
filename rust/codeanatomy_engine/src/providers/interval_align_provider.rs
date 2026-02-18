@@ -6,11 +6,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::Column;
 use datafusion::datasource::{MemTable, TableType};
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{dml::InsertOp, Expr, LogicalPlan, TableProviderFilterPushDown};
+use datafusion::logical_expr::{
+    dml::InsertOp, Expr, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown,
+};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{DataFusionError, Result, Statistics};
 use serde::{Deserialize, Serialize};
@@ -68,14 +71,45 @@ impl Default for IntervalAlignProviderConfig {
 /// TableProvider wrapper for interval-aligned output.
 #[derive(Debug)]
 pub struct IntervalAlignProvider {
-    inner: Arc<dyn TableProvider>,
-    #[allow(dead_code)]
+    left_schema: SchemaRef,
+    left_batches: Vec<RecordBatch>,
+    right_schema: SchemaRef,
+    right_batches: Vec<RecordBatch>,
+    output_schema: SchemaRef,
     config: IntervalAlignProviderConfig,
 }
 
 impl IntervalAlignProvider {
-    pub fn new(inner: Arc<dyn TableProvider>, config: IntervalAlignProviderConfig) -> Self {
-        Self { inner, config }
+    pub fn try_new(
+        left_schema: SchemaRef,
+        left_batches: Vec<RecordBatch>,
+        right_schema: SchemaRef,
+        right_batches: Vec<RecordBatch>,
+        config: IntervalAlignProviderConfig,
+    ) -> Result<Self> {
+        let output_schema = build_output_schema(&config, left_schema.as_ref(), right_schema.as_ref())?;
+        Ok(Self {
+            left_schema,
+            left_batches,
+            right_schema,
+            right_batches,
+            output_schema,
+            config,
+        })
+    }
+
+    async fn build_dataframe(&self) -> Result<datafusion::prelude::DataFrame> {
+        let sql = build_interval_align_sql(
+            &self.config,
+            self.left_schema.as_ref(),
+            self.right_schema.as_ref(),
+        )?;
+        let ctx = SessionContext::new();
+        let left_mem = MemTable::try_new(self.left_schema.clone(), vec![self.left_batches.clone()])?;
+        let right_mem = MemTable::try_new(self.right_schema.clone(), vec![self.right_batches.clone()])?;
+        ctx.register_table("__ca_left", Arc::new(left_mem))?;
+        ctx.register_table("__ca_right", Arc::new(right_mem))?;
+        ctx.sql(sql.as_str()).await
     }
 }
 
@@ -86,19 +120,19 @@ impl TableProvider for IntervalAlignProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.inner.schema()
+        self.output_schema.clone()
     }
 
     fn table_type(&self) -> TableType {
-        self.inner.table_type()
+        TableType::Base
     }
 
     fn get_table_definition(&self) -> Option<&str> {
-        self.inner.get_table_definition()
+        None
     }
 
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
-        self.inner.get_logical_plan()
+        None
     }
 
     async fn scan(
@@ -108,27 +142,51 @@ impl TableProvider for IntervalAlignProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.inner.scan(state, projection, filters, limit).await
+        let df = self.build_dataframe().await?;
+        let mut plan = LogicalPlanBuilder::from(df.logical_plan().clone());
+
+        if let Some(filter_expr) = filters.iter().cloned().reduce(|acc, new| acc.and(new)) {
+            plan = plan.filter(filter_expr)?;
+        }
+
+        if let Some(indices) = projection {
+            let current_projection = (0..plan.schema().fields().len()).collect::<Vec<usize>>();
+            if indices != &current_projection {
+                let projected: Vec<Expr> = indices
+                    .iter()
+                    .map(|index| Expr::Column(Column::from(plan.schema().qualified_field(*index))))
+                    .collect();
+                plan = plan.project(projected)?;
+            }
+        }
+
+        if let Some(row_limit) = limit {
+            plan = plan.limit(0, Some(row_limit))?;
+        }
+
+        state.create_physical_plan(&plan.build()?).await
     }
 
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        self.inner.supports_filters_pushdown(filters)
+        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        self.inner.statistics()
+        None
     }
 
     async fn insert_into(
         &self,
-        state: &dyn Session,
-        input: Arc<dyn ExecutionPlan>,
-        insert_op: InsertOp,
+        _state: &dyn Session,
+        _input: Arc<dyn ExecutionPlan>,
+        _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.inner.insert_into(state, input, insert_op).await
+        Err(DataFusionError::NotImplemented(
+            "IntervalAlignProvider is read-only".to_string(),
+        ))
     }
 }
 
@@ -196,26 +254,123 @@ fn mode_condition(config: &IntervalAlignProviderConfig) -> String {
     }
 }
 
-fn build_interval_align_sql(
+fn schema_columns(schema: &Schema) -> Vec<String> {
+    schema
+        .fields()
+        .iter()
+        .map(|field| field.name().to_string())
+        .collect()
+}
+
+fn validate_required_columns(
+    config: &IntervalAlignProviderConfig,
+    left_columns: &[String],
+    right_columns: &[String],
+) -> Result<()> {
+    let left_set: HashSet<&str> = left_columns.iter().map(String::as_str).collect();
+    let right_set: HashSet<&str> = right_columns.iter().map(String::as_str).collect();
+
+    for required in [
+        config.left_path_col.as_str(),
+        config.left_start_col.as_str(),
+        config.left_end_col.as_str(),
+    ] {
+        if !left_set.contains(required) {
+            return Err(DataFusionError::Plan(format!(
+                "Left input is missing required column: {required}"
+            )));
+        }
+    }
+    for required in [
+        config.right_path_col.as_str(),
+        config.right_start_col.as_str(),
+        config.right_end_col.as_str(),
+    ] {
+        if !right_set.contains(required) {
+            return Err(DataFusionError::Plan(format!(
+                "Right input is missing required column: {required}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn build_output_schema(
     config: &IntervalAlignProviderConfig,
     left_schema: &Schema,
     right_schema: &Schema,
-) -> Result<String> {
-    let left_available: Vec<String> = left_schema
-        .fields()
-        .iter()
-        .map(|field| field.name().to_string())
-        .collect();
-    let right_available: Vec<String> = right_schema
-        .fields()
-        .iter()
-        .map(|field| field.name().to_string())
-        .collect();
+) -> Result<SchemaRef> {
+    let left_available = schema_columns(left_schema);
+    let right_available = schema_columns(right_schema);
     if left_available.is_empty() || right_available.is_empty() {
         return Err(DataFusionError::Plan(
             "interval_align_table requires non-empty left and right schemas".to_string(),
         ));
     }
+    validate_required_columns(config, left_available.as_slice(), right_available.as_slice())?;
+
+    let left_keep = select_columns(config.select_left.as_slice(), left_available.as_slice());
+    let right_keep = select_columns(config.select_right.as_slice(), right_available.as_slice());
+    let right_aliases = resolve_right_aliases(
+        right_keep.as_slice(),
+        left_keep.as_slice(),
+        config.right_suffix.as_str(),
+        config.match_kind_col.as_str(),
+        config.match_score_col.as_str(),
+    );
+
+    let join_mode = config.how.trim().to_ascii_lowercase();
+    if join_mode != "inner" && join_mode != "left" {
+        return Err(DataFusionError::Plan(format!(
+            "interval_align_table unsupported how mode: {}",
+            config.how
+        )));
+    }
+    let right_nullable = join_mode == "left";
+    let mut fields: Vec<Arc<Field>> = Vec::new();
+
+    for column in left_keep {
+        let field = left_schema.field_with_name(column.as_str())?;
+        fields.push(Arc::new(field.as_ref().clone()));
+    }
+    for (original, alias) in right_aliases {
+        let field = right_schema.field_with_name(original.as_str())?;
+        let renamed = Field::new(
+            alias.as_str(),
+            field.data_type().clone(),
+            field.is_nullable() || right_nullable,
+        );
+        fields.push(Arc::new(renamed));
+    }
+    if config.emit_match_meta {
+        fields.push(Arc::new(Field::new(
+            config.match_kind_col.as_str(),
+            arrow::datatypes::DataType::Utf8,
+            right_nullable,
+        )));
+        fields.push(Arc::new(Field::new(
+            config.match_score_col.as_str(),
+            arrow::datatypes::DataType::Float64,
+            right_nullable,
+        )));
+    }
+
+    Ok(Arc::new(Schema::new(fields)))
+}
+
+fn build_interval_align_sql(
+    config: &IntervalAlignProviderConfig,
+    left_schema: &Schema,
+    right_schema: &Schema,
+) -> Result<String> {
+    let left_available = schema_columns(left_schema);
+    let right_available = schema_columns(right_schema);
+    if left_available.is_empty() || right_available.is_empty() {
+        return Err(DataFusionError::Plan(
+            "interval_align_table requires non-empty left and right schemas".to_string(),
+        ));
+    }
+    validate_required_columns(config, left_available.as_slice(), right_available.as_slice())?;
 
     let left_keep = select_columns(config.select_left.as_slice(), left_available.as_slice());
     let right_keep = select_columns(config.select_right.as_slice(), right_available.as_slice());
@@ -228,29 +383,6 @@ fn build_interval_align_sql(
     );
     let left_available_set: HashSet<&str> = left_available.iter().map(String::as_str).collect();
     let right_available_set: HashSet<&str> = right_available.iter().map(String::as_str).collect();
-
-    for required in [
-        config.left_path_col.as_str(),
-        config.left_start_col.as_str(),
-        config.left_end_col.as_str(),
-    ] {
-        if !left_available_set.contains(required) {
-            return Err(DataFusionError::Plan(format!(
-                "Left input is missing required column: {required}"
-            )));
-        }
-    }
-    for required in [
-        config.right_path_col.as_str(),
-        config.right_start_col.as_str(),
-        config.right_end_col.as_str(),
-    ] {
-        if !right_available_set.contains(required) {
-            return Err(DataFusionError::Plan(format!(
-                "Right input is missing required column: {required}"
-            )));
-        }
-    }
 
     let join_mode = config.how.trim().to_ascii_lowercase();
     if join_mode != "inner" && join_mode != "left" {
@@ -272,10 +404,10 @@ fn build_interval_align_sql(
     let r_start = format!("r.{}", quote_ident(config.right_start_col.as_str()));
     let r_end = format!("r.{}", quote_ident(config.right_end_col.as_str()));
     let overlap_expr = format!(
-        "CASE WHEN LEAST(CAST({l_end} AS BIGINT), CAST({r_end} AS BIGINT)) > \\
-         GREATEST(CAST({l_start} AS BIGINT), CAST({r_start} AS BIGINT)) \\
-         THEN CAST(LEAST(CAST({l_end} AS BIGINT), CAST({r_end} AS BIGINT)) - \\
-              GREATEST(CAST({l_start} AS BIGINT), CAST({r_start} AS BIGINT)) AS DOUBLE) \\
+        "CASE WHEN LEAST(CAST({l_end} AS BIGINT), CAST({r_end} AS BIGINT)) > \
+         GREATEST(CAST({l_start} AS BIGINT), CAST({r_start} AS BIGINT)) \
+         THEN CAST(LEAST(CAST({l_end} AS BIGINT), CAST({r_end} AS BIGINT)) - \
+              GREATEST(CAST({l_start} AS BIGINT), CAST({r_start} AS BIGINT)) AS DOUBLE) \
          ELSE 0.0 END"
     );
 
@@ -336,10 +468,7 @@ fn build_interval_align_sql(
                 quote_ident(config.match_kind_col.as_str())
             )
         } else {
-            format!(
-                "{mode_lit} AS {}",
-                quote_ident(config.match_kind_col.as_str())
-            )
+            format!("{mode_lit} AS {}", quote_ident(config.match_kind_col.as_str()))
         };
         output_parts.push(kind_expr);
         let score_expr = if join_mode == "left" {
@@ -354,46 +483,27 @@ fn build_interval_align_sql(
     }
 
     Ok(format!(
-        "WITH left_aug AS ( \\
-            SELECT l.*, ROW_NUMBER() OVER () AS __left_row \\
-            FROM __ca_left l \\
-         ), \\
-         matched AS ( \\
-            SELECT {matched_select} \\
-            FROM left_aug l \\
-            JOIN __ca_right r \\
-              ON {l_path} = {r_path} AND ({condition}) \\
-         ), \\
-         best AS ( \\
-            SELECT * FROM matched WHERE __rn = 1 \\
-         ) \\
-         SELECT {outputs} \\
-         FROM left_aug l \\
-         {join_keyword} best b \\
+        "WITH left_aug AS ( \
+            SELECT l.*, ROW_NUMBER() OVER () AS __left_row \
+            FROM __ca_left l \
+         ), \
+         matched AS ( \
+            SELECT {matched_select} \
+            FROM left_aug l \
+            JOIN __ca_right r \
+              ON {l_path} = {r_path} AND ({condition}) \
+         ), \
+         best AS ( \
+            SELECT * FROM matched WHERE __rn = 1 \
+         ) \
+         SELECT {outputs} \
+         FROM left_aug l \
+         {join_keyword} best b \
            ON l.__left_row = b.__left_row",
         matched_select = matched_select_parts.join(", "),
         condition = mode_condition(config),
         outputs = output_parts.join(", "),
     ))
-}
-
-async fn materialize_interval_align(
-    left_schema: SchemaRef,
-    left_batches: Vec<RecordBatch>,
-    right_schema: SchemaRef,
-    right_batches: Vec<RecordBatch>,
-    config: IntervalAlignProviderConfig,
-) -> Result<(SchemaRef, Vec<RecordBatch>)> {
-    let sql = build_interval_align_sql(&config, left_schema.as_ref(), right_schema.as_ref())?;
-    let ctx = SessionContext::new();
-    let left_mem = MemTable::try_new(left_schema, vec![left_batches])?;
-    let right_mem = MemTable::try_new(right_schema, vec![right_batches])?;
-    ctx.register_table("__ca_left", Arc::new(left_mem))?;
-    ctx.register_table("__ca_right", Arc::new(right_mem))?;
-    let df = ctx.sql(sql.as_str()).await?;
-    let schema = df.schema().as_arrow().clone().into();
-    let batches = df.collect().await?;
-    Ok((schema, batches))
 }
 
 pub async fn build_interval_align_provider(
@@ -403,16 +513,14 @@ pub async fn build_interval_align_provider(
     right_batches: Vec<RecordBatch>,
     config: IntervalAlignProviderConfig,
 ) -> Result<Arc<dyn TableProvider>> {
-    let (schema, batches) = materialize_interval_align(
+    let provider = IntervalAlignProvider::try_new(
         left_schema,
         left_batches,
         right_schema,
         right_batches,
-        config.clone(),
-    )
-    .await?;
-    let mem = Arc::new(MemTable::try_new(schema, vec![batches])?);
-    Ok(Arc::new(IntervalAlignProvider::new(mem, config)))
+        config,
+    )?;
+    Ok(Arc::new(provider))
 }
 
 pub async fn execute_interval_align(

@@ -264,6 +264,9 @@ pub struct DeltaWritePayload {
     pub gate: Option<DeltaFeatureGate>,
     pub commit_options: Option<datafusion_ext::DeltaCommitOptions>,
     pub extra_constraints: Option<Vec<String>>,
+    pub table_properties: Option<HashMap<String, String>>,
+    pub enable_features: Option<Vec<String>>,
+    pub commit_metadata_required: Option<HashMap<String, String>>,
 }
 
 pub async fn execute_delta_write(
@@ -282,7 +285,11 @@ pub async fn execute_delta_write(
         gate,
         commit_options,
         extra_constraints,
+        table_properties,
+        enable_features,
+        commit_metadata_required,
     } = payload;
+    let _ = (table_properties, enable_features, commit_metadata_required);
     delta_write_batches_request(DeltaWriteBatchesRequest {
         session_ctx,
         table_uri: &table_uri,

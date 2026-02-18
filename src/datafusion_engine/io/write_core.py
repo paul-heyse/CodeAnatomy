@@ -525,6 +525,8 @@ class DeltaWriteOutcome:
     enabled_features: Mapping[str, str]
     commit_app_id: str | None = None
     commit_version: int | None = None
+    mutation_report: Mapping[str, object] | None = None
+    constraint_status: str | None = None
 
 
 def _apply_zorder_sort(

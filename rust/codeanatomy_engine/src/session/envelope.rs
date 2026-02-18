@@ -17,9 +17,9 @@ use crate::session::capture::capture_df_settings;
 /// for reproducible execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEnvelope {
-    /// DataFusion version (e.g., "51.0.0")
+    /// DataFusion version (e.g., "52.1.0")
     pub datafusion_version: String,
-    /// DeltaLake version (e.g., "0.30.1")
+    /// DeltaLake version (e.g., "0.31.0")
     pub delta_rs_version: String,
     /// CodeAnatomy engine version
     pub codeanatomy_version: String,
@@ -257,8 +257,8 @@ mod tests {
         ]);
 
         let hash1 = SessionEnvelope::compute_envelope_hash(
-            "51.0.0",
-            "0.30.1",
+            "52.1.0",
+            "0.31.0",
             "0.1.0",
             &config,
             8,
@@ -274,8 +274,8 @@ mod tests {
         );
 
         let hash2 = SessionEnvelope::compute_envelope_hash(
-            "51.0.0",
-            "0.30.1",
+            "52.1.0",
+            "0.31.0",
             "0.1.0",
             &config,
             8,
@@ -299,8 +299,8 @@ mod tests {
         let config2 = BTreeMap::from([("key1".to_string(), "value2".to_string())]);
 
         let hash1 = SessionEnvelope::compute_envelope_hash(
-            "51.0.0",
-            "0.30.1",
+            "52.1.0",
+            "0.31.0",
             "0.1.0",
             &config1,
             8,
@@ -316,8 +316,8 @@ mod tests {
         );
 
         let hash2 = SessionEnvelope::compute_envelope_hash(
-            "51.0.0",
-            "0.30.1",
+            "52.1.0",
+            "0.31.0",
             "0.1.0",
             &config2,
             8,
@@ -340,8 +340,8 @@ mod tests {
         let config = BTreeMap::from([("key1".to_string(), "value1".to_string())]);
 
         let hash1 = SessionEnvelope::compute_envelope_hash(
-            "51.0.0",
-            "0.30.1",
+            "52.1.0",
+            "0.31.0",
             "0.1.0",
             &config,
             8,
@@ -357,8 +357,8 @@ mod tests {
         );
 
         let hash2 = SessionEnvelope::compute_envelope_hash(
-            "51.0.0",
-            "0.30.1",
+            "52.1.0",
+            "0.31.0",
             "0.1.0",
             &config,
             8,
@@ -390,8 +390,8 @@ mod tests {
     fn test_envelope_hash_changes_with_provider_identity() {
         let config = BTreeMap::from([("key1".to_string(), "value1".to_string())]);
         let hash1 = SessionEnvelope::compute_envelope_hash(
-            "51.0.0",
-            "0.30.1",
+            "52.1.0",
+            "0.31.0",
             "0.1.0",
             &config,
             8,
@@ -406,8 +406,8 @@ mod tests {
             &[3u8; 32],
         );
         let hash2 = SessionEnvelope::compute_envelope_hash(
-            "51.0.0",
-            "0.30.1",
+            "52.1.0",
+            "0.31.0",
             "0.1.0",
             &config,
             8,

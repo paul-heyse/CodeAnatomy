@@ -21,8 +21,8 @@ from datafusion_engine.compile.options import (
 from datafusion_engine.lineage.diagnostics import record_artifact as _lineage_record_artifact
 from datafusion_engine.session.contracts import IdentifierNormalizationMode
 from datafusion_engine.session.runtime_config_policies import (
-    DATAFUSION_MAJOR_VERSION,
     _effective_catalog_autoload_for_profile,
+    effective_datafusion_engine_major_version,
 )
 from utils.env_utils import env_bool
 from utils.value_coercion import coerce_bool, coerce_int
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 _COMPILE_RESOLVER_STRICT_ENV = "CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT"
 _CI_ENV = "CI"
+_MIN_DF_VERSION_EXPLAIN_ANALYZE_LEVEL = 51
 
 
 @lru_cache(maxsize=1)
@@ -258,9 +259,10 @@ def _resolve_prepared_statement_options(
 
 
 def _supports_explain_analyze_level() -> bool:
-    if DATAFUSION_MAJOR_VERSION is None:
+    major = effective_datafusion_engine_major_version()
+    if major is None:
         return False
-    return DATAFUSION_MAJOR_VERSION >= 51
+    return major >= _MIN_DF_VERSION_EXPLAIN_ANALYZE_LEVEL
 
 
 def effective_catalog_autoload(

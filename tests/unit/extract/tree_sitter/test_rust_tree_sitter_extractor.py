@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
 import pytest
 
 from datafusion_engine.extensions import datafusion_ext
@@ -44,18 +43,27 @@ def test_extract_ts_file_row_uses_bridge_when_available(
         include_stats=True,
     )
 
-    def _bridge(_source: str, _file_path: str) -> pa.RecordBatch:
-        source_bytes = source.encode("utf-8")
-        return pa.record_batch(
-            [
-                pa.array(["module", "function_definition"]),
-                pa.array([0, 0], type=pa.int64()),
-                pa.array([len(source_bytes), 10], type=pa.int64()),
-                pa.array([None, 0], type=pa.int64()),
-                pa.array(["foo.py", "foo.py"]),
+    def _bridge(_source: str, _file_path: str) -> dict[str, object]:
+        return {
+            "repo": "",
+            "path": "foo.py",
+            "file_id": "file-1",
+            "file_sha256": None,
+            "nodes": [
+                {"kind": "module", "bstart": 0, "bend": len(source.encode("utf-8"))},
+                {"kind": "function_definition", "bstart": 0, "bend": 10},
             ],
-            names=["node_type", "bstart", "bend", "parent_id", "file"],
-        )
+            "edges": [],
+            "errors": [],
+            "missing": [],
+            "captures": [],
+            "defs": [],
+            "calls": [],
+            "imports": [],
+            "docstrings": [],
+            "stats": {"node_count": 2},
+            "attrs": [],
+        }
 
     monkeypatch.setattr(datafusion_ext, "extract_tree_sitter_batch", _bridge, raising=False)
 
@@ -102,3 +110,122 @@ def test_extract_ts_file_row_raises_when_bridge_missing(
             options=options,
             query_pack=None,
         )
+
+
+def test_extract_ts_file_row_preserves_bridge_nested_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bridge mapping payload should preserve nested query-derived structures."""
+    source = "import os\n\ndef foo():\n    return bar()\n"
+    file_ctx = FileContext(
+        file_id="file-1",
+        path="foo.py",
+        abs_path=None,
+        file_sha256="abc",
+        encoding="utf-8",
+        text=source,
+        data=source.encode("utf-8"),
+    )
+    options = TreeSitterExtractOptions()
+
+    def _bridge(_source: str, _file_path: str, _payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "repo": "repo-x",
+            "path": "foo.py",
+            "file_id": "file-1",
+            "file_sha256": "abc",
+            "nodes": [],
+            "edges": [],
+            "errors": [],
+            "missing": [],
+            "captures": [{"capture_id": "c1", "query_name": "defs", "capture_name": "def.node"}],
+            "defs": [{"node_id": "n1", "kind": "function_definition", "name": "foo"}],
+            "calls": [{"node_id": "n2", "callee_kind": "identifier", "callee_text": "bar"}],
+            "imports": [{"node_id": "n3", "kind": "Import", "name": "os"}],
+            "docstrings": [],
+            "stats": {"node_count": 3},
+            "attrs": {"language_name": "python"},
+        }
+
+    monkeypatch.setattr(datafusion_ext, "extract_tree_sitter_batch", _bridge, raising=False)
+    row = _extract_ts_file_row(
+        file_ctx,
+        parser=_parser(options),
+        cache=None,
+        options=options,
+        query_pack=None,
+    )
+
+    assert row is not None
+    assert row["repo"] == "repo-x"
+    assert isinstance(row.get("captures"), list)
+    assert isinstance(row.get("defs"), list)
+    assert isinstance(row.get("calls"), list)
+    assert isinstance(row.get("imports"), list)
+
+
+def test_extract_ts_file_row_sends_include_option_toggles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bridge request payload should carry include_* option toggles."""
+    source = "def foo():\n    return 1\n"
+    file_ctx = FileContext(
+        file_id="file-1",
+        path="foo.py",
+        abs_path=None,
+        file_sha256=None,
+        encoding="utf-8",
+        text=source,
+        data=source.encode("utf-8"),
+    )
+    options = TreeSitterExtractOptions(
+        include_nodes=False,
+        include_edges=False,
+        include_errors=False,
+        include_missing=False,
+        include_captures=False,
+        include_defs=True,
+        include_calls=False,
+        include_imports=False,
+        include_docstrings=False,
+        include_stats=False,
+    )
+    captured: dict[str, object] = {}
+
+    def _bridge(_source: str, _file_path: str, payload: dict[str, object]) -> dict[str, object]:
+        captured["payload"] = payload
+        return {
+            "repo": "",
+            "path": "foo.py",
+            "file_id": "file-1",
+            "file_sha256": None,
+            "nodes": [],
+            "edges": [],
+            "errors": [],
+            "missing": [],
+            "captures": [],
+            "defs": [{"node_id": "n1", "kind": "function_definition", "name": "foo"}],
+            "calls": [],
+            "imports": [],
+            "docstrings": [],
+            "stats": None,
+            "attrs": [],
+        }
+
+    monkeypatch.setattr(datafusion_ext, "extract_tree_sitter_batch", _bridge, raising=False)
+    row = _extract_ts_file_row(
+        file_ctx,
+        parser=_parser(options),
+        cache=None,
+        options=options,
+        query_pack=None,
+    )
+
+    assert row is not None
+    bridge_payload = captured["payload"]
+    assert isinstance(bridge_payload, dict)
+    bridge_options = bridge_payload.get("options")
+    assert isinstance(bridge_options, dict)
+    assert bridge_options["include_nodes"] is False
+    assert bridge_options["include_defs"] is True
+    assert bridge_options["include_stats"] is False

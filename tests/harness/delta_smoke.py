@@ -11,7 +11,11 @@ import pyarrow as pa
 from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from extraction.delta_tools import DeltaQueryRequest, delta_query
 from tests.harness.plan_bundle import build_plan_manifest_for_sql, persist_plan_artifacts
-from tests.harness.profiles import conformance_profile_with_sink
+from tests.harness.profiles import (
+    ConformanceBackendConfig,
+    conformance_profile_with_sink,
+    resolve_conformance_backend_config,
+)
 from tests.test_helpers.arrow_seed import register_arrow_table
 
 _MISSING_DELTA_VERSION_MSG = "Delta smoke round-trip did not produce a committed Delta version."
@@ -40,9 +44,17 @@ class DeltaSmokeResult:
     provider_artifacts: tuple[Mapping[str, object], ...]
     service_provider_artifacts: tuple[Mapping[str, object], ...]
     strict_native_provider_enabled: bool
+    backend: str
+    table_uri: str
+    storage_options: Mapping[str, str]
+    log_storage_options: Mapping[str, str]
 
 
-def run_delta_smoke_round_trip(scenario: DeltaSmokeScenario) -> DeltaSmokeResult:
+def run_delta_smoke_round_trip(
+    scenario: DeltaSmokeScenario,
+    *,
+    backend_config: ConformanceBackendConfig | None = None,
+) -> DeltaSmokeResult:
     """Execute the canonical Delta/DataFusion smoke round-trip.
 
     Args:
@@ -54,7 +66,8 @@ def run_delta_smoke_round_trip(scenario: DeltaSmokeScenario) -> DeltaSmokeResult
     Raises:
         RuntimeError: If the operation cannot be completed.
     """
-    delta_path = scenario.tmp_path / scenario.delta_dir_name
+    backend = backend_config or resolve_conformance_backend_config("fs")
+    table_uri = backend.table_uri(table_name=scenario.delta_dir_name, root_dir=scenario.tmp_path)
     artifacts_root = scenario.tmp_path / scenario.artifacts_dir_name
     profile, sink = conformance_profile_with_sink(
         plan_artifacts_root=str(artifacts_root),
@@ -69,9 +82,13 @@ def run_delta_smoke_round_trip(scenario: DeltaSmokeScenario) -> DeltaSmokeResult
     write_result = pipeline.write(
         WriteRequest(
             source=source,
-            destination=str(delta_path),
+            destination=table_uri,
             format=WriteFormat.DELTA,
             mode=WriteMode.OVERWRITE,
+            format_options={
+                "storage_options": dict(backend.storage_options),
+                "log_storage_options": dict(backend.log_storage_options),
+            },
         )
     )
     if write_result.delta_result is None or write_result.delta_result.version is None:
@@ -91,7 +108,9 @@ def run_delta_smoke_round_trip(scenario: DeltaSmokeScenario) -> DeltaSmokeResult
     rows = _rows_from_reader(
         delta_query(
             DeltaQueryRequest(
-                path=str(delta_path),
+                path=table_uri,
+                storage_options=dict(backend.storage_options),
+                log_storage_options=dict(backend.log_storage_options),
                 table_name=scenario.query_table_name,
                 runtime_profile=profile,
                 builder=lambda ctx, table_name: ctx.sql(
@@ -111,6 +130,10 @@ def run_delta_smoke_round_trip(scenario: DeltaSmokeScenario) -> DeltaSmokeResult
         provider_artifacts=tuple(_artifact_rows(artifacts, "dataset_provider_mode_v1")),
         service_provider_artifacts=tuple(_artifact_rows(artifacts, "delta_service_provider_v1")),
         strict_native_provider_enabled=profile.features.enforce_delta_ffi_provider,
+        backend=backend.kind,
+        table_uri=table_uri,
+        storage_options=dict(backend.storage_options),
+        log_storage_options=dict(backend.log_storage_options),
     )
 
 

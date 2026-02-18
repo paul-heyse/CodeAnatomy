@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pytest
 
+from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.extensions import datafusion_ext
-from relspec import policy_compiler
+from relspec.contracts import OutDegreeGraph
+from relspec.policy_compiler import derive_cache_policies_from_graph
 
 
 @dataclass(frozen=True)
@@ -18,10 +21,10 @@ class _Graph:
         return self.out_degree_map[node_idx]
 
 
-@dataclass(frozen=True)
+@dataclass
 class _TaskGraph:
-    task_idx: dict[str, int]
-    graph: _Graph
+    task_idx: Mapping[str, int]
+    graph: OutDegreeGraph
 
     def out_degree(self, task_name: str) -> int:
         return self.graph.out_degree(self.task_idx[task_name])
@@ -42,9 +45,9 @@ def test_derive_cache_policies_prefers_bridge(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(datafusion_ext, "derive_cache_policies", _fake_bridge, raising=False)
 
-    policies = policy_compiler.derive_cache_policies_from_graph(
+    policies = derive_cache_policies_from_graph(
         task_graph,
-        output_locations={"a": object()},
+        output_locations={"a": DatasetLocation(path="/tmp/a.delta", format="delta")},
         cache_overrides=None,
         workload_class="compile_replay",
     )
@@ -69,7 +72,7 @@ def test_derive_cache_policies_raises_when_bridge_errors(
     monkeypatch.setattr(datafusion_ext, "derive_cache_policies", _broken_bridge, raising=False)
 
     with pytest.raises(RuntimeError, match="derive_cache_policies bridge"):
-        _ = policy_compiler.derive_cache_policies_from_graph(
+        _ = derive_cache_policies_from_graph(
             task_graph,
             output_locations={},
             cache_overrides=None,

@@ -12,6 +12,7 @@ from datafusion import SessionContext
 
 from datafusion_engine.delta.capabilities import is_delta_extension_compatible
 from datafusion_engine.extensions.plugin_manifest import resolve_plugin_manifest
+from datafusion_engine.session.runtime_config_policies import effective_datafusion_engine_version
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,9 +93,8 @@ def detect_plan_capabilities(ctx: SessionContext) -> DataFusionPlanCapabilities:
     DataFusionPlanCapabilities
         Frozen snapshot of detected plan-level capabilities.
     """
-    import datafusion as _df
-
-    version = getattr(_df, "__version__", "unknown")
+    capabilities_report = _extension_capabilities_report()
+    version = effective_datafusion_engine_version(capabilities_report) or "unknown"
 
     has_df_exec_plan = False
     has_stats = False
@@ -295,7 +295,7 @@ def runtime_capabilities_payload(snapshot: RuntimeCapabilitiesSnapshot) -> dict[
 
 def _extension_capabilities_report() -> dict[str, object]:
     try:
-        from datafusion_engine.udf.extension_validation import extension_capabilities_report
+        from datafusion_engine.udf.extension_runtime import extension_capabilities_report
     except ImportError:
         return {}
     try:

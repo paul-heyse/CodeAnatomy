@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import pyarrow as pa
 import pytest
@@ -10,6 +11,7 @@ from datafusion import SessionContext
 
 from datafusion_engine.io import write_pipeline as write_pipeline_module
 from datafusion_engine.io.write_pipeline import WritePipeline
+from schema_spec.dataset_spec import DatasetSpec
 
 
 def test_validate_dataframe_uses_record_batch_reader(
@@ -32,6 +34,7 @@ def test_validate_dataframe_uses_record_batch_reader(
     ) -> object:
         captured["is_reader"] = isinstance(value, pa.RecordBatchReader)
         captured["spec"] = spec
+        _ = options
         _ = runtime_profile
         return value
 
@@ -46,7 +49,13 @@ def test_validate_dataframe_uses_record_batch_reader(
         table_spec=object(),
         policies=SimpleNamespace(validation=None, dataframe_validation=None),
     )
-    pipeline._validate_dataframe(df, dataset_spec=dataset_spec, overrides=None)
+    validate_dataframe = vars(type(pipeline))["_validate_dataframe"]
+    validate_dataframe(
+        pipeline,
+        df,
+        dataset_spec=cast("DatasetSpec", dataset_spec),
+        overrides=None,
+    )
 
     assert captured["is_reader"] is True
     assert captured["spec"] is dataset_spec.table_spec

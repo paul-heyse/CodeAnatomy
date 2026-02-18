@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from datafusion_engine.session._session_constants import CACHE_PROFILES, parse_major_version
 
-EXPECTED_MAJOR_VERSION = 51
+EXPECTED_MAJOR_VERSION = 52
 
 
 def test_parse_major_version_handles_standard_inputs() -> None:
     """Version parser extracts major version and tolerates invalid strings."""
-    assert parse_major_version("51.0.0") == EXPECTED_MAJOR_VERSION
+    assert parse_major_version("52.1.0") == EXPECTED_MAJOR_VERSION
     assert parse_major_version("not-a-version") is None
 
 

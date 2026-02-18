@@ -8,6 +8,7 @@ import msgspec
 import pyarrow as pa
 
 from datafusion_engine.delta.control_plane_core import DeltaCommitOptions, DeltaWriteRequest
+from datafusion_engine.generated.delta_types import DeltaFeatureGate
 
 
 class DeltaWriteRequestOptions(msgspec.Struct, frozen=True):
@@ -19,6 +20,10 @@ class DeltaWriteRequestOptions(msgspec.Struct, frozen=True):
     partition_columns: Sequence[str] | None = None
     target_file_size: int | None = None
     extra_constraints: Sequence[str] | None = None
+    table_properties: Mapping[str, str] | None = None
+    enable_features: Sequence[str] | None = None
+    commit_metadata_required: Mapping[str, str] | None = None
+    gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
 
@@ -71,6 +76,9 @@ def build_delta_write_request(
 
     Returns:
         DeltaWriteRequest: Normalized Delta write request.
+
+    Raises:
+        ValueError: If neither table nor reader payload is provided.
     """
     if table is None and reader is None:
         msg = "build_delta_write_request requires either table or reader payload."
@@ -87,6 +95,10 @@ def build_delta_write_request(
         partition_columns=options.partition_columns,
         target_file_size=options.target_file_size,
         extra_constraints=options.extra_constraints,
+        table_properties=options.table_properties,
+        enable_features=options.enable_features,
+        commit_metadata_required=options.commit_metadata_required,
+        gate=options.gate,
         commit_options=options.commit_options,
     )
 

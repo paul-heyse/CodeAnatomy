@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import cast
 from unittest.mock import Mock
 
 import pyarrow as pa
@@ -127,7 +129,9 @@ def test_build_view_artifact_from_bundle(mock_plan_bundle: DataFusionPlanArtifac
     assert artifact.schema == schema
     assert artifact.required_udfs == ("udf_a",)
     assert artifact.referenced_tables == ("table1",)
-    assert artifact.pushdown_contracts["table1"]["statuses"]["predicate_pushdown"] == "inexact"
+    table_contract = artifact.pushdown_contracts["table1"]
+    statuses = cast("Mapping[str, object]", table_contract["statuses"])
+    assert statuses["predicate_pushdown"] == "inexact"
 
 
 @pytest.fixture

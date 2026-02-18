@@ -28,7 +28,7 @@ def _apply_scan_settings(
     *,
     scan: DataFusionScanOptions | None,
     sql_options: SQLOptions,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
+    _runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> None:
     if scan is None:
         return

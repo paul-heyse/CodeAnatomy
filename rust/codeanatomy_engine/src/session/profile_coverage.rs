@@ -2,7 +2,7 @@
 //!
 //! Every field in `RuntimeProfileSpec` must have a corresponding
 //! `RuntimeProfileCoverage` entry, either `Applied` (wired into
-//! session configuration) or `Reserved` (no stable DataFusion 51
+//! session configuration) or `Reserved` (no stable DataFusion 52.1
 //! surface for the current engine path).
 //!
 //! This registry is the machine-checkable proof that every profile
@@ -18,7 +18,7 @@ use crate::session::runtime_profiles::RuntimeProfileSpec;
 pub enum CoverageState {
     /// Field is wired into session configuration via a documented API.
     Applied,
-    /// Field is recognized but not wired; no stable DF51 surface exists
+    /// Field is recognized but not wired; no stable DF52.1 surface exists
     /// in the current engine path.
     Reserved,
 }
@@ -66,7 +66,7 @@ pub fn evaluate_profile_coverage() -> Vec<RuntimeProfileCoverage> {
         RuntimeProfileCoverage {
             field: "meta_fetch_concurrency".into(),
             state: CoverageState::Reserved,
-            note: "No stable DataFusion 51 surface in current engine path".into(),
+            note: "No stable DataFusion 52.1 surface in current engine path".into(),
         },
         // --- Memory & Spill ---
         RuntimeProfileCoverage {
@@ -134,7 +134,7 @@ pub fn evaluate_profile_coverage() -> Vec<RuntimeProfileCoverage> {
         RuntimeProfileCoverage {
             field: "max_predicate_cache_size".into(),
             state: CoverageState::Reserved,
-            note: "Provider-level cache; no global DF51 session knob".into(),
+            note: "Provider-level cache; no global DF52.1 session knob".into(),
         },
         // --- Cache ---
         RuntimeProfileCoverage {
@@ -357,7 +357,7 @@ mod tests {
             .map(|c| c.field.as_str())
             .collect();
 
-        // Fields known to lack DF51 session wiring
+        // Fields known to lack DF52.1 session wiring
         assert!(reserved.contains(&"meta_fetch_concurrency"));
         assert!(reserved.contains(&"max_predicate_cache_size"));
         assert!(reserved.contains(&"list_files_cache_limit"));

@@ -168,14 +168,14 @@ wheels = [
 
 [[package]]
 name = "basedpyright"
-version = "1.38.0"
+version = "1.38.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "nodejs-wheel-binaries" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a2/d4/4ac6eeba6cfe2ad8586dcf87fdb9e8b045aa467b559bc2e24e91e84f58b2/basedpyright-1.38.0.tar.gz", hash = "sha256:7a9cf631d7eaf5859022a4352b51ed0e78ce115435a8599402239804000d0cdf", size = 25257385, upload-time = "2026-02-11T16:05:47.834Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/17/ea/4d45e3c66c609496f3069a7c9e5fbd1f9ba54097c41b89048af0d8021ea6/basedpyright-1.38.1.tar.gz", hash = "sha256:e4876aa3ef7c76569ffdcd908d4e260b8d1a1deaa8838f2486f91a10b60d68d6", size = 25267403, upload-time = "2026-02-18T09:20:45.563Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d5/90/1883cec16d667d944b08e8d8909b9b2f46cc1d2b9731e855e3c71f9b0450/basedpyright-1.38.0-py3-none-any.whl", hash = "sha256:a6c11a343fd12a2152a0d721b0e92f54f2e2e3322ee2562197e27dad952f1a61", size = 12303557, upload-time = "2026-02-11T16:05:44.863Z" },
+    { url = "https://files.pythonhosted.org/packages/28/92/42f4dc30a28c052a70c939d8dbb34102674b48c89369010442038d3c888b/basedpyright-1.38.1-py3-none-any.whl", hash = "sha256:24f21661d2754687b64f3bc35efcc78781e11b08c8b2310312ed92bf178ea627", size = 12311610, upload-time = "2026-02-18T09:20:50.09Z" },
 ]
 
 [[package]]
@@ -395,7 +395,7 @@ name = "codeanatomy-engine"
 version = "0.1.0"
 source = { path = "dist/wheels/codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl" }
 wheels = [
-    { filename = "codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:c436bc9c2f2f1a10382b3fb8822a8fb3062d4ecadef236f0c06c480e262fd9d7" },
+    { filename = "codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:9081071d311743de4df936ae7af85ce4793f5b001140e9d7044f09fb99562d7c" },
 ]
 
 [[package]]
@@ -505,7 +505,7 @@ dependencies = [
     { name = "pyarrow" },
 ]
 wheels = [
-    { filename = "datafusion-51.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:76ccd8d3f17a1a6755e4736561a0610789fcb8b6ef6b591793016df54cd847bd" },
+    { filename = "datafusion-51.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b5c272e975e037042cae823e5488ff2a32df90432dcfb957491c2c314304dc8d" },
 ]
 
 [package.metadata]
@@ -523,7 +523,7 @@ dependencies = [
     { name = "datafusion" },
 ]
 wheels = [
-    { filename = "datafusion_ext-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:02c755dc24baedbbe8c8b8cc6d654366e535fc5a42bb527d6d2434932a358be9" },
+    { filename = "datafusion_ext-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b1100b57500daa75a1f99914554de3188e7bbc9085f6ec11de85806a97c5b764" },
 ]
 
 [package.metadata]

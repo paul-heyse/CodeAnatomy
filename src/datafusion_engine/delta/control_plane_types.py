@@ -122,6 +122,9 @@ class DeltaWriteRequest(StructBaseStrict, frozen=True):
     partition_columns: Sequence[str] | None
     target_file_size: int | None
     extra_constraints: Sequence[str] | None
+    table_properties: Mapping[str, str] | None = None
+    enable_features: Sequence[str] | None = None
+    commit_metadata_required: Mapping[str, str] | None = None
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 

@@ -36,12 +36,34 @@ class _SettingsProvider(Protocol):
         ...
 
 
+def _set_config_if_supported(
+    config: SessionConfig,
+    *,
+    key: str,
+    value: str,
+) -> SessionConfig:
+    """Apply a config setting and skip keys unsupported by the active binding.
+
+    Returns:
+        SessionConfig: Updated config when the key is supported, else unchanged config.
+    """
+    if key.startswith("datafusion.runtime."):
+        return config
+    try:
+        return config.set(key, value)
+    except BaseException as exc:
+        message = str(exc)
+        if "Config value" in message and "not found" in message:
+            return config
+        raise
+
+
 def _apply_settings_overrides(
     config: SessionConfig,
     overrides: Mapping[str, str],
 ) -> SessionConfig:
     for key, value in overrides.items():
-        config = config.set(key, str(value))
+        config = _set_config_if_supported(config, key=key, value=str(value))
     return config
 
 
@@ -52,9 +74,17 @@ def _apply_catalog_autoload(
     file_format: str | None,
 ) -> SessionConfig:
     if location is not None:
-        config = config.set("datafusion.catalog.location", location)
+        config = _set_config_if_supported(
+            config,
+            key="datafusion.catalog.location",
+            value=location,
+        )
     if file_format is not None:
-        config = config.set("datafusion.catalog.format", file_format)
+        config = _set_config_if_supported(
+            config,
+            key="datafusion.catalog.format",
+            value=file_format,
+        )
     return config
 
 
@@ -63,9 +93,10 @@ def _apply_identifier_settings(
     *,
     enable_ident_normalization: bool,
 ) -> SessionConfig:
-    return config.set(
-        "datafusion.sql_parser.enable_ident_normalization",
-        str(enable_ident_normalization).lower(),
+    return _set_config_if_supported(
+        config,
+        key="datafusion.sql_parser.enable_ident_normalization",
+        value=str(enable_ident_normalization).lower(),
     )
 
 
@@ -77,13 +108,7 @@ def _apply_feature_settings(
         return config
     settings_map = feature_gates.settings()
     for key, value in settings_map.items():
-        try:
-            config = config.set(key, value)
-        except BaseException as exc:
-            message = str(exc)
-            if "Config value" in message and "not found" in message:
-                continue
-            raise
+        config = _set_config_if_supported(config, key=key, value=value)
     return config
 
 
@@ -95,7 +120,7 @@ def _apply_join_settings(
         return config
     settings_map = join_policy.settings()
     for key, value in settings_map.items():
-        config = config.set(key, value)
+        config = _set_config_if_supported(config, key=key, value=value)
     return config
 
 
@@ -107,7 +132,11 @@ def _apply_explain_analyze_level(
 ) -> SessionConfig:
     if level is None or not supported:
         return config
-    return config.set("datafusion.explain.analyze_level", level)
+    return _set_config_if_supported(
+        config,
+        key="datafusion.explain.analyze_level",
+        value=level,
+    )
 
 
 def _split_runtime_settings(
@@ -257,63 +286,73 @@ class SessionFactory:
         )
         target_partitions = profile.execution.target_partitions
         if target_partitions is not None:
-            config = config.set(
-                "datafusion.execution.target_partitions",
-                str(target_partitions),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.execution.target_partitions",
+                value=str(target_partitions),
             )
         batch_size = profile.execution.batch_size
         if batch_size is not None:
-            config = config.set(
-                "datafusion.execution.batch_size",
-                str(batch_size),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.execution.batch_size",
+                value=str(batch_size),
             )
         repartition_aggregations = profile.execution.repartition_aggregations
         if repartition_aggregations is not None:
-            config = config.set(
-                "datafusion.optimizer.repartition_aggregations",
-                str(repartition_aggregations).lower(),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.optimizer.repartition_aggregations",
+                value=str(repartition_aggregations).lower(),
             )
         repartition_windows = profile.execution.repartition_windows
         if repartition_windows is not None:
-            config = config.set(
-                "datafusion.optimizer.repartition_windows",
-                str(repartition_windows).lower(),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.optimizer.repartition_windows",
+                value=str(repartition_windows).lower(),
             )
         repartition_file_scans = profile.execution.repartition_file_scans
         if repartition_file_scans is not None:
-            config = config.set(
-                "datafusion.execution.repartition_file_scans",
-                str(repartition_file_scans).lower(),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.execution.repartition_file_scans",
+                value=str(repartition_file_scans).lower(),
             )
         repartition_file_min_size = profile.execution.repartition_file_min_size
         if repartition_file_min_size is not None:
-            config = config.set(
-                "datafusion.execution.repartition_file_min_size",
-                str(repartition_file_min_size),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.execution.repartition_file_min_size",
+                value=str(repartition_file_min_size),
             )
         minimum_parallel_output_files = profile.execution.minimum_parallel_output_files
         if minimum_parallel_output_files is not None:
-            config = config.set(
-                "datafusion.execution.minimum_parallel_output_files",
-                str(minimum_parallel_output_files),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.execution.minimum_parallel_output_files",
+                value=str(minimum_parallel_output_files),
             )
         soft_max_rows_per_output_file = profile.execution.soft_max_rows_per_output_file
         if soft_max_rows_per_output_file is not None:
-            config = config.set(
-                "datafusion.execution.soft_max_rows_per_output_file",
-                str(soft_max_rows_per_output_file),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.execution.soft_max_rows_per_output_file",
+                value=str(soft_max_rows_per_output_file),
             )
         maximum_parallel_row_group_writers = profile.execution.maximum_parallel_row_group_writers
         if maximum_parallel_row_group_writers is not None:
-            config = config.set(
-                "datafusion.execution.maximum_parallel_row_group_writers",
-                str(maximum_parallel_row_group_writers),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.execution.maximum_parallel_row_group_writers",
+                value=str(maximum_parallel_row_group_writers),
             )
         objectstore_writer_buffer_size = profile.execution.objectstore_writer_buffer_size
         if objectstore_writer_buffer_size is not None:
-            config = config.set(
-                "datafusion.execution.objectstore_writer_buffer_size",
-                str(objectstore_writer_buffer_size),
+            config = _set_config_if_supported(
+                config,
+                key="datafusion.execution.objectstore_writer_buffer_size",
+                value=str(objectstore_writer_buffer_size),
             )
         catalog_location, catalog_format = effective_catalog_autoload(profile)
         config = _apply_catalog_autoload(

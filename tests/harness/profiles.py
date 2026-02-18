@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
+from typing import Literal
 
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.capabilities import is_delta_extension_compatible
@@ -18,6 +22,90 @@ from datafusion_engine.session.runtime_profile_config import (
     PolicyBundleConfig,
 )
 from obs.diagnostics import DiagnosticsCollector
+
+ConformanceBackendKind = Literal["fs", "minio", "localstack"]
+
+
+@dataclass(frozen=True)
+class ConformanceBackendConfig:
+    """Backend-resolved URI and storage-option contract for conformance lanes."""
+
+    kind: ConformanceBackendKind
+    storage_options: Mapping[str, str]
+    log_storage_options: Mapping[str, str]
+    bucket: str | None = None
+    root_prefix: str = "codeanatomy/conformance"
+
+    def table_uri(self, *, table_name: str, root_dir: Path) -> str:
+        """Build backend-specific Delta URI for a test table name."""
+        if self.kind == "fs":
+            return str(root_dir / table_name)
+        bucket = self.bucket or "codeanatomy-conformance"
+        prefix_parts = [
+            self.root_prefix.strip("/"),
+            root_dir.name.strip("/"),
+            table_name.strip("/"),
+        ]
+        object_key = "/".join(part for part in prefix_parts if part)
+        return f"s3://{bucket}/{object_key}"
+
+    def artifact_context(self, *, table_name: str, root_dir: Path) -> dict[str, object]:
+        """Return deterministic backend context for artifact payloads."""
+        return {
+            "backend": self.kind,
+            "table_uri": self.table_uri(table_name=table_name, root_dir=root_dir),
+            "storage_options": dict(self.storage_options),
+            "log_storage_options": dict(self.log_storage_options),
+        }
+
+
+def resolve_conformance_backend_config(
+    backend: ConformanceBackendKind,
+) -> ConformanceBackendConfig:
+    """Resolve backend-specific URI/storage contracts for conformance tests."""
+    if backend == "fs":
+        return ConformanceBackendConfig(kind="fs", storage_options={}, log_storage_options={})
+
+    if backend == "minio":
+        resolved_endpoint = os.environ.get("CODEANATOMY_MINIO_ENDPOINT", "").strip()
+        bucket = os.environ.get("CODEANATOMY_MINIO_BUCKET", "codeanatomy").strip()
+        options = {
+            "AWS_ENDPOINT_URL": resolved_endpoint,
+            "AWS_ALLOW_HTTP": "true",
+            "AWS_REGION": os.environ.get("CODEANATOMY_MINIO_REGION", "us-east-1"),
+            "AWS_ACCESS_KEY_ID": os.environ.get("CODEANATOMY_MINIO_ACCESS_KEY", "minioadmin"),
+            "AWS_SECRET_ACCESS_KEY": os.environ.get(
+                "CODEANATOMY_MINIO_SECRET_KEY",
+                "minioadmin",
+            ),
+            "AWS_S3_FORCE_PATH_STYLE": "true",
+        }
+        return ConformanceBackendConfig(
+            kind="minio",
+            storage_options=options,
+            log_storage_options=options,
+            bucket=bucket or "codeanatomy",
+        )
+
+    resolved_endpoint = os.environ.get("CODEANATOMY_LOCALSTACK_ENDPOINT", "").strip()
+    bucket = os.environ.get("CODEANATOMY_LOCALSTACK_BUCKET", "codeanatomy").strip()
+    options = {
+        "AWS_ENDPOINT_URL": resolved_endpoint,
+        "AWS_ALLOW_HTTP": "true",
+        "AWS_REGION": os.environ.get("CODEANATOMY_LOCALSTACK_REGION", "us-east-1"),
+        "AWS_ACCESS_KEY_ID": os.environ.get("CODEANATOMY_LOCALSTACK_ACCESS_KEY", "test"),
+        "AWS_SECRET_ACCESS_KEY": os.environ.get(
+            "CODEANATOMY_LOCALSTACK_SECRET_KEY",
+            "test",
+        ),
+        "AWS_S3_FORCE_PATH_STYLE": "true",
+    }
+    return ConformanceBackendConfig(
+        kind="localstack",
+        storage_options=options,
+        log_storage_options=options,
+        bucket=bucket or "codeanatomy",
+    )
 
 
 def clone_profile_with_delta_service(

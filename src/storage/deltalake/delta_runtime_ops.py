@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 from deltalake import CommitProperties
@@ -43,7 +43,6 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 type StorageOptions = Mapping[str, str]
-_T = TypeVar("_T")
 
 
 def runtime_profile_for_delta(
@@ -194,17 +193,17 @@ def delta_retry_delay(attempt: int, *, policy: DeltaRetryPolicy) -> float:
     return min(delay, float(policy.max_delay_s))
 
 
-def retry_with_policy(
-    operation: Callable[[], _T],
+def retry_with_policy[T](
+    operation: Callable[[], T],
     *,
     policy: DeltaRetryPolicy,
     span: Span | None = None,
-) -> tuple[_T, int]:
+) -> tuple[T, int]:
     """Run an operation with Delta retry classification/backoff semantics.
 
     Returns:
     -------
-    tuple[_T, int]
+    tuple[T, int]
         Operation result and retry attempt count.
     """
     attempts = 0

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
+import pyarrow as pa
+import pytest
+
 from extract.coordination.context import FileContext
 from extract.coordination.extraction_runtime_loop import (
     ExtractionRuntimeWorklist,
@@ -9,6 +14,7 @@ from extract.coordination.extraction_runtime_loop import (
     iter_runtime_row_batches,
     runtime_worklist_contexts,
 )
+from extract.infrastructure.worklists import WorklistRequest
 
 
 def _file_ctx(name: str) -> FileContext:
@@ -50,15 +56,17 @@ def test_iter_runtime_row_batches_chunks() -> None:
     ]
 
 
-def test_runtime_worklist_contexts_uses_queue_name(monkeypatch) -> None:
+def test_runtime_worklist_contexts_uses_queue_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Worklist resolver should wire queue_name when queue mode is enabled."""
-    captured: dict[str, object] = {}
+    captured: dict[str, WorklistRequest] = {}
     expected = [_file_ctx("queued")]
 
     def _fake_queue_name(*, output_table: str, repo_id: str | None) -> str:
         return f"{output_table}:{repo_id or ''}"
 
-    def _fake_iter(request):
+    def _fake_iter(request: WorklistRequest) -> Iterator[FileContext]:
         captured["request"] = request
         yield from expected
 
@@ -73,7 +81,7 @@ def test_runtime_worklist_contexts_uses_queue_name(monkeypatch) -> None:
 
     contexts = runtime_worklist_contexts(
         ExtractionRuntimeWorklist(
-            repo_files=object(),
+            repo_files=pa.table({"path": ["a.py"]}),
             output_table="ast_files_v1",
             runtime_profile=None,
             file_contexts=None,

@@ -5,7 +5,7 @@
 //! shared planning-surface path — see `planning_surface.rs`.
 //!
 //! The only post-build mutation is `install_rewrites()` for function
-//! rewrites that lack a builder API in DataFusion 51.
+//! rewrites that lack a builder API in DataFusion 52.1.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

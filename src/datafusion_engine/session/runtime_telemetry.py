@@ -25,9 +25,10 @@ from datafusion_engine.session.runtime_compile import (
     _identifier_normalization_mode,
 )
 from datafusion_engine.session.runtime_config_policies import (
-    DATAFUSION_MAJOR_VERSION,
     _ansi_mode,
     _effective_catalog_autoload_for_profile,
+    effective_datafusion_engine_major_version,
+    effective_datafusion_engine_version,
 )
 from schema_spec.policies import DataFusionWritePolicy
 from serde_msgspec import MSGPACK_ENCODER
@@ -50,6 +51,7 @@ TELEMETRY_PAYLOAD_VERSION: int = 2
 _TELEMETRY_MSGPACK_ENCODER = MSGPACK_ENCODER
 
 _DEFAULT_PERFORMANCE_POLICY = PerformancePolicy()
+_MIN_DF_VERSION_EXPLAIN_ANALYZE_LEVEL = 51
 
 # ---------------------------------------------------------------------------
 # PyArrow Schema Constants
@@ -185,6 +187,7 @@ _TELEMETRY_SCHEMA = pa.schema(
         version_field(nullable=True),
         pa.field("profile_name", pa.string()),
         pa.field("datafusion_version", pa.string()),
+        pa.field("datafusion_engine_version", pa.string()),
         pa.field("architecture_version", pa.string()),
         pa.field("sql_policy_name", pa.string()),
         pa.field("cache_profile_name", pa.string()),
@@ -367,9 +370,10 @@ def _delta_protocol_support_payload(
 
 
 def _supports_explain_analyze_level() -> bool:
-    if DATAFUSION_MAJOR_VERSION is None:
+    major = effective_datafusion_engine_major_version()
+    if major is None:
         return False
-    return DATAFUSION_MAJOR_VERSION >= 51
+    return major >= _MIN_DF_VERSION_EXPLAIN_ANALYZE_LEVEL
 
 
 def _sql_policy_payload(profile: DataFusionRuntimeProfile) -> dict[str, bool] | None:
@@ -432,6 +436,8 @@ def _telemetry_common_payload(profile: DataFusionRuntimeProfile) -> dict[str, ob
 
 
 def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str, object]:
+    binding_version = getattr(datafusion, "__version__", "unknown")
+    engine_version = effective_datafusion_engine_version()
     settings = profile.settings_payload()
     sql_policy_payload = _sql_policy_payload(profile)
     write_policy_payload = _datafusion_write_policy_payload(profile.policies.write_policy)
@@ -463,7 +469,8 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
     return {
         "version": TELEMETRY_PAYLOAD_VERSION,
         "profile_name": profile.policies.config_policy_name,
-        "datafusion_version": datafusion.__version__,
+        "datafusion_version": binding_version,
+        "datafusion_engine_version": engine_version,
         "architecture_version": profile.architecture_version,
         "sql_policy_name": profile.policies.sql_policy_name,
         "cache_profile_name": profile.policies.cache_profile_name,

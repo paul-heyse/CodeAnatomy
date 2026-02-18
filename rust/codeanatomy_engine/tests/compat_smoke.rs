@@ -1,7 +1,7 @@
 //! WS0: API Compatibility Smoke Tests
 //!
 //! This module contains compile-checked API conformance tests that validate
-//! we're using correct DataFusion 51.0.0 / DeltaLake 0.30.1 API surfaces.
+//! we're using correct DataFusion 52.1.x / DeltaLake 0.31.x API surfaces.
 //!
 //! Each test verifies a specific API that the implementation plan depends on.
 //! These tests must compile and pass to ensure version compatibility.
@@ -102,8 +102,8 @@ fn test_version_capture_api() {
         "DataFusion version should not be empty"
     );
     assert!(
-        datafusion_version.starts_with("51."),
-        "Expected DataFusion 51.x"
+        datafusion_version.starts_with("52.1."),
+        "Expected DataFusion 52.1.x"
     );
 
     // Verify DeltaLake crate_version function
@@ -113,8 +113,8 @@ fn test_version_capture_api() {
         "DeltaLake version should not be empty"
     );
     assert!(
-        deltalake_version.starts_with("0.30."),
-        "Expected DeltaLake 0.30.x"
+        deltalake_version.starts_with("0.31."),
+        "Expected DeltaLake 0.31.x"
     );
 
     // Verify engine version from Cargo.toml

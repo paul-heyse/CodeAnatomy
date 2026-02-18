@@ -10,7 +10,6 @@ import msgspec
 from deltalake import CommitProperties
 from msgspec import convert
 
-from datafusion_engine.delta.service import DeltaFeatureMutationRequest
 from datafusion_engine.delta.service_protocol import DeltaServicePort
 from datafusion_engine.io.write_core import (
     DeltaWriteOutcome,
@@ -25,8 +24,7 @@ from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from schema_spec.dataset_spec import DeltaMaintenancePolicy
 from serde_msgspec import convert_from_attributes
 from storage.deltalake.config import DeltaSchemaPolicy
-from storage.deltalake.delta_write import DeltaFeatureMutationOptions, IdempotentWriteOptions
-from utils.hashing import hash_sha256_hex
+from storage.deltalake.delta_write import IdempotentWriteOptions
 from utils.storage_options import normalize_storage_options
 
 if TYPE_CHECKING:
@@ -139,117 +137,6 @@ def _replace_where_predicate(options: Mapping[str, object]) -> str | None:
         return None
     text = str(value).strip()
     return text if text else None
-
-
-def _delta_feature_mutation_options(
-    spec: DeltaWriteSpec,
-    *,
-    delta_service: DeltaServicePort,
-) -> DeltaFeatureMutationOptions:
-    request = DeltaFeatureMutationRequest(
-        path=spec.table_uri,
-        storage_options=spec.storage_options,
-        log_storage_options=spec.log_storage_options,
-        commit_metadata=spec.commit_metadata,
-        dataset_name=spec.commit_key,
-        gate=spec.feature_gate,
-    )
-    return delta_service.features.feature_mutation_options(request)
-
-
-def _apply_explicit_delta_features(
-    *,
-    spec: DeltaWriteSpec,
-    delta_service: DeltaServicePort,
-) -> None:
-    """Enable explicitly requested Delta features."""
-    if not spec.enable_features:
-        return
-    options = _delta_feature_mutation_options(spec, delta_service=delta_service)
-    for feature in spec.enable_features:
-        if feature == "change_data_feed":
-            delta_service.features.enable_change_data_feed(options)
-        elif feature == "deletion_vectors":
-            delta_service.features.enable_deletion_vectors(options)
-        elif feature == "row_tracking":
-            delta_service.features.enable_row_tracking(options)
-        elif feature == "in_commit_timestamps":
-            delta_service.features.enable_in_commit_timestamps(options)
-        elif feature == "column_mapping":
-            delta_service.features.enable_column_mapping(
-                options,
-                mode=spec.table_properties.get("delta.columnMapping.mode", "name"),
-            )
-        elif feature == "v2_checkpoints":
-            delta_service.features.enable_v2_checkpoints(options)
-
-
-def _delta_constraint_name(expression: str) -> str:
-    digest = hash_sha256_hex(expression.encode("utf-8"))[:10]
-    return f"ck_{digest}"
-
-
-def _existing_delta_constraints(
-    spec: DeltaWriteSpec,
-    *,
-    delta_service: DeltaServicePort,
-) -> dict[str, str]:
-    snapshot = delta_service.history_snapshot(
-        path=spec.table_uri,
-        storage_options=spec.storage_options,
-        log_storage_options=spec.log_storage_options,
-        gate=spec.feature_gate,
-    )
-    if snapshot is None:
-        return {}
-    properties = snapshot.get("table_properties")
-    if not isinstance(properties, Mapping):
-        return {}
-    constraints: dict[str, str] = {}
-    for key, value in properties.items():
-        name = str(key)
-        if not name.startswith("delta.constraints."):
-            continue
-        constraint_name = name.split("delta.constraints.", 1)[-1]
-        constraints[constraint_name] = str(value)
-    return constraints
-
-
-def _delta_constraints_to_add(
-    constraints: Sequence[str],
-    *,
-    existing: Mapping[str, str],
-) -> dict[str, str]:
-    existing_values = {value.strip() for value in existing.values() if str(value).strip()}
-    mapping: dict[str, str] = {}
-    for expression in constraints:
-        normalized = expression.strip()
-        if not normalized:
-            continue
-        if normalized in existing_values:
-            continue
-        name = _delta_constraint_name(normalized)
-        if name in existing and existing[name].strip() == normalized:
-            continue
-        mapping[name] = normalized
-    return mapping
-
-
-def _apply_delta_check_constraints(
-    *,
-    spec: DeltaWriteSpec,
-    delta_service: DeltaServicePort,
-) -> str:
-    if not spec.extra_constraints:
-        return "skipped"
-    options = _delta_feature_mutation_options(spec, delta_service=delta_service)
-    delta_service.features.enable_check_constraints(options)
-    existing = _existing_delta_constraints(spec, delta_service=delta_service)
-    to_add = _delta_constraints_to_add(spec.extra_constraints, existing=existing)
-    if to_add:
-        delta_service.features.add_constraints(options, constraints=to_add)
-        return "added"
-    return "present"
 
 
 def _delta_table_properties(options: Mapping[str, object]) -> dict[str, str]:

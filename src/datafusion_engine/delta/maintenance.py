@@ -583,7 +583,9 @@ def _run_maintenance_operation[T](
                 duration_s=duration_s,
             )
             span.set_attribute("status", "error")
-            span.record_exception(exc)
+            record_exception = getattr(span, "record_exception", None)
+            if callable(record_exception):
+                record_exception(exc)
             logger.exception(
                 "Delta maintenance operation failed table_uri=%s operation=%s",
                 table_uri,

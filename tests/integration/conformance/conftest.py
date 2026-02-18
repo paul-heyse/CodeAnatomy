@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import os
+from typing import cast
 
 import pytest
+
+from tests.harness.profiles import (
+    ConformanceBackendConfig,
+    ConformanceBackendKind,
+    resolve_conformance_backend_config,
+)
 
 _SUPPORTED_BACKENDS = {"fs", "minio", "localstack"}
 
 
 @pytest.fixture(scope="session")
 def conformance_backend() -> str:
-    """Return the active conformance backend and skip when unavailable."""
+    """Return the active conformance backend and skip when unavailable.
+
+    Raises:
+        ValueError: If the configured backend is not one of the supported values.
+    """
     backend = os.environ.get("CODEANATOMY_CONFORMANCE_BACKEND", "fs").strip().lower()
     if backend not in _SUPPORTED_BACKENDS:
         msg = (
@@ -29,20 +40,14 @@ def conformance_backend() -> str:
 
 
 @pytest.fixture(scope="session")
-def conformance_storage_options(conformance_backend: str) -> dict[str, str]:
+def conformance_backend_config(conformance_backend: str) -> ConformanceBackendConfig:
+    """Return canonical backend-resolved URI/storage configuration."""
+    return resolve_conformance_backend_config(cast("ConformanceBackendKind", conformance_backend))
+
+
+@pytest.fixture(scope="session")
+def conformance_storage_options(
+    conformance_backend_config: ConformanceBackendConfig,
+) -> dict[str, str]:
     """Return storage options for the selected conformance backend."""
-    if conformance_backend == "fs":
-        return {}
-    if conformance_backend == "minio":
-        endpoint = os.environ.get("CODEANATOMY_MINIO_ENDPOINT", "")
-        return {
-            "AWS_ENDPOINT_URL": endpoint,
-            "AWS_ALLOW_HTTP": "true",
-            "AWS_REGION": os.environ.get("CODEANATOMY_MINIO_REGION", "us-east-1"),
-        }
-    endpoint = os.environ.get("CODEANATOMY_LOCALSTACK_ENDPOINT", "")
-    return {
-        "AWS_ENDPOINT_URL": endpoint,
-        "AWS_ALLOW_HTTP": "true",
-        "AWS_REGION": os.environ.get("CODEANATOMY_LOCALSTACK_REGION", "us-east-1"),
-    }
+    return dict(conformance_backend_config.storage_options)

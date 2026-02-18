@@ -29,7 +29,7 @@ use crate::session::planning_surface::{PlanningSurfaceSpec, TableFactoryEntry};
 /// All name vectors are sorted before hashing to ensure order-independence.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlanningSurfaceManifest {
-    /// DataFusion version (e.g., "51.0.0").
+    /// DataFusion version (e.g., "52.1.0").
     pub datafusion_version: String,
     /// Whether default features are enabled on the session state builder.
     pub default_features_enabled: bool,
@@ -370,7 +370,7 @@ mod tests {
 
     fn sample_manifest() -> PlanningSurfaceManifest {
         PlanningSurfaceManifest {
-            datafusion_version: "51.0.0".to_string(),
+            datafusion_version: "52.1.0".to_string(),
             default_features_enabled: true,
             file_format_names: vec!["parquet".to_string(), "csv".to_string(), "json".to_string()],
             table_factory_names: vec!["delta".to_string(), "memory".to_string()],
@@ -450,7 +450,7 @@ mod tests {
     fn test_hash_changes_with_different_version() {
         let manifest_a = sample_manifest();
         let mut manifest_b = sample_manifest();
-        manifest_b.datafusion_version = "52.0.0".to_string();
+        manifest_b.datafusion_version = "52.2.0".to_string();
 
         assert_ne!(
             manifest_a.hash(),

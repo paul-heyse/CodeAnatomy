@@ -147,7 +147,7 @@ def register_listing_table(
         context.ctx,
         scan=scan,
         sql_options=sql_options,
-        runtime_profile=runtime_profile,
+        _runtime_profile=runtime_profile,
     )
     provider: object
     registration_mode = "listing_table"
@@ -180,7 +180,7 @@ def _apply_scan_settings(
     *,
     scan: DataFusionScanOptions | None,
     sql_options: SQLOptions,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
+    _runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> None:
     if scan is None:
         return

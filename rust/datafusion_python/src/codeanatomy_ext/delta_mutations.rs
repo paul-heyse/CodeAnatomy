@@ -10,15 +10,17 @@ use crate::delta_mutations::{
 use codeanatomy_engine::executor::delta_writer::{
     execute_delta_write_ipc as execute_delta_write_native, DeltaWritePayload,
 };
+use datafusion_ext::delta_observability::mutation_report_payload;
 use datafusion_ext::{DeltaCommitOptions, DeltaFeatureGate};
 use deltalake::protocol::SaveMode;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use serde_json::json;
 use serde::Deserialize;
 use tracing::instrument;
 
 use super::helpers::{
-    extract_session_ctx, mutation_report_to_pydict, parse_msgpack_payload, runtime,
+    extract_session_ctx, json_to_py, mutation_report_to_pydict, parse_msgpack_payload, runtime,
     table_version_from_options,
 };
 
@@ -34,6 +36,9 @@ struct DeltaWriteRequestPayload {
     partition_columns: Option<Vec<String>>,
     target_file_size: Option<usize>,
     extra_constraints: Option<Vec<String>>,
+    table_properties: Option<HashMap<String, String>>,
+    enable_features: Option<Vec<String>>,
+    commit_metadata_required: Option<HashMap<String, String>>,
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 }
@@ -119,12 +124,49 @@ pub(crate) fn delta_write_ipc_request(
                 target_file_size: request.target_file_size,
                 gate: request.gate,
                 commit_options: request.commit_options,
-                extra_constraints: request.extra_constraints,
+                extra_constraints: request.extra_constraints.clone(),
+                table_properties: request.table_properties.clone(),
+                enable_features: request.enable_features.clone(),
+                commit_metadata_required: request.commit_metadata_required.clone(),
             },
             request.data_ipc.as_slice(),
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta write failed: {err}")))?;
-    mutation_report_to_pydict(py, &report)
+    let mutation_report = mutation_report_payload(&report);
+    let constraint_status = if request
+        .extra_constraints
+        .as_ref()
+        .is_some_and(|constraints| !constraints.is_empty())
+    {
+        "checked"
+    } else {
+        "skipped"
+    };
+    let metadata_required = request.commit_metadata_required.unwrap_or_default();
+    let metadata_present = metadata_required
+        .iter()
+        .all(|(key, expected)| mutation_report.get(key).is_some_and(|value| value == expected));
+    let enabled_features = request.table_properties.unwrap_or_default();
+    let response = json!({
+        "operation": "write",
+        "final_version": report.version,
+        "mutation_report": mutation_report,
+        "enabled_features": enabled_features,
+        "constraint_status": constraint_status,
+        "constraint_outcome": {
+            "status": constraint_status,
+            "requested": request.extra_constraints.unwrap_or_default(),
+        },
+        "feature_outcomes": {
+            "requested": request.enable_features.unwrap_or_default(),
+            "enabled": enabled_features,
+        },
+        "metadata_outcome": {
+            "required": metadata_required,
+            "present": metadata_present,
+        },
+    });
+    json_to_py(py, &response)
 }
 
 #[pyfunction]

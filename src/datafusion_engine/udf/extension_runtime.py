@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import ModuleType
 from typing import TYPE_CHECKING
@@ -15,8 +15,10 @@ from datafusion_engine.extensions.context_adaptation import (
     ExtensionEntrypointInvocation,
     invoke_entrypoint_with_adapted_context,
 )
+from datafusion_engine.extensions.required_entrypoints import REQUIRED_RUNTIME_ENTRYPOINTS
 from datafusion_engine.udf.constants import (
     ABI_LOAD_FAILURE_MSG,
+    ABI_VERSION_MISMATCH_MSG,
     EXTENSION_MODULE_LABEL,
     EXTENSION_MODULE_PATH,
     REBUILD_WHEELS_HINT,
@@ -29,6 +31,7 @@ from datafusion_engine.udf.runtime_snapshot_types import (
 )
 from serde_msgspec import dumps_msgpack
 from utils.hashing import hash_sha256_hex
+from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -151,7 +154,7 @@ def _install_codeanatomy_runtime_snapshot(
     snapshot_msgpack = payload_mapping.get("snapshot_msgpack")
     if not isinstance(snapshot_msgpack, (bytes, bytearray, memoryview)):
         msg = "Rust runtime installer returned a payload without snapshot_msgpack bytes."
-        raise RuntimeError(msg)
+        raise TypeError(msg)
     try:
         typed_snapshot = decode_rust_udf_snapshot_msgpack(bytes(snapshot_msgpack))
     except Exception as exc:  # pragma: no cover - defensive decode wrapper
@@ -358,6 +361,104 @@ def extension_module_with_capabilities() -> ModuleType:
     return _extension_module_with_capabilities()
 
 
+def extension_capabilities_snapshot() -> Mapping[str, object]:
+    """Return the Rust extension capabilities snapshot when available."""
+    module = extension_module_with_capabilities()
+    snapshot = module.capabilities_snapshot()
+    if isinstance(snapshot, Mapping):
+        return dict(snapshot)
+    msg = f"{EXTENSION_MODULE_LABEL}.capabilities_snapshot returned a non-mapping payload."
+    raise TypeError(msg)
+
+
+def extension_capabilities_report() -> Mapping[str, object]:
+    """Return extension capability diagnostics report."""
+    expected = expected_plugin_abi()
+    try:
+        snapshot = extension_capabilities_snapshot()
+    except (ImportError, TypeError, RuntimeError, ValueError) as exc:
+        return {
+            "available": False,
+            "compatible": False,
+            "expected_plugin_abi": expected,
+            "error": str(exc),
+            "snapshot": None,
+        }
+
+    plugin_abi = snapshot.get("plugin_abi") if isinstance(snapshot, Mapping) else None
+    major = None
+    minor = None
+    if isinstance(plugin_abi, Mapping):
+        major = plugin_abi.get("major")
+        minor = plugin_abi.get("minor")
+    compatible = major == expected["major"] and minor == expected["minor"]
+    error = None
+    if not compatible:
+        error = ABI_VERSION_MISMATCH_MSG.format(
+            expected=expected,
+            actual={"major": major, "minor": minor},
+        )
+    return {
+        "available": True,
+        "compatible": compatible,
+        "expected_plugin_abi": expected,
+        "observed_plugin_abi": {"major": major, "minor": minor},
+        "snapshot": snapshot,
+        "error": error,
+    }
+
+
+def validate_extension_capabilities(
+    *,
+    strict: bool = True,
+    ctx: SessionContext | None = None,
+) -> Mapping[str, object]:
+    """Validate extension capabilities for the runtime profile."""
+    report = extension_capabilities_report()
+    if strict and not report.get("compatible", False):
+        msg = report.get("error") or "Extension ABI compatibility check failed."
+        raise RuntimeError(msg)
+    module = extension_module_with_capabilities()
+    missing = [
+        name for name in REQUIRED_RUNTIME_ENTRYPOINTS if not callable(getattr(module, name, None))
+    ]
+    if strict and missing:
+        missing_csv = ", ".join(sorted(missing))
+        msg = (
+            "Required runtime entrypoints are missing from extension module: "
+            f"{missing_csv}. {REBUILD_WHEELS_HINT}"
+        )
+        raise RuntimeError(msg)
+    probe = getattr(module, "session_context_contract_probe", None) if module is not None else None
+    if strict and module is not None and callable(probe):
+        probe_ctx = ctx if ctx is not None else SessionContext()
+        try:
+            invoke_runtime_entrypoint(module, "session_context_contract_probe", ctx=probe_ctx)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            expected = expected_plugin_abi()
+            msg = (
+                "SessionContext ABI mismatch detected by extension contract probe. "
+                f"expected_plugin_abi={expected}. "
+                f"{REBUILD_WHEELS_HINT}"
+            )
+            raise RuntimeError(msg) from exc
+    return report
+
+
+def validate_runtime_capabilities(
+    *,
+    strict: bool = True,
+    ctx: SessionContext | None = None,
+) -> Mapping[str, object]:
+    """Compatibility alias for runtime capability validation."""
+    return validate_extension_capabilities(strict=strict, ctx=ctx)
+
+
+def capability_report() -> Mapping[str, object]:
+    """Compatibility alias for extension capability reports."""
+    return extension_capabilities_report()
+
+
 def udf_backend_available() -> bool:
     """Return whether the native CodeAnatomy UDF backend is available.
 
@@ -483,7 +584,10 @@ __all__ = [
     "AsyncUdfPolicy",
     "ExtensionRegistries",
     "RustUdfSnapshot",
+    "capability_report",
     "expected_plugin_abi",
+    "extension_capabilities_report",
+    "extension_capabilities_snapshot",
     "extension_module_with_capabilities",
     "invoke_runtime_entrypoint",
     "register_rust_udfs",
@@ -500,7 +604,9 @@ __all__ = [
     "snapshot_return_types",
     "udf_audit_payload",
     "udf_names_from_snapshot",
+    "validate_extension_capabilities",
     "validate_required_udfs",
+    "validate_runtime_capabilities",
     "validate_rust_udf_snapshot",
 ]
 
@@ -530,65 +636,132 @@ def _empty_registry_snapshot() -> dict[str, object]:
 
 
 def _mutable_mapping(payload: Mapping[str, object], key: str) -> dict[str, object]:
-    from datafusion_engine.udf.extension_validation import _mutable_mapping as _impl
-
-    return _impl(payload, key)
+    mapping = payload.get(key)
+    if isinstance(mapping, Mapping):
+        return {str(name): value for name, value in mapping.items()}
+    return {}
 
 
 def _require_sequence(snapshot: Mapping[str, object], *, name: str) -> Sequence[object]:
-    from datafusion_engine.udf.extension_validation import _require_sequence as _impl
-
-    return _impl(snapshot, name=name)
+    value = snapshot.get(name)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return value
+    msg = f"Rust UDF snapshot field {name!r} must be a sequence."
+    raise TypeError(msg)
 
 
 def _require_mapping(snapshot: Mapping[str, object], *, name: str) -> Mapping[str, object]:
-    from datafusion_engine.udf.extension_validation import _require_mapping as _impl
-
-    return _impl(snapshot, name=name)
+    value = snapshot.get(name)
+    if isinstance(value, Mapping):
+        return value
+    msg = f"Rust UDF snapshot field {name!r} must be a mapping."
+    raise TypeError(msg)
 
 
 def _require_bool_mapping(snapshot: Mapping[str, object], *, name: str) -> Mapping[str, bool]:
-    from datafusion_engine.udf.extension_validation import _require_bool_mapping as _impl
-
-    return _impl(snapshot, name=name)
+    value = _require_mapping(snapshot, name=name)
+    for key, flag in value.items():
+        if not isinstance(flag, bool):
+            msg = f"Rust UDF snapshot {name!r} entry {key!r} must be bool."
+            raise TypeError(msg)
+    return {str(key): bool(flag) for key, flag in value.items()}
 
 
 def _coerce_config_default_value(field_value: object) -> bool | int | str:
-    from datafusion_engine.udf.extension_validation import _coerce_config_default_value as _impl
-
-    return _impl(field_value)
+    if isinstance(field_value, bool):
+        return field_value
+    if isinstance(field_value, int) and not isinstance(field_value, bool):
+        return field_value
+    if isinstance(field_value, str):
+        return field_value
+    if isinstance(field_value, Mapping) and len(field_value) == 1:
+        tag, value = next(iter(field_value.items()))
+        tag_text = str(tag).strip().lower()
+        if tag_text in {"bool", "boolean"} and isinstance(value, bool):
+            return value
+        if (
+            tag_text in {"int", "int32", "int64", "uint", "uint32", "uint64"}
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        ):
+            return value
+        if tag_text in {"str", "string"} and isinstance(value, str):
+            return value
+    msg = "Rust UDF snapshot config_defaults entries must be bool, int, or str values."
+    raise TypeError(msg)
 
 
 def _require_config_defaults(
     snapshot: Mapping[str, object],
 ) -> Mapping[str, Mapping[str, object]]:
-    from datafusion_engine.udf.extension_validation import _require_config_defaults as _impl
-
-    return _impl(snapshot)
+    raw_defaults = snapshot.get("config_defaults")
+    if raw_defaults is None:
+        return {}
+    if not isinstance(raw_defaults, Mapping):
+        msg = "Rust UDF snapshot field 'config_defaults' must be a mapping."
+        raise TypeError(msg)
+    normalized: dict[str, dict[str, object]] = {}
+    for section_name, section_payload in raw_defaults.items():
+        if not isinstance(section_payload, Mapping):
+            msg = "Rust UDF snapshot config_defaults sections must contain mapping payloads."
+            raise TypeError(msg)
+        section_dict: dict[str, object] = {}
+        for field_name, field_value in section_payload.items():
+            section_dict[str(field_name)] = _coerce_config_default_value(field_value)
+        normalized[str(section_name)] = section_dict
+    return normalized
 
 
 def _snapshot_names(snapshot: Mapping[str, object]) -> frozenset[str]:
-    from datafusion_engine.udf.extension_validation import _snapshot_names as _impl
-
-    return _impl(snapshot)
+    names: set[str] = set()
+    for key in ("scalar", "aggregate", "window", "table"):
+        values = snapshot.get(key, [])
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+            names.update(str(value) for value in values if value is not None)
+    return frozenset(names)
 
 
 def _alias_to_canonical(snapshot: Mapping[str, object]) -> dict[str, str]:
-    from datafusion_engine.udf.extension_validation import _alias_to_canonical as _impl
-
-    return _impl(snapshot)
+    aliases = _mutable_mapping(snapshot, "aliases")
+    names = _snapshot_names(snapshot)
+    canonical: dict[str, str] = {}
+    for alias, target in aliases.items():
+        alias_name = str(alias)
+        target_name: str | None = None
+        if isinstance(target, str):
+            target_name = target
+        elif isinstance(target, Sequence) and not isinstance(target, (str, bytes, bytearray)):
+            values = [str(item) for item in target if item is not None]
+            if values:
+                target_name = values[0]
+        if target_name is None:
+            continue
+        if target_name in names:
+            canonical[alias_name] = target_name
+    return canonical
 
 
 def _iter_snapshot_values(values: object) -> set[str]:
-    from datafusion_engine.udf.extension_validation import _iter_snapshot_values as _impl
-
-    return _impl(values)
+    if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+        return {str(value) for value in values if value is not None}
+    return set()
 
 
 def _snapshot_alias_names(snapshot: Mapping[str, object]) -> set[str]:
-    from datafusion_engine.udf.extension_validation import _snapshot_alias_names as _impl
-
-    return _impl(snapshot)
+    raw = snapshot.get("aliases")
+    if not isinstance(raw, Mapping):
+        return set()
+    names: set[str] = set()
+    for alias, target in raw.items():
+        if alias is not None:
+            names.add(str(alias))
+        if target is None:
+            continue
+        if isinstance(target, str):
+            names.add(target)
+        elif isinstance(target, Sequence) and not isinstance(target, (str, bytes, bytearray)):
+            names.update({str(value) for value in target if value is not None})
+    return names
 
 
 def snapshot_function_names(
@@ -632,11 +805,18 @@ def snapshot_parameter_names(snapshot: Mapping[str, object]) -> dict[str, tuple[
     dict[str, tuple[str, ...]]
         Mapping of function name to parameter names.
     """
-    from datafusion_engine.udf.extension_validation import (
-        snapshot_parameter_names as _snapshot_parameter_names,
-    )
-
-    return _snapshot_parameter_names(snapshot)
+    raw = snapshot.get("parameter_names")
+    if not isinstance(raw, Mapping):
+        return {}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for name, params in raw.items():
+        if name is None:
+            continue
+        if params is None or isinstance(params, str):
+            continue
+        if isinstance(params, Sequence) and not isinstance(params, (str, bytes, bytearray)):
+            resolved[str(name)] = tuple(str(param) for param in params if param is not None)
+    return resolved
 
 
 def snapshot_return_types(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
@@ -647,11 +827,17 @@ def snapshot_return_types(snapshot: Mapping[str, object]) -> dict[str, tuple[str
     dict[str, tuple[str, ...]]
         Mapping of function name to return type names.
     """
-    from datafusion_engine.udf.extension_validation import (
-        snapshot_return_types as _snapshot_return_types,
-    )
-
-    return _snapshot_return_types(snapshot)
+    raw = snapshot.get("return_types")
+    if not isinstance(raw, Mapping):
+        return {}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for name, entries in raw.items():
+        if name is None:
+            continue
+        if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes, bytearray)):
+            continue
+        resolved[str(name)] = tuple(str(item) for item in entries if item is not None)
+    return resolved
 
 
 def snapshot_alias_mapping(snapshot: Mapping[str, object]) -> dict[str, str]:
@@ -662,19 +848,28 @@ def snapshot_alias_mapping(snapshot: Mapping[str, object]) -> dict[str, str]:
     dict[str, str]
         Mapping of alias name to canonical name.
     """
-    from datafusion_engine.udf.extension_validation import (
-        snapshot_alias_mapping as _snapshot_alias_mapping,
-    )
-
-    return _snapshot_alias_mapping(snapshot)
+    return _alias_to_canonical(snapshot)
 
 
 def _validate_required_snapshot_keys(snapshot: Mapping[str, object]) -> None:
-    from datafusion_engine.udf.extension_validation import (
-        _validate_required_snapshot_keys as _impl,
+    required = (
+        "scalar",
+        "aggregate",
+        "window",
+        "table",
+        "aliases",
+        "parameter_names",
+        "volatility",
+        "simplify",
+        "coerce_types",
+        "short_circuits",
+        "signature_inputs",
+        "return_types",
     )
-
-    _impl(snapshot)
+    missing = sorted(name for name in required if name not in snapshot)
+    if missing:
+        msg = f"Missing Rust UDF snapshot keys: {missing}."
+        raise ValueError(msg)
 
 
 def _require_snapshot_metadata(
@@ -686,9 +881,21 @@ def _require_snapshot_metadata(
     Mapping[str, object],
     frozenset[str],
 ]:
-    from datafusion_engine.udf.extension_validation import _require_snapshot_metadata as _impl
-
-    return _impl(snapshot)
+    _require_sequence(snapshot, name="scalar")
+    _require_sequence(snapshot, name="aggregate")
+    _require_sequence(snapshot, name="window")
+    _require_sequence(snapshot, name="table")
+    _require_mapping(snapshot, name="aliases")
+    param_names = _require_mapping(snapshot, name="parameter_names")
+    volatility = _require_mapping(snapshot, name="volatility")
+    _require_bool_mapping(snapshot, name="simplify")
+    _require_bool_mapping(snapshot, name="coerce_types")
+    _require_bool_mapping(snapshot, name="short_circuits")
+    _require_config_defaults(snapshot)
+    signature_inputs = _require_mapping(snapshot, name="signature_inputs")
+    return_types = _require_mapping(snapshot, name="return_types")
+    names = _snapshot_names(snapshot)
+    return param_names, volatility, signature_inputs, return_types, names
 
 
 def _validate_udf_entries(
@@ -698,14 +905,16 @@ def _validate_udf_entries(
     param_names: Mapping[str, object],
     volatility: Mapping[str, object],
 ) -> None:
-    from datafusion_engine.udf.extension_validation import _validate_udf_entries as _impl
-
-    _impl(
-        snapshot,
-        list_name=list_name,
-        param_names=param_names,
-        volatility=volatility,
-    )
+    for name in _require_sequence(snapshot, name=list_name):
+        if not isinstance(name, str):
+            msg = f"Rust UDF snapshot {list_name} entries must be strings."
+            raise TypeError(msg)
+        if name not in param_names:
+            msg = f"Rust UDF snapshot missing parameter names for {name!r}."
+            raise ValueError(msg)
+        if name not in volatility:
+            msg = f"Rust UDF snapshot missing volatility for {name!r}."
+            raise ValueError(msg)
 
 
 def _validate_signature_metadata(
@@ -714,13 +923,12 @@ def _validate_signature_metadata(
     signature_inputs: Mapping[str, object],
     return_types: Mapping[str, object],
 ) -> None:
-    from datafusion_engine.udf.extension_validation import _validate_signature_metadata as _impl
-
-    _impl(
-        names=names,
-        signature_inputs=signature_inputs,
-        return_types=return_types,
-    )
+    if names and not signature_inputs:
+        msg = "Rust UDF snapshot missing signature_inputs entries."
+        raise ValueError(msg)
+    if names and not return_types:
+        msg = "Rust UDF snapshot missing return_types entries."
+        raise ValueError(msg)
 
 
 def validate_rust_udf_snapshot(snapshot: Mapping[str, object]) -> None:
@@ -731,11 +939,37 @@ def validate_rust_udf_snapshot(snapshot: Mapping[str, object]) -> None:
     snapshot
         Snapshot payload returned by the extension runtime.
     """
-    from datafusion_engine.udf.extension_validation import (
-        validate_rust_udf_snapshot as _validate_rust_udf_snapshot,
-    )
+    _validate_required_snapshot_keys(snapshot)
+    try:
+        typed = coerce_rust_udf_snapshot(snapshot)
+    except Exception as exc:
+        msg = f"Invalid Rust UDF snapshot types: {exc}"
+        raise TypeError(msg) from exc
 
-    _validate_rust_udf_snapshot(snapshot)
+    names = frozenset((*typed.scalar, *typed.aggregate, *typed.window, *typed.table))
+    param_names = typed.parameter_names
+    volatility = typed.volatility
+    signature_inputs = typed.signature_inputs
+    return_types = typed.return_types
+
+    for list_name, entries in (
+        ("scalar", typed.scalar),
+        ("aggregate", typed.aggregate),
+        ("window", typed.window),
+    ):
+        for name in entries:
+            if name not in param_names:
+                msg = f"Rust UDF snapshot missing parameter names for {name!r} in {list_name}."
+                raise ValueError(msg)
+            if name not in volatility:
+                msg = f"Rust UDF snapshot missing volatility for {name!r} in {list_name}."
+                raise ValueError(msg)
+
+    _validate_signature_metadata(
+        names=names,
+        signature_inputs=signature_inputs,
+        return_types=return_types,
+    )
 
 
 def validate_required_udfs(
@@ -752,11 +986,33 @@ def validate_required_udfs(
     required
         Required UDF names that must be present in the snapshot.
     """
-    from datafusion_engine.udf.extension_validation import (
-        validate_required_udfs as _validate_required_udfs,
+    if not required:
+        return
+    names = _snapshot_names(snapshot)
+    aliases = _alias_to_canonical(snapshot)
+    available = names | set(aliases)
+    validate_required_items(
+        required,
+        available,
+        item_label="Rust UDFs",
+        error_type=ValueError,
     )
-
-    _validate_required_udfs(snapshot, required=required)
+    signature_inputs = _require_mapping(snapshot, name="signature_inputs")
+    return_types = _require_mapping(snapshot, name="return_types")
+    missing_signatures: list[str] = []
+    missing_returns: list[str] = []
+    for name in required:
+        canonical = aliases.get(name, name)
+        if canonical not in signature_inputs and name not in signature_inputs:
+            missing_signatures.append(name)
+        if canonical not in return_types and name not in return_types:
+            missing_returns.append(name)
+    if missing_signatures:
+        msg = f"Missing Rust UDF signature metadata for: {sorted(missing_signatures)}."
+        raise ValueError(msg)
+    if missing_returns:
+        msg = f"Missing Rust UDF return metadata for: {sorted(missing_returns)}."
+        raise ValueError(msg)
 
 
 def udf_names_from_snapshot(snapshot: Mapping[str, object]) -> frozenset[str]:
@@ -767,11 +1023,8 @@ def udf_names_from_snapshot(snapshot: Mapping[str, object]) -> frozenset[str]:
     frozenset[str]
         Canonical UDF names present in the snapshot.
     """
-    from datafusion_engine.udf.extension_validation import (
-        udf_names_from_snapshot as _udf_names_from_snapshot,
-    )
-
-    return _udf_names_from_snapshot(snapshot)
+    validate_rust_udf_snapshot(snapshot)
+    return _snapshot_names(snapshot)
 
 
 def _notify_udf_snapshot(snapshot: Mapping[str, object]) -> None:

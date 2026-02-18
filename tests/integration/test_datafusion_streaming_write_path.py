@@ -8,6 +8,8 @@ from datafusion import SessionContext
 
 from datafusion_engine.session.streaming import as_record_batch_reader
 
+_EXPECTED_ROW_COUNT = 3
+
 
 @pytest.mark.integration
 def test_as_record_batch_reader_streams_dataframe_results() -> None:
@@ -19,5 +21,5 @@ def test_as_record_batch_reader_streams_dataframe_results() -> None:
 
     assert isinstance(reader, pa.RecordBatchReader)
     table = reader.read_all()
-    assert table.num_rows == 3
+    assert table.num_rows == _EXPECTED_ROW_COUNT
     assert table.column_names == ["id"]

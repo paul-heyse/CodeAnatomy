@@ -96,6 +96,8 @@ def test_execute_engine_phase_preserves_deterministic_plan_artifact_fields(
                         {
                             "artifacts": {
                                 "deterministic_optimizer": True,
+                                "planning_surface_hash": "00" * 32,
+                                "provider_identity_hash": "11" * 32,
                                 "optimizer_traces": [
                                     {"step_index": 0, "rule_name": "FilterPushDown"}
                                 ],
@@ -135,7 +137,8 @@ def test_execute_engine_phase_preserves_deterministic_plan_artifact_fields(
         rulepack_profile="Default",
     )
 
-    run_result, artifacts = build_pipeline._execute_engine_phase(
+    execute_engine_phase = vars(build_pipeline)["_execute_engine_phase"]
+    run_result, artifacts = execute_engine_phase(
         {"input": "/tmp/in"},
         spec,
         "medium",
@@ -145,5 +148,7 @@ def test_execute_engine_phase_preserves_deterministic_plan_artifact_fields(
     assert isinstance(plan_bundles, list)
     artifact_payload = plan_bundles[0]["artifacts"]
     assert artifact_payload["deterministic_optimizer"] is True
+    assert artifact_payload["planning_surface_hash"] == "00" * 32
+    assert artifact_payload["provider_identity_hash"] == "11" * 32
     assert artifact_payload["optimizer_traces"][0]["rule_name"] == "FilterPushDown"
     assert artifacts["manifest_path"] == str(tmp_path / "run_manifest")

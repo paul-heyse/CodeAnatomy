@@ -45,7 +45,7 @@ def install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
         RuntimeError: If extension entrypoint invocation fails unexpectedly.
         TypeError: If invocation fails due to SessionContext ABI mismatch.
     """
-    from datafusion_engine.udf.extension_validation import extension_capabilities_report
+    from datafusion_engine.udf.extension_runtime import extension_capabilities_report
 
     try:
         capabilities = extension_capabilities_report()

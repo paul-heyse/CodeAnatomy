@@ -8,8 +8,9 @@ consistency within a compilation unit and enable schema-driven optimization.
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
 import pyarrow as pa
@@ -560,9 +561,9 @@ def _cache_contract_probe(ctx: SessionContext) -> Mapping[str, object]:
     try:
         payload = datafusion_ext.session_context_contract_probe(ctx)
     except (AttributeError, RuntimeError, TypeError, ValueError):
-        return {}
+        return cast("Mapping[str, object]", {})
     if not isinstance(payload, Mapping):
-        return {}
+        return cast("Mapping[str, object]", {})
     return {str(key): value for key, value in payload.items()}
 
 
@@ -602,7 +603,9 @@ def metadata_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
         miss_count=None,
         eviction_count=None,
         config_ttl=None,
-        config_limit=str(metadata_limit) if metadata_limit is not None else config.metadata_cache_limit,
+        config_limit=str(metadata_limit)
+        if metadata_limit is not None
+        else config.metadata_cache_limit,
     )
 
 

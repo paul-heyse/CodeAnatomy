@@ -272,7 +272,7 @@ def require_native_runtime() -> None:
     """Require the Rust-first DataFusion runtime contract for native-path tests."""
     from datafusion_engine.extensions.schema_runtime import load_schema_runtime
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from datafusion_engine.udf.extension_validation import validate_extension_capabilities
+    from datafusion_engine.udf.extension_runtime import validate_extension_capabilities
 
     try:
         profile = DataFusionRuntimeProfile()

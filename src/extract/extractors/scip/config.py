@@ -104,16 +104,20 @@ class ScipIndexSettings:
         node_max_old_space_mb: int | None,
         scip_extra_args: tuple[str, ...],
     ) -> ScipIndexSettings:
-        """Build SCIP settings by merging config payload and CLI overrides."""
+        """Build SCIP settings by merging config payload and CLI overrides.
+
+        Returns:
+        -------
+        ScipIndexSettings
+            Normalized SCIP index settings after applying CLI overrides.
+        """
         defaults = cls()
         raw_scip = config_contents.get("scip")
         payload: Mapping[str, object] = (
-            cast(Mapping[str, object], raw_scip) if isinstance(raw_scip, Mapping) else {}
+            cast("Mapping[str, object]", raw_scip) if isinstance(raw_scip, Mapping) else {}
         )
         extra_args = _coerce_tuple_str(payload.get("extra_args")) or defaults.extra_args
-        scip_test_args = (
-            _coerce_tuple_str(payload.get("scip_test_args")) or defaults.scip_test_args
-        )
+        scip_test_args = _coerce_tuple_str(payload.get("scip_test_args")) or defaults.scip_test_args
         payload_node_max_old_space_mb = _coerce_optional_int(payload.get("node_max_old_space_mb"))
         payload_timeout_s = _coerce_optional_int(payload.get("timeout_s"))
         enabled = _coerce_bool(payload.get("enabled"), default=defaults.enabled)
@@ -162,7 +166,9 @@ class ScipIndexSettings:
             timeout_s=(
                 scip_timeout_s
                 if scip_timeout_s is not None
-                else payload_timeout_s if payload_timeout_s is not None else defaults.timeout_s
+                else payload_timeout_s
+                if payload_timeout_s is not None
+                else defaults.timeout_s
             ),
             extra_args=scip_extra_args or extra_args,
             use_incremental_shards=_coerce_bool(
@@ -186,8 +192,7 @@ class ScipIndexSettings:
                 default=defaults.run_scip_snapshot,
             ),
             scip_snapshot_dir=(
-                _coerce_optional_str(payload.get("scip_snapshot_dir"))
-                or defaults.scip_snapshot_dir
+                _coerce_optional_str(payload.get("scip_snapshot_dir")) or defaults.scip_snapshot_dir
             ),
             scip_snapshot_comment_syntax=_coerce_str(
                 payload.get("scip_snapshot_comment_syntax"),

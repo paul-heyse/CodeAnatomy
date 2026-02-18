@@ -2933,7 +2933,8 @@ def test_delta_conflict_retry_contract(...) -> None:
 - [x] S11: Upgrade `codeanatomy_engine` to DF52; remove `apply_post_filter_coalescing`;
       update scan config for `with_projection_indices -> Result<Self>`
 - [x] S12: Update Python `_normalize_args` for DF52 `(py, session)` PyCapsule signatures
-      with no version branching
+      with no version branching, and move runtime behavior gates to capability-first
+      engine-version detection (independent of wheel/package label)
 - [x] S13: Align workspace crates to `deltalake = "0.31.0"`
 
 ### Phase 2: DF52 Planning and Optimizer Surfaces
@@ -2954,12 +2955,14 @@ def test_delta_conflict_retry_contract(...) -> None:
 - [x] S20: Add `extract_lineage_json` to Rust; retire `plan/walk.py` and visitor in
       `lineage/reporting.py`
 - [x] S21: Emit `RustUdfSnapshot` msgpack from Rust; replace Python validation chain
+      (validation/capability interfaces now centralized in `extension_runtime.py`;
+      `extension_validation.py` deleted)
 - [x] S22: Create shared `ExtractionRuntime` loop; reduce all four `builders_runtime.py`
       to adapters
-- [ ] S23: Migrate tree-sitter extraction to Rust; emit Arrow `RecordBatch` directly
-- [ ] S24: Connect Python `write_delta.py` to Rust `delta_writer.rs` via IPC payload
+- [x] S23: Migrate tree-sitter extraction to Rust; emit Arrow `RecordBatch` directly
+- [x] S24: Connect Python `write_delta.py` to Rust `delta_writer.rs` via IPC payload
 - [x] S25: Implement `canonicalize_byte_span` Rust `ScalarUDF`
-- [ ] S26: Implement `IntervalAlignProvider` as Rust `TableProvider`
+- [x] S26: Implement `IntervalAlignProvider` as Rust `TableProvider`
 - [x] S27: Migrate cache-policy graph traversal to Rust `scheduling.rs`
 - [x] S39: Make streaming (`RecordBatchReader.from_stream`) the default read/write boundary
 
@@ -2980,17 +2983,23 @@ def test_delta_conflict_retry_contract(...) -> None:
 ### Phase 5: Conformance and Deployment Gate
 
 - [x] S41: Add deterministic plan/pushdown/retry conformance harness across FS/MinIO/LocalStack
+      (backend-resolved URI/storage contracts, backend-aware conformance assertions,
+      and executable matrix driver script in place)
 
 ### Cross-Scope Deletion Batches
 
 - [x] D1: Pre-migration dead code (post S4, S7, S8)
 - [x] D2: DF51 remnants (post S9, S10, S11, S12, S13)
+      (runtime behavior no longer keyed on package label; remaining wheel-label `51.0.0`
+      treated as packaging artifact while capability probe reports core `52.1.0`)
 - [x] D3: Bespoke cache infrastructure (post S14)
 - [x] D4: Lineage walker (post S20)
 - [x] D5: UDF snapshot Python validation (post S21)
+      (`src/datafusion_engine/udf/extension_validation.py` deleted; imports rewired to
+      `extension_runtime.py`)
 - [x] D6: Extraction runtime duplication (post S22, S33)
-- [ ] D7: Tree-sitter Python accumulation (post S23)
-- [ ] D8: Delta write Python orchestration (post S24)
+- [x] D7: Tree-sitter Python accumulation (post S23)
+- [x] D8: Delta write Python orchestration (post S24)
 - [x] D9: Session global state (post S28, S40)
 - [x] D10: UDF and registration import legacy (post S29, S30)
 - [x] D11: Planner control-plane fallback cleanup (post S35, S38)
@@ -2999,20 +3008,51 @@ def test_delta_conflict_retry_contract(...) -> None:
 
 ### Audit Delta (2026-02-18)
 
-- `S23` remains partial: Rust tree-sitter bridge wiring is present, but
-  `src/extract/extractors/tree_sitter/builders.py` still retains the large Python
-  accumulation/query implementation (~1,500 LOC) rather than a thin shim.
-- `S24` remains partial: Rust write execution entrypoints are present, but Python still owns
-  substantial Delta write orchestration in `src/datafusion_engine/io/write_delta.py` and
-  `src/datafusion_engine/io/delta_write_handler.py`.
-- `S26` remains partial: Rust provider module exists, but the plan’s target shape
-  (provider-first sort-merge execution + removal of Python interval-align implementation)
-  is not complete; `src/datafusion_engine/kernels.py` still carries the full DataFusion
-  interval-align path (`interval_align_kernel_datafusion` plus helper graph).
+- `S23` closed:
+  `rust/codeanatomy_engine/src/python/tree_sitter_extractor.rs` now emits full
+  `tree_sitter_files_v1` row payloads, `rust/datafusion_python/src/codeanatomy_ext/rust_pivot.rs`
+  parses bridge payloads, and
+  `src/extract/extractors/tree_sitter/builders.py` is now a bridge-oriented shim.
+- `S24` closed:
+  `rust/datafusion_python/src/codeanatomy_ext/delta_mutations.rs` now returns expanded
+  `delta_write_ipc_request` outcomes (`final_version`, `mutation_report`,
+  feature/constraint/metadata outcomes), and
+  `src/datafusion_engine/io/delta_write_handler.py` routes write execution through a single
+  Rust bridge path (`execute_delta_write_bridge`).
+- `S26` closed:
+  `rust/codeanatomy_engine/src/providers/interval_align_provider.rs` now builds execution
+  plans in `scan(...)` (projection/filter/limit aware) with explicit
+  `supports_filters_pushdown` status, and production
+  `src/datafusion_engine/kernels.py` no longer contains
+  `interval_align_kernel_datafusion`.
 - `S27` closed: scheduling traversal is executed in Rust and exposed via
   `derive_cache_policies` in the production extension surface.
-- `D7` remains open: Python tree-sitter accumulation/query helpers remain in
-  `src/extract/extractors/tree_sitter/builders.py` despite bridge hard-cutover.
-- `D8` remains open: Python Delta write orchestration remains materially present in
-  `src/datafusion_engine/io/write_delta.py` and
-  `src/datafusion_engine/io/delta_write_handler.py`.
+- `D7` closed:
+  production `src/extract/extractors/tree_sitter/builders.py` no longer carries Python
+  tree walking/query accumulation helpers.
+- `D8` closed:
+  Python Delta write modules are now spec/payload/recording adapters, with write execution
+  orchestrated through Rust bridge responses.
+- `S12` closed:
+  runtime feature gates moved to capability-first version resolution in
+  `src/datafusion_engine/session/runtime_config_policies.py`,
+  `src/datafusion_engine/session/runtime_compile.py`, and
+  `src/datafusion_engine/session/runtime_telemetry.py`, with explicit telemetry split
+  (`datafusion_version` binding label + `datafusion_engine_version` capability version).
+- `S21` / `D5` closed:
+  production imports now target `src/datafusion_engine/udf/extension_runtime.py`;
+  `src/datafusion_engine/udf/extension_validation.py` removed; new runtime capability/snapshot
+  tests cover canonical interfaces.
+- `S41` closed:
+  backend-resolved conformance contract is implemented through
+  `tests/harness/profiles.py`, `tests/integration/conformance/conftest.py`, and
+  `tests/harness/delta_smoke.py`; conformance tests now consume backend URI/storage context;
+  matrix execution is available via `scripts/run_conformance_matrix.sh`.
+- `D2` closed:
+  DF51-specific Rust/session wording and assertions were updated in planning/envelope/compat
+  surfaces, and wheel-manifest producer now emits capability-derived
+  `datafusion_core_version` in `build/datafusion_plugin_manifest.json`.
+
+### Reconciliation Delta (2026-02-18, checklist reconciliation)
+- `S12`, `S21`, `S41`, `D2`, and `D5` are now reconciled as complete based on merged
+  code-path updates, deletion batches, and backend-aware conformance harness upgrades.

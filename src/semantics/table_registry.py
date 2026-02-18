@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from semantics.compiler import TableInfo
@@ -16,7 +17,11 @@ class TableRegistry:
     _tables: dict[str, TableInfo] = field(default_factory=dict)
 
     def register(self, name: str, info: TableInfo) -> None:
-        """Store table info under ``name``."""
+        """Store table info under ``name``.
+
+        Raises:
+            ValueError: If ``name`` is already registered.
+        """
         if name in self._tables:
             msg = f"Table already registered: {name!r}"
             raise ValueError(msg)

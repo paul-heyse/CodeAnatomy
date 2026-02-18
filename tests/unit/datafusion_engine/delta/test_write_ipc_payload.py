@@ -56,3 +56,22 @@ def test_build_delta_write_request_requires_payload() -> None:
             table_uri="/tmp/delta",
             options=DeltaWriteRequestOptions(mode="append", schema_mode=None),
         )
+
+
+def test_build_delta_write_request_includes_extended_bridge_options() -> None:
+    """Extended bridge options should be preserved on DeltaWriteRequest."""
+    table = pa.table({"id": [1]})
+    request = build_delta_write_request(
+        table_uri="/tmp/delta",
+        table=table,
+        options=DeltaWriteRequestOptions(
+            mode="append",
+            schema_mode="merge",
+            table_properties={"delta.feature.x": "enabled"},
+            enable_features=("change_data_feed",),
+            commit_metadata_required={"operation": "write"},
+        ),
+    )
+    assert request.table_properties == {"delta.feature.x": "enabled"}
+    assert tuple(request.enable_features or ()) == ("change_data_feed",)
+    assert request.commit_metadata_required == {"operation": "write"}

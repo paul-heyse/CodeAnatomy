@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 
-from datafusion_engine.udf import extension_registry, extension_validation
+from datafusion_engine.udf import extension_registry, extension_runtime
 
 
 def test_extension_registry_exports_registration_helpers() -> None:
@@ -17,6 +17,6 @@ def test_extension_registry_exports_registration_helpers() -> None:
     assert "def register_rust_udfs" in source
 
 
-def test_extension_validation_exports_runtime_helpers() -> None:
-    """Extension validation module exports runtime helper surface."""
-    assert callable(extension_validation.validate_runtime_capabilities)
+def test_extension_runtime_exports_runtime_helpers() -> None:
+    """Extension runtime module exports runtime helper surface."""
+    assert callable(extension_runtime.validate_runtime_capabilities)

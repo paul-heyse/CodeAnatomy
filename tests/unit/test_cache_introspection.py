@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from datafusion_engine.catalog.introspection import (
     CacheConfigSnapshot,
     CacheStateSnapshot,
@@ -22,6 +24,9 @@ HIT_COUNT = 5
 MISS_COUNT = 2
 EVICTION_COUNT = 1
 EXPECTED_CACHE_SNAPSHOTS = 4
+LIST_FILES_ENTRY_COUNT = 17
+METADATA_ENTRY_COUNT = 9
+METADATA_HIT_COUNT = 4
 
 
 def test_cache_config_snapshot_construction() -> None:
@@ -72,17 +77,17 @@ def test_list_files_cache_snapshot() -> None:
     assert snapshot.config_limit is not None
 
 
-def test_list_files_cache_snapshot_uses_contract_probe(monkeypatch) -> None:
+def test_list_files_cache_snapshot_uses_contract_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     """list_files cache entry count comes from the DF52 contract probe."""
     profile = df_profile()
     ctx = profile.session_context()
 
     monkeypatch.setattr(
         "datafusion_engine.catalog.introspection.datafusion_ext.session_context_contract_probe",
-        lambda _ctx: {"list_files_cache_entries": 17},
+        lambda _ctx: {"list_files_cache_entries": LIST_FILES_ENTRY_COUNT},
     )
     snapshot = list_files_cache_snapshot(ctx)
-    assert snapshot.entry_count == 17
+    assert snapshot.entry_count == LIST_FILES_ENTRY_COUNT
 
 
 def test_metadata_cache_snapshot() -> None:
@@ -95,7 +100,7 @@ def test_metadata_cache_snapshot() -> None:
     assert snapshot.config_limit is not None
 
 
-def test_metadata_cache_snapshot_uses_contract_probe(monkeypatch) -> None:
+def test_metadata_cache_snapshot_uses_contract_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     """Metadata cache metrics are sourced from the DF52 contract probe."""
     profile = df_profile()
     ctx = profile.session_context()
@@ -103,14 +108,14 @@ def test_metadata_cache_snapshot_uses_contract_probe(monkeypatch) -> None:
     monkeypatch.setattr(
         "datafusion_engine.catalog.introspection.datafusion_ext.session_context_contract_probe",
         lambda _ctx: {
-            "metadata_cache_entries": 9,
-            "metadata_cache_hits": 4,
+            "metadata_cache_entries": METADATA_ENTRY_COUNT,
+            "metadata_cache_hits": METADATA_HIT_COUNT,
             "metadata_cache_limit_bytes": 2048,
         },
     )
     snapshot = metadata_cache_snapshot(ctx)
-    assert snapshot.entry_count == 9
-    assert snapshot.hit_count == 4
+    assert snapshot.entry_count == METADATA_ENTRY_COUNT
+    assert snapshot.hit_count == METADATA_HIT_COUNT
     assert snapshot.config_limit == "2048"
 
 

@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 
 import msgspec
+import pyarrow as pa
 from datafusion import Expr, SessionContext, lit
 
 IS_STUB: bool = True
@@ -273,11 +274,11 @@ def derive_cache_policies(payload: Mapping[str, object]) -> dict[str, str]:
     outputs_payload = payload.get("outputs")
     output_names = (
         {str(item) for item in outputs_payload}
-        if isinstance(outputs_payload, list | tuple)
+        if isinstance(outputs_payload, (list, tuple))
         else set()
     )
     overrides_payload = payload.get("cache_overrides")
-    overrides = (
+    overrides: dict[str, str] = (
         {str(key): str(value) for key, value in overrides_payload.items()}
         if isinstance(overrides_payload, Mapping)
         else {}
@@ -330,48 +331,140 @@ def interval_align_table(
     object
         Interval-aligned table-like payload.
     """
-    from datafusion_engine import kernels as kernels_mod
+    from datafusion_engine.arrow.coercion import to_arrow_table
+
+    def _int_value(value: object) -> int | None:
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if text and text.lstrip("-").isdigit():
+                return int(text)
+        return None
 
     payload_map = dict(payload or {})
+    mode = str(payload_map.get("mode") or "CONTAINED_BEST").upper()
+    how = str(payload_map.get("how") or "inner").lower()
+    left_path_col = str(payload_map.get("left_path_col") or "path")
+    left_start_col = str(payload_map.get("left_start_col") or "bstart")
+    left_end_col = str(payload_map.get("left_end_col") or "bend")
+    right_path_col = str(payload_map.get("right_path_col") or "path")
+    right_start_col = str(payload_map.get("right_start_col") or "bstart")
+    right_end_col = str(payload_map.get("right_end_col") or "bend")
+    select_left_raw = payload_map.get("select_left")
+    select_left = (
+        tuple(str(value) for value in select_left_raw)
+        if isinstance(select_left_raw, Sequence)
+        and not isinstance(select_left_raw, (str, bytes, bytearray))
+        else ()
+    )
+    select_right_raw = payload_map.get("select_right")
+    select_right = (
+        tuple(str(value) for value in select_right_raw)
+        if isinstance(select_right_raw, Sequence)
+        and not isinstance(select_right_raw, (str, bytes, bytearray))
+        else ()
+    )
+    emit_match_meta = bool(payload_map.get("emit_match_meta", True))
+    match_kind_col = str(payload_map.get("match_kind_col") or "match_kind")
+    match_score_col = str(payload_map.get("match_score_col") or "match_score")
+    right_suffix = str(payload_map.get("right_suffix") or "__r")
     tie_breakers_raw = payload_map.get("tie_breakers")
-    tie_breakers: list[kernels_mod.SortKey] = []
-    if isinstance(tie_breakers_raw, Sequence) and not isinstance(
-        tie_breakers_raw,
-        (str, bytes, bytearray),
-    ):
-        for entry in tie_breakers_raw:
-            if not isinstance(entry, Mapping):
-                continue
-            column = str(entry.get("column") or "").strip()
-            if not column:
-                continue
-            order_raw = str(entry.get("order") or "ascending").strip().lower()
-            order = "descending" if order_raw == "descending" else "ascending"
-            tie_breakers.append(kernels_mod.SortKey(column=column, order=order))
+    tie_breakers = (
+        list(tie_breakers_raw)
+        if isinstance(tie_breakers_raw, Sequence)
+        and not isinstance(tie_breakers_raw, (str, bytes, bytearray))
+        else []
+    )
 
-    cfg = kernels_mod.IntervalAlignOptions(
-        mode=str(payload_map.get("mode") or "CONTAINED_BEST"),
-        how=str(payload_map.get("how") or "inner"),
-        left_path_col=str(payload_map.get("left_path_col") or "path"),
-        left_start_col=str(payload_map.get("left_start_col") or "bstart"),
-        left_end_col=str(payload_map.get("left_end_col") or "bend"),
-        right_path_col=str(payload_map.get("right_path_col") or "path"),
-        right_start_col=str(payload_map.get("right_start_col") or "bstart"),
-        right_end_col=str(payload_map.get("right_end_col") or "bend"),
-        select_left=tuple(payload_map.get("select_left") or ()),
-        select_right=tuple(payload_map.get("select_right") or ()),
-        tie_breakers=tuple(tie_breakers),
-        emit_match_meta=bool(payload_map.get("emit_match_meta", True)),
-        match_kind_col=str(payload_map.get("match_kind_col") or "match_kind"),
-        match_score_col=str(payload_map.get("match_score_col") or "match_score"),
-        right_suffix=str(payload_map.get("right_suffix") or "__r"),
-    )
-    return kernels_mod.interval_align_kernel_datafusion(
-        left,
-        right,
-        cfg=cfg,
-        runtime_profile=None,
-    )
+    left_table = to_arrow_table(left)
+    right_table = to_arrow_table(right)
+    left_rows = left_table.to_pylist()
+    right_rows = right_table.to_pylist()
+    left_cols = list(left_table.column_names)
+    right_cols = list(right_table.column_names)
+    left_keep = list(select_left) if select_left else left_cols
+    right_keep = list(select_right) if select_right else right_cols
+
+    used = set(left_keep) | ({match_kind_col, match_score_col} if emit_match_meta else set())
+    right_aliases: list[tuple[str, str]] = []
+    for name in right_keep:
+        alias = f"{name}{right_suffix}" if name in used else name
+        while alias in used:
+            alias = f"{alias}_r"
+        used.add(alias)
+        right_aliases.append((name, alias))
+
+    output_rows: list[dict[str, object]] = []
+    for left_row in left_rows:
+        left_path = left_row.get(left_path_col)
+        left_start = _int_value(left_row.get(left_start_col))
+        left_end = _int_value(left_row.get(left_end_col))
+
+        candidates: list[tuple[float, dict[str, object]]] = []
+        for right_row in right_rows:
+            if right_row.get(right_path_col) != left_path:
+                continue
+            right_start = _int_value(right_row.get(right_start_col))
+            right_end = _int_value(right_row.get(right_end_col))
+            if left_start is None or left_end is None or right_start is None or right_end is None:
+                continue
+            if mode == "EXACT":
+                matched = right_start == left_start and right_end == left_end
+            elif mode == "OVERLAP_BEST":
+                matched = right_start < left_end and right_end > left_start
+            else:
+                matched = right_start <= left_start and right_end >= left_end
+            if not matched:
+                continue
+            overlap = max(0, min(left_end, right_end) - max(left_start, right_start))
+            score = float(overlap)
+            for tie_index, tie in enumerate(tie_breakers):
+                if not isinstance(tie, Mapping):
+                    continue
+                col_name = str(tie.get("column") or "")
+                order = str(tie.get("order") or "ascending").lower()
+                tie_value = right_row.get(col_name, left_row.get(col_name))
+                if isinstance(tie_value, (int, float)):
+                    if order == "descending":
+                        score += float(tie_value) / (10 ** (tie_index + 6))
+                    else:
+                        score -= float(tie_value) / (10 ** (tie_index + 6))
+            candidates.append((score, right_row))
+
+        best = max(candidates, key=lambda item: item[0])[1] if candidates else None
+        if best is None and how != "left":
+            continue
+
+        out_row: dict[str, object] = {}
+        for name in left_keep:
+            out_row[name] = left_row.get(name)
+        for source, alias in right_aliases:
+            out_row[alias] = None if best is None else best.get(source)
+        if emit_match_meta:
+            if best is None:
+                if left_path is None or left_start is None or left_end is None:
+                    out_row[match_kind_col] = "NO_PATH_OR_SPAN"
+                else:
+                    out_row[match_kind_col] = "NO_MATCH"
+                out_row[match_score_col] = None
+            else:
+                out_row[match_kind_col] = mode
+                out_row[match_score_col] = max(
+                    0.0,
+                    float(
+                        min(_int_value(best.get(right_end_col)) or 0, left_end or 0)
+                        - max(_int_value(best.get(right_start_col)) or 0, left_start or 0)
+                    ),
+                )
+        output_rows.append(out_row)
+
+    if not output_rows:
+        names = [*left_keep, *(alias for _, alias in right_aliases)]
+        if emit_match_meta:
+            names.extend((match_kind_col, match_score_col))
+        return pa.table({name: pa.array([], type=pa.null()) for name in names})
+    return pa.table(output_rows)
 
 
 def extract_tree_sitter_batch(
@@ -386,29 +479,61 @@ def extract_tree_sitter_batch(
     object
         Mapping payload containing extracted tree-sitter rows.
     """
-    from extract.coordination.context import SpanSpec, span_dict
     from tree_sitter_language_pack import get_parser
+
+    from extract.coordination.context import SpanSpec, span_dict
 
     payload_map = dict(payload or {})
     parser = get_parser("python")
     source_bytes = source.encode("utf-8")
     tree = parser.parse(source_bytes)
     if tree is None:
-        return {}
+        return {
+            "repo": "",
+            "path": file_path,
+            "file_id": str(payload_map.get("file_id") or file_path),
+            "file_sha256": (
+                str(payload_map["file_sha256"])
+                if payload_map.get("file_sha256") is not None
+                else None
+            ),
+            "nodes": list[object](),
+            "edges": list[object](),
+            "errors": list[object](),
+            "missing": list[object](),
+            "captures": list[object](),
+            "defs": list[object](),
+            "calls": list[object](),
+            "imports": list[object](),
+            "docstrings": list[object](),
+            "stats": None,
+            "attrs": list[object](),
+        }
 
     node_rows: list[dict[str, object]] = []
+    def_rows: list[dict[str, object]] = []
+    call_rows: list[dict[str, object]] = []
+    import_rows: list[dict[str, object]] = []
+    capture_rows: list[dict[str, object]] = []
     stack: list[object] = [tree.root_node]
     while stack:
         node = stack.pop()
         if node is None:
             continue
-        node_id = len(node_rows)
+        node_uid = len(node_rows)
         bstart = int(getattr(node, "start_byte", 0))
         bend = int(getattr(node, "end_byte", bstart))
+        kind = str(getattr(node, "type", "unknown"))
+        node_id = f"{payload_map.get('file_id') or file_path}:{kind}:{bstart}:{bend}"
         node_rows.append(
             {
-                "id": f"{payload_map.get('file_id') or file_path}:{node_id}",
-                "kind": str(getattr(node, "type", "unknown")),
+                "node_id": node_id,
+                "node_uid": node_uid,
+                "parent_id": None,
+                "kind": kind,
+                "kind_id": 0,
+                "grammar_id": 0,
+                "grammar_name": "python",
                 "span": span_dict(
                     SpanSpec(
                         start_line0=None,
@@ -421,11 +546,88 @@ def extract_tree_sitter_batch(
                         byte_len=max(0, bend - bstart),
                     )
                 ),
+                "flags": {
+                    "is_named": bool(getattr(node, "is_named", True)),
+                    "has_error": bool(getattr(node, "has_error", False)),
+                    "is_error": bool(getattr(node, "is_error", False)),
+                    "is_missing": bool(getattr(node, "is_missing", False)),
+                    "is_extra": bool(getattr(node, "is_extra", False)),
+                    "has_changes": False,
+                },
+                "attrs": [],
             }
         )
-        children = list(getattr(node, "children", []) or [])
-        for child in reversed(children):
-            stack.append(child)
+        if kind in {"function_definition", "class_definition"}:
+            name_node = getattr(node, "child_by_field_name", lambda *_args: None)("name")
+            name: str | None = None
+            if name_node is not None:
+                nstart = int(getattr(name_node, "start_byte", 0))
+                nend = int(getattr(name_node, "end_byte", nstart))
+                name = source_bytes[nstart:nend].decode("utf-8", errors="replace")
+            def_rows.append(
+                {
+                    "node_id": node_id,
+                    "parent_id": None,
+                    "kind": kind,
+                    "name": name,
+                    "span": node_rows[-1]["span"],
+                    "attrs": [],
+                }
+            )
+        if kind == "call":
+            callee = getattr(node, "child_by_field_name", lambda *_args: None)("function")
+            callee_kind = (
+                str(getattr(callee, "type", "unknown")) if callee is not None else "unknown"
+            )
+            callee_start = (
+                int(getattr(callee, "start_byte", bstart)) if callee is not None else bstart
+            )
+            callee_end = (
+                int(getattr(callee, "end_byte", callee_start)) if callee is not None else bend
+            )
+            callee_text = source_bytes[callee_start:callee_end].decode("utf-8", errors="replace")
+            call_rows.append(
+                {
+                    "node_id": node_id,
+                    "parent_id": None,
+                    "callee_kind": callee_kind,
+                    "callee_text": callee_text,
+                    "callee_node_id": f"{payload_map.get('file_id') or file_path}:{callee_kind}:{callee_start}:{callee_end}",
+                    "span": node_rows[-1]["span"],
+                    "attrs": [],
+                }
+            )
+        if kind in {"import_statement", "import_from_statement"}:
+            snippet = source_bytes[bstart:bend].decode("utf-8", errors="replace").strip()
+            import_rows.append(
+                {
+                    "node_id": node_id,
+                    "parent_id": None,
+                    "kind": "ImportFrom" if kind == "import_from_statement" else "Import",
+                    "module": None,
+                    "name": snippet,
+                    "asname": None,
+                    "alias_index": 0,
+                    "level": None,
+                    "span": node_rows[-1]["span"],
+                    "attrs": [],
+                }
+            )
+        if def_rows and kind in {"function_definition", "class_definition"}:
+            capture_rows.append(
+                {
+                    "capture_id": f"{node_id}:capture:def",
+                    "query_name": "defs",
+                    "capture_name": "def.node",
+                    "pattern_index": 0,
+                    "node_id": node_id,
+                    "node_kind": kind,
+                    "span": node_rows[-1]["span"],
+                    "attrs": [],
+                }
+            )
+        children = tuple(getattr(node, "children", ()) or ())
+        stack.extend(reversed(children))
 
     return {
         "repo": "",
@@ -435,16 +637,27 @@ def extract_tree_sitter_batch(
             str(payload_map["file_sha256"]) if payload_map.get("file_sha256") is not None else None
         ),
         "nodes": node_rows,
-        "edges": [],
-        "errors": [],
-        "missing": [],
-        "captures": [],
-        "defs": [],
-        "calls": [],
-        "imports": [],
-        "docstrings": [],
-        "stats": None,
-        "attrs": {},
+        "edges": list[object](),
+        "errors": list[object](),
+        "missing": list[object](),
+        "captures": capture_rows,
+        "defs": def_rows,
+        "calls": call_rows,
+        "imports": import_rows,
+        "docstrings": list[object](),
+        "stats": {
+            "node_count": len(node_rows),
+            "named_count": len(node_rows),
+            "error_count": 0,
+            "missing_count": 0,
+            "parse_ms": 0,
+            "parse_timed_out": False,
+            "incremental_used": False,
+            "query_match_count": len(def_rows) + len(call_rows) + len(import_rows),
+            "query_capture_count": len(capture_rows),
+            "match_limit_exceeded": False,
+        },
+        "attrs": [("language_name", "python"), ("language_abi_version", "stub")],
     }
 
 
@@ -560,14 +773,26 @@ def build_plan_bundle_artifact_with_warnings(
 def delta_write_ipc_request(ctx: SessionContext, request_msgpack: bytes) -> dict[str, object]:
     """Return a stub Delta write result payload."""
     _ = (ctx, request_msgpack)
-    return {
+    mutation_report = {
+        "operation": "write",
         "version": 0,
+        "mutation_version": 0,
         "num_added_files": 0,
         "num_removed_files": 0,
         "num_copied_rows": 0,
         "num_deleted_rows": 0,
         "num_inserted_rows": 0,
         "num_updated_rows": 0,
+    }
+    return {
+        **mutation_report,
+        "final_version": 0,
+        "mutation_report": mutation_report,
+        "enabled_features": {},
+        "constraint_status": "skipped",
+        "constraint_outcome": {"status": "skipped", "requested": []},
+        "feature_outcomes": {"requested": [], "enabled": {}},
+        "metadata_outcome": {"required": {}, "present": True},
     }
 
 

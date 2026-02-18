@@ -401,6 +401,9 @@ plugin_abs_path="$(pwd)/rust/datafusion_ext_py/plugin/$(basename "${plugin_lib}"
 from __future__ import annotations
 
 import json
+import sys
+import tempfile
+import zipfile
 from pathlib import Path
 import tomllib
 
@@ -420,12 +423,34 @@ cargo = tomllib.loads(cargo_text)
 datafusion_dep = cargo.get("dependencies", {}).get("datafusion", {})
 datafusion_features = list(datafusion_dep.get("features", []))
 
+core_version = ""
+with tempfile.TemporaryDirectory() as tmpdir:
+    with zipfile.ZipFile(datafusion_wheel) as archive:
+        archive.extractall(tmpdir)
+    with zipfile.ZipFile(datafusion_ext_wheel) as archive:
+        archive.extractall(tmpdir)
+    sys.path.insert(0, tmpdir)
+    try:
+        import datafusion_ext  # type: ignore[import-not-found]
+    except Exception:
+        core_version = ""
+    else:
+        capabilities = getattr(datafusion_ext, "capabilities_snapshot", None)
+        if callable(capabilities):
+            payload = capabilities()
+            if isinstance(payload, dict):
+                version = payload.get("datafusion_version")
+                if isinstance(version, str):
+                    core_version = version
+
 manifest = {
     "build_profile": "${profile}",
     "datafusion_ext_version": wheel_version(datafusion_ext_wheel),
     "datafusion_features": datafusion_features,
     "datafusion_python_features": features,
     "datafusion_version": wheel_version(datafusion_wheel),
+    "datafusion_binding_version": wheel_version(datafusion_wheel),
+    "datafusion_core_version": core_version or None,
     "plugin_path": "${plugin_abs_path}",
     "wheel_plugin_paths": [
         f"datafusion_ext/${plugin_filename}",

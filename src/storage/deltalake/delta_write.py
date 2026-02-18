@@ -125,8 +125,8 @@ def delta_delete_where(
         enforce_append_only_policy,
         enforce_locking_provider,
         record_mutation_artifact,
-        retry_with_policy,
         resolve_delta_mutation_policy,
+        retry_with_policy,
         storage_span_attributes,
     )
     from utils.storage_options import merged_storage_options

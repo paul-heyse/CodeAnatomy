@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from datafusion_engine.udf.extension_validation import validate_rust_udf_snapshot
+from datafusion_engine.udf.extension_runtime import validate_rust_udf_snapshot
 from datafusion_engine.udf.runtime_snapshot_types import (
     RustUdfSnapshot,
     coerce_rust_udf_snapshot,

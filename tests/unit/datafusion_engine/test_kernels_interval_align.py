@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pyarrow as pa
 import pytest
 
@@ -34,8 +36,8 @@ def test_interval_align_kernel_uses_bridge_when_available(
         runtime_profile=None,
     )
 
-    assert isinstance(result, pa.Table)
-    assert result.equals(expected)
+    result_table = cast("pa.Table", result)
+    assert result_table.equals(expected)
     assert isinstance(captured["payload"], dict)
     assert captured["payload"]["mode"] == "CONTAINED_BEST"
 

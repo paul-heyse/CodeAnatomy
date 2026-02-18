@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
-from datafusion_engine.delta.service import DeltaFeatureMutationRequest
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.io.write_core import (
     DeltaWriteOutcome,
@@ -21,8 +20,6 @@ from datafusion_engine.io.write_core import (
     _stats_decision_from_policy,
 )
 from datafusion_engine.io.write_delta import (
-    _apply_delta_check_constraints,
-    _apply_explicit_delta_features,
     _apply_policy_commit_metadata,
     _delta_commit_metadata,
     _delta_feature_gate_override,
@@ -32,6 +29,7 @@ from datafusion_engine.io.write_delta import (
     _delta_schema_mode,
     _replace_where_predicate,
     _resolve_delta_schema_policy,
+    _string_mapping,
     _validate_delta_protocol_support,
 )
 from datafusion_engine.schema.contracts import delta_constraints_for_location
@@ -481,6 +479,17 @@ def run_post_write_maintenance(
     run_delta_maintenance(pipeline.ctx, plan=plan, runtime_profile=pipeline.runtime_profile)
 
 
+@dataclass(frozen=True, slots=True)
+class DeltaBridgeWriteResult:
+    """Normalized result payload returned by the Rust delta_write bridge."""
+
+    delta_result: DeltaWriteResult
+    final_version: int
+    mutation_report: Mapping[str, object]
+    enabled_features: Mapping[str, str]
+    constraint_status: str
+
+
 def write_delta(
     pipeline: WritePipeline,
     result: StreamingExecutionResult,
@@ -491,14 +500,11 @@ def write_delta(
     """Write a Delta table using a deterministic write specification.
 
     Raises:
-        DataFusionEngineError: If a committed write cannot resolve a Delta version.
         ValueError: If write mode is `ERROR` and destination already exists.
 
     Returns:
         DeltaWriteOutcome: Finalized Delta write outcome with feature metadata.
     """
-    from datafusion_engine.delta.observability import DeltaOperationReport
-
     runtime_profile = _require_runtime_profile(
         pipeline.runtime_profile,
         operation="delta writes",
@@ -522,55 +528,21 @@ def write_delta(
         gate=spec.feature_gate,
         table_exists=existing_version is not None,
     )
-    delta_result = write_delta_bootstrap(pipeline, result, spec=spec)
-    feature_request = DeltaFeatureMutationRequest(
-        path=spec.table_uri,
-        storage_options=spec.storage_options,
-        log_storage_options=spec.log_storage_options,
-        commit_metadata=spec.commit_metadata,
-        dataset_name=spec.commit_key,
-        gate=spec.feature_gate,
+    bridge_result = execute_delta_write_bridge(pipeline, result, spec=spec)
+    enabled_features = (
+        dict(bridge_result.enabled_features)
+        if bridge_result.enabled_features
+        else dict(spec.table_properties)
     )
-    feature_options = delta_service.features.feature_mutation_options(feature_request)
-    enabled_features = delta_service.features.enable_features(
-        feature_options,
-        features=spec.table_properties,
-    )
-    _apply_explicit_delta_features(spec=spec, delta_service=delta_service)
-    constraint_status = _apply_delta_check_constraints(spec=spec, delta_service=delta_service)
+    constraint_status = bridge_result.constraint_status
     record_delta_mutation(
         pipeline,
         spec=spec,
-        delta_result=delta_result,
+        delta_result=bridge_result.delta_result,
         operation="write",
         constraint_status=constraint_status,
     )
-    if not enabled_features:
-        enabled_features = dict(spec.table_properties)
-    final_version = delta_service.table_version(
-        path=spec.table_uri,
-        storage_options=spec.storage_options,
-        log_storage_options=spec.log_storage_options,
-    )
-    if final_version is None:
-        if pipeline.runtime_profile is not None:
-            from datafusion_engine.lineage.diagnostics import record_artifact
-            from serde_artifact_specs import DELTA_WRITE_VERSION_MISSING_SPEC
-
-            record_artifact(
-                pipeline.runtime_profile,
-                DELTA_WRITE_VERSION_MISSING_SPEC,
-                {
-                    "event_time_unix_ms": int(time.time() * 1000),
-                    "table_uri": spec.table_uri,
-                    "mode": spec.mode,
-                },
-            )
-        msg = (
-            "Committed Delta write did not resolve a table version; "
-            f"table_uri={spec.table_uri} mode={spec.mode}"
-        )
-        raise DataFusionEngineError(msg, kind=ErrorKind.DELTA)
+    final_version = bridge_result.final_version
     if pipeline.runtime_profile is not None:
         from datafusion_engine.delta.observability import (
             DeltaFeatureStateArtifact,
@@ -598,8 +570,10 @@ def write_delta(
             delta_version=final_version,
         ),
     )
+    from datafusion_engine.delta.observability import DeltaOperationReport
+
     operation_report = DeltaOperationReport.from_payload(
-        delta_result.report,
+        bridge_result.delta_result.report,
         operation="write",
         commit_metadata=spec.commit_metadata,
     )
@@ -615,25 +589,44 @@ def write_delta(
         delta_result=DeltaWriteResult(
             path=canonical_uri,
             version=final_version,
-            report=delta_result.report,
+            report=bridge_result.delta_result.report,
             snapshot_key=snapshot_key_for_table(spec.table_uri, final_version),
         ),
         enabled_features=enabled_features,
         commit_app_id=spec.commit_app_id,
         commit_version=spec.commit_version,
+        mutation_report=bridge_result.mutation_report,
+        constraint_status=constraint_status,
     )
 
 
-def write_delta_bootstrap(
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text and text.lstrip("-").isdigit():
+            return int(text)
+    return None
+
+
+def execute_delta_write_bridge(
     pipeline: WritePipeline,
     result: StreamingExecutionResult,
     *,
     spec: DeltaWriteSpec,
-) -> DeltaWriteResult:
-    """Write initial Delta payload and return bootstrap result.
+) -> DeltaBridgeWriteResult:
+    """Execute Rust Delta write bridge and normalize response payload.
 
     Returns:
-        DeltaWriteResult: Bootstrap write result before final version resolution.
+        DeltaBridgeWriteResult: Normalized write result with version/report metadata.
+
+    Raises:
+        DataFusionEngineError: If the Rust bridge response does not include a final version.
     """
     from datafusion_engine.delta.control_plane_core import DeltaCommitOptions
     from datafusion_engine.delta.transactions import write_transaction
@@ -665,9 +658,49 @@ def write_delta_bootstrap(
             target_file_size=spec.target_file_size,
             extra_constraints=spec.extra_constraints,
             commit_options=commit_options,
+            gate=spec.feature_gate,
+            table_properties=spec.table_properties,
+            enable_features=spec.enable_features,
+            commit_metadata_required=spec.commit_metadata,
         ),
     )
-    report = write_transaction(pipeline.ctx, request=request)
+    response = write_transaction(pipeline.ctx, request=request)
+    mutation_report_raw = response.get("mutation_report")
+    mutation_report = (
+        {str(key): value for key, value in mutation_report_raw.items()}
+        if isinstance(mutation_report_raw, Mapping)
+        else {str(key): value for key, value in response.items()}
+    )
+    final_version = _coerce_int(response.get("final_version"))
+    if final_version is None:
+        final_version = _coerce_int(mutation_report.get("version"))
+    if final_version is None:
+        final_version = _coerce_int(mutation_report.get("mutation_version"))
+    if final_version is None:
+        if pipeline.runtime_profile is not None:
+            record_artifact(
+                pipeline.runtime_profile,
+                DELTA_WRITE_BOOTSTRAP_SPEC,
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "table_uri": spec.table_uri,
+                    "mode": spec.mode,
+                    "status": "missing_version",
+                },
+            )
+        msg = (
+            "Rust Delta write bridge response missing final_version; "
+            f"table_uri={spec.table_uri} mode={spec.mode}"
+        )
+        raise DataFusionEngineError(msg, kind=ErrorKind.DELTA)
+    enabled_features = _string_mapping(response.get("enabled_features")) or dict(
+        spec.table_properties
+    )
+    constraint_status = "skipped"
+    constraint_payload = response.get("constraint_outcome")
+    if isinstance(constraint_payload, Mapping):
+        constraint_status = str(constraint_payload.get("status") or constraint_status)
+    constraint_status = str(response.get("constraint_status") or constraint_status)
     if pipeline.runtime_profile is not None:
         record_artifact(
             pipeline.runtime_profile,
@@ -677,13 +710,35 @@ def write_delta_bootstrap(
                 "table_uri": spec.table_uri,
                 "mode": spec.mode,
                 "row_count": 0,
+                "final_version": final_version,
             },
         )
-    return DeltaWriteResult(
-        path=canonical_table_uri(spec.table_uri),
-        version=None,
-        report=report,
+    return DeltaBridgeWriteResult(
+        delta_result=DeltaWriteResult(
+            path=canonical_table_uri(spec.table_uri),
+            version=final_version,
+            report=mutation_report,
+            snapshot_key=snapshot_key_for_table(spec.table_uri, final_version),
+        ),
+        final_version=final_version,
+        mutation_report=mutation_report,
+        enabled_features=enabled_features,
+        constraint_status=constraint_status,
     )
+
+
+def write_delta_bootstrap(
+    pipeline: WritePipeline,
+    result: StreamingExecutionResult,
+    *,
+    spec: DeltaWriteSpec,
+) -> DeltaWriteResult:
+    """Execute bridge write and return the normalized Delta write result.
+
+    Returns:
+        DeltaWriteResult: Write result returned by the Rust bridge.
+    """
+    return execute_delta_write_bridge(pipeline, result, spec=spec).delta_result
 
 
 def delta_insert_table_name(spec: DeltaWriteSpec) -> str:
@@ -764,6 +819,7 @@ __all__ = [
     "DeltaWriteHandler",
     "delta_insert_table_name",
     "delta_write_spec",
+    "execute_delta_write_bridge",
     "finalize_delta_commit",
     "prepare_commit_metadata",
     "record_delta_mutation",

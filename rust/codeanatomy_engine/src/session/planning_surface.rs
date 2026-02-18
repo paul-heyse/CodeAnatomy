@@ -6,7 +6,7 @@
 //! deterministic.
 //!
 //! Post-build mutation is isolated to `install_rewrites()` — the only operation
-//! that cannot be expressed through `SessionStateBuilder` in DataFusion 51.
+//! that cannot be expressed through `SessionStateBuilder` in DataFusion 52.1.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -99,7 +99,7 @@ pub fn apply_to_builder(
 
 /// Install function rewrites on an already-constructed `SessionContext`.
 ///
-/// This is the only post-build mutation allowed. DataFusion 51 does not
+/// This is the only post-build mutation allowed. DataFusion 52.1 does not
 /// expose a builder API for function rewrites, so we register them through
 /// the `FunctionRegistry` trait on `SessionState` after context creation.
 pub fn install_rewrites(

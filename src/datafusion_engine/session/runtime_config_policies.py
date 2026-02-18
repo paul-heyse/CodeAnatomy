@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
@@ -40,6 +41,8 @@ __all__ = [
     "DataFusionJoinPolicy",
     "DataFusionSettingsContract",
     "SchemaHardeningProfile",
+    "effective_datafusion_engine_major_version",
+    "effective_datafusion_engine_version",
     "resolved_config_policy",
     "resolved_schema_hardening",
 ]
@@ -47,6 +50,21 @@ __all__ = [
 # Note: Helper functions (_catalog_autoload_settings, _ansi_mode,
 # _resolved_config_policy_for_profile, _resolved_schema_hardening_for_profile,
 # _effective_catalog_autoload_for_profile) are intentionally private (not in __all__)
+
+_LOG = logging.getLogger(__name__)
+
+
+def _set_config_if_supported(config: SessionConfig, *, key: str, value: str) -> SessionConfig:
+    if key.startswith("datafusion.runtime."):
+        return config
+    try:
+        return config.set(key, value)
+    except BaseException as exc:
+        message = str(exc)
+        if "Config value" in message and "not found on ConfigOptions" in message:
+            _LOG.debug("Skipping unsupported DataFusion config key: %s", key)
+            return config
+        raise
 
 
 def _catalog_autoload_settings() -> dict[str, str]:
@@ -69,6 +87,56 @@ def _ansi_mode(settings: Mapping[str, str]) -> bool | None:
 
 # Version constants for DataFusion
 DATAFUSION_MAJOR_VERSION: int | None = parse_major_version(datafusion.__version__)
+
+
+def effective_datafusion_engine_version(
+    capabilities_report: Mapping[str, object] | None = None,
+) -> str | None:
+    """Return engine version using extension capabilities first, package version second.
+
+    Parameters
+    ----------
+    capabilities_report
+        Optional extension capability report payload returned by
+        ``extension_capabilities_report``. When omitted, the helper probes
+        the runtime extension.
+
+    Returns:
+    -------
+    str | None
+        Effective DataFusion engine version.
+    """
+    report = capabilities_report
+    if report is None:
+        try:
+            from datafusion_engine.udf.extension_runtime import extension_capabilities_report
+        except ImportError:
+            report = None
+        else:
+            try:
+                report = extension_capabilities_report()
+            except (RuntimeError, TypeError, ValueError):
+                report = None
+    if isinstance(report, Mapping):
+        snapshot = report.get("snapshot")
+        if isinstance(snapshot, Mapping):
+            version = snapshot.get("datafusion_version")
+            if isinstance(version, str) and version:
+                return version
+    package_version = getattr(datafusion, "__version__", None)
+    if isinstance(package_version, str) and package_version:
+        return package_version
+    return None
+
+
+def effective_datafusion_engine_major_version(
+    capabilities_report: Mapping[str, object] | None = None,
+) -> int | None:
+    """Return major DataFusion engine version from capability-first resolution."""
+    version = effective_datafusion_engine_version(capabilities_report)
+    if version is None:
+        return None
+    return parse_major_version(version)
 
 
 class DataFusionConfigPolicy(StructBaseStrict, frozen=True):
@@ -105,7 +173,7 @@ class DataFusionConfigPolicy(StructBaseStrict, frozen=True):
             Session config with policy settings applied.
         """
         for key, value in self.settings.items():
-            config = config.set(key, value)
+            config = _set_config_if_supported(config, key=key, value=value)
         return config
 
 
@@ -261,7 +329,7 @@ class DataFusionSettingsContract(StructBaseStrict, frozen=True):
         """
         merged = {**self.settings, **self.feature_gates.settings()}
         for key, value in merged.items():
-            config = config.set(key, value)
+            config = _set_config_if_supported(config, key=key, value=value)
         return config
 
 

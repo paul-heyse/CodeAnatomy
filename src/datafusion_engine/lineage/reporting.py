@@ -77,7 +77,11 @@ def extract_lineage(
     *,
     udf_snapshot: Mapping[str, object] | None = None,
 ) -> LineageReport:
-    """Extract lineage information from a DataFusion logical plan."""
+    """Extract lineage information from a DataFusion logical plan.
+
+    Returns:
+        LineageReport: Normalized lineage report for the provided plan.
+    """
     payload: Mapping[str, object] = {}
     try:
         payload = extract_lineage_from_plan(plan)
@@ -119,12 +123,20 @@ def extract_lineage(
 
 
 def referenced_tables_from_plan(plan: object) -> tuple[str, ...]:
-    """Extract referenced table names from a DataFusion plan."""
+    """Extract referenced table names from a DataFusion plan.
+
+    Returns:
+        tuple[str, ...]: Sorted table names referenced by scans/requirements.
+    """
     return extract_lineage(plan).referenced_tables
 
 
 def required_columns_by_table(plan: object) -> Mapping[str, tuple[str, ...]]:
-    """Extract required columns per table from a DataFusion plan."""
+    """Extract required columns per table from a DataFusion plan.
+
+    Returns:
+        Mapping[str, tuple[str, ...]]: Required columns keyed by table name.
+    """
     return extract_lineage(plan).required_columns_by_dataset
 
 

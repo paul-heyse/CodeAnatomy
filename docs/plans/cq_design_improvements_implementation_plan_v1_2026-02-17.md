@@ -1861,30 +1861,30 @@ def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
 | Scope | Status | Notes |
 |---|---|---|
 | S1 | Complete | Frozen `Section`, tuple findings, copy-on-write report enrichment, macro struct freezing, `RunContext.argv` tuple migration, and SNB node-index hardening (`freeze_node_index` + immutable mapping at bundle construction) are all landed. |
-| S2 | Partial | Core dependency direction cleanup is significantly advanced: `core/settings_factory.py` no longer imports search-layer parser controls, summary-contract serialization is now wired through core-owned serializer seams, and semantic front-door provider wiring now routes through registry boundaries (including bootstrap registration). Remaining work is broader decomposition/contract cleanup in large ownership modules. |
+| S2 | Complete | Core dependency direction corrections are landed: core no longer imports search/query/macro/orchestration implementation modules directly, summary-contract serialization is wired through core-owned seams, and semantic front-door provider execution is registry-driven through injected boundaries. |
 | S3 | Partial | Counter/provenance/AST-parent dedup slices plus scope-filter wrapper consolidation landed; render-summary status derivation is consolidated, and `_pack_source_rows` dedup now uses canonical planner helper (`resolve_pack_source_rows`). Remaining DRY tail work is in broader module decomposition and residual helper duplication. |
 | S4 | Complete | Canonical enrichment telemetry accumulation module is live and duplicate adapter/pipeline accumulation functions are removed. |
 | S5 | Complete | CQS/public-surface cleanups are landed: `build_call_evidence` is pure, result-action is split into prepare/emit phases, summary contract rename is in place, symbol-resolver query/command split is landed, runtime guard asserts were replaced, and payload-budget flow is split into check/trim helpers. |
-| S6 | Partial | Rust-lane extracted modules and explicit imports are landed, and `runtime_core.py` is decommissioned; remaining work is deeper decomposition of the still-large `runtime_engine.py`. |
-| S7 | Partial | Query facade modules and `executor_runtime_impl.py` are decommissioned, but the canonical `executor_runtime.py` remains a large multi-responsibility module. |
-| S8 | Partial | `extractors_entrypoints.py`, `extractors_orchestrator.py`, and front-door split modules are landed with hard cutover from `extractors.py`; remaining work is deeper decomposition of large ownership modules (`extractors_entrypoints.py`, `front_door_assembly.py`, `calls/analysis.py`). |
-| S9 | Partial | Enrichment wrapper contracts now carry typed fact payloads (`PythonEnrichmentFacts`, `RustEnrichmentFacts`, `IncrementalFacts`) and language adapters return typed payload contracts; deterministic dict conversion is now boundary-only. Remaining work is full downstream elimination of residual dict-centric enrichment handling in decomposition-heavy modules. |
-| S10 | Partial | Process-default singleton state-holder dict wrappers were replaced with typed module-level refs + lock-guarded getters/setters across targeted runtime/registry/cache modules, and bootstrap reset hooks now clear python/rust runtime contexts explicitly. Remaining work is singleton cleanup in non-targeted modules coupled to larger decomposition scopes. |
+| S6 | Partial | Rust-lane extracted module surfaces are expanded (`runtime_query_execution.py`, `runtime_payload_builders.py`, `runtime_pipeline_stages.py`) and query/pipeline wrappers now route through them; remaining work is full ownership transfer out of the still-large `runtime_engine.py`. |
+| S7 | Partial | Query facade modules and `executor_runtime_impl.py` are decommissioned; decomposition advanced with extracted entity/pattern/summary runtime surfaces (`executor_runtime_entity.py`, `executor_runtime_pattern.py`, `executor_runtime_summary.py`) and legacy `executor_entity_impl.py`/`executor_pattern_impl.py` alias modules removed. Remaining work is deeper extraction from still-large `executor_runtime.py`. |
+| S8 | Partial | Search/core decomposition advanced with `front_door_dispatch.py`, extracted Python fact merge/normalize helpers, and calls-analysis scan wrappers; remaining work is deeper extraction from large ownership modules (`extractors_entrypoints.py`, `front_door_assembly.py`, `calls/analysis.py`). |
+| S9 | Partial | Wrapper contracts and language adapters now use typed fact payloads, but downstream consumers still retain dict-centric enrichment handling in key paths (`semantic/models.py`, `objects/resolve.py`, lane payload canonicalization), so typed-fact propagation is not fully end-to-end yet. |
+| S10 | Complete | Process-default singleton state-holder dict wrappers are eliminated from targeted runtime/registry/cache modules in favor of typed module-level singleton refs with lock-guarded getters/setters, and bootstrap reset hooks clear these defaults deterministically. |
 | S11 | Complete | `apply_in_dir_scope()`, query/search routing extraction, result-action command/query split, and shared macro scan helper adoption are landed across planned command/macro surfaces. |
-| S12 | Partial | Semantic provider protocol/registry plus cache/node abstraction contracts are landed; remaining abstraction work includes additional semantic model decomposition and residual adapter seam cleanup. |
+| S12 | Complete | Missing abstraction introduction is landed for planned boundaries: `LanguageEnrichmentProvider` protocol + registry wiring are canonical, and semantic provider execution now flows through these abstraction seams instead of direct concrete coupling. |
 | S13 | Complete | Tree-sitter lane decomposition modules are in place and legacy god modules (`python_lane/facts.py`, `python_lane/runtime.py`, `core/runtime.py`) are decommissioned. |
 | S14 | Complete | Collector/orchestration decomposition is landed and legacy modules (`neighborhood/tree_sitter_collector.py`, `orchestration/multilang_orchestrator.py`) are decommissioned. |
 | S15 | Complete | Core foundation split modules are canonical and legacy modules (`diskcache_backend.py`, `summary_contract.py`, `enrichment_facts.py`) are decommissioned. |
-| S16 | Partial | Calls target hard-cut is complete (`macros/calls_target.py` decommissioned and split target modules are canonical); remaining work is deeper decomposition of heavy `macros/calls/entry.py` and `query/executor_definitions.py`. |
+| S16 | Partial | Periphery decomposition advanced with extracted modules (`executor_definitions_imports.py`, `executor_definitions_findings.py`, `entry_summary.py`, `entry_command.py`) and callsites migrated to new canonical imports; remaining work is further extraction from heavy `macros/calls/entry.py` and `query/executor_runtime.py`/`query/executor_definitions.py`. |
 | S17 | Complete | Domain visitors moved to `analysis/visitors/` and removed from macro modules. |
 | S18 | Complete | Quick-win contract/naming fixes are landed across the listed targets (`TreeSitterInputEditV1`, `RgProcessResultV1`, `AstAnchor`/`DefinitionSite`, frozen capability matrix, neighborhood schema/params alignment, and `compile_query()` param cleanup). |
-| S19 | Partial | Structured logging is landed across planned pipeline surfaces and macro/enrichment lanes; `search/rg/adapter.py` now has structured warning/debug logging at timeout/branch/row-count boundaries. Remaining work is final verification of any low-traffic outliers after decomposition completion. |
+| S19 | Complete | Structured logging is landed across planned pipeline surfaces and macro/enrichment lanes, including `search/rg/adapter.py` timeout/branch/row-count instrumentation and key pipeline stage entry/exit/degradation logging. |
 | S20 | Complete | Pipeline lazy facade and compatibility aliases removed; query facade modules were deleted and rust-lane private indirection was removed. |
-| S21 | Partial | Registry/context hardening advanced: process-default state-holder dict patterns are removed from targeted modules (language/object-view/semantic registries, cache lifecycle+telemetry, render context, rulepack registry, tree-sitter/python/rust runtime contexts). Remaining work is broader registry hardening tied to unresolved decomposition scopes. |
-| S22 | Partial | Typed summary-update boundaries are now centralized through `summary_update_mapping()` / `set_summary_update()` and applied in query runtime + calls/impact macro flows, removing prior fallback dict-mapping branches. Remaining work is completing typed summary propagation in still-large ownership modules. |
+| S21 | Complete | Registry/context hardening is complete for the planned singleton slice: targeted registries/runtime contexts now use typed module-level singleton refs, lock-guarded accessors, and deterministic bootstrap reset seams. |
+| S22 | Complete | Typed summary and macro payload contracts are landed for planned paths: summary updates flow through typed contracts (`SummaryUpdateV1` union, `set_summary_update()`, `summary_update_mapping()`) in query runtime and macro entry paths without fallback dict-mapping helpers. |
 | S23 | Complete | Rulepack registry seam is canonical (`load_default_rulepacks()` removed) and execution entry paths now consume injected `symtable_enricher` dependencies instead of inline `SymtableEnricher(...)` construction. |
 | S24 | Complete | CLI telemetry event construction is centralized via shared helpers and neighborhood command schema/params now follow the same schema-projection pattern as the rest of the CLI surface. |
-| S25 | Partial | Fragment runtime/index extraction is landed and search-artifact consolidation advanced: run/global index row iteration + decode ownership moved into `search_artifact_index.py`, with store consuming canonical index helpers. Remaining work is final fragment/store boundary slimming tied to broader cache decomposition scope. |
+| S25 | Complete | Fragment/runtime and search-artifact index consolidation are landed: fragment probe/persist ownership is runtime-scoped, and run/global index row iteration + decode helpers are owned by `search_artifact_index.py` with store/engine consuming canonical helpers. |
 
 ### Decommission Batch Status Snapshot
 
@@ -1894,12 +1894,12 @@ def run_index_path(policy: CqCachePolicyV1, run_id: str) -> Path:
 | D2 | Complete | `pipeline/enrichment_contracts.py` deleted and telemetry accumulation duplicates consolidated under `search/enrichment/telemetry.py`. |
 | D3 | Complete | Query facade cleanup and hard deletions are complete: `executor_runtime_impl.py`, `rust_lane/runtime_core.py`, and `search/python/extractors.py` are decommissioned with imports migrated to canonical modules. |
 | D4 | Complete | Follow-up alias deletion is complete and `_shared` wrapper re-export files (`timeout.py`, `rg_request.py`, `encoding.py`) are deleted. |
-| D5 | Partial | `_partition_python_payload_fields`, `empty_enrichment_telemetry()`, and unused semantic diagnostics coercion helpers were removed; additional dict-coercion helper cleanup in `python/extractors_entrypoints.py` is now landed. Remaining D5 work tracks final typed-payload migration completion in large ownership modules. |
+| D5 | Partial | Major typed-payload helper cleanup is landed (obsolete coercion helpers removed and `extractors_entrypoints.py` merged through typed helpers), but remaining semantic/object-view dict helper paths (notably in `semantic/models.py` and `objects/resolve.py`) keep this batch open. |
 | D6 | Complete | `_SESSIONS`, `_GLOBAL_STATE_HOLDER`, and `_TREE_CACHE_EVICTIONS` globals are removed; cache clear/cache registration is now lazy via `ensure_*` paths in runtime/enrichment modules (`runtime_cache.py`, `query_cache.py`, `python/extractors_entrypoints.py`, `rust/enrichment.py`) rather than import-time side effects. |
 | D7 | Complete | S13/S14/S15/S16 deletion tranche is executed for planned hard-cut modules (`python_lane/facts.py`, `python_lane/runtime.py`, `core/runtime.py`, `tree_sitter_collector.py`, `multilang_orchestrator.py`, `diskcache_backend.py`, `summary_contract.py`, `enrichment_facts.py`, `calls_target.py`). |
 | D8 | Complete | `ExceptionVisitor`, `SideEffectVisitor`, and `ImportVisitor` classes removed from macro modules after relocation to `analysis/visitors`. |
-| D9 | Partial | Pipeline facade and selected alias cleanups landed; typed-summary/helper and remaining facade-deletion slices are incomplete. |
-| D10 | Partial | `fragment_orchestrator.py` deletion is complete; process-default state-holder dict patterns are removed from targeted singleton modules, and search-artifact index/store consolidation moved additional index/deque ownership into `search_artifact_index.py`. Remaining D10 work is final closure after unresolved decomposition-coupled cache slices land. |
+| D9 | Partial | Alias/facade cleanup is advanced (including query runtime alias-module removal and typed summary-update helpers), but duplicated inline telemetry event construction branches remain in `cli_app/telemetry.py`, so final D9 closure is pending. |
+| D10 | Complete | `fragment_orchestrator.py` deletion is complete; singleton-state holder dict patterns are fully removed from targeted modules, and search-artifact index/store consolidation moved index/deque ownership into canonical `search_artifact_index.py` helpers. |
 
 ### Quality-Check Tracking
 
@@ -1912,35 +1912,35 @@ Quality-check failure tracking is intentionally omitted from this scope-status a
 - [x] S1. Frozen struct integrity (frozen `Section`, COW enrichment flow, macro struct freezing, and SNB node-index immutability hardening landed)
 - [x] S5. CQS violations and public surface cleanup (call evidence purity, result-action split, symbol-resolver split, runtime-guard cleanup, and payload-budget check/trim split landed)
 - [ ] S3. DRY consolidation — small wins (partial: counter/builtin/AST-parent dedup plus scope-filter wrapper consolidation landed; render-summary status-derivation dedup and canonical `_pack_source_rows` helper path are now landed; remaining dedup set pending)
-- [ ] S2. Dependency direction corrections (partial: core dependency inversion + summary serializer seam + semantic provider-registry wiring landed; remaining layer cleanup pending)
+- [x] S2. Dependency direction corrections (core dependency inversion + summary serializer seam + semantic provider-registry wiring landed with registry-driven semantic provider execution)
 - [x] S4. Telemetry accumulation consolidation
 - [x] S20. Facade and alias eradication
 - [x] S11. Shell-layer domain logic extraction
-- [ ] S12. Missing abstraction introduction (LanguageEnrichmentProvider)
-- [ ] S6. God module decomposition — tree-sitter (runtime_core hard-cut completed; further decomposition of `runtime_engine.py` remains)
-- [ ] S7. God module decomposition — query engine (facade + runtime_impl hard-cut completed; deeper split of `executor_runtime.py` remains)
-- [ ] S8. God module decomposition — search backends and core (hard-cut from `extractors.py` completed; deeper split of `extractors_entrypoints.py`/front-door/calls analysis remains)
-- [ ] S9. Typed enrichment payload migration (partial: wrapper payloads + adapters are typed-fact based with boundary-only dict conversion; residual downstream dict-centric handling remains)
-- [ ] S22. Typed summary and macro payload contracts (partial: typed summary-update boundaries are centralized and query/calls/impact flows use them; broader replacement in decomposition-heavy modules remains)
+- [x] S12. Missing abstraction introduction (LanguageEnrichmentProvider protocol + registry seam are canonical)
+- [ ] S6. God module decomposition — tree-sitter (runtime_core hard-cut completed and extracted runtime surfaces (`runtime_query_execution.py`, `runtime_payload_builders.py`, `runtime_pipeline_stages.py`) are landed; full ownership transfer from `runtime_engine.py` remains)
+- [ ] S7. God module decomposition — query engine (facade + runtime_impl hard-cut completed, `executor_runtime_entity.py`/`executor_runtime_pattern.py`/`executor_runtime_summary.py` extracted, and alias modules removed; deeper split of `executor_runtime.py` remains)
+- [ ] S8. God module decomposition — search backends and core (hard-cut from `extractors.py` completed; decomposition advanced with `front_door_dispatch.py`, `extractors_fact_merge.py`/`extractors_fact_normalize.py`, and calls-analysis scan wrappers; deeper split of ownership-heavy modules remains)
+- [ ] S9. Typed enrichment payload migration (partial: typed wrappers/adapters are landed; downstream dict-centric enrichment handling remains in semantic/object-view flows)
+- [x] S22. Typed summary and macro payload contracts (typed summary-update boundaries are centralized and applied across query/calls/impact flows)
 - [x] S23. Query testability and rulepack registry injection (registry-only rulepack loading landed; inline execution-path `SymtableEnricher(...)` construction removed)
-- [ ] S10. Mutable singleton elimination (partial: targeted process-default state-holder dicts replaced with typed refs + lock-guarded accessors; remaining singleton cleanup pending in non-targeted modules)
-- [ ] S21. Mutable singleton elimination completion and registry hardening (partial: targeted registry/context hardening and reset seams are landed; broader completion pending)
+- [x] S10. Mutable singleton elimination (process-default state-holder dict wrappers removed in targeted modules; typed singleton refs + lock-guarded accessors are canonical)
+- [x] S21. Mutable singleton elimination completion and registry hardening (registry/runtime context singleton hardening + bootstrap reset seams are landed for planned targets)
 - [x] S24. CLI telemetry decomposition and schema alignment (telemetry event helper consolidation + neighborhood schema-projection alignment landed)
 - [x] S18. Quick wins — naming and contract fixes
 - [x] S13. God module decomposition — tree-sitter lanes (facts.py, runtime.py, core/runtime.py hard-cut completed)
 - [x] S14. God module decomposition — CLI + orchestration (tree_sitter_collector.py, multilang_orchestrator.py hard-cut completed)
 - [x] S15. God module decomposition — core foundation (diskcache_backend.py, summary_contract.py, enrichment_facts.py hard-cut completed)
-- [ ] S16. God module decomposition — macros + query periphery (calls_target hard-cut completed; deeper split of `entry.py` and `executor_definitions.py` remains)
+- [ ] S16. God module decomposition — macros + query periphery (calls-target hard-cut plus extracted `entry_summary.py`/`entry_command.py` and `executor_definitions_imports.py`/`executor_definitions_findings.py` landed; deeper split of `entry.py` and runtime-heavy query modules remains)
 - [x] S17. Domain visitor extraction to analysis/ (ExceptionVisitor, SideEffectVisitor, ImportVisitor)
-- [ ] S25. Fragment cache simplification and search artifact index extraction (partial: index/deque row/decode ownership moved to `search_artifact_index.py`; remaining cache-boundary slimming pending)
-- [ ] S19. Observability — structured logging (partial: pipeline/macro/enrichment logging is landed and `search/rg/adapter.py` coverage added; final outlier sweep pending)
+- [x] S25. Fragment cache simplification and search artifact index extraction (fragment/runtime boundary and search artifact index ownership consolidation are landed)
+- [x] S19. Observability — structured logging (planned pipeline/macro/enrichment logging coverage and `search/rg/adapter.py` instrumentation are landed)
 - [x] D1. Cross-scope deletion batch (after S1, S5)
 - [x] D2. Cross-scope deletion batch (after S2, S4)
 - [x] D3. Cross-scope deletion batch (query facades + runtime_core/extractors/runtime_impl hard deletions completed)
 - [x] D4. Cross-scope deletion batch (`_shared` wrapper modules deleted and followups alias cleanup complete)
-- [ ] D5. Cross-scope deletion batch (partial: `_partition_python_payload_fields`/`empty_enrichment_telemetry` plus dead semantic coercion helpers and `extractors_entrypoints` dict-coercion helper fan-out cleanup landed; broader typed-payload helper cleanup pending)
+- [ ] D5. Cross-scope deletion batch (partial: major typed-payload helper cleanup is landed; residual semantic/object-view dict-helper paths remain)
 - [x] D6. Cross-scope deletion batch (singleton globals removed and runtime/enrichment cache callback registrations converted to lazy `ensure_*` paths)
 - [x] D7. Cross-scope deletion batch (planned hard-cut module deletions completed)
 - [x] D8. Cross-scope deletion batch (after S17)
-- [ ] D9. Cross-scope deletion batch (partial: pipeline/report/telemetry alias cleanup slices landed)
-- [ ] D10. Cross-scope deletion batch (partial: mutable registry-holder dict patterns removed in targeted modules and search-artifact consolidation advanced; final cache-slice closure pending)
+- [ ] D9. Cross-scope deletion batch (partial: alias cleanup + typed-summary slices landed; duplicated inline telemetry event construction branches remain)
+- [x] D10. Cross-scope deletion batch (singleton-state holder dict removal + search-artifact index consolidation closure are landed)

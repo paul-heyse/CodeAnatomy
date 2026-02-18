@@ -26,9 +26,6 @@ All write operations should use `WritePipeline` from `datafusion_engine.write_pi
 which provides DataFusion-native write surfaces (write_parquet, write_csv, write_json,
 write_table, and streaming Delta writes via provider inserts).
 """
-# NOTE(size-exception): This module is temporarily >800 LOC during hard-cutover
-# decomposition. Remaining extraction and contraction work is tracked in
-# docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
 
 from __future__ import annotations
 

@@ -54,8 +54,8 @@ from tools.cq.query.shared_utils import extract_def_name
 if TYPE_CHECKING:
     from tools.cq.query.execution_context import QueryExecutionContext
     from tools.cq.query.execution_requests import EntityQueryRequest
-    from tools.cq.query.ir import Query
     from tools.cq.query.executor_runtime import EntityExecutionState
+    from tools.cq.query.ir import Query
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,11 @@ def apply_entity_handlers(
     *,
     symtable: SymtableEnricherPort,
 ) -> tuple[list[Finding], list[Section], EntitySummaryUpdateV1]:
-    """Apply entity handlers for one prepared query execution state."""
+    """Apply entity handlers for one prepared query execution state.
+
+    Returns:
+        Findings, sections, and typed summary counters for one entity query.
+    """
     query = state.ctx.query
     root = state.ctx.root
     candidates = state.candidates
@@ -111,7 +115,11 @@ def process_decorator_query(
     root: Path,
     def_candidates: list[SgRecord] | tuple[SgRecord, ...] | None = None,
 ) -> tuple[list[Finding], EntitySummaryUpdateV1]:
-    """Process a decorator entity query."""
+    """Process a decorator entity query.
+
+    Returns:
+        Decorator findings and typed summary counters.
+    """
     from tools.cq.query.enrichment import enrich_with_decorators
 
     findings: list[Finding] = []
@@ -184,7 +192,11 @@ def process_call_query(
     query: Query,
     root: Path,
 ) -> tuple[list[Finding], EntitySummaryUpdateV1]:
-    """Process a callsite entity query."""
+    """Process a callsite entity query.
+
+    Returns:
+        Callsite findings and typed summary counters.
+    """
     matching_calls = _filter_to_matching(list(ctx.call_records), query)
     call_contexts: list[tuple[SgRecord, SgRecord | None]] = []
     for call_record in matching_calls:
@@ -215,14 +227,22 @@ def process_call_query(
 
 
 def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
-    """Execute entity query for a prepared execution context."""
+    """Execute entity query for a prepared execution context.
+
+    Returns:
+        Entity query result payload.
+    """
     from tools.cq.query.executor_runtime import execute_entity_query as execute_entity_query_impl
 
     return execute_entity_query_impl(ctx)
 
 
 def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
-    """Execute entity query over pre-scanned records."""
+    """Execute entity query over pre-scanned records.
+
+    Returns:
+        Entity query result payload.
+    """
     from tools.cq.query.executor_runtime import (
         execute_entity_query_from_records as execute_entity_query_from_records_impl,
     )

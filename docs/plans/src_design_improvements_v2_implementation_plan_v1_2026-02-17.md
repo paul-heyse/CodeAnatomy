@@ -61,24 +61,26 @@ Status legend for this revision:
 
 Evidence snapshot used for this refresh:
 - `wc -l`: `bundle_artifact.py` 188, `write_pipeline.py` 607, `materialization.py` 692, `delta/observability.py` 655, `introspection_core.py` 662, `contracts.py` 656, `finalize.py` 458, `dataset_spec.py` 157, `artifact_store_core.py` 645, `session/facade.py` 691, `obs/metrics.py` 23
+- `NOTE(size-exception)` comments are removed from now-compliant files (`io/write_core.py` 604, `dataset/registration_core.py` 691, `session/runtime.py` 668, `udf/extension_core.py` 512, `storage/deltalake/delta_write.py` 398).
 - `rg "write_deltalake\\(" src` returns no matches; fallback symbols `_execute_delta_merge_fallback` and `_should_fallback_delta_merge` are absent
 - Rust plan/extraction bridge entrypoints are wired and invoked, with Python bridge modules in place (`plan/rust_bundle_bridge.py`, `extraction/rust_session_bridge.py`), and extraction session fallback branches have been removed from `engine_session_factory`
 - Substrait execution fallback branches (`_record_substrait_fallback`, `_rehydrate_from_proto`) are removed from `session/facade.py`, and plan-level fallback helpers are removed from `plan/normalization.py`
 - Additional `bundle_artifact.py` decomposition landed via `plan_identity.py`, `planning_env.py`, `substrait_artifacts.py`, `plan_utils.py`, and `bundle_assembly.py`
 - `obs/` has zero direct `datafusion_engine` imports (`rg -n "from datafusion_engine|import datafusion_engine" src/obs` returns no matches)
-- Private-name exports in `__all__` remain in plan modules (`bundle_assembly.py`, `plan_proto.py`, `artifact_store_constants.py`, `artifact_store_persistence.py`) and require final S3/D2 cleanup.
-- Direct `DataFusionRuntimeProfile(...)` construction appears only in `session/profiles.py` factory helpers (2 hits)
+- Private-name exports in `__all__` are fully cleaned in `src/` (`rg -n --multiline "__all__\\s*=\\s*\\[[^\\]]*['\\\"]_[^'\\\"]+['\\\"]" src` returns no matches).
+- Direct runtime-code `DataFusionRuntimeProfile(...)` construction appears only in `session/profiles.py` factory helpers (2 hits, excluding docstring examples)
 - Moved schema-spec concerns are fully migrated off `dataset_spec.py` (`rg --multiline` hit count for moved symbols in `src/`: 0)
 - View cache registration functions (`_register_view_with_cache`, `_register_delta_staging_cache`, `_register_delta_output_cache`) now live in `views/cache_registration.py`; corresponding function definitions are removed from `views/graph.py`
 - Diagnostics payload builders are canonical in `lineage/diagnostics_payloads.py`; payload-callsite imports from `lineage/diagnostics` are removed
 - Protocol-first adoption closure: `semantics/compiler.py` resolves context via `SessionContextProviderPort`, `relspec/contracts.py` uses `RuntimeProfilePort`, and targeted deep policy chains are replaced with runtime-profile convenience helpers
 - `plan/rust_bundle_bridge.py` now uses a single strict bridge signature (`df=`) with no TypeError fallback dispatch
-- Canonical runtime install contract remains partially incomplete: session/runtime tests still fail because `invoke_entrypoint_with_adapted_context()` calls `install_codeanatomy_runtime` with positional args while `datafusion_ext.install_codeanatomy_runtime()` enforces keyword-only runtime args.
+- Canonical runtime install contract is closed: `invoke_entrypoint_with_adapted_context()` forwards kwargs, and `extension_core` routes runtime install arguments via `enable_async_udfs`, `async_udf_timeout_ms`, and `async_udf_batch_size` keyword args.
 
 ### Completed Scope Items
 
 - S1. Consolidate duplicated type aliases and helper functions
 - S2. Fix lying APIs and dead parameters
+- S3. Promote private exports and clean `__all__` lists
 - S4. Extract shared lazy-loading facade utility
 - S5. Replace unstructured multi-value returns with named types
 - S6. Fix dependency direction: move engine-dependent code from inner ring
@@ -102,13 +104,11 @@ Evidence snapshot used for this refresh:
 - S24. Rust-native Delta write and mutation cutover
 - S25. Extension contract hardening and shim removal
 - S26. Rust-native extraction session and provider registration cutover
+- S27. Canonical Rust runtime install and UDF snapshot contract
 
 ### Partially Implemented Scope Items
 
-- S3. Promote private exports and clean `__all__` lists
-  - Remaining: remove `_`-prefixed exports from `__all__` in `src/datafusion_engine/plan/bundle_assembly.py`, `src/datafusion_engine/plan/plan_proto.py`, `src/datafusion_engine/plan/artifact_store_constants.py`, and `src/datafusion_engine/plan/artifact_store_persistence.py`.
-- S27. Canonical Rust runtime install and UDF snapshot contract
-  - Remaining: fix runtime entrypoint invocation in `src/datafusion_engine/extensions/context_adaptation.py` / `src/datafusion_engine/udf/extension_core.py` so `install_codeanatomy_runtime` receives keyword arguments (`enable_async_udfs`, `async_udf_timeout_ms`, `async_udf_batch_size`) instead of positional arguments.
+- None.
 
 ### Pending / Not Started Scope Items
 
@@ -1970,7 +1970,7 @@ class RuntimeInstallSnapshot:
 ### Phase 1: Quick Wins
 - [x] S1. Consolidate duplicated type aliases and helper functions (all modules)
 - [x] S2. Fix lying APIs, dead parameters, and no-op stubs
-- [ ] S3. Promote private exports and clean `__all__` lists (all packages) — partial
+- [x] S3. Promote private exports and clean `__all__` lists (all packages)
 - [x] S5. Replace unstructured multi-value returns with named types
 - [x] S4. Extract shared lazy-loading facade utility
 - [x] S13. Replace deferred import pattern with generic factory
@@ -1985,7 +1985,7 @@ class RuntimeInstallSnapshot:
 
 ### Phase 3: Rust Convergence
 - [x] S25. Extension contract hardening and shim removal
-- [ ] S27. Canonical Rust runtime install and UDF snapshot contract — partial
+- [x] S27. Canonical Rust runtime install and UDF snapshot contract
 - [x] S23. Rust-canonical plan bundle and Substrait artifact cutover
 - [x] S24. Rust-native Delta write and mutation cutover
 - [x] S26. Rust-native extraction session and provider registration cutover
@@ -2006,9 +2006,9 @@ class RuntimeInstallSnapshot:
 
 ### Decommission Batches
 - [x] D1. Post-S1/S2 cleanup batch
-- [ ] D2. Post-S3/S4 cleanup batch — partial
+- [x] D2. Post-S3/S4 cleanup batch
 - [x] D3. Post-S6/S7/S19 cleanup batch
 - [x] D4. Post-decomposition verification batch
 - [x] D5. Post-protocol cleanup batch
 - [x] D6. Post-Rust plan/write cutover cleanup batch
-- [ ] D7. Post-extension/runtime contract cleanup batch — partial
+- [x] D7. Post-extension/runtime contract cleanup batch

@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 from tools.cq.core.schema import CqResult
-from tools.cq.query import executor_pattern_impl
+from tools.cq.query import executor_runtime_pattern
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import PatternQueryRequest
 
@@ -23,11 +23,11 @@ def test_execute_pattern_query_delegates_to_executor(
         return sentinel_result
 
     monkeypatch.setattr(
-        "tools.cq.query.executor_pattern_impl._execute_pattern_query_impl",
+        "tools.cq.query.executor_runtime.execute_pattern_query",
         _fake_execute,
     )
 
-    assert executor_pattern_impl.execute_pattern_query(sentinel_ctx) is sentinel_result
+    assert executor_runtime_pattern.execute_pattern_query(sentinel_ctx) is sentinel_result
 
 
 def test_execute_pattern_query_with_files_delegates(
@@ -42,10 +42,11 @@ def test_execute_pattern_query_with_files_delegates(
         return sentinel_result
 
     monkeypatch.setattr(
-        "tools.cq.query.executor_pattern_impl._execute_pattern_query_with_files_impl",
+        "tools.cq.query.executor_runtime.execute_pattern_query_with_files",
         _fake_execute,
     )
 
     assert (
-        executor_pattern_impl.execute_pattern_query_with_files(sentinel_request) is sentinel_result
+        executor_runtime_pattern.execute_pattern_query_with_files(sentinel_request)
+        is sentinel_result
     )

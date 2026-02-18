@@ -12,16 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.schema import (
     CqResult,
     Finding,
     ScoreDetails,
     Section,
     append_result_key_finding,
-    assign_result_finding_ids,
     insert_result_section,
-    ms,
     update_result_summary,
 )
 from tools.cq.core.scoring import build_detail_payload
@@ -29,8 +26,15 @@ from tools.cq.core.summary_types import build_semantic_telemetry
 from tools.cq.core.summary_update_contracts import summary_update_mapping
 from tools.cq.macros.calls.analysis import (
     CallSite,
-    _analyze_sites,
-    _collect_call_sites_from_records,
+)
+from tools.cq.macros.calls.analysis_scan import (
+    analyze_sites as _analyze_sites,
+)
+from tools.cq.macros.calls.analysis_scan import (
+    collect_call_sites,
+)
+from tools.cq.macros.calls.analysis_scan import (
+    collect_call_sites_from_records as _collect_call_sites_from_records,
 )
 from tools.cq.macros.calls.entry_summary import build_calls_summary
 from tools.cq.macros.calls.insight import (
@@ -66,7 +70,6 @@ from tools.cq.macros.constants import (
 )
 from tools.cq.macros.contracts import CallsRequest
 from tools.cq.macros.result_builder import MacroResultBuilder
-from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.query.sg_parser import SgRecord, list_scan_files, sg_scan
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
@@ -158,8 +161,6 @@ def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
         )
         rg_candidates = 0
     else:
-        from tools.cq.macros.calls.analysis import collect_call_sites
-
         candidates = _rg_find_candidates(
             function_name,
             root_path,
@@ -516,50 +517,14 @@ def build_calls_result(
 
 
 def cmd_calls(request: CallsRequest) -> CqResult:
-    """Census all call sites for a function.
-
-    Parameters
-    ----------
-    request : CallsRequest
-        Request contract for calls execution.
+    """Command entry wrapper delegated to `entry_command` ownership module.
 
     Returns:
-    -------
-    CqResult
-        Analysis result.
+        Calls macro result payload.
     """
-    started = ms()
-    ctx = CallsContext(
-        tc=request.tc,
-        root=Path(request.root),
-        argv=request.argv,
-        function_name=request.function_name,
-    )
-    logger.debug("Running calls macro function=%s root=%s", ctx.function_name, ctx.root)
-    scan_result = _scan_call_sites(ctx.root, ctx.function_name)
-    if scan_result.used_fallback:
-        logger.warning("Calls macro used ripgrep fallback for function=%s", ctx.function_name)
-    result = _build_calls_result(ctx, scan_result, started_ms=started)
-    result = apply_rust_fallback_policy(
-        result,
-        root=ctx.root,
-        policy=RustFallbackPolicyV1(
-            macro_name="calls",
-            pattern=ctx.function_name,
-            query=ctx.function_name,
-            fallback_matches_summary_key="total_sites",
-        ),
-    )
-    result = assign_result_finding_ids(result)
-    if result.run.run_id:
-        maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=result.run.run_id)
-        maybe_evict_run_cache_tag(root=ctx.root, language="rust", run_id=result.run.run_id)
-    logger.debug(
-        "Calls macro completed function=%s total_sites=%d",
-        ctx.function_name,
-        len(scan_result.all_sites),
-    )
-    return result
+    from tools.cq.macros.calls.entry_command import cmd_calls as cmd_calls_impl
+
+    return cmd_calls_impl(request)
 
 
 __all__ = [

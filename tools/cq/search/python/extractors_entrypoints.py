@@ -83,6 +83,12 @@ from tools.cq.search.python.extractors_classification import (
 from tools.cq.search.python.extractors_classification import (
     classify_item_role as _classify_item_role,
 )
+from tools.cq.search.python.extractors_fact_merge import (
+    merge_python_enrichment_stage_facts as _merge_python_enrichment_stage_facts_shared,
+)
+from tools.cq.search.python.extractors_fact_normalize import (
+    flatten_python_enrichment_facts as _flatten_python_enrichment_facts_shared,
+)
 from tools.cq.search.python.extractors_structure import (
     classify_class_kind as _classify_class_kind,
 )
@@ -1183,113 +1189,19 @@ def _build_stage_fact_patch(fields: Mapping[str, object]) -> _PythonStageFactPat
     )
 
 
-def _merge_fact_section[StructT](
-    current: StructT | None,
-    incoming: StructT | None,
-    *,
-    type_: type[StructT],
-) -> StructT | None:
-    def _as_mapping(section: object | None) -> dict[str, object]:
-        if section is None:
-            return {}
-        raw = msgspec.to_builtins(section, str_keys=True)
-        return raw if isinstance(raw, dict) else {}
-
-    if incoming is None:
-        return current
-    if current is None:
-        return incoming
-    merged = _as_mapping(current)
-    for key, value in _as_mapping(incoming).items():
-        if _has_enrichment_value(value):
-            merged[key] = value
-    try:
-        return msgspec.convert(merged, type=type_, strict=False)
-    except (msgspec.ValidationError, TypeError, ValueError):
-        return current
-
-
 def _merge_python_enrichment_stage_facts(
     current: PythonEnrichmentFacts,
     patch: _PythonStageFactPatch,
 ) -> PythonEnrichmentFacts:
-    incoming = patch.facts
-    return msgspec.structs.replace(
+    return _merge_python_enrichment_stage_facts_shared(
         current,
-        resolution=_merge_fact_section(
-            current.resolution,
-            incoming.resolution,
-            type_=PythonResolutionFacts,
-        ),
-        behavior=_merge_fact_section(
-            current.behavior,
-            incoming.behavior,
-            type_=PythonBehaviorFacts,
-        ),
-        structure=_merge_fact_section(
-            current.structure,
-            incoming.structure,
-            type_=PythonStructureFacts,
-        ),
-        signature=_merge_fact_section(
-            current.signature,
-            incoming.signature,
-            type_=PythonSignatureFacts,
-        ),
-        call=_merge_fact_section(
-            current.call,
-            incoming.call,
-            type_=PythonCallFacts,
-        ),
-        import_=_merge_fact_section(
-            current.import_,
-            incoming.import_,
-            type_=PythonImportFacts,
-        ),
-        class_shape=_merge_fact_section(
-            current.class_shape,
-            incoming.class_shape,
-            type_=PythonClassShapeFacts,
-        ),
-        locals=_merge_fact_section(
-            current.locals,
-            incoming.locals,
-            type_=PythonLocalsFacts,
-        ),
-        parse_quality=_merge_fact_section(
-            current.parse_quality,
-            incoming.parse_quality,
-            type_=PythonParseQualityFacts,
-        ),
+        patch.facts,
+        has_value=_has_enrichment_value,
     )
 
 
 def _flatten_python_enrichment_facts(facts: PythonEnrichmentFacts) -> dict[str, object]:
-    payload: dict[str, object] = {}
-    for section in (
-        facts.resolution,
-        facts.behavior,
-        facts.structure,
-        facts.signature,
-        facts.call,
-        facts.import_,
-        facts.class_shape,
-    ):
-        if section is None:
-            continue
-        section_map = msgspec.to_builtins(section, str_keys=True)
-        if isinstance(section_map, dict):
-            payload.update(section_map)
-
-    if facts.locals is not None:
-        locals_payload = msgspec.to_builtins(facts.locals, str_keys=True)
-        if isinstance(locals_payload, dict):
-            payload["locals"] = locals_payload
-    if facts.parse_quality is not None:
-        parse_payload = msgspec.to_builtins(facts.parse_quality, str_keys=True)
-        if isinstance(parse_payload, dict):
-            payload["parse_quality"] = parse_payload
-    return payload
+    return _flatten_python_enrichment_facts_shared(facts)
 
 
 def _build_stage_facts_from_enrichment(

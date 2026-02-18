@@ -89,6 +89,7 @@ def test_record_dataset_readiness_records_resolver_identity(
     )
     profile = SimpleNamespace(
         diagnostics=SimpleNamespace(diagnostics_sink=None),
+        diagnostics_sink=lambda: None,
     )
 
     record_dataset_readiness(

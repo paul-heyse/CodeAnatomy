@@ -27,7 +27,7 @@ def _attach_insight_artifact_refs(
     telemetry_ref: str | None = None,
     neighborhood_overflow_ref: str | None = None,
 ) -> CqResult:
-    from tools.cq.core.front_door_assembly import (
+    from tools.cq.core.front_door_dispatch import (
         attach_artifact_refs,
         attach_neighborhood_overflow_ref,
     )

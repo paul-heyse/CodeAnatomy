@@ -786,7 +786,11 @@ def process_decorator_query(
     root: Path,
     def_candidates: list[SgRecord] | tuple[SgRecord, ...] | None = None,
 ) -> tuple[list[Finding], EntitySummaryUpdateV1]:
-    """Process a decorator query through extracted entity runtime helpers."""
+    """Process a decorator query through extracted entity runtime helpers.
+
+    Returns:
+        Decorator findings and typed summary counters.
+    """
     from tools.cq.query.executor_runtime_entity import process_decorator_query as impl
 
     return impl(
@@ -802,7 +806,11 @@ def process_call_query(
     query: Query,
     root: Path,
 ) -> tuple[list[Finding], EntitySummaryUpdateV1]:
-    """Process a callsite query through extracted entity runtime helpers."""
+    """Process a callsite query through extracted entity runtime helpers.
+
+    Returns:
+        Callsite findings and typed summary counters.
+    """
     from tools.cq.query.executor_runtime_entity import process_call_query as impl
 
     return impl(ctx=ctx, query=query, root=root)

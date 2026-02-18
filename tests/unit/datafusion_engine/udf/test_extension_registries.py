@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from datafusion import SessionContext
 
@@ -63,3 +65,53 @@ def test_rust_udf_docs_cache_is_scoped_by_registry(monkeypatch: pytest.MonkeyPat
     assert docs_first["revision"] == FIRST_REVISION
     assert docs_first_cached["revision"] == FIRST_REVISION
     assert docs_second["revision"] == SECOND_REVISION
+
+
+def test_runtime_install_snapshot_uses_keyword_runtime_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime install snapshot forwards async settings via keyword arguments."""
+    ctx = SessionContext()
+    registries = ExtensionRegistries()
+    calls: list[dict[str, object]] = []
+
+    def _install_codeanatomy_runtime(
+        runtime_ctx: SessionContext,
+        *,
+        enable_async_udfs: bool,
+        async_udf_timeout_ms: int | None,
+        async_udf_batch_size: int | None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "ctx": runtime_ctx,
+                "enable_async_udfs": enable_async_udfs,
+                "async_udf_timeout_ms": async_udf_timeout_ms,
+                "async_udf_batch_size": async_udf_batch_size,
+            }
+        )
+        return {"snapshot": {"version": 1}}
+
+    module = SimpleNamespace(
+        __name__="datafusion._internal._test_stub",
+        install_codeanatomy_runtime=_install_codeanatomy_runtime,
+    )
+    monkeypatch.setattr(extension_core, "_datafusion_internal", lambda: module)
+
+    snapshot = extension_core.__dict__["_install_codeanatomy_runtime_snapshot"](
+        ctx,
+        enable_async=True,
+        async_udf_timeout_ms=321,
+        async_udf_batch_size=64,
+        registries=registries,
+    )
+
+    assert calls == [
+        {
+            "ctx": ctx,
+            "enable_async_udfs": True,
+            "async_udf_timeout_ms": 321,
+            "async_udf_batch_size": 64,
+        }
+    ]
+    assert snapshot["version"] == 1

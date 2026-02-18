@@ -148,7 +148,7 @@ def test_delta_service_provider_artifact_payload_includes_canonical_fields() -> 
         ctx_kind="outer",
         probe_result="ok",
     )
-    provider_artifact_payload = service.__dict__["_provider_artifact_payload"]
+    provider_artifact_payload = service.provider_artifact_payload
 
     payload = provider_artifact_payload(
         request=request,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 
@@ -49,6 +49,7 @@ class ExtensionEntrypointInvocation:
     ctx: object
     internal_ctx: object | None = None
     args: Sequence[object] = ()
+    kwargs: Mapping[str, object] | None = None
     allow_fallback: bool = True
     fallback_ctx_factory: Callable[[object], object | None] | None = None
 
@@ -123,8 +124,11 @@ def invoke_entrypoint_with_adapted_context(
         msg = f"Extension entrypoint {entrypoint} is unavailable."
         raise TypeError(msg)
 
+    resolved_kwargs: dict[str, object] = (
+        {} if invocation.kwargs is None else dict(invocation.kwargs)
+    )
     try:
-        payload = fn(invocation.ctx, *invocation.args)
+        payload = fn(invocation.ctx, *invocation.args, **resolved_kwargs)
     except (TypeError, RuntimeError, ValueError) as exc:
         msg = (
             f"Extension entrypoint {entrypoint} failed for canonical context candidate "

@@ -1,7 +1,4 @@
 """Rust UDF registration helpers."""
-# NOTE(size-exception): This module is temporarily >800 LOC during hard-cutover
-# decomposition. Remaining extraction and contraction work is tracked in
-# docs/plans/src_design_improvements_implementation_plan_v1_2026-02-16.md.
 
 from __future__ import annotations
 
@@ -88,6 +85,7 @@ def _invoke_runtime_entrypoint(
     *,
     ctx: SessionContext,
     args: Sequence[object] = (),
+    kwargs: Mapping[str, object] | None = None,
 ) -> object:
     _selection, payload = invoke_entrypoint_with_adapted_context(
         internal.__name__,
@@ -97,6 +95,7 @@ def _invoke_runtime_entrypoint(
             ctx=ctx,
             internal_ctx=getattr(ctx, "ctx", None),
             args=args,
+            kwargs=kwargs,
             allow_fallback=False,
         ),
     )
@@ -125,11 +124,11 @@ def _install_codeanatomy_runtime_snapshot(
             internal,
             _RUNTIME_INSTALL_ENTRYPOINT,
             ctx=ctx,
-            args=(
-                enable_async,
-                async_udf_timeout_ms,
-                async_udf_batch_size,
-            ),
+            kwargs={
+                "enable_async_udfs": enable_async,
+                "async_udf_timeout_ms": async_udf_timeout_ms,
+                "async_udf_batch_size": async_udf_batch_size,
+            },
         )
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = (
@@ -322,6 +321,7 @@ def invoke_runtime_entrypoint(
     *,
     ctx: SessionContext,
     args: Sequence[object] = (),
+    kwargs: Mapping[str, object] | None = None,
 ) -> object:
     """Invoke a runtime extension entrypoint with adapted SessionContext payload.
 
@@ -333,6 +333,7 @@ def invoke_runtime_entrypoint(
         entrypoint,
         ctx=ctx,
         args=args,
+        kwargs=kwargs,
     )
 
 

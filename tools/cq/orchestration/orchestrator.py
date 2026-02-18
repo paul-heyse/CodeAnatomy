@@ -183,7 +183,7 @@ def _select_front_door_insight(
     scope: QueryLanguageScope,
     results: Mapping[QueryLanguage, CqResult],
 ) -> FrontDoorInsightV1 | None:
-    from tools.cq.core.front_door_assembly import mark_partial_for_missing_languages
+    from tools.cq.core.front_door_dispatch import mark_partial_for_missing_languages
     from tools.cq.core.front_door_render import coerce_front_door_insight
 
     order = list(expand_language_scope(scope))

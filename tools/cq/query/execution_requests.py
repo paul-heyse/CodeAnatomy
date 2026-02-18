@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.index.files import FileFilterDecision
-    from tools.cq.query.executor_entity_impl import EntityExecutionState
+    from tools.cq.query.executor_runtime import EntityExecutionState
     from tools.cq.query.ir import Query
     from tools.cq.query.planner import ToolPlan
 

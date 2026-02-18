@@ -158,7 +158,5 @@ def _write_artifact_table(
 
 __all__ = [
     "WriteArtifactRequest",
-    "_ArtifactTableWriteRequest",
-    "_write_artifact_table",
     "persist_write_artifact",
 ]

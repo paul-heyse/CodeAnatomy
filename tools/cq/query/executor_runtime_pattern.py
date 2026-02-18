@@ -21,10 +21,18 @@ __all__ = [
 
 
 def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
-    """Execute pattern query for a prepared execution context."""
+    """Execute pattern query for a prepared execution context.
+
+    Returns:
+        Pattern query result payload.
+    """
     return _execute_pattern_query_impl(ctx)
 
 
 def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
-    """Execute pattern query with pre-tabulated files."""
+    """Execute pattern query with pre-tabulated files.
+
+    Returns:
+        Pattern query result payload.
+    """
     return _execute_pattern_query_with_files_impl(request)

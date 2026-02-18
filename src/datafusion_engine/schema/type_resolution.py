@@ -61,6 +61,8 @@ def arrow_type_to_sql(arrow_type: pa.DataType | ArrowTypeBase) -> str:
     for candidate, sql_type in _ARROW_TO_SQL_PAIRS:
         if arrow_type == candidate:
             return sql_type
+    if pa.types.is_dictionary(arrow_type):
+        return arrow_type_to_sql(arrow_type.value_type)
     storage_type = getattr(arrow_type, "storage_type", None)
     if isinstance(storage_type, pa.DataType) and storage_type is not arrow_type:
         return arrow_type_to_sql(storage_type)

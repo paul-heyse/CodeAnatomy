@@ -457,8 +457,22 @@ def _seed_and_register_dataset(
         tally.seeded_count += 1
         tally.seeded_dataset_names.add(item.name)
 
+    registration_location = location
+    if registration_location.dataset_spec is None:
+        from schema_spec.dataset_spec import dataset_spec_from_schema
+
+        registration_location = msgspec.structs.replace(
+            registration_location,
+            dataset_spec=dataset_spec_from_schema(item.name, item.schema),
+        )
+
     try:
-        _register_dataset(ctx=ctx, profile=profile, name=item.name, location=location)
+        _register_dataset(
+            ctx=ctx,
+            profile=profile,
+            name=item.name,
+            location=registration_location,
+        )
     except (RuntimeError, TypeError, ValueError, OSError, KeyError) as exc:
         tally.add_event(
             ZeroRowBootstrapEvent(
@@ -517,7 +531,6 @@ def _validation_errors(
 def _bootstrap_safe_location(location: DatasetLocation) -> DatasetLocation:
     return msgspec.structs.replace(
         location,
-        dataset_spec=None,
         delta_cdf_options=None,
         datafusion_provider=None,
         overrides=None,

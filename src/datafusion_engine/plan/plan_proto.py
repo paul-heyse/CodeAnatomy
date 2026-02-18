@@ -68,8 +68,6 @@ def plan_proto_payload[T](
 
 
 __all__ = [
-    "_plan_proto_bytes",
-    "_proto_serialization_enabled",
     "plan_proto_payload",
     "plan_to_proto_bytes",
     "proto_serialization_enabled",

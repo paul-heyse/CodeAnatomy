@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import TYPE_CHECKING, cast
 
 import msgspec
@@ -18,7 +17,6 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterQueryHitV1,
 )
 from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_python_lane_payload
-from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
 from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
 from tools.cq.search.tree_sitter.core.lane_support import build_query_windows, lift_anchor
 from tools.cq.search.tree_sitter.core.node_utils import node_text
@@ -49,7 +47,7 @@ from tools.cq.search.tree_sitter.python_lane.runtime_engine import (
 )
 from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.planner import (
-    resolve_pack_source_rows_cached,
+    resolve_pack_sources_cached,
 )
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
@@ -234,9 +232,8 @@ def _parse_quality(captures: dict[str, list[Node]], source_bytes: bytes) -> dict
     }
 
 
-@lru_cache(maxsize=1)
-def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    return resolve_pack_source_rows_cached(
+def _pack_sources() -> tuple[tuple[str, str], ...]:
+    return resolve_pack_sources_cached(
         language="python",
         source_rows=tuple(
             (source.pack_name, source.source)
@@ -245,10 +242,6 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
         dedupe_by_pack_name=False,
         request_surface="artifact",
     )
-
-
-def _pack_sources() -> tuple[tuple[str, str], ...]:
-    return tuple((pack_name, source) for pack_name, source, _ in _pack_source_rows())
 
 
 def _collect_query_pack_captures(

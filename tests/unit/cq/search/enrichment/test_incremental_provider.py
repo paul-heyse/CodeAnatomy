@@ -29,7 +29,7 @@ def test_incremental_provider_ts_sym_dis(tmp_path: Path) -> None:
             col=13,
             match_text="x",
             mode=parse_incremental_enrichment_mode("ts_sym_dis"),
-            python_payload=None,
+            python_facts=None,
             runtime_enrichment=False,
         )
     )

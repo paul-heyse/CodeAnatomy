@@ -19,6 +19,7 @@ from datafusion_engine.dataset.resolution import (
 )
 from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from tests.harness.profiles import clone_profile_with_delta_service, conformance_profile
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import (
@@ -46,6 +47,9 @@ def _write_delta_table_for_resolution(profile: DataFusionRuntimeProfile, delta_p
     -------
     int
         Version number of written Delta table
+
+    Raises:
+        RuntimeError: Re-raised when Delta write fails for reasons other than wheel gating.
     """
     ctx = profile.session_context()
     source = register_arrow_table(

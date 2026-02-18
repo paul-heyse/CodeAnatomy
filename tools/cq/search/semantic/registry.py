@@ -9,9 +9,7 @@ from pathlib import Path
 from tools.cq.search.semantic.contracts import LanguageEnrichmentProvider
 
 _DEFAULT_LANGUAGE_PROVIDER_REGISTRY_LOCK = threading.Lock()
-_DEFAULT_LANGUAGE_PROVIDER_REGISTRY_STATE: dict[str, LanguageProviderRegistry | None] = {
-    "registry": None
-}
+_DEFAULT_LANGUAGE_PROVIDER_REGISTRY: LanguageProviderRegistry | None = None
 
 
 @dataclass
@@ -53,8 +51,9 @@ def set_default_language_provider_registry(
     registry: LanguageProviderRegistry | None,
 ) -> None:
     """Set process-default language provider registry."""
+    global _DEFAULT_LANGUAGE_PROVIDER_REGISTRY
     with _DEFAULT_LANGUAGE_PROVIDER_REGISTRY_LOCK:
-        _DEFAULT_LANGUAGE_PROVIDER_REGISTRY_STATE["registry"] = registry
+        _DEFAULT_LANGUAGE_PROVIDER_REGISTRY = registry
 
 
 def get_default_language_provider_registry() -> LanguageProviderRegistry | None:
@@ -64,7 +63,7 @@ def get_default_language_provider_registry() -> LanguageProviderRegistry | None:
         Process-default provider registry, when configured.
     """
     with _DEFAULT_LANGUAGE_PROVIDER_REGISTRY_LOCK:
-        return _DEFAULT_LANGUAGE_PROVIDER_REGISTRY_STATE["registry"]
+        return _DEFAULT_LANGUAGE_PROVIDER_REGISTRY
 
 
 def run_python_byte_range_provider(

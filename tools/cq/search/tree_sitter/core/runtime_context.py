@@ -17,23 +17,25 @@ class TreeSitterRuntimeContext:
 
 
 _CONTEXT_LOCK = threading.Lock()
-_DEFAULT_CONTEXT_STATE: dict[str, TreeSitterRuntimeContext | None] = {"context": None}
+_DEFAULT_CONTEXT: TreeSitterRuntimeContext | None = None
 
 
 def get_default_context() -> TreeSitterRuntimeContext:
     """Return process-global runtime context, creating lazily."""
+    global _DEFAULT_CONTEXT
     with _CONTEXT_LOCK:
-        context = _DEFAULT_CONTEXT_STATE["context"]
+        context = _DEFAULT_CONTEXT
         if context is None:
             context = TreeSitterRuntimeContext()
-            _DEFAULT_CONTEXT_STATE["context"] = context
+            _DEFAULT_CONTEXT = context
         return context
 
 
 def set_default_context(context: TreeSitterRuntimeContext | None) -> None:
     """Install or clear process-global runtime context (test seam)."""
+    global _DEFAULT_CONTEXT
     with _CONTEXT_LOCK:
-        _DEFAULT_CONTEXT_STATE["context"] = context
+        _DEFAULT_CONTEXT = context
 
 
 __all__ = ["TreeSitterRuntimeContext", "get_default_context", "set_default_context"]

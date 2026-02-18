@@ -36,6 +36,8 @@ _REQUIRED_PAYLOAD_KEYS: tuple[str, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class RustPayloadBuildRequestV1:
+    """Typed request for one rust payload-build pass."""
+
     node: Node
     tree_root: Node
     source_bytes: bytes
@@ -48,6 +50,8 @@ class RustPayloadBuildRequestV1:
 
 @dataclass(frozen=True, slots=True)
 class RustPipelineRequestV1:
+    """Typed request for full rust enrichment pipeline execution."""
+
     source: str
     cache_key: str | None
     max_scope_depth: int

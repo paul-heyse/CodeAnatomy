@@ -25,7 +25,11 @@ def clone_profile_with_delta_service(
     *,
     diagnostics: DiagnosticsCollector | None = None,
 ) -> DataFusionRuntimeProfile:
-    """Clone a runtime profile and bind a fresh Delta service."""
+    """Clone a runtime profile and bind a fresh Delta service.
+
+    Returns:
+        DataFusionRuntimeProfile: Cloned profile with bound Delta service.
+    """
     diagnostics_config = (
         DiagnosticsConfig(diagnostics_sink=diagnostics)
         if diagnostics is not None

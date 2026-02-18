@@ -251,7 +251,7 @@ def resolve_pack_source_rows_cached(
     request_surface: str = "artifact",
     ignored_errors: tuple[type[Exception], ...] = (),
 ) -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    """Cached wrapper for deterministic source-row planning.
+    """Cache deterministic source-row planning.
 
     Returns:
         tuple[tuple[str, str, QueryPackPlanV1], ...]: Sorted planned pack rows.
@@ -262,6 +262,32 @@ def resolve_pack_source_rows_cached(
         dedupe_by_pack_name=dedupe_by_pack_name,
         request_surface=request_surface,
         ignored_errors=ignored_errors,
+    )
+
+
+@lru_cache(maxsize=32)
+def resolve_pack_sources_cached(
+    *,
+    language: str,
+    source_rows: tuple[tuple[str, str], ...],
+    dedupe_by_pack_name: bool = False,
+    request_surface: str = "artifact",
+    ignored_errors: tuple[type[Exception], ...] = (),
+) -> tuple[tuple[str, str], ...]:
+    """Cache and return only ``(pack_name, source)`` tuples.
+
+    Returns:
+        tuple[tuple[str, str], ...]: Sorted pack/source rows.
+    """
+    return tuple(
+        (pack_name, source)
+        for pack_name, source, _ in resolve_pack_source_rows_cached(
+            language=language,
+            source_rows=source_rows,
+            dedupe_by_pack_name=dedupe_by_pack_name,
+            request_surface=request_surface,
+            ignored_errors=ignored_errors,
+        )
     )
 
 
@@ -307,5 +333,6 @@ __all__ = [
     "normalize_pack_source_rows",
     "resolve_pack_source_rows",
     "resolve_pack_source_rows_cached",
+    "resolve_pack_sources_cached",
     "sort_pack_plans",
 ]

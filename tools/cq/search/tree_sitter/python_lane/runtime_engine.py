@@ -20,7 +20,6 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryWindowV1,
 )
 from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_python_lane_payload
-from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
 from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
 from tools.cq.search.tree_sitter.core.lane_support import (
     ENRICHMENT_ERRORS,
@@ -48,6 +47,7 @@ from tools.cq.search.tree_sitter.python_lane.constants import (
 from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.planner import (
     resolve_pack_source_rows_cached,
+    resolve_pack_sources_cached,
 )
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
@@ -181,7 +181,8 @@ def clear_tree_sitter_python_cache() -> None:
     clear_parse_session(language="python")
     _python_language.cache_clear()
     compile_query.cache_clear()
-    _pack_source_rows.cache_clear()
+    resolve_pack_source_rows_cached.cache_clear()
+    resolve_pack_sources_cached.cache_clear()
 
 
 def get_tree_sitter_python_cache_stats() -> dict[str, int]:
@@ -201,9 +202,8 @@ def get_tree_sitter_python_cache_stats() -> dict[str, int]:
     }
 
 
-@lru_cache(maxsize=1)
-def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    return resolve_pack_source_rows_cached(
+def _query_sources() -> tuple[tuple[str, str], ...]:
+    return resolve_pack_sources_cached(
         language="python",
         source_rows=tuple(
             (source.pack_name, source.source)
@@ -212,10 +212,6 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
         dedupe_by_pack_name=True,
         request_surface="artifact",
     )
-
-
-def _query_sources() -> tuple[tuple[str, str], ...]:
-    return tuple((pack_name, source) for pack_name, source, _ in _pack_source_rows())
 
 
 def _safe_cursor_captures(

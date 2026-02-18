@@ -34,7 +34,7 @@ class CacheNamespaceTelemetry(CqStruct, frozen=True):
 
 
 _DEFAULT_TELEMETRY_STORE_LOCK = threading.Lock()
-_DEFAULT_TELEMETRY_STORE_STATE: dict[str, CacheTelemetryStore | None] = {"store": None}
+_DEFAULT_TELEMETRY_STORE: CacheTelemetryStore | None = None
 _MAX_KEY_SIZE_64 = 64
 _MAX_KEY_SIZE_128 = 128
 _MAX_KEY_SIZE_256 = 256
@@ -46,18 +46,20 @@ def _incr(namespace: str, field: str, amount: int = 1) -> None:
 
 def get_default_cache_telemetry_store() -> CacheTelemetryStore:
     """Return process-default cache telemetry store."""
+    global _DEFAULT_TELEMETRY_STORE
     with _DEFAULT_TELEMETRY_STORE_LOCK:
-        store = _DEFAULT_TELEMETRY_STORE_STATE["store"]
+        store = _DEFAULT_TELEMETRY_STORE
         if store is None:
             store = CacheTelemetryStore()
-            _DEFAULT_TELEMETRY_STORE_STATE["store"] = store
+            _DEFAULT_TELEMETRY_STORE = store
         return store
 
 
 def set_default_cache_telemetry_store(store: CacheTelemetryStore | None) -> None:
     """Set or clear process-default telemetry store."""
+    global _DEFAULT_TELEMETRY_STORE
     with _DEFAULT_TELEMETRY_STORE_LOCK:
-        _DEFAULT_TELEMETRY_STORE_STATE["store"] = store
+        _DEFAULT_TELEMETRY_STORE = store
 
 
 def record_cache_key(*, namespace: str, key: str) -> None:

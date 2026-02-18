@@ -11,6 +11,7 @@ from tools.cq.core.front_door_contracts import (
     SearchInsightBuildRequestV1,
 )
 from tools.cq.core.front_door_risk import risk_from_counters
+from tools.cq.core.render_utils import summary_value
 from tools.cq.core.snb_schema import NeighborhoodSliceV1
 
 __all__ = ["build_neighborhood_from_slices", "build_search_insight"]
@@ -48,7 +49,7 @@ def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsig
 
     target = assembly.target_from_finding(
         request.primary_target,
-        fallback_symbol=assembly.string_or_none(assembly.summary_value(request.summary, "query"))
+        fallback_symbol=assembly.string_or_none(summary_value(request.summary, "query"))
         or "search target",
         fallback_kind="query",
         selection_reason=(
@@ -60,7 +61,7 @@ def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsig
         confidence,
         evidence_kind=confidence.evidence_kind
         if confidence.evidence_kind != "unknown"
-        else assembly.string_or_none(assembly.summary_value(request.summary, "scan_method"))
+        else assembly.string_or_none(summary_value(request.summary, "scan_method"))
         or "resolved_ast",
     )
     neighborhood = request.neighborhood or assembly.empty_neighborhood()

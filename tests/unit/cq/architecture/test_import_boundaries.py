@@ -61,6 +61,9 @@ def test_no_private_cross_module_imports() -> None:
         "tools/cq/search/pipeline/smart_search_summary.py:24:    from tools.cq.search.pipeline.smart_search import _build_search_summary",
         # Python extractor decomposition (S29) - intra-subsystem imports
         "tools/cq/search/python/extractors_entrypoints.py:58:from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function",
+        "tools/cq/search/python/extractors_runtime_core.py:74:from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function",
+        "tools/cq/search/python/extractors_runtime_astgrep.py:12:from tools.cq.search.enrichment.core import append_source as _append_enrichment_source",
+        "tools/cq/search/python/extractors_runtime_state.py:10:from tools.cq.search.enrichment.core import has_value as _has_enrichment_value",
         "tools/cq/search/python/extractors_structure.py:15:from tools.cq.search.python.extractors_classification import _unwrap_decorated",
         # Rust package lazy proxies to avoid circular import (S30)
         "tools/cq/search/rust/__init__.py:29:    from tools.cq.search.rust.enrichment import enrich_context_by_byte_range as _fn",

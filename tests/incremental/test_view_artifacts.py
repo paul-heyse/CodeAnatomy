@@ -109,7 +109,11 @@ def _record_view_artifact(
 
 
 def test_record_view_artifact_payload_has_plan_fingerprint() -> None:
-    """Ensure view artifacts yield stable plan fingerprints."""
+    """Ensure view artifacts yield stable plan fingerprints.
+
+    Raises:
+        ValueError: Re-raised when plan recording fails for reasons unrelated to wheel gating.
+    """
     runtime, _ = _runtime_with_sink()
     table = pa.table({"a": [1, 2]})
 

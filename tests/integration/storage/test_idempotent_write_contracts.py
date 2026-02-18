@@ -186,6 +186,9 @@ def test_write_pipeline_propagates_idempotent(tmp_path: Path) -> None:
 
     Written table's commit history should include app transaction with expected
     app_id and version.
+
+    Raises:
+        RuntimeError: Re-raised when Delta write fails for reasons other than wheel gating.
     """
     profile = conformance_profile()
     ctx = profile.session_context()
@@ -229,6 +232,9 @@ def test_schema_evolution_with_idempotent_write(tmp_path: Path) -> None:
     """Write A,B then A,B,C with schema evolution + idempotent; verify schema evolves.
 
     Final schema should have columns A,B,C; idempotent dedup should still work.
+
+    Raises:
+        RuntimeError: Re-raised when Delta write fails for reasons other than wheel gating.
     """
     profile = conformance_profile()
     ctx = profile.session_context()

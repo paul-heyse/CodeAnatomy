@@ -60,6 +60,7 @@ def get_otel_harness() -> OtelTestHarness:
     cached = _HARNESS_CACHE.get("value")
     if cached is not None:
         return cached
+
     reset_providers_for_tests()
     resource = Resource.create({"service.name": "codeanatomy-tests"})
 

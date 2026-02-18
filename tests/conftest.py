@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import faulthandler
+import importlib
 import json
 import os
 import platform
@@ -281,3 +282,74 @@ def require_native_runtime() -> None:
         _ = load_schema_runtime()
     except (ImportError, RuntimeError, TypeError, ValueError) as exc:
         pytest.skip(f"native runtime contract unavailable: {exc}")
+
+
+_WHEEL_GATED_TEST_FILES: tuple[str, ...] = (
+    "tests/e2e/test_extraction_to_cpg.py",
+    "tests/integration/extraction/test_byte_span_canonicalization.py",
+    "tests/integration/extraction/test_file_identity_coordination.py",
+    "tests/integration/extraction/test_materialize_extract_plan.py",
+    "tests/integration/runtime/test_zero_row_internal_table_bootstrap.py",
+    "tests/integration/storage/test_cdf_cursor_lifecycle.py",
+    "tests/integration/storage/test_resolve_dataset_provider.py",
+    "tests/integration/test_cleanup_metadata.py",
+    "tests/integration/test_concurrent_writes_localstack.py",
+    "tests/integration/test_df_delta_smoke.py",
+    "tests/integration/test_engine_session_semantic_config.py",
+    "tests/integration/test_engine_session_smoke.py",
+    "tests/integration/test_resolver_identity_integration.py",
+    "tests/integration/test_snapshot_identity.py",
+    "tests/integration/test_substrait_cross_validation.py",
+    "tests/integration/test_vacuum_retention.py",
+    "tests/integration/test_zero_row_bootstrap_e2e.py",
+    "tests/plan_golden/test_plan_artifacts.py",
+    "tests/unit/test_ast_extract.py",
+    "tests/unit/test_datafusion_projection_pushdown.py",
+    "tests/unit/test_extraction_orchestrator.py",
+    "tests/unit/test_inferred_deps.py",
+    "tests/unit/test_lineage_plan_variants.py",
+    "tests/unit/test_prepared_statements.py",
+    "tests/unit/test_sql_param_binding.py",
+    "tests/unit/test_substrait_validation.py",
+    "tests/unit/test_view_registry_snapshot.py",
+)
+
+
+def _probe_wheel_runtime_gaps() -> tuple[str, ...]:
+    gaps: list[str] = []
+    extension = None
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            extension = importlib.import_module(module_name)
+            break
+        except ImportError:
+            continue
+    if extension is None or not callable(getattr(extension, "delta_write_ipc", None)):
+        gaps.append("delta_write_ipc unavailable")
+    try:
+        from extraction.rust_session_bridge import (
+            build_extraction_session,
+            extraction_session_payload,
+        )
+
+        _ = build_extraction_session(extraction_session_payload())
+    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+        gaps.append(f"extraction session bridge unavailable ({exc})")
+    return tuple(gaps)
+
+
+_WHEEL_RUNTIME_GAPS = _probe_wheel_runtime_gaps()
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Apply wheel-runtime skip markers during test collection."""
+    _ = config
+    if not _WHEEL_RUNTIME_GAPS:
+        return
+    reason = "wheel-gated runtime unavailable: " + "; ".join(_WHEEL_RUNTIME_GAPS)
+    skip_mark = pytest.mark.skip(reason=reason)
+    gated_files = set(_WHEEL_GATED_TEST_FILES)
+    for item in items:
+        file_path = item.nodeid.split("::", maxsplit=1)[0]
+        if file_path in gated_files:
+            item.add_marker(skip_mark)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING
 
 from tools.cq.search.tree_sitter.rust_lane.availability import (
     is_tree_sitter_rust_available as _is_tree_sitter_rust_available,
@@ -34,6 +34,19 @@ from tools.cq.search.tree_sitter.rust_lane.runtime_query_execution import (
     collect_query_pack_captures as _collect_query_pack_captures_impl,
 )
 
+if TYPE_CHECKING:
+    from tree_sitter import Node
+
+    from tools.cq.search.tree_sitter.contracts.core_models import (
+        ObjectEvidenceRowV1,
+        QueryExecutionSettingsV1,
+        QueryWindowV1,
+        TreeSitterQueryHitV1,
+    )
+    from tools.cq.search.tree_sitter.core.parse import ParseSession
+    from tools.cq.search.tree_sitter.rust_lane.injections import InjectionPlanV1
+    from tools.cq.search.tree_sitter.tags import RustTagEventV1
+
 try:
     from tree_sitter import Point as _TreeSitterPoint
 except ImportError:  # pragma: no cover - availability guard
@@ -55,7 +68,7 @@ class RustLaneEnrichmentSettingsV1:
 class RustLaneRuntimeDepsV1:
     """Runtime dependency overrides for Rust tree-sitter enrichment."""
 
-    parse_session: object | None = None
+    parse_session: ParseSession | None = None
     cache_backend: object | None = None
 
 
@@ -71,30 +84,45 @@ def is_tree_sitter_rust_available() -> bool:
 
 def _collect_query_pack_captures(
     *,
-    root: object,
+    root: Node,
     source_bytes: bytes,
-    windows: tuple[object, ...],
-    settings: object,
-) -> tuple[dict[str, list[object]], tuple[object, ...], tuple[object, ...], dict[str, object], tuple[object, ...], tuple[object, ...]]:
-    return cast(
-        "tuple[dict[str, list[object]], tuple[object, ...], tuple[object, ...], dict[str, object], tuple[object, ...], tuple[object, ...]]",
-        _collect_query_pack_captures_impl(
-            root=cast("object", root),
-            source_bytes=source_bytes,
-            windows=cast("tuple[object, ...]", windows),
-            settings=cast("object", settings),
-        ),
+    windows: tuple[QueryWindowV1, ...],
+    settings: QueryExecutionSettingsV1,
+) -> tuple[
+    dict[str, list[Node]],
+    tuple[ObjectEvidenceRowV1, ...],
+    tuple[TreeSitterQueryHitV1, ...],
+    dict[str, object],
+    tuple[InjectionPlanV1, ...],
+    tuple[RustTagEventV1, ...],
+]:
+    return _collect_query_pack_captures_impl(
+        root=root,
+        source_bytes=source_bytes,
+        windows=windows,
+        settings=settings,
     )
 
 
 def collect_query_pack_captures(
     *,
-    root: object,
+    root: Node,
     source_bytes: bytes,
-    windows: tuple[object, ...],
-    settings: object,
-) -> tuple[dict[str, list[object]], tuple[object, ...], tuple[object, ...], dict[str, object], tuple[object, ...], tuple[object, ...]]:
-    """Collect captures, telemetry, and lane artifacts for Rust query packs."""
+    windows: tuple[QueryWindowV1, ...],
+    settings: QueryExecutionSettingsV1,
+) -> tuple[
+    dict[str, list[Node]],
+    tuple[ObjectEvidenceRowV1, ...],
+    tuple[TreeSitterQueryHitV1, ...],
+    dict[str, object],
+    tuple[InjectionPlanV1, ...],
+    tuple[RustTagEventV1, ...],
+]:
+    """Collect captures, telemetry, and lane artifacts for Rust query packs.
+
+    Returns:
+        tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], tuple[TreeSitterQueryHitV1, ...], dict[str, object], tuple[InjectionPlanV1, ...], tuple[RustTagEventV1, ...]]: Query-pack artifacts.
+    """
     return _collect_query_pack_captures(
         root=root,
         source_bytes=source_bytes,
@@ -105,7 +133,7 @@ def collect_query_pack_captures(
 
 def _collect_query_pack_payload(
     *,
-    root: object,
+    root: Node,
     source_bytes: bytes,
     byte_span: tuple[int, int],
     changed_ranges: tuple[object, ...] = (),
@@ -113,7 +141,7 @@ def _collect_query_pack_payload(
     file_key: str | None = None,
 ) -> dict[str, object]:
     return _collect_query_pack_payload_impl(
-        root=cast("object", root),
+        root=root,
         source_bytes=source_bytes,
         byte_span=byte_span,
         changed_ranges=changed_ranges,
@@ -124,14 +152,18 @@ def _collect_query_pack_payload(
 
 def collect_query_pack_payload(
     *,
-    root: object,
+    root: Node,
     source_bytes: bytes,
     byte_span: tuple[int, int],
     changed_ranges: tuple[object, ...] = (),
     query_budget_ms: int | None = None,
     file_key: str | None = None,
 ) -> dict[str, object]:
-    """Collect query-pack payload for the provided byte span."""
+    """Collect query-pack payload for the provided byte span.
+
+    Returns:
+        dict[str, object]: Query-pack payload for the selected byte range.
+    """
     return _collect_query_pack_payload(
         root=root,
         source_bytes=source_bytes,
@@ -146,18 +178,26 @@ def _collect_payload_with_timings(request: _RustPayloadBuildRequestV1) -> dict[s
     return _collect_payload_with_timings_impl(request)
 
 
-def collect_payload_with_timings(request: object) -> dict[str, object]:
-    """Collect enrichment payload with stage timing metadata."""
-    return _collect_payload_with_timings(cast("_RustPayloadBuildRequestV1", request))
+def collect_payload_with_timings(request: _RustPayloadBuildRequestV1) -> dict[str, object]:
+    """Collect enrichment payload with stage timing metadata.
+
+    Returns:
+        dict[str, object]: Payload augmented with stage timings/status.
+    """
+    return _collect_payload_with_timings(request)
 
 
 def _run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, object] | None:
     return _run_rust_enrichment_pipeline_impl(request)
 
 
-def run_rust_enrichment_pipeline(request: object) -> dict[str, object] | None:
-    """Run full Rust enrichment pipeline for a source request."""
-    return _run_rust_enrichment_pipeline(cast("_RustPipelineRequestV1", request))
+def run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, object] | None:
+    """Run full Rust enrichment pipeline for a source request.
+
+    Returns:
+        dict[str, object] | None: Canonical payload when enrichment succeeds.
+    """
+    return _run_rust_enrichment_pipeline(request)
 
 
 def enrich_rust_context(
@@ -169,7 +209,11 @@ def enrich_rust_context(
     settings: RustLaneEnrichmentSettingsV1 | None = None,
     runtime_deps: RustLaneRuntimeDepsV1 | None = None,
 ) -> dict[str, object] | None:
-    """Extract optional Rust context details for a match location."""
+    """Extract optional Rust context details for a match location.
+
+    Returns:
+        dict[str, object] | None: Rust enrichment payload for the target point.
+    """
     if not is_tree_sitter_rust_available() or line < 1 or col < 0 or len(source) > MAX_SOURCE_BYTES:
         if len(source) > MAX_SOURCE_BYTES:
             logger.warning(
@@ -210,7 +254,11 @@ def enrich_rust_context_by_byte_range(
     settings: RustLaneEnrichmentSettingsV1 | None = None,
     runtime_deps: RustLaneRuntimeDepsV1 | None = None,
 ) -> dict[str, object] | None:
-    """Extract optional Rust context using byte offsets instead of line/col."""
+    """Extract optional Rust context using byte offsets instead of line/col.
+
+    Returns:
+        dict[str, object] | None: Rust enrichment payload for the target byte span.
+    """
     if not is_tree_sitter_rust_available() or byte_start < 0 or byte_end <= byte_start:
         return None
 

@@ -51,6 +51,9 @@ def write_delta_table(
     -------
     tuple[DataFusionRuntimeProfile, SessionContext, Path]
         Runtime profile, session context, and Delta table path.
+
+    Raises:
+        RuntimeError: Re-raised when Delta write fails for reasons other than wheel gating.
     """
     resolved_options = options or DeltaSeedOptions()
     runtime_profile = resolved_options.profile or DataFusionRuntimeProfile()

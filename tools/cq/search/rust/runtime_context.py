@@ -22,25 +22,25 @@ class RustEnrichmentRuntimeContext(msgspec.Struct):
 
 
 _DEFAULT_RUST_RUNTIME_CONTEXT_LOCK = threading.Lock()
-_DEFAULT_RUST_RUNTIME_CONTEXT_STATE: dict[str, RustEnrichmentRuntimeContext | None] = {
-    "context": None
-}
+_DEFAULT_RUST_RUNTIME_CONTEXT: RustEnrichmentRuntimeContext | None = None
 
 
 def get_default_rust_runtime_context() -> RustEnrichmentRuntimeContext:
     """Return process-default runtime context for Rust enrichment."""
+    global _DEFAULT_RUST_RUNTIME_CONTEXT
     with _DEFAULT_RUST_RUNTIME_CONTEXT_LOCK:
-        context = _DEFAULT_RUST_RUNTIME_CONTEXT_STATE["context"]
+        context = _DEFAULT_RUST_RUNTIME_CONTEXT
         if context is None:
             context = RustEnrichmentRuntimeContext()
-            _DEFAULT_RUST_RUNTIME_CONTEXT_STATE["context"] = context
+            _DEFAULT_RUST_RUNTIME_CONTEXT = context
         return context
 
 
 def set_default_rust_runtime_context(context: RustEnrichmentRuntimeContext | None) -> None:
     """Install or clear process-default Rust runtime context."""
+    global _DEFAULT_RUST_RUNTIME_CONTEXT
     with _DEFAULT_RUST_RUNTIME_CONTEXT_LOCK:
-        _DEFAULT_RUST_RUNTIME_CONTEXT_STATE["context"] = context
+        _DEFAULT_RUST_RUNTIME_CONTEXT = context
 
 
 def ensure_rust_cache_registered(ctx: RustEnrichmentRuntimeContext) -> None:

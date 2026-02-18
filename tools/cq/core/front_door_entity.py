@@ -11,6 +11,7 @@ from tools.cq.core.front_door_contracts import (
     InsightRiskCountersV1,
 )
 from tools.cq.core.front_door_risk import risk_from_counters
+from tools.cq.core.render_utils import summary_value
 
 __all__ = ["augment_insight_with_semantic", "build_entity_insight"]
 
@@ -115,10 +116,10 @@ def build_entity_insight(request: EntityInsightBuildRequestV1) -> FrontDoorInsig
 
     target = assembly.target_from_finding(
         request.primary_target,
-        fallback_symbol=assembly.string_or_none(assembly.summary_value(request.summary, "query"))
-        or assembly.string_or_none(assembly.summary_value(request.summary, "entity_kind"))
+        fallback_symbol=assembly.string_or_none(summary_value(request.summary, "query"))
+        or assembly.string_or_none(summary_value(request.summary, "entity_kind"))
         or "entity target",
-        fallback_kind=assembly.string_or_none(assembly.summary_value(request.summary, "entity_kind"))
+        fallback_kind=assembly.string_or_none(summary_value(request.summary, "entity_kind"))
         or "entity",
         selection_reason=(
             "top_entity_result" if request.primary_target is not None else "fallback_query"

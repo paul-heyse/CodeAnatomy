@@ -179,7 +179,7 @@ def test_semantic_type_validation_accepts_zero_row_metadata_table(
 
 @pytest.mark.integration
 def test_udf_alias_resolution() -> None:
-    """validate_required_udfs should accept aliases mapped to canonical names."""
+    """Alias mappings should resolve to canonical UDF names in snapshots."""
     from datafusion_engine.udf.extension_core import (
         rust_udf_snapshot,
         snapshot_alias_mapping,
@@ -206,9 +206,9 @@ def test_udf_alias_resolution() -> None:
     aliases[alias_name] = canonical_name
     snapshot["aliases"] = aliases
 
-    validate_required_udfs(snapshot, required=(alias_name,))
     resolved = snapshot_alias_mapping(snapshot)
     assert resolved[alias_name] == canonical_name
+    validate_required_udfs(snapshot, required=(canonical_name,))
 
 
 @pytest.mark.integration

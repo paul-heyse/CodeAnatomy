@@ -47,6 +47,7 @@ def _metric_points(data: object, name: str) -> list[object]:
 def test_metrics_catalog_emits() -> None:
     """Ensure the metric catalog emits expected instrument names."""
     harness = get_otel_harness()
+    harness.reset()
     record_stage_duration("extract", 12.5, status="ok")
     record_task_duration("scan", 7.0, status="ok")
     set_dataset_stats("cpg_nodes", rows=100, columns=5)

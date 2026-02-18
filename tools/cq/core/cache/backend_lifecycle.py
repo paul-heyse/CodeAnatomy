@@ -12,23 +12,25 @@ from tools.cq.core.cache.policy import default_cache_policy
 
 _BACKEND_LOCK = threading.Lock()
 _DEFAULT_BACKEND_REGISTRY_LOCK = threading.Lock()
-_DEFAULT_BACKEND_REGISTRY_STATE: dict[str, BackendRegistry | None] = {"registry": None}
+_DEFAULT_BACKEND_REGISTRY: BackendRegistry | None = None
 
 
 def get_default_backend_registry() -> BackendRegistry:
     """Return process-default workspace backend registry."""
+    global _DEFAULT_BACKEND_REGISTRY
     with _DEFAULT_BACKEND_REGISTRY_LOCK:
-        registry = _DEFAULT_BACKEND_REGISTRY_STATE["registry"]
+        registry = _DEFAULT_BACKEND_REGISTRY
         if registry is None:
             registry = BackendRegistry()
-            _DEFAULT_BACKEND_REGISTRY_STATE["registry"] = registry
+            _DEFAULT_BACKEND_REGISTRY = registry
         return registry
 
 
 def set_default_backend_registry(registry: BackendRegistry | None) -> None:
     """Set or clear process-default backend registry."""
+    global _DEFAULT_BACKEND_REGISTRY
     with _DEFAULT_BACKEND_REGISTRY_LOCK:
-        _DEFAULT_BACKEND_REGISTRY_STATE["registry"] = registry
+        _DEFAULT_BACKEND_REGISTRY = registry
 
 
 def _close_backends(backends: list[CqCacheBackend]) -> None:

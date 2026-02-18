@@ -14,6 +14,7 @@ from tools.cq.core.front_door_contracts import (
     InsightLocationV1,
     InsightNeighborhoodV1,
     InsightSliceV1,
+    InsightTargetV1,
     NeighborhoodSource,
     SummaryLike,
 )
@@ -73,7 +74,11 @@ def build_neighborhood_from_slices(
     source: NeighborhoodSource = "structural",
     overflow_artifact_ref: str | None = None,
 ) -> InsightNeighborhoodV1:
-    """Map structural neighborhood slices into insight neighborhood schema."""
+    """Map structural neighborhood slices into insight neighborhood schema.
+
+    Returns:
+        InsightNeighborhoodV1: Canonical neighborhood payload.
+    """
     callers = _collect_slice_group(
         slices,
         kinds={"callers"},
@@ -121,6 +126,11 @@ def build_neighborhood_from_slices(
 
 
 def default_search_budget(*, target_candidate_count: int) -> InsightBudgetV1:
+    """Build default budget policy for search insights.
+
+    Returns:
+        InsightBudgetV1: Search budget tuned by target candidate count.
+    """
     top_candidates = (
         min(DEFAULT_INSIGHT_THRESHOLDS.default_top_candidates, target_candidate_count)
         if target_candidate_count > 0
@@ -134,6 +144,11 @@ def default_search_budget(*, target_candidate_count: int) -> InsightBudgetV1:
 
 
 def default_calls_budget() -> InsightBudgetV1:
+    """Build default budget policy for calls insights.
+
+    Returns:
+        InsightBudgetV1: Standard calls budget.
+    """
     return InsightBudgetV1(
         top_candidates=DEFAULT_INSIGHT_THRESHOLDS.default_top_candidates,
         preview_per_slice=DEFAULT_INSIGHT_THRESHOLDS.default_preview_per_slice,
@@ -142,6 +157,11 @@ def default_calls_budget() -> InsightBudgetV1:
 
 
 def default_entity_budget() -> InsightBudgetV1:
+    """Build default budget policy for entity insights.
+
+    Returns:
+        InsightBudgetV1: Standard entity budget.
+    """
     return InsightBudgetV1(
         top_candidates=DEFAULT_INSIGHT_THRESHOLDS.default_top_candidates,
         preview_per_slice=DEFAULT_INSIGHT_THRESHOLDS.default_preview_per_slice,
@@ -155,10 +175,20 @@ def _max_bucket(lhs: str, rhs: str) -> str:
 
 
 def max_bucket(lhs: str, rhs: str) -> str:
+    """Select the higher confidence bucket.
+
+    Returns:
+        str: Higher-priority bucket between the two inputs.
+    """
     return _max_bucket(lhs, rhs)
 
 
 def string_or_none(value: object) -> str | None:
+    """Return a normalized non-empty string value.
+
+    Returns:
+        str | None: Trimmed string when present, otherwise ``None``.
+    """
     if isinstance(value, str):
         text = value.strip()
         return text if text else None
@@ -179,6 +209,11 @@ def _int_or_none(value: object) -> int | None:
 
 
 def read_total(value: object, *, fallback: int) -> int:
+    """Read an integer total with fallback coercion.
+
+    Returns:
+        int: Parsed integer value or fallback.
+    """
     parsed = _int_or_none(value)
     return parsed if parsed is not None else fallback
 
@@ -199,9 +234,12 @@ def target_from_finding(
     fallback_symbol: str,
     fallback_kind: str,
     selection_reason: str,
-):
-    from tools.cq.core.front_door_contracts import InsightTargetV1
+) -> InsightTargetV1:
+    """Build an insight target from a finding plus fallback metadata.
 
+    Returns:
+        InsightTargetV1: Selected target with normalized identity/location fields.
+    """
     if finding is None:
         return InsightTargetV1(
             symbol=fallback_symbol,
@@ -235,6 +273,11 @@ def target_from_finding(
 
 
 def confidence_from_findings(findings: Sequence[Finding]) -> InsightConfidenceV1:
+    """Aggregate confidence values from finding score details.
+
+    Returns:
+        InsightConfidenceV1: Derived confidence score/bucket/evidence kind.
+    """
     best_score = 0.0
     best_bucket = "low"
     evidence_kind = "unknown"
@@ -305,6 +348,11 @@ def _read_semantic_telemetry(summary: SummaryLike) -> tuple[int, int, int, int]:
 
 
 def degradation_from_summary(summary: SummaryLike) -> InsightDegradationV1:
+    """Derive degradation state from summary telemetry fields.
+
+    Returns:
+        InsightDegradationV1: Degradation contract with semantic/scan/scope statuses.
+    """
     provider, semantic_available = _semantic_provider_and_availability(summary)
     attempted, applied, failed, timed_out = _read_semantic_telemetry(summary)
     semantic_reasons: list[str] = []
@@ -353,6 +401,11 @@ def degradation_from_summary(summary: SummaryLike) -> InsightDegradationV1:
 
 
 def empty_neighborhood() -> InsightNeighborhoodV1:
+    """Construct an unavailable neighborhood placeholder.
+
+    Returns:
+        InsightNeighborhoodV1: Empty neighborhood payload.
+    """
     return InsightNeighborhoodV1(
         callers=InsightSliceV1(availability="unavailable", source="none"),
         callees=InsightSliceV1(availability="unavailable", source="none"),
@@ -368,6 +421,11 @@ def merge_slice(
     preview: tuple[SemanticNodeRefV1, ...],
     source: NeighborhoodSource,
 ) -> InsightSliceV1:
+    """Merge structural and semantic slice totals/preview values.
+
+    Returns:
+        InsightSliceV1: Merged slice payload.
+    """
     merged_total = max(original.total, total)
     merged_preview = preview or original.preview
     availability: Availability = "full" if merged_total > 0 else "partial"
@@ -384,6 +442,11 @@ def node_refs_from_semantic_entries(
     payload: object,
     limit: int,
 ) -> tuple[SemanticNodeRefV1, ...]:
+    """Convert semantic entry mappings into node-ref previews.
+
+    Returns:
+        tuple[SemanticNodeRefV1, ...]: Canonical node-reference previews.
+    """
     if not isinstance(payload, list):
         return ()
     refs: list[SemanticNodeRefV1] = []
@@ -408,6 +471,11 @@ def node_refs_from_semantic_entries(
 
 
 def read_reference_total(payload: dict[str, object]) -> int | None:
+    """Read reference total count from semantic payload variants.
+
+    Returns:
+        int | None: Reference total when present.
+    """
     local_scope = payload.get("local_scope_context")
     if not isinstance(local_scope, dict):
         symbol_grounding = payload.get("symbol_grounding")

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
 
+import pyarrow as pa
 import pyarrow.dataset as ds
 
 from core_types import JsonDict
-from datafusion_engine.arrow.interop import ComputeExpression, SchemaLike
-from datafusion_engine.obs.metrics_bridge import schema_to_dict
+from datafusion_engine.arrow.interop import ComputeExpression, ensure_expression
 from obs.metrics import fragment_file_hints, list_fragments, row_group_count, scan_task_count
 from obs.otel.metrics import set_scan_telemetry
 from serde_msgspec import StructBaseCompat
@@ -53,7 +54,7 @@ class ScanTelemetryOptions:
 def fragment_telemetry(
     dataset: ds.Dataset,
     *,
-    predicate: ComputeExpression | None = None,
+    predicate: object | None = None,
     scanner: ds.Scanner | None = None,
     options: ScanTelemetryOptions | None = None,
 ) -> ScanTelemetry:
@@ -65,15 +66,21 @@ def fragment_telemetry(
         Fragment counts and estimated row totals (when available).
     """
     resolved = options or ScanTelemetryOptions()
-    fragments = list_fragments(dataset, predicate=predicate)
+    predicate_expr: ComputeExpression | None = None
+    if predicate is not None:
+        try:
+            predicate_expr = ensure_expression(predicate)
+        except TypeError:
+            predicate_expr = None
+    fragments = list_fragments(dataset, predicate=predicate_expr)
     try:
-        count_rows = dataset.count_rows(filter=predicate)
+        count_rows = dataset.count_rows(filter=predicate_expr)
     except (AttributeError, NotImplementedError, TypeError, ValueError):
         count_rows = None
     fragment_paths, partition_expressions = _fragment_paths_and_partitions(fragments)
     estimated_rows = _estimated_rows(fragments)
     if scanner is None:
-        scanner = dataset.scanner(filter=predicate)
+        scanner = dataset.scanner(filter=predicate_expr)
     dataset_schema = _schema_payload(getattr(dataset, "schema", None))
     projected_schema = _schema_payload(getattr(scanner, "schema", None))
     required_columns, scan_columns = _scan_columns(scanner, resolved)
@@ -148,8 +155,10 @@ def _scan_columns(
 def _schema_payload(schema: object | None) -> JsonDict | None:
     if schema is None:
         return None
-    if isinstance(schema, SchemaLike):
-        return schema_to_dict(schema)
+    if isinstance(schema, pa.Schema):
+        from datafusion_engine.arrow.abi import schema_to_dict
+
+        return schema_to_dict(cast("pa.Schema", schema))
     return None
 
 

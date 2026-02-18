@@ -85,6 +85,7 @@ if TYPE_CHECKING:
 _DEFAULT_SCOPE_DEPTH = 24
 _CROSSCHECK_ENV = "CQ_RUST_ENRICHMENT_CROSSCHECK"
 logger = logging.getLogger(__name__)
+_CLEAR_CALLBACK_STATE: dict[str, bool] = {"registered": False}
 
 _CROSSCHECK_METADATA_KEYS: frozenset[str] = frozenset(
     {"enrichment_status", "enrichment_sources", "degrade_reason", "language"}
@@ -96,6 +97,7 @@ def _source_hash(source_bytes: bytes) -> str:
 
 
 def _rust_ast_cache() -> BoundedCache[str, tuple[SgRoot, str]]:
+    ensure_rust_clear_callback_registered()
     ctx = get_default_rust_runtime_context()
     ensure_rust_cache_registered(ctx)
     return cast("BoundedCache[str, tuple[SgRoot, str]]", ctx.ast_cache)
@@ -125,7 +127,12 @@ def clear_rust_enrichment_cache() -> None:
     _rust_ast_cache().clear()
 
 
-CACHE_REGISTRY.register_clear_callback("rust", clear_rust_enrichment_cache)
+def ensure_rust_clear_callback_registered() -> None:
+    """Lazily register Rust enrichment clear callback once."""
+    if _CLEAR_CALLBACK_STATE["registered"]:
+        return
+    CACHE_REGISTRY.register_clear_callback("rust", clear_rust_enrichment_cache)
+    _CLEAR_CALLBACK_STATE["registered"] = True
 
 
 def _node_text(node: SgNode | None) -> str | None:
@@ -666,6 +673,7 @@ __all__ = [
     "clear_rust_enrichment_cache",
     "enrich_context_by_byte_range",
     "enrich_rust_context_by_byte_range",
+    "ensure_rust_clear_callback_registered",
     "extract_rust_context",
     "lint_rust_enrichment_schema",
     "runtime_available",

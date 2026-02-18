@@ -31,9 +31,11 @@ except ImportError:  # pragma: no cover - exercised via availability checks
 
 _MAX_TREE_CACHE_ENTRIES = 128
 _CACHE_REGISTRATION_STATE: dict[str, bool] = {"registered": False}
+_CLEAR_CALLBACK_STATE: dict[str, bool] = {"registered": False}
 
 
 def _tree_cache() -> BoundedCache[str, None]:
+    ensure_runtime_cache_callback_registered()
     runtime_context = get_default_context()
     cache = runtime_context.rust_tree_cache
     if isinstance(cache, BoundedCache):
@@ -47,6 +49,14 @@ def _tree_cache() -> BoundedCache[str, None]:
         CACHE_REGISTRY.register_cache("rust", "rust_lane:tree_cache", created)
         _CACHE_REGISTRATION_STATE["registered"] = True
     return created
+
+
+def ensure_runtime_cache_callback_registered() -> None:
+    """Lazily register Rust runtime cache clear callback once."""
+    if _CLEAR_CALLBACK_STATE["registered"]:
+        return
+    CACHE_REGISTRY.register_clear_callback("rust", clear_tree_sitter_rust_cache)
+    _CLEAR_CALLBACK_STATE["registered"] = True
 
 
 def _tree_cache_evictions() -> int:
@@ -154,17 +164,18 @@ def _parse_with_session(
 
 def clear_tree_sitter_rust_cache() -> None:
     """Clear per-process Rust parser caches and reset debug counters."""
-    from tools.cq.search.tree_sitter.rust_lane.query_cache import clear_query_cache
+    from tools.cq.search.tree_sitter.rust_lane.query_cache import (
+        clear_query_cache,
+        ensure_query_cache_callback_registered,
+    )
 
     clear_parse_session(language="rust")
     _tree_cache().clear()
     _set_tree_cache_evictions(0)
     _rust_language.cache_clear()
     compile_query.cache_clear()
+    ensure_query_cache_callback_registered()
     clear_query_cache()
-
-
-CACHE_REGISTRY.register_clear_callback("rust", clear_tree_sitter_rust_cache)
 
 
 def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
@@ -178,6 +189,7 @@ def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
     session = get_parse_session(
         language="rust", parser_factory=lambda: make_parser_from_language(_rust_language())
     )
+    ensure_runtime_cache_callback_registered()
     stats = session.stats()
     return {
         "entries": stats.entries,
@@ -192,6 +204,7 @@ def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
 
 __all__ = [
     "clear_tree_sitter_rust_cache",
+    "ensure_runtime_cache_callback_registered",
     "get_tree_sitter_rust_cache_stats",
     "rust_field_ids",
 ]

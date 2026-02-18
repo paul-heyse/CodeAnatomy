@@ -10,6 +10,7 @@ from tools.cq.core.structs import CqStruct
 
 if TYPE_CHECKING:
     from tools.cq.core.ports import RenderEnrichmentPort
+
     type RenderEnrichmentFactory = Callable[[], RenderEnrichmentPort | None]
 else:
     RenderEnrichmentFactory = Callable[[], object | None]

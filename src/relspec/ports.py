@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Protocol
 
 
 class LineagePort(Protocol):
     """Abstract lineage extraction used by dependency inference."""
 
-    def extract_lineage(self, plan: object) -> object:
+    def extract_lineage(
+        self,
+        plan: object,
+        *,
+        udf_snapshot: Mapping[str, object] | None = None,
+    ) -> object:
         """Extract lineage payload for a compiled plan."""
         ...
 

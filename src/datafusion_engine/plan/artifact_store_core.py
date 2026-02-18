@@ -66,6 +66,15 @@ from datafusion_engine.plan.artifact_serialization import (
 from datafusion_engine.plan.artifact_serialization import (
     udf_compatibility as _udf_compatibility,
 )
+from datafusion_engine.plan.artifact_store_tables import (
+    pipeline_events_schema,
+    plan_artifacts_schema,
+    profile_name,
+    record_pipeline_events_summary,
+    record_plan_artifact_summary,
+    refresh_pipeline_events_registration,
+    refresh_plan_artifacts_registration,
+)
 from datafusion_engine.plan.perf_policy import PlanBundleComparisonPolicy
 from datafusion_engine.plan.signals import extract_plan_signals, plan_signals_payload
 from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow
@@ -770,22 +779,6 @@ def build_plan_artifact_row(
     )
 
 
-from datafusion_engine.plan.artifact_store_tables import (
-    bootstrap_pipeline_events_table,
-    bootstrap_plan_artifacts_table,
-    delta_schema_available,
-    pipeline_events_location,
-    pipeline_events_schema,
-    plan_artifacts_location,
-    plan_artifacts_schema,
-    profile_name,
-    record_pipeline_events_summary,
-    record_plan_artifact_summary,
-    refresh_pipeline_events_registration,
-    refresh_plan_artifacts_registration,
-    reset_artifacts_table_path,
-)
-
 __all__ = [
     "PIPELINE_EVENTS_TABLE_NAME",
     "PLAN_ARTIFACTS_TABLE_NAME",
@@ -796,10 +789,7 @@ __all__ = [
     "PlanArtifactRow",
     "PlanArtifactsForViewsRequest",
     "WriteArtifactRow",
-    "bootstrap_pipeline_events_table",
-    "bootstrap_plan_artifacts_table",
     "build_plan_artifact_row",
-    "delta_schema_available",
     "ensure_pipeline_events_table",
     "ensure_plan_artifacts_table",
     "persist_execution_artifact",
@@ -808,8 +798,5 @@ __all__ = [
     "persist_plan_artifact_rows",
     "persist_plan_artifacts_for_views",
     "persist_write_artifact",
-    "pipeline_events_location",
-    "plan_artifacts_location",
-    "reset_artifacts_table_path",
     "validate_plan_determinism",
 ]

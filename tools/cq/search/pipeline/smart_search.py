@@ -11,7 +11,7 @@ import msgspec
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
 from tools.cq.core.schema import CqResult, ms, update_result_summary
 from tools.cq.core.types import QueryLanguage, expand_language_scope
-from tools.cq.orchestration.multilang_orchestrator import execute_by_language_scope
+from tools.cq.orchestration.language_scope import execute_by_language_scope
 from tools.cq.search.pipeline.assembly import assemble_smart_search_result
 from tools.cq.search.pipeline.candidate_phase import run_candidate_phase as run_candidate_phase_impl
 from tools.cq.search.pipeline.classifier import QueryMode, clear_caches

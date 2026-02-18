@@ -154,4 +154,71 @@ def sort_pack_plans(
     )
 
 
-__all__ = ["build_pack_plan", "build_pattern_plan", "sort_pack_plans"]
+def compile_pack_source_rows(
+    *,
+    language: str,
+    source_rows: Iterable[tuple[str, str]],
+    request_surface: str = "artifact",
+    ignored_errors: tuple[type[Exception], ...] = (),
+) -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
+    """Compile one language's query-pack source rows into planned rows.
+
+    Parameters
+    ----------
+    language
+        Query language for compilation.
+    source_rows
+        Iterable of ``(pack_name, source)`` pairs.
+    request_surface
+        Query specialization surface passed to the compiler.
+    ignored_errors
+        Optional exception types to suppress while compiling individual packs.
+
+    Returns:
+    -------
+    tuple[tuple[str, str, QueryPackPlanV1], ...]
+        Sorted pack rows as ``(pack_name, source, plan)``.
+    """
+    from tools.cq.search.tree_sitter.query.compiler import compile_query
+
+    rows: list[tuple[str, str, QueryPackPlanV1]] = []
+    for pack_name, source in source_rows:
+        if not pack_name.endswith(".scm"):
+            continue
+        if ignored_errors:
+            try:
+                plan = build_pack_plan(
+                    pack_name=pack_name,
+                    query=compile_query(
+                        language=language,
+                        pack_name=pack_name,
+                        source=source,
+                        request_surface=request_surface,
+                    ),
+                    query_text=source,
+                    language=language,
+                )
+            except ignored_errors:
+                continue
+        else:
+            plan = build_pack_plan(
+                pack_name=pack_name,
+                query=compile_query(
+                    language=language,
+                    pack_name=pack_name,
+                    source=source,
+                    request_surface=request_surface,
+                ),
+                query_text=source,
+                language=language,
+            )
+        rows.append((pack_name, source, plan))
+    return sort_pack_plans(rows)
+
+
+__all__ = [
+    "build_pack_plan",
+    "build_pattern_plan",
+    "compile_pack_source_rows",
+    "sort_pack_plans",
+]

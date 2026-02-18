@@ -48,7 +48,7 @@ from tools.cq.search.tree_sitter.python_lane.runtime import (
     parse_python_tree_with_ranges,
 )
 from tools.cq.search.tree_sitter.query.compiler import compile_query
-from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
+from tools.cq.search.tree_sitter.query.planner import compile_pack_source_rows
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
     make_query_predicate,
@@ -234,27 +234,16 @@ def _parse_quality(captures: dict[str, list[Node]], source_bytes: bytes) -> dict
 
 @lru_cache(maxsize=1)
 def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    sources = load_query_pack_sources("python", include_distribution=False)
-    rows = [
-        (
-            source.pack_name,
-            source.source,
-            build_pack_plan(
-                pack_name=source.pack_name,
-                query=compile_query(
-                    language="python",
-                    pack_name=source.pack_name,
-                    source=source.source,
-                    request_surface="artifact",
-                ),
-                query_text=source.source,
-                language="python",
-            ),
-        )
-        for source in sources
+    source_rows = tuple(
+        (source.pack_name, source.source)
+        for source in load_query_pack_sources("python", include_distribution=False)
         if source.pack_name.endswith(".scm")
-    ]
-    return tuple((pack_name, source, plan) for pack_name, source, plan in sort_pack_plans(rows))
+    )
+    return compile_pack_source_rows(
+        language="python",
+        source_rows=source_rows,
+        request_surface="artifact",
+    )
 
 
 def _pack_sources() -> tuple[tuple[str, str], ...]:

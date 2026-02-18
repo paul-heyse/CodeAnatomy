@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from tools.cq.search._shared.enrichment_contracts import (
     IncrementalEnrichmentV1,
     PythonEnrichmentV1,
     RustTreeSitterEnrichmentV1,
+    python_enrichment_payload,
     rust_enrichment_payload,
     wrap_incremental_enrichment,
     wrap_python_enrichment,
@@ -72,6 +74,7 @@ _TREE_SITTER_QUERY_BUDGET_FALLBACK_MS = budget_ms_per_anchor(
     timeout_seconds=INTERACTIVE.timeout_seconds,
     max_anchors=INTERACTIVE.max_total_matches,
 )
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -482,7 +485,13 @@ def _maybe_rust_tree_sitter_enrichment(
             query_budget_ms=query_budget_ms,
         )
         return wrap_rust_enrichment(normalize_rust_payload(payload))
-    except ENRICHMENT_ERRORS:
+    except ENRICHMENT_ERRORS as exc:
+        logger.warning(
+            "Rust enrichment degraded for %s:%s (%s)",
+            file_path,
+            raw.line,
+            type(exc).__name__,
+        )
         return None
 
 
@@ -529,7 +538,13 @@ def _maybe_python_enrichment(
             )
         )
         return wrap_python_enrichment(normalize_python_payload(payload))
-    except ENRICHMENT_ERRORS:
+    except ENRICHMENT_ERRORS as exc:
+        logger.warning(
+            "Python enrichment degraded for %s:%s (%s)",
+            file_path,
+            raw.line,
+            type(exc).__name__,
+        )
         return None
 
 
@@ -546,7 +561,7 @@ def _maybe_incremental_enrichment(
     if source is None:
         return None
     python_payload = (
-        normalize_python_payload(request.python_enrichment.payload)
+        normalize_python_payload(python_enrichment_payload(request.python_enrichment))
         if request.python_enrichment is not None
         else None
     )
@@ -564,7 +579,13 @@ def _maybe_incremental_enrichment(
                 runtime_enrichment=request.mode.includes_inspect,
             )
         )
-    except ENRICHMENT_ERRORS:
+    except ENRICHMENT_ERRORS as exc:
+        logger.warning(
+            "Incremental enrichment degraded for %s:%s (%s)",
+            request.file_path,
+            request.raw.line,
+            type(exc).__name__,
+        )
         return None
     if outcome is not None:
         return outcome

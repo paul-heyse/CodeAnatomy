@@ -6,7 +6,6 @@ and scheduling paths use.
 
 from __future__ import annotations
 
-import contextlib
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -20,13 +19,7 @@ from core_types import JsonValue
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
 from datafusion_engine.delta.store_policy import delta_store_policy_hash
 from datafusion_engine.plan.bundle_environment import (
-    capture_udf_metadata_for_plan as _capture_udf_metadata_for_plan,
-)
-from datafusion_engine.plan.bundle_environment import (
     df_settings_snapshot as _df_settings_snapshot,
-)
-from datafusion_engine.plan.bundle_environment import (
-    function_registry_hash as _function_registry_hash,
 )
 from datafusion_engine.plan.bundle_environment import (
     information_schema_hash as _information_schema_hash,
@@ -54,15 +47,33 @@ from datafusion_engine.plan.plan_fingerprint import (
     PlanFingerprintInputs,
     compute_plan_fingerprint,
 )
+from datafusion_engine.plan.plan_identity import PlanIdentityInputs, plan_identity_payload
 from datafusion_engine.plan.plan_proto import plan_proto_payload, proto_serialization_enabled
+from datafusion_engine.plan.plan_utils import (
+    explain_rows_from_text,
+    plan_display,
+    safe_execution_plan,
+    safe_logical_plan,
+    safe_optimized_logical_plan,
+)
+from datafusion_engine.plan.planning_env import (
+    function_registry_artifacts,
+    planning_env_hash,
+    planning_env_snapshot,
+    rulepack_hash,
+    rulepack_snapshot,
+)
 from datafusion_engine.plan.profiler import ExplainCapture, capture_explain
+from datafusion_engine.plan.substrait_artifacts import (
+    substrait_bytes_from_rust_bundle,
+    substrait_validation_payload,
+)
 from datafusion_engine.plan.udf_snapshot import (
     RequiredUdfArtifacts,
     UdfArtifacts,
     collect_udf_artifacts,
     required_udf_artifacts,
 )
-from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from obs.otel import SCOPE_PLANNING, stage_span
 from serde_artifacts import DeltaInputPin, PlanArtifacts, PlanProtoStatus
 from serde_msgspec import to_builtins
@@ -73,7 +84,6 @@ from serde_msgspec_ext import (
 )
 from utils.hashing import (
     hash_json_default,
-    hash_msgpack_canonical,
 )
 
 if TYPE_CHECKING:
@@ -151,7 +161,7 @@ class DataFusionPlanArtifact:
         str | None
             Indented logical plan display, or None if unavailable.
         """
-        return _plan_display(self.logical_plan, method="display_indent_schema")
+        return plan_display(self.logical_plan, method="display_indent_schema")
 
     def display_optimized_plan(self) -> str | None:
         """Return a string representation of the optimized logical plan.
@@ -161,7 +171,7 @@ class DataFusionPlanArtifact:
         str | None
             Indented optimized plan display, or None if unavailable.
         """
-        return _plan_display(self.optimized_logical_plan, method="display_indent_schema")
+        return plan_display(self.optimized_logical_plan, method="display_indent_schema")
 
     def display_execution_plan(self) -> str | None:
         """Return a string representation of the physical execution plan.
@@ -173,7 +183,7 @@ class DataFusionPlanArtifact:
         """
         if self.execution_plan is None:
             return None
-        return _plan_display(self.execution_plan, method="display_indent")
+        return plan_display(self.execution_plan, method="display_indent")
 
     def graphviz(self) -> str | None:
         """Return GraphViz DOT representation of the optimized plan.
@@ -494,22 +504,22 @@ def _plan_core_components(
         ValueError: If substrait generation is disabled.
     """
     t0 = time.perf_counter()
-    logical = cast("DataFusionLogicalPlan", _safe_logical_plan(df))
+    logical = cast("DataFusionLogicalPlan", safe_logical_plan(df))
     logical_ms = (time.perf_counter() - t0) * 1000.0
     t1 = time.perf_counter()
-    optimized = cast("DataFusionLogicalPlan | None", _safe_optimized_logical_plan(df))
+    optimized = cast("DataFusionLogicalPlan | None", safe_optimized_logical_plan(df))
     optimized_ms = (time.perf_counter() - t1) * 1000.0
     execution = None
     execution_ms = None
     if options.compute_execution_plan:
         t2 = time.perf_counter()
-        execution = _safe_execution_plan(df)
+        execution = safe_execution_plan(df)
         execution_ms = (time.perf_counter() - t2) * 1000.0
     if not options.compute_substrait:
         msg = "Substrait bytes are required for plan bundle construction."
         raise ValueError(msg)
     t3 = time.perf_counter()
-    substrait_bytes, rust_required_udfs = _substrait_bytes_from_rust_bundle(
+    substrait_bytes, rust_required_udfs = substrait_bytes_from_rust_bundle(
         ctx,
         df,
         session_runtime=options.session_runtime,
@@ -570,7 +580,7 @@ def _capture_explain_artifacts(
     _ExplainArtifacts
         Explain outputs captured for the bundle.
     """
-    if _is_explain_plan(_safe_logical_plan(df)):
+    if _is_explain_plan(safe_logical_plan(df)):
         return _ExplainArtifacts(tree=None, verbose=None, analyze=None)
     verbose = None
     if session_runtime is not None and session_runtime.profile.diagnostics.explain_verbose:
@@ -609,10 +619,10 @@ def _environment_artifacts(
         Environment artifacts for fingerprints and diagnostics.
     """
     df_settings = _df_settings_snapshot(ctx, session_runtime=session_runtime)
-    planning_env_snapshot = _planning_env_snapshot(session_runtime)
-    planning_env_hash = _planning_env_hash(planning_env_snapshot)
-    rulepack_snapshot = _rulepack_snapshot(ctx)
-    rulepack_hash = _rulepack_hash(rulepack_snapshot)
+    planning_snapshot = planning_env_snapshot(session_runtime)
+    planning_hash = planning_env_hash(planning_snapshot)
+    rules_snapshot = rulepack_snapshot(ctx)
+    rules_hash = rulepack_hash(rules_snapshot)
     info_schema_snapshot = _information_schema_snapshot(ctx, session_runtime=session_runtime)
     info_schema_hash = _information_schema_hash(info_schema_snapshot)
     cdf_windows = _cdf_window_snapshot(session_runtime, dataset_resolver=dataset_resolver)
@@ -623,202 +633,15 @@ def _environment_artifacts(
         )
     return _EnvironmentArtifacts(
         df_settings=df_settings,
-        planning_env_snapshot=planning_env_snapshot,
-        planning_env_hash=planning_env_hash,
-        rulepack_snapshot=rulepack_snapshot,
-        rulepack_hash=rulepack_hash,
+        planning_env_snapshot=planning_snapshot,
+        planning_env_hash=planning_hash,
+        rulepack_snapshot=rules_snapshot,
+        rulepack_hash=rules_hash,
         information_schema_snapshot=info_schema_snapshot,
         information_schema_hash=info_schema_hash,
         cdf_windows=cdf_windows,
         delta_store_policy_hash=store_policy_hash,
     )
-
-
-def _session_config_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    config_method = getattr(ctx, "config", None)
-    if not callable(config_method):
-        return {}
-    try:
-        config = config_method()
-    except (RuntimeError, TypeError, ValueError):
-        return {}
-    to_dict = getattr(config, "to_dict", None)
-    if not callable(to_dict):
-        return {}
-    try:
-        payload = to_dict()
-    except (RuntimeError, TypeError, ValueError):
-        return {}
-    if isinstance(payload, Mapping):
-        return dict(payload)
-    return {}
-
-
-def _planning_env_snapshot(
-    session_runtime: SessionRuntime | None,
-) -> Mapping[str, object]:
-    """Return planning-relevant environment settings for determinism.
-
-    Parameters
-    ----------
-    session_runtime
-        Session runtime used to resolve profile settings.
-
-    Returns:
-    -------
-    Mapping[str, object]
-        Planning environment snapshot payload.
-    """
-    if session_runtime is None:
-        return {}
-    profile = session_runtime.profile
-    session_config = _session_config_snapshot(session_runtime.ctx)
-    sql_policy_payload = None
-    if profile.policies.sql_policy is not None:
-        sql_policy_payload = {
-            "allow_ddl": profile.policies.sql_policy.allow_ddl,
-            "allow_dml": profile.policies.sql_policy.allow_dml,
-            "allow_statements": profile.policies.sql_policy.allow_statements,
-        }
-    schema_hardening = profile.policies.schema_hardening
-    return {
-        "datafusion_version": getattr(profile, "datafusion_version", None),
-        "session_config": session_config,
-        "settings_payload": profile.settings_payload(),
-        "settings_hash": profile.settings_hash(),
-        "sql_policy_name": profile.policies.sql_policy_name,
-        "sql_policy": sql_policy_payload,
-        "explain_controls": {
-            "capture_explain": profile.diagnostics.capture_explain,
-            "explain_verbose": profile.diagnostics.explain_verbose,
-            "explain_analyze": profile.diagnostics.explain_analyze,
-            "explain_analyze_level": profile.diagnostics.explain_analyze_level,
-        },
-        "execution": {
-            "target_partitions": profile.execution.target_partitions,
-            "batch_size": profile.execution.batch_size,
-            "repartition_aggregations": profile.execution.repartition_aggregations,
-            "repartition_windows": profile.execution.repartition_windows,
-            "repartition_file_scans": profile.execution.repartition_file_scans,
-            "repartition_file_min_size": profile.execution.repartition_file_min_size,
-        },
-        "runtime_env": {
-            "spill_dir": profile.execution.spill_dir,
-            "memory_pool": profile.execution.memory_pool,
-            "memory_limit_bytes": profile.execution.memory_limit_bytes,
-            "enable_cache_manager": profile.features.enable_cache_manager,
-        },
-        "async_udf": {
-            "enable_async_udfs": profile.features.enable_async_udfs,
-            "async_udf_timeout_ms": profile.policies.async_udf_timeout_ms,
-            "async_udf_batch_size": profile.policies.async_udf_batch_size,
-        },
-        "delta_protocol": {
-            "mode": profile.policies.delta_protocol_mode,
-            "support": _delta_protocol_support_payload(profile.policies.delta_protocol_support),
-        },
-        "schema_hardening": {
-            "explain_format": schema_hardening.explain_format if schema_hardening else None,
-            "enable_view_types": schema_hardening.enable_view_types if schema_hardening else None,
-        },
-    }
-
-
-def _delta_protocol_support_payload(
-    support: object | None,
-) -> Mapping[str, object] | None:
-    if support is None:
-        return None
-    max_reader = getattr(support, "max_reader_version", None)
-    max_writer = getattr(support, "max_writer_version", None)
-    reader_features = getattr(support, "supported_reader_features", ())
-    writer_features = getattr(support, "supported_writer_features", ())
-    return {
-        "max_reader_version": max_reader,
-        "max_writer_version": max_writer,
-        "supported_reader_features": list(reader_features),
-        "supported_writer_features": list(writer_features),
-    }
-
-
-def _planning_env_hash(snapshot: Mapping[str, object]) -> str:
-    return hash_msgpack_canonical(snapshot)
-
-
-def _rulepack_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:
-    """Return a snapshot of planner rulepacks when available.
-
-    Returns:
-    -------
-    Mapping[str, object] | None
-        Rulepack metadata payload, or ``None`` when unavailable.
-    """
-    containers: list[object] = [ctx]
-    for attr in ("state", "session_state"):
-        candidate = getattr(ctx, attr, None)
-        if callable(candidate):
-            with _suppress_errors():
-                candidate = candidate()
-        if candidate is not None:
-            containers.append(candidate)
-    snapshot: dict[str, object] = {}
-    for container in containers:
-        analyzer = _extract_rule_names(container, "analyzer_rules")
-        optimizer = _extract_rule_names(container, "optimizer_rules")
-        physical = _extract_rule_names(container, "physical_optimizer_rules")
-        if analyzer is not None:
-            snapshot["analyzer_rules"] = analyzer
-        if optimizer is not None:
-            snapshot["optimizer_rules"] = optimizer
-        if physical is not None:
-            snapshot["physical_optimizer_rules"] = physical
-    if snapshot:
-        snapshot["status"] = "ok"
-        snapshot["source"] = type(containers[-1]).__name__
-        return snapshot
-    return {"status": "unavailable", "reason": "rulepack APIs not exposed"}
-
-
-def _extract_rule_names(container: object, attr: str) -> list[str] | None:
-    rules = getattr(container, attr, None)
-    if callable(rules):
-        with _suppress_errors():
-            rules = rules()
-    if rules is None:
-        return None
-    if isinstance(rules, Sequence) and not isinstance(rules, (str, bytes)):
-        names: list[str] = []
-        for rule in rules:
-            name = _rule_name(rule)
-            if name:
-                names.append(name)
-        return names
-    return None
-
-
-def _rule_name(rule: object) -> str | None:
-    if rule is None:
-        return None
-    name_attr = getattr(rule, "name", None)
-    if callable(name_attr):
-        with _suppress_errors():
-            name_attr = name_attr()
-    if isinstance(name_attr, str) and name_attr:
-        return name_attr
-    try:
-        return type(rule).__name__
-    except (TypeError, ValueError):
-        return None
-
-
-def _rulepack_hash(snapshot: Mapping[str, object] | None) -> str | None:
-    if not snapshot:
-        return None
-    return hash_msgpack_canonical(snapshot)
-
-
-def _suppress_errors() -> contextlib.AbstractContextManager[None]:
-    return contextlib.suppress(RuntimeError, TypeError, ValueError)
 
 
 def _merged_delta_inputs_for_bundle(
@@ -844,33 +667,6 @@ def _merged_delta_inputs_for_bundle(
         )
     scan_unit_pins = _delta_inputs_from_scan_units(scan_units)
     return _merge_delta_inputs(options.delta_inputs, scan_unit_pins)
-
-
-def _explain_rows_from_text(text: str) -> tuple[dict[str, object], ...] | None:
-    """Parse explain output text into row dictionaries when possible.
-
-    Returns:
-    -------
-    list[dict[str, object]] | None
-        Parsed row payloads or ``None`` when parsing fails.
-    """
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    table_lines = [line for line in lines if line.startswith("|") and line.endswith("|")]
-    if not table_lines:
-        return None
-    header: list[str] | None = None
-    rows: list[dict[str, object]] = []
-    for line in table_lines:
-        parts = [part.strip() for part in line.strip("|").split("|")]
-        if header is None and {"plan_type", "plan"}.issubset(set(parts)):
-            header = parts
-            continue
-        if header is None:
-            continue
-        if len(parts) != len(header):
-            continue
-        rows.append(dict(zip(header, parts, strict=False)))
-    return tuple(rows) if rows else None
 
 
 def _proto_serialization_context(
@@ -952,10 +748,10 @@ def _plan_artifacts_from_components(
     """
     explain_artifacts = inputs.explain_artifacts
     explain_tree_rows = (
-        _explain_rows_from_text(explain_artifacts.tree.text) if explain_artifacts.tree else None
+        explain_rows_from_text(explain_artifacts.tree.text) if explain_artifacts.tree else None
     )
     explain_verbose_rows = (
-        _explain_rows_from_text(explain_artifacts.verbose.text)
+        explain_rows_from_text(explain_artifacts.verbose.text)
         if explain_artifacts.verbose is not None
         else None
     )
@@ -1054,7 +850,7 @@ def _collect_bundle_assembly_state(
         registry_snapshot=options.registry_snapshot,
         session_runtime=options.session_runtime,
     )
-    function_registry_hash = _function_registry_artifacts(
+    function_registry_hash = function_registry_artifacts(
         ctx,
         session_runtime=options.session_runtime,
     )
@@ -1152,7 +948,7 @@ def _bundle_substrait_validation(
         or not options.session_runtime.profile.diagnostics.substrait_validation
     ):
         return None
-    return _substrait_validation_payload(
+    return substrait_validation_payload(
         substrait_bytes,
         df=df,
         ctx=ctx,
@@ -1166,8 +962,8 @@ def _resolve_bundle_identity(
 ) -> _BundleIdentityResult:
     if options.session_runtime is None:
         return _BundleIdentityResult(payload=None, plan_identity_hash=None)
-    payload = _plan_identity_payload(
-        _PlanIdentityInputs(
+    payload = plan_identity_payload(
+        PlanIdentityInputs(
             plan_fingerprint=state.fingerprint,
             artifacts=state.artifacts,
             required_udfs=state.required.required_udfs,
@@ -1232,6 +1028,7 @@ def _finalize_bundle_components(
         plan_details=collect_plan_details(df, detail_inputs=detail_inputs),
     )
 
+
 def _merge_delta_inputs(
     explicit: Sequence[DeltaInputPin],
     from_scan_units: Sequence[DeltaInputPin],
@@ -1251,225 +1048,6 @@ def _merge_delta_inputs(
     for pin in explicit:
         pins[pin.dataset_name] = pin
     return tuple(pins[name] for name in sorted(pins))
-
-
-def _delta_inputs_payload(
-    delta_inputs: Sequence[DeltaInputPin],
-) -> tuple[dict[str, object], ...]:
-    payloads: list[dict[str, object]] = [
-        {
-            "dataset_name": pin.dataset_name,
-            "version": pin.version,
-            "timestamp": pin.timestamp,
-            "protocol": (
-                to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
-            ),
-            "delta_scan_config": (
-                to_builtins(pin.delta_scan_config) if pin.delta_scan_config is not None else None
-            ),
-            "delta_scan_config_hash": pin.delta_scan_config_hash,
-            "datafusion_provider": pin.datafusion_provider,
-            "protocol_compatible": pin.protocol_compatible,
-            "protocol_compatibility": (
-                to_builtins(pin.protocol_compatibility)
-                if pin.protocol_compatibility is not None
-                else None
-            ),
-        }
-        for pin in delta_inputs
-    ]
-    payloads.sort(key=lambda item: str(item["dataset_name"]))
-    return tuple(payloads)
-
-
-def _scan_units_payload(
-    scan_units: Sequence[ScanUnit],
-) -> tuple[dict[str, object], ...]:
-    payloads: list[dict[str, object]] = [
-        {
-            "key": unit.key,
-            "dataset_name": unit.dataset_name,
-            "delta_version": unit.delta_version,
-            "delta_timestamp": unit.delta_timestamp,
-            "snapshot_timestamp": unit.snapshot_timestamp,
-            "delta_protocol": (
-                to_builtins(unit.delta_protocol, str_keys=True)
-                if unit.delta_protocol is not None
-                else None
-            ),
-            "delta_scan_config": (
-                to_builtins(unit.delta_scan_config) if unit.delta_scan_config is not None else None
-            ),
-            "delta_scan_config_hash": unit.delta_scan_config_hash,
-            "datafusion_provider": unit.datafusion_provider,
-            "protocol_compatible": unit.protocol_compatible,
-            "protocol_compatibility": (
-                to_builtins(unit.protocol_compatibility)
-                if unit.protocol_compatibility is not None
-                else None
-            ),
-            "total_files": unit.total_files,
-            "candidate_file_count": unit.candidate_file_count,
-            "pruned_file_count": unit.pruned_file_count,
-            "candidate_files": [str(path) for path in unit.candidate_files],
-            "pushed_filters": list(unit.pushed_filters),
-            "projected_columns": list(unit.projected_columns),
-        }
-        for unit in scan_units
-    ]
-    payloads.sort(key=lambda item: str(item["key"]))
-    return tuple(payloads)
-
-
-@dataclass(frozen=True)
-class _PlanIdentityInputs:
-    plan_fingerprint: str
-    artifacts: PlanArtifacts
-    required_udfs: tuple[str, ...]
-    required_rewrite_tags: tuple[str, ...]
-    delta_inputs: Sequence[DeltaInputPin]
-    scan_units: Sequence[ScanUnit]
-    profile: DataFusionRuntimeProfile
-
-
-def _plan_identity_payload(inputs: _PlanIdentityInputs) -> Mapping[str, object]:
-    df_settings_entries = tuple(
-        sorted((str(key), str(value)) for key, value in inputs.artifacts.df_settings.items())
-    )
-    return {
-        "version": 4,
-        "plan_fingerprint": inputs.plan_fingerprint,
-        "udf_snapshot_hash": inputs.artifacts.udf_snapshot_hash,
-        "function_registry_hash": inputs.artifacts.function_registry_hash,
-        "required_udfs": tuple(sorted(inputs.required_udfs)),
-        "required_rewrite_tags": tuple(sorted(inputs.required_rewrite_tags)),
-        "domain_planner_names": tuple(sorted(inputs.artifacts.domain_planner_names)),
-        "df_settings_entries": df_settings_entries,
-        "planning_env_hash": inputs.artifacts.planning_env_hash,
-        "rulepack_hash": inputs.artifacts.rulepack_hash,
-        "information_schema_hash": inputs.artifacts.information_schema_hash,
-        "delta_inputs": tuple(_delta_inputs_payload(inputs.delta_inputs)),
-        "scan_units": tuple(_scan_units_payload(inputs.scan_units)),
-        "scan_keys": (),
-        "profile_settings_hash": inputs.profile.settings_hash(),
-        "profile_context_key": inputs.profile.context_cache_key(),
-    }
-
-
-def _safe_logical_plan(df: DataFrame) -> object | None:
-    """Safely extract the logical plan from a DataFrame.
-
-    Returns:
-    -------
-    object | None
-        Logical plan, or None if unavailable.
-    """
-    method = getattr(df, "logical_plan", None)
-    if not callable(method):
-        return None
-    try:
-        return method()
-    except (RuntimeError, TypeError, ValueError):
-        return None
-
-
-def _safe_optimized_logical_plan(df: DataFrame) -> object | None:
-    """Safely extract the optimized logical plan from a DataFrame.
-
-    Returns:
-    -------
-    object | None
-        Optimized logical plan, or None if unavailable.
-    """
-    method = getattr(df, "optimized_logical_plan", None)
-    if not callable(method):
-        return None
-    try:
-        return method()
-    except (RuntimeError, TypeError, ValueError):
-        return None
-
-
-def _safe_execution_plan(df: DataFrame) -> object | None:
-    """Safely extract the execution plan from a DataFrame.
-
-    Returns:
-    -------
-    object | None
-        Execution plan, or None if unavailable.
-
-    Raises:
-        RuntimeError: If DataFusion returns an unexpected runtime error.
-        TypeError: If the execution-plan call surface is malformed.
-        ValueError: If DataFusion returns an unexpected value error.
-        AttributeError: If execution-plan attributes are not available.
-    """
-    method = getattr(df, "execution_plan", None)
-    if not callable(method):
-        return None
-    try:
-        return method()
-    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-        if str(exc).startswith("DataFusion error:"):
-            return None
-        raise
-
-
-def _substrait_bytes_from_rust_bundle(
-    ctx: SessionContext,
-    df: DataFrame,
-    *,
-    session_runtime: SessionRuntime | None,
-) -> tuple[bytes, tuple[str, ...] | None]:
-    """Build Substrait bytes from the canonical Rust plan-bundle bridge.
-
-    Returns:
-        tuple[bytes, tuple[str, ...] | None]: Canonical Substrait bytes and optional
-        required-UDF names from the Rust bridge artifact payload.
-
-    Raises:
-        TypeError: If bridge payload is structurally invalid.
-        ValueError: If bridge payload is missing artifact bytes.
-    """
-    from datafusion_engine.plan.rust_bundle_bridge import build_plan_bundle_artifact_with_warnings
-
-    payload: dict[str, object] = {
-        "capture_substrait": True,
-        "capture_sql": False,
-        "capture_delta_codec": False,
-        "deterministic_inputs": True,
-        "no_volatile_udfs": True,
-        "deterministic_optimizer": True,
-    }
-    if session_runtime is not None:
-        payload["stats_quality"] = "runtime_profile"
-    response = build_plan_bundle_artifact_with_warnings(ctx, payload, df=df)
-    artifact = response.get("artifact")
-    if not isinstance(artifact, Mapping):
-        msg = "Rust plan-bundle bridge returned a non-mapping artifact payload."
-        raise TypeError(msg)
-    raw = artifact.get("substrait_bytes")
-    required_udfs = _required_udfs_from_rust_artifact(artifact)
-    if isinstance(raw, (bytes, bytearray)):
-        return bytes(raw), required_udfs
-    if isinstance(raw, list):
-        try:
-            return bytes(int(item) for item in raw), required_udfs
-        except (TypeError, ValueError):
-            msg = "Rust plan-bundle bridge returned malformed substrait byte values."
-            raise ValueError(msg) from None
-    msg = "Rust plan-bundle artifact is missing substrait_bytes."
-    raise ValueError(msg)
-
-
-def _required_udfs_from_rust_artifact(artifact: Mapping[str, object]) -> tuple[str, ...] | None:
-    raw = artifact.get("required_udfs")
-    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
-        return None
-    names = [str(item).strip() for item in raw if str(item).strip()]
-    if not names:
-        return None
-    return tuple(sorted(set(names)))
 
 
 def _capture_explain_analyze(
@@ -1497,84 +1075,6 @@ def _capture_explain_analyze(
         return None
     return capture_explain(df, verbose=True, analyze=True)
 
-
-def _substrait_validation_payload(
-    substrait_bytes: bytes,
-    *,
-    df: DataFrame,
-    ctx: SessionContext,
-) -> Mapping[str, object] | None:
-    """Validate Substrait bytes and return the validation payload.
-
-    Args:
-        substrait_bytes: Encoded substrait bytes.
-        df: Source DataFrame used to compare replay output.
-        ctx: DataFusion session context.
-
-    Returns:
-        Mapping[str, object] | None: Result.
-
-    Raises:
-        ValueError: If substrait validation reports mismatch.
-    """
-    from datafusion_engine.plan.result_types import validate_substrait_plan
-
-    validation = validate_substrait_plan(substrait_bytes, df=df, ctx=ctx)
-    if validation is None:
-        return None
-    match = validation.get("match")
-    if match is False:
-        msg = f"Substrait validation failed: {validation}"
-        raise ValueError(msg)
-    return validation
-
-
-def _plan_display(plan: object | None, *, method: str) -> str | None:
-    """Extract a display string from a plan object.
-
-    Returns:
-    -------
-    str | None
-        Display string for the plan, if available.
-    """
-    if plan is None:
-        return None
-    if isinstance(plan, str):
-        return plan
-    display_method = getattr(plan, method, None)
-    if callable(display_method):
-        try:
-            return str(display_method())
-        except (RuntimeError, TypeError, ValueError):
-            return None
-    return str(plan)
-
-
-def _function_registry_artifacts(
-    ctx: SessionContext,
-    *,
-    session_runtime: SessionRuntime | None,
-) -> str:
-
-    if not _capture_udf_metadata_for_plan(session_runtime):
-        return _function_registry_hash({"functions": []})
-
-    functions: Sequence[Mapping[str, object]] = ()
-    try:
-        sql_options = None
-        if session_runtime is not None:
-            try:
-                from datafusion_engine.sql.options import planning_sql_options
-
-                sql_options = planning_sql_options(session_runtime.profile)
-            except (RuntimeError, TypeError, ValueError, ImportError):
-                sql_options = None
-        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
-        functions = introspector.function_catalog_snapshot(include_parameters=True)
-    except (RuntimeError, TypeError, ValueError, Warning):
-        functions = ()
-    snapshot: Mapping[str, object] = {"functions": list(functions)}
-    return _function_registry_hash(snapshot)
 
 __all__ = [
     "DataFrameBuilder",

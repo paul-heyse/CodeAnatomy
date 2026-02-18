@@ -43,6 +43,7 @@ _SEMANTIC_INPUT_CANDIDATES: dict[str, tuple[str, ...]] = {
     "symtable_symbols": ("symtable_symbols", "symtable_files_v1", "symtable_files"),
 }
 
+
 def resolve_semantic_input_locations(delta_locations: Mapping[str, str]) -> dict[str, str]:
     """Resolve canonical semantic input table locations from extraction outputs.
 

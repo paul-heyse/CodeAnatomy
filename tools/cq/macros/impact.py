@@ -18,6 +18,7 @@ from tools.cq.analysis.taint import (
     analyze_function_node,
     find_function_node,
 )
+from tools.cq.core.contracts import require_mapping as require_contract_mapping
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
@@ -478,11 +479,10 @@ def _build_impact_result(
         ),
         order="deterministic",
     )
-    summary_mapping_dict: dict[str, object]
-    if not isinstance(summary_mapping, dict):
+    try:
+        summary_mapping_dict = require_contract_mapping(summary_mapping)
+    except TypeError:
         summary_mapping_dict = {}
-    else:
-        summary_mapping_dict = {str(key): value for key, value in summary_mapping.items()}
     builder.with_summary(summary_from_mapping(summary_mapping_dict))
 
     scoring_details, depth_counts, files_affected = _build_impact_scoring(all_sites)

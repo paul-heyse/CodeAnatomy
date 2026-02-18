@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import importlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
@@ -50,6 +49,7 @@ from datafusion_engine.schema.finalize_errors import (
 from datafusion_engine.schema.finalize_errors import (
     raise_on_errors_if_strict as _raise_on_errors_if_strict,
 )
+from datafusion_engine.schema.finalize_runtime import validate_with_arrow
 from datafusion_engine.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema.validation import ArrowValidationOptions
 from schema_spec.specs import TableSchemaSpec
@@ -65,17 +65,6 @@ _LOGGER = logging.getLogger(__name__)
 type InvariantFn = Callable[[TableLike], tuple[ArrayLike, str]]
 
 
-class _ValidateArrowTable(Protocol):
-    def __call__(
-        self,
-        table: TableLike,
-        *,
-        spec: TableSchemaSpec,
-        options: ArrowValidationOptions,
-        runtime_profile: DataFusionRuntimeProfile | None,
-    ) -> TableLike: ...
-
-
 def _table_spec_from_schema(
     name: str,
     schema: SchemaLike,
@@ -83,18 +72,6 @@ def _table_spec_from_schema(
     version: int | None = None,
 ) -> TableSchemaSpec:
     return TableSchemaSpec.from_schema(name, schema, version=version)
-
-
-def _validate_arrow_table(
-    table: TableLike,
-    *,
-    spec: TableSchemaSpec,
-    options: ArrowValidationOptions,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> TableLike:
-    module = importlib.import_module("schema_spec.dataset_spec")
-    validate_fn = cast("_ValidateArrowTable", module.validate_arrow_table)
-    return validate_fn(table, spec=spec, options=options, runtime_profile=runtime_profile)
 
 
 @dataclass(frozen=True)
@@ -215,33 +192,6 @@ class FinalizeOptions:
     schema_validation: ArrowValidationOptions | None = None
 
 
-def _maybe_validate_with_arrow(
-    table: TableLike,
-    *,
-    contract: Contract,
-    schema_policy: SchemaPolicy | None = None,
-    schema_validation: ArrowValidationOptions | None = None,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-) -> TableLike:
-    if contract.schema_spec is None:
-        return table
-    options = None
-    if schema_policy is not None and schema_policy.validation is not None:
-        options = schema_policy.validation
-    if options is None:
-        options = contract.validation
-    if options is None:
-        options = schema_validation
-    if options is None:
-        return table
-    return _validate_arrow_table(
-        table,
-        spec=contract.schema_spec,
-        options=options,
-        runtime_profile=runtime_profile,
-    )
-
-
 def _build_alignment_table(
     contract: Contract,
     info: AlignmentInfo,
@@ -318,7 +268,7 @@ def finalize(
     aligned, align_info = schema_policy.apply_with_info(table)
     if schema_policy.encoding is None:
         aligned = (options.chunk_policy or ChunkPolicy()).apply(aligned)
-    aligned = _maybe_validate_with_arrow(
+    aligned = validate_with_arrow(
         aligned,
         contract=contract,
         schema_policy=schema_policy,

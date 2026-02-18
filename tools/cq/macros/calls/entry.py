@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
+from tools.cq.core.contracts import require_mapping as require_contract_mapping
 from tools.cq.core.schema import (
     CqResult,
     Finding,
@@ -282,11 +283,10 @@ def _init_calls_result(
         _build_calls_summary(ctx.function_name, scan_result),
         order="deterministic",
     )
-    summary_mapping_dict: dict[str, object]
-    if not isinstance(summary_mapping, dict):
+    try:
+        summary_mapping_dict = require_contract_mapping(summary_mapping)
+    except TypeError:
         summary_mapping_dict = {}
-    else:
-        summary_mapping_dict = {str(key): value for key, value in summary_mapping.items()}
     updated_summary = summary_from_mapping(summary_mapping_dict)
     return update_result_summary(builder.result, updated_summary.to_dict())
 

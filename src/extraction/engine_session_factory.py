@@ -58,11 +58,14 @@ class EngineSessionOptions:
     otel_options: OtelBootstrapOptions | None = None
 
 
-def _build_rust_session_context(runtime_spec: RuntimeProfileSpec) -> SessionContext | None:
-    """Build a SessionContext through the Rust extraction bridge when available.
+def _build_rust_session_context(runtime_spec: RuntimeProfileSpec) -> SessionContext:
+    """Build a SessionContext through the Rust extraction bridge.
 
     Returns:
-        SessionContext | None: Rust-backed session context, or `None` on fallback.
+        SessionContext: Rust-built extraction session context.
+
+    Raises:
+        RuntimeError: If the Rust extraction-session bridge fails.
     """
     payload = extraction_session_payload(
         parallelism=runtime_spec.datafusion.execution.target_partitions,
@@ -71,8 +74,9 @@ def _build_rust_session_context(runtime_spec: RuntimeProfileSpec) -> SessionCont
     )
     try:
         return build_extraction_session(payload)
-    except (AttributeError, RuntimeError, TypeError, ValueError):
-        return None
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        msg = "Rust extraction-session bridge failed; degraded Python fallback paths are removed."
+        raise RuntimeError(msg) from exc
 
 
 def build_engine_session(

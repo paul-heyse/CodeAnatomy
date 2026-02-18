@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import msgspec
 
-from datafusion_engine.lineage.reporting import ScanLineage
+from datafusion_engine.lineage.reporting import LineageReport, ScanLineage
+from relspec.ports import DatasetSpecProvider, LineagePort
 from schema_spec.dataset_spec import dataset_spec_name
 from serde_msgspec import StructBaseStrict
 
@@ -96,6 +97,73 @@ class InferredDepsInputs:
     ctx: SessionContext | None = None
     snapshot: Mapping[str, object] | None = None
     required_udfs: Sequence[str] | None = None
+    lineage_port: LineagePort | None = None
+    dataset_spec_provider: DatasetSpecProvider | None = None
+
+
+class _DataFusionLineagePort:
+    """Default DataFusion-backed lineage adapter."""
+
+    @staticmethod
+    def extract_lineage(
+        plan: object,
+        *,
+        udf_snapshot: Mapping[str, object] | None = None,
+    ) -> object:
+        from datafusion_engine.lineage.reporting import extract_lineage
+
+        return extract_lineage(plan, udf_snapshot=udf_snapshot)
+
+    @staticmethod
+    def resolve_required_udfs(bundle: object) -> frozenset[str]:
+        from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
+        from datafusion_engine.views.bundle_extraction import resolve_required_udfs_from_bundle
+
+        if not isinstance(bundle, DataFusionPlanArtifact):
+            return frozenset()
+        snapshot: Mapping[str, object] | object = getattr(
+            getattr(bundle, "artifacts", None),
+            "udf_snapshot",
+            {},
+        )
+        if not isinstance(snapshot, Mapping):
+            snapshot = {"status": "unavailable"}
+        resolved = resolve_required_udfs_from_bundle(bundle, snapshot=snapshot)
+        return frozenset(str(name) for name in resolved)
+
+
+class _DefaultDatasetSpecProvider:
+    """Default dataset-spec provider adapter for dependency inference."""
+
+    @staticmethod
+    def extract_dataset_spec(value: object) -> object | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
+        except (ImportError, RuntimeError, TypeError, ValueError):
+            return None
+        try:
+            return extract_dataset_spec(value)
+        except KeyError:
+            return None
+
+    @staticmethod
+    def normalize_dataset_spec(value: object) -> object | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            from semantics.catalog.dataset_specs import dataset_spec as normalize_dataset_spec
+        except (ImportError, RuntimeError, TypeError, ValueError):
+            return None
+        try:
+            return normalize_dataset_spec(value)
+        except KeyError:
+            return None
+
+
+_DEFAULT_LINEAGE_PORT = _DataFusionLineagePort()
+_DEFAULT_DATASET_SPEC_PROVIDER = _DefaultDatasetSpecProvider()
 
 
 def infer_deps_from_plan_bundle(
@@ -116,34 +184,43 @@ def infer_deps_from_plan_bundle(
     InferredDeps
         Inferred dependencies extracted from DataFusion plan.
 
-    """
-    from datafusion_engine.lineage.reporting import extract_lineage
+    Raises:
+        TypeError: If the lineage adapter returns a payload that is not `LineageReport`.
 
+    """
     plan_bundle = inputs.plan_bundle
+    lineage_port = inputs.lineage_port or _DEFAULT_LINEAGE_PORT
 
     # Extract lineage from the optimized logical plan
     lineage_snapshot = inputs.snapshot or plan_bundle.artifacts.udf_snapshot
-    lineage = extract_lineage(
+    lineage_obj = lineage_port.extract_lineage(
         plan_bundle.optimized_logical_plan,
-        udf_snapshot=lineage_snapshot,
+        udf_snapshot=lineage_snapshot if isinstance(lineage_snapshot, Mapping) else None,
     )
+    if not isinstance(lineage_obj, LineageReport):
+        msg = "LineagePort.extract_lineage must return LineageReport."
+        raise TypeError(msg)
+    lineage = lineage_obj
 
     # Map lineage to InferredDeps format
     tables = _expand_nested_inputs(lineage.referenced_tables)
     columns_by_table = dict(lineage.required_columns_by_dataset)
 
     # Compute required types and metadata from registry
-    required_types = _required_types_from_registry(columns_by_table, ctx=inputs.ctx)
-    required_metadata = _required_metadata_for_tables(columns_by_table, ctx=inputs.ctx)
-
-    from datafusion_engine.views.bundle_extraction import resolve_required_udfs_from_bundle
+    required_types = _required_types_from_registry(
+        columns_by_table,
+        ctx=inputs.ctx,
+        dataset_spec_provider=inputs.dataset_spec_provider,
+    )
+    required_metadata = _required_metadata_for_tables(
+        columns_by_table,
+        ctx=inputs.ctx,
+        dataset_spec_provider=inputs.dataset_spec_provider,
+    )
 
     snapshot = inputs.snapshot or plan_bundle.artifacts.udf_snapshot
     resolved_snapshot = snapshot if isinstance(snapshot, Mapping) else {}
-    resolved_udfs = resolve_required_udfs_from_bundle(
-        plan_bundle,
-        snapshot=resolved_snapshot,
-    )
+    resolved_udfs = tuple(sorted(lineage_port.resolve_required_udfs(plan_bundle)))
     if inputs.required_udfs is not None:
         allowed = {name.lower() for name in resolved_udfs}
         extra = [
@@ -246,10 +323,15 @@ def _required_metadata_for_tables(
     columns_by_table: Mapping[str, tuple[str, ...]],
     *,
     ctx: SessionContext | None = None,
+    dataset_spec_provider: DatasetSpecProvider | None = None,
 ) -> dict[str, tuple[tuple[bytes, bytes], ...]]:
     required: dict[str, tuple[tuple[bytes, bytes], ...]] = {}
     for table_name in columns_by_table:
-        spec = _dataset_spec_for_table(table_name, ctx=ctx)
+        spec = _dataset_spec_for_table(
+            table_name,
+            ctx=ctx,
+            dataset_spec_provider=dataset_spec_provider,
+        )
         if spec is None:
             continue
         from schema_spec.dataset_spec import dataset_spec_schema
@@ -264,10 +346,15 @@ def _required_types_from_registry(
     columns_by_table: Mapping[str, tuple[str, ...]],
     *,
     ctx: SessionContext | None = None,
+    dataset_spec_provider: DatasetSpecProvider | None = None,
 ) -> dict[str, tuple[tuple[str, str], ...]]:
     required: dict[str, tuple[tuple[str, str], ...]] = {}
     for table_name, columns in columns_by_table.items():
-        contract = _schema_contract_for_table(table_name, ctx=ctx)
+        contract = _schema_contract_for_table(
+            table_name,
+            ctx=ctx,
+            dataset_spec_provider=dataset_spec_provider,
+        )
         if contract is None:
             continue
         pairs = _types_from_contract(contract, columns)
@@ -276,45 +363,36 @@ def _required_types_from_registry(
     return required
 
 
-def _extract_dataset_spec(name: str) -> DatasetSpec | None:
-    try:
-        from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None
-    try:
-        return extract_dataset_spec(name)
-    except KeyError:
-        return None
-
-
-def _normalize_dataset_spec(name: str, *, ctx: SessionContext | None = None) -> DatasetSpec | None:
-    try:
-        from semantics.catalog.dataset_specs import dataset_spec as normalize_dataset_spec
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None
+def _dataset_spec_for_table(
+    name: str,
+    *,
+    ctx: SessionContext | None = None,
+    dataset_spec_provider: DatasetSpecProvider | None = None,
+) -> DatasetSpec | None:
     _ = ctx
-    try:
-        return normalize_dataset_spec(name)
-    except KeyError:
-        return None
+    provider = dataset_spec_provider or _DEFAULT_DATASET_SPEC_PROVIDER
+    from schema_spec.dataset_spec import DatasetSpec
 
-
-def _dataset_spec_for_table(name: str, *, ctx: SessionContext | None = None) -> DatasetSpec | None:
-    resolvers: tuple[Callable[[str], DatasetSpec | None], ...] = (
-        _extract_dataset_spec,
-        lambda table_name: _normalize_dataset_spec(table_name, ctx=ctx),
-    )
-    for resolver in resolvers:
-        spec = resolver(name)
-        if spec is not None:
-            return spec
+    extracted = provider.extract_dataset_spec(name)
+    if isinstance(extracted, DatasetSpec):
+        return extracted
+    normalized = provider.normalize_dataset_spec(name)
+    if isinstance(normalized, DatasetSpec):
+        return normalized
     return None
 
 
 def _schema_contract_for_table(
-    name: str, *, ctx: SessionContext | None = None
+    name: str,
+    *,
+    ctx: SessionContext | None = None,
+    dataset_spec_provider: DatasetSpecProvider | None = None,
 ) -> SchemaContract | None:
-    spec = _dataset_spec_for_table(name, ctx=ctx)
+    spec = _dataset_spec_for_table(
+        name,
+        ctx=ctx,
+        dataset_spec_provider=dataset_spec_provider,
+    )
     if spec is None:
         return None
     try:

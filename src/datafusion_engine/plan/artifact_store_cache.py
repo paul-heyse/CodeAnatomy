@@ -10,6 +10,8 @@ from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.plan.artifact_store_core import (
     PIPELINE_EVENTS_TABLE_NAME,
     PLAN_ARTIFACTS_TABLE_NAME,
+)
+from datafusion_engine.plan.artifact_store_tables import (
     bootstrap_pipeline_events_table,
     bootstrap_plan_artifacts_table,
     delta_schema_available,

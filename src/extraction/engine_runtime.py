@@ -22,7 +22,7 @@ class EngineRuntime:
     """Unified runtime settings for engine execution surfaces."""
 
     datafusion_profile: DataFusionRuntimeProfile
-    session_context: SessionContext | None = None
+    session_context: SessionContext
 
     def with_datafusion_profile(
         self,
@@ -50,7 +50,7 @@ def build_engine_runtime(
     runtime_profile: DataFusionRuntimeProfile,
     diagnostics: DiagnosticsCollector | None = None,
     diagnostics_policy: DiagnosticsPolicy | None = None,
-    session_context: SessionContext | None = None,
+    session_context: SessionContext,
 ) -> EngineRuntime:
     """Build the unified runtime bundle for engine execution.
 
@@ -74,10 +74,7 @@ def build_engine_runtime(
                 diagnostics_sink=diagnostics,
             ),
         )
-    return EngineRuntime(
-        datafusion_profile=datafusion_profile,
-        session_context=session_context,
-    )
+    return EngineRuntime(datafusion_profile=datafusion_profile, session_context=session_context)
 
 
 def _apply_diagnostics_policy(

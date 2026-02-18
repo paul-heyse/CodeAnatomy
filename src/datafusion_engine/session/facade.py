@@ -370,14 +370,7 @@ class DataFusionExecutionFacade:
         ) as span:
             try:
                 _ensure_udf_compatibility(self.ctx, bundle)
-                df, used_fallback = self._substrait_first_df(bundle)
-                if used_fallback:
-                    plan_kind = "fallback"
-                    self._record_substrait_fallback(
-                        bundle,
-                        view_name=view_name,
-                        reason="substrait_replay_failed",
-                    )
+                df = self._substrait_first_df(bundle)
                 result = ExecutionResult.from_dataframe(df, plan_bundle=bundle)
             except (RuntimeError, ValueError, TypeError) as exc:
                 duration_s = time.perf_counter() - start
@@ -507,7 +500,7 @@ class DataFusionExecutionFacade:
     def _substrait_first_df(
         self,
         bundle: DataFusionPlanArtifact,
-    ) -> tuple[DataFrame, bool]:
+    ) -> DataFrame:
         """Return DataFrame using Substrait-first execution.
 
         Args:
@@ -529,17 +522,7 @@ class DataFusionExecutionFacade:
         # Lazy import to avoid circular dependency
         from datafusion_engine.plan.result_types import replay_substrait_bytes
 
-        try:
-            df = replay_substrait_bytes(self.ctx, substrait_bytes)
-        except (RuntimeError, TypeError, ValueError):
-            cached_df = self._rehydrate_from_proto(bundle)
-            if cached_df is not None:
-                self._record_plan_cache_event(bundle, status="hit", source="proto")
-                return cached_df, True
-            self._record_plan_cache_event(bundle, status="miss", source="proto")
-            return bundle.df, True
-        else:
-            return df, False
+        return replay_substrait_bytes(self.ctx, substrait_bytes)
 
     def _plan_cache_entry(
         self,
@@ -556,32 +539,6 @@ class DataFusionExecutionFacade:
         entry = cache.get(plan_identity_hash)
         if isinstance(entry, PlanCacheEntry):
             return entry
-        return None
-
-    def _rehydrate_from_proto(
-        self,
-        bundle: DataFusionPlanArtifact,
-    ) -> DataFrame | None:
-        cached_entry = self._plan_cache_entry(bundle)
-        if cached_entry is None:
-            return None
-        from_proto = getattr(self.ctx, "from_proto", None)
-        if not callable(from_proto):
-            return None
-        proto_candidates = (
-            getattr(cached_entry, "execution_plan_proto", None),
-            getattr(cached_entry, "optimized_plan_proto", None),
-            getattr(cached_entry, "logical_plan_proto", None),
-        )
-        for payload in proto_candidates:
-            if payload is None:
-                continue
-            try:
-                df = from_proto(payload)
-            except (RuntimeError, TypeError, ValueError):
-                continue
-            if isinstance(df, DataFrame):
-                return df
         return None
 
     def _record_plan_cache_event(
@@ -606,42 +563,6 @@ class DataFusionExecutionFacade:
                 "plan_fingerprint": bundle.plan_fingerprint,
                 "status": status,
                 "source": source,
-            },
-        )
-
-    def _record_substrait_fallback(
-        self,
-        bundle: DataFusionPlanArtifact,
-        *,
-        view_name: str | None,
-        reason: str,
-    ) -> None:
-        """Record diagnostics when Substrait replay falls back.
-
-        Parameters
-        ----------
-        bundle
-            Plan bundle that fell back to original DataFrame.
-        view_name
-            Optional view name for diagnostics context.
-        reason
-            Reason for the fallback (e.g., 'replay_failed').
-        """
-        if self.runtime_profile is None:
-            return
-        from datafusion_engine.lineage.diagnostics import record_artifact
-        from serde_artifact_specs import SUBSTRAIT_FALLBACK_SPEC
-
-        substrait_bytes = bundle.substrait_bytes
-        record_artifact(
-            self.runtime_profile,
-            SUBSTRAIT_FALLBACK_SPEC,
-            {
-                "view_name": view_name,
-                "plan_fingerprint": bundle.plan_fingerprint,
-                "reason": reason,
-                "has_substrait_bytes": True,
-                "substrait_bytes_len": len(substrait_bytes),
             },
         )
 

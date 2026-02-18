@@ -74,12 +74,7 @@ from tools.cq.search.python.extractors_analysis import (
     extract_import_detail as _extract_import_detail,
 )
 from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function
-from tools.cq.search.python.extractors_budget import (
-    enforce_payload_budget as _enforce_payload_budget_shared,
-)
-from tools.cq.search.python.extractors_budget import (
-    payload_size_hint as _payload_size_hint_shared,
-)
+from tools.cq.search.python.extractors_budget import enforce_payload_budget
 from tools.cq.search.python.extractors_classification import (
     _is_class_node,
     _is_function_node,
@@ -127,6 +122,7 @@ _FULL_AGREEMENT_SOURCE_COUNT = 3
 _PYTHON_ENRICHMENT_CROSSCHECK_ENV = "CQ_PY_ENRICHMENT_CROSSCHECK"
 
 logger = logging.getLogger(__name__)
+_CLEAR_CALLBACK_STATE: dict[str, bool] = {"registered": False}
 
 # ---------------------------------------------------------------------------
 # Enrichable node kinds
@@ -266,6 +262,7 @@ def _try_extract(
 
 
 def _python_ast_cache() -> BoundedCache[str, tuple[ast.Module, str]]:
+    ensure_python_clear_callback_registered()
     ctx = get_default_python_runtime_context()
     ensure_python_cache_registered(ctx)
     return cast("BoundedCache[str, tuple[ast.Module, str]]", ctx.ast_cache)
@@ -943,33 +940,6 @@ def _promote_enrichment_node(node: SgNode) -> SgNode:
     return node
 
 
-# ---------------------------------------------------------------------------
-# Payload budgeting / metadata
-# ---------------------------------------------------------------------------
-
-
-def _payload_size_hint(payload: dict[str, object]) -> int:
-    """Estimate payload size in bytes.
-
-    Returns:
-    -------
-    int
-        Encoded payload size in bytes.
-    """
-    return _payload_size_hint_shared(payload)
-
-
-def _enforce_payload_budget(payload: dict[str, object]) -> tuple[list[str], int]:
-    """Prune optional fields when payload exceeds the configured budget.
-
-    Returns:
-    -------
-    tuple[list[str], int]
-        Removed keys and final payload size.
-    """
-    return _enforce_payload_budget_shared(payload, max_payload_bytes=_MAX_PAYLOAD_BYTES)
-
-
 @dataclass(slots=True)
 class _PythonAgreementStage:
     resolution: PythonResolutionFacts | None = None
@@ -1578,7 +1548,10 @@ def _finalize_python_enrichment_payload(state: _PythonEnrichmentState) -> dict[s
     if state.context.truncations:
         payload["truncated_fields"] = list(state.context.truncations)
 
-    dropped_fields, size_hint = _enforce_payload_budget(payload)
+    dropped_fields, size_hint = enforce_payload_budget(
+        payload,
+        max_payload_bytes=_MAX_PAYLOAD_BYTES,
+    )
     payload["payload_size_hint"] = size_hint
     if dropped_fields:
         payload["dropped_fields"] = dropped_fields
@@ -1734,7 +1707,12 @@ def clear_python_enrichment_cache() -> None:
     _python_ast_cache().clear()
 
 
-CACHE_REGISTRY.register_clear_callback("python", clear_python_enrichment_cache)
+def ensure_python_clear_callback_registered() -> None:
+    """Lazily register Python enrichment clear callback once."""
+    if _CLEAR_CALLBACK_STATE["registered"]:
+        return
+    CACHE_REGISTRY.register_clear_callback("python", clear_python_enrichment_cache)
+    _CLEAR_CALLBACK_STATE["registered"] = True
 
 
 def extract_python_node(request: PythonNodeEnrichmentRequest) -> dict[str, object]:
@@ -1763,6 +1741,7 @@ __all__ = [
     "clear_python_enrichment_cache",
     "enrich_python_context",
     "enrich_python_context_by_byte_range",
+    "ensure_python_clear_callback_registered",
     "extract_python_byte_range",
     "extract_python_node",
 ]

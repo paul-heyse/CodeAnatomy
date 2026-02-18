@@ -46,7 +46,7 @@ from tools.cq.search.tree_sitter.python_lane.constants import (
     get_python_field_ids,
 )
 from tools.cq.search.tree_sitter.query.compiler import compile_query
-from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
+from tools.cq.search.tree_sitter.query.planner import compile_pack_source_rows
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
     make_query_predicate,
@@ -201,29 +201,16 @@ def get_tree_sitter_python_cache_stats() -> dict[str, int]:
 
 @lru_cache(maxsize=1)
 def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    sources: dict[str, str] = {}
-    for source in load_query_pack_sources("python", include_distribution=False):
-        if source.pack_name.endswith(".scm"):
-            sources[source.pack_name] = source.source
-    packed = [
-        (
-            pack_name,
-            source,
-            build_pack_plan(
-                pack_name=pack_name,
-                query=compile_query(
-                    language="python",
-                    pack_name=pack_name,
-                    source=source,
-                    request_surface="artifact",
-                ),
-                query_text=source,
-                language="python",
-            ),
-        )
-        for pack_name, source in sorted(sources.items())
-    ]
-    return sort_pack_plans(packed)
+    deduped_sources: dict[str, str] = {
+        source.pack_name: source.source
+        for source in load_query_pack_sources("python", include_distribution=False)
+        if source.pack_name.endswith(".scm")
+    }
+    return compile_pack_source_rows(
+        language="python",
+        source_rows=sorted(deduped_sources.items()),
+        request_surface="artifact",
+    )
 
 
 def _query_sources() -> tuple[tuple[str, str], ...]:

@@ -630,6 +630,7 @@ class ContractRegistry(Registry[str, SchemaContract]):
             for violation in contract.validate_against_introspection(snapshot)
         ]
 
+
 __all__ = [
     "ConstraintSpec",
     "ConstraintType",

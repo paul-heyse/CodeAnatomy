@@ -15,6 +15,7 @@ import msgspec
 from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
 from tools.cq.core.cache.run_lifecycle import maybe_evict_run_cache_tag
+from tools.cq.core.contracts import require_mapping as require_contract_mapping
 from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.core.result_factory import build_error_result
 from tools.cq.core.schema import (
@@ -39,9 +40,7 @@ from tools.cq.core.types import (
     expand_language_scope,
     file_extensions_for_language,
 )
-from tools.cq.orchestration.multilang_orchestrator import (
-    execute_by_language_scope,
-)
+from tools.cq.orchestration.language_scope import execute_by_language_scope
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import (
@@ -138,6 +137,18 @@ from tools.cq.query.merge import (
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
 logger = logging.getLogger(__name__)
+
+
+def _summary_update_mapping(update: object) -> dict[str, object]:
+    """Convert one typed summary-update payload into a plain mapping.
+
+    Returns:
+        Decoded summary-update mapping, or an empty mapping on decode failure.
+    """
+    try:
+        return require_contract_mapping(update)
+    except TypeError:
+        return {}
 
 
 @dataclass
@@ -617,12 +628,7 @@ def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
         state,
         symtable=ctx.symtable_enricher,
     )
-    summary_mapping_raw = msgspec.to_builtins(summary_updates, order="deterministic")
-    summary_mapping: dict[str, object]
-    if not isinstance(summary_mapping_raw, dict):
-        summary_mapping = {}
-    else:
-        summary_mapping = {str(key): value for key, value in summary_mapping_raw.items()}
+    summary_mapping = _summary_update_mapping(summary_updates)
     summary = apply_summary_mapping(
         summary,
         {
@@ -686,12 +692,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     result = mk_result(_build_runmeta(ctx))
     summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
     findings, sections, summary_updates = _apply_entity_handlers(state, symtable=request.symtable)
-    summary_mapping_raw = msgspec.to_builtins(summary_updates, order="deterministic")
-    summary_mapping: dict[str, object]
-    if not isinstance(summary_mapping_raw, dict):
-        summary_mapping = {}
-    else:
-        summary_mapping = {str(key): value for key, value in summary_mapping_raw.items()}
+    summary_mapping = _summary_update_mapping(summary_updates)
     summary = apply_summary_mapping(
         summary,
         {
@@ -869,7 +870,7 @@ def process_decorator_query(
     """Process a decorator entity query.
 
     Returns:
-        tuple[list[Finding], dict[str, object]]: Decorator findings and summary metrics.
+        tuple[list[Finding], EntitySummaryUpdateV1]: Decorator findings and summary metrics.
     """
     from tools.cq.query.enrichment import enrich_with_decorators
 
@@ -954,7 +955,7 @@ def process_call_query(
     """Process a callsite entity query.
 
     Returns:
-        tuple[list[Finding], dict[str, object]]: Callsite findings and summary metrics.
+        tuple[list[Finding], EntitySummaryUpdateV1]: Callsite findings and summary metrics.
     """
     matching_calls = _filter_to_matching(list(ctx.call_records), query)
     call_contexts: list[tuple[SgRecord, SgRecord | None]] = []

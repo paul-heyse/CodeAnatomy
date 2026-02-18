@@ -13,7 +13,7 @@ from tools.cq.core.types import (
     QueryLanguageScope,
     ripgrep_types_for_scope,
 )
-from tools.cq.orchestration.multilang_orchestrator import merge_partitioned_items
+from tools.cq.orchestration.language_scope import merge_partitioned_items
 from tools.cq.search._shared.requests import RgRunRequest
 from tools.cq.search._shared.types import SearchLimits
 from tools.cq.search.pipeline.classifier import QueryMode, detect_query_mode

@@ -195,7 +195,7 @@ def validate_plan_determinism(
     DeterminismValidationResult
         Determinism status and conflict metadata.
     """
-    from datafusion_engine.plan.artifact_store_core import plan_artifacts_location
+    from datafusion_engine.plan.artifact_store_tables import plan_artifacts_location
 
     location = plan_artifacts_location(profile)
     if location is None:

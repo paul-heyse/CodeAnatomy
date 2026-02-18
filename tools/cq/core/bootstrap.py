@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import atexit
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,6 +41,29 @@ class CqRuntimeServices:
     policy: RuntimeExecutionPolicy
 
 
+@dataclass
+class RuntimeServicesRegistry:
+    """Thread-safe workspace-keyed runtime service registry."""
+
+    _rows: dict[str, CqRuntimeServices] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def get(self, workspace: str) -> CqRuntimeServices | None:
+        """Return cached services for a workspace, if present."""
+        with self._lock:
+            return self._rows.get(workspace)
+
+    def set(self, workspace: str, services: CqRuntimeServices) -> None:
+        """Store runtime services for a workspace."""
+        with self._lock:
+            self._rows[workspace] = services
+
+    def clear(self) -> None:
+        """Clear all cached workspace services."""
+        with self._lock:
+            self._rows.clear()
+
+
 def _build_render_enrichment_adapter() -> RenderEnrichmentPort | None:
     from tools.cq.orchestration.render_enrichment import SmartSearchRenderEnrichmentAdapter
 
@@ -58,6 +81,19 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
     from tools.cq.query.entity_front_door import attach_entity_front_door_insight
     from tools.cq.search._shared.types import QueryMode
     from tools.cq.search.pipeline.smart_search import smart_search
+    from tools.cq.search.python.extractors import ensure_python_clear_callback_registered
+    from tools.cq.search.rust.enrichment import ensure_rust_clear_callback_registered
+    from tools.cq.search.tree_sitter.rust_lane.query_cache import (
+        ensure_query_cache_callback_registered,
+    )
+    from tools.cq.search.tree_sitter.rust_lane.runtime_cache import (
+        ensure_runtime_cache_callback_registered,
+    )
+
+    ensure_python_clear_callback_registered()
+    ensure_rust_clear_callback_registered()
+    ensure_query_cache_callback_registered()
+    ensure_runtime_cache_callback_registered()
 
     def _attach_front_door(request: EntityFrontDoorRequest) -> CqResult:
         return attach_entity_front_door_insight(
@@ -117,8 +153,7 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
     )
 
 
-_RUNTIME_SERVICES_LOCK = threading.Lock()
-_RUNTIME_SERVICES: dict[str, CqRuntimeServices] = {}
+_RUNTIME_SERVICES_REGISTRY = RuntimeServicesRegistry()
 
 
 def resolve_runtime_services(root: Path) -> CqRuntimeServices:
@@ -132,19 +167,17 @@ def resolve_runtime_services(root: Path) -> CqRuntimeServices:
         Reused runtime service bundle keyed by resolved workspace path.
     """
     workspace = str(root.resolve())
-    with _RUNTIME_SERVICES_LOCK:
-        services = _RUNTIME_SERVICES.get(workspace)
-        if services is not None:
-            return services
-        services = build_runtime_services(root=root)
-        _RUNTIME_SERVICES[workspace] = services
+    services = _RUNTIME_SERVICES_REGISTRY.get(workspace)
+    if services is not None:
         return services
+    services = build_runtime_services(root=root)
+    _RUNTIME_SERVICES_REGISTRY.set(workspace, services)
+    return services
 
 
 def clear_runtime_services() -> None:
     """Clear cached runtime service bundles."""
-    with _RUNTIME_SERVICES_LOCK:
-        _RUNTIME_SERVICES.clear()
+    _RUNTIME_SERVICES_REGISTRY.clear()
     close_cq_cache_backend()
 
 
@@ -153,6 +186,7 @@ atexit.register(clear_runtime_services)
 
 __all__ = [
     "CqRuntimeServices",
+    "RuntimeServicesRegistry",
     "build_runtime_services",
     "clear_runtime_services",
     "resolve_runtime_services",

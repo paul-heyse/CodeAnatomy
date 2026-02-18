@@ -13,8 +13,6 @@ from datafusion_engine.plan.bundle_artifact import (
     DataFusionPlanArtifact,
     PlanFingerprintInputs,
     _information_schema_hash,
-    _planning_env_hash,
-    _rulepack_hash,
 )
 from datafusion_engine.plan.plan_fingerprint import (
     _delta_protocol_payload as plan_delta_protocol_payload,
@@ -22,6 +20,8 @@ from datafusion_engine.plan.plan_fingerprint import (
 from datafusion_engine.plan.plan_fingerprint import (
     compute_plan_fingerprint,
 )
+from datafusion_engine.plan.planning_env import planning_env_hash as _planning_env_hash
+from datafusion_engine.plan.planning_env import rulepack_hash as _rulepack_hash
 from datafusion_engine.views.artifacts import _delta_inputs_payload, _plan_task_signature
 from extract.infrastructure.cache_utils import CACHE_VERSION, stable_cache_key, stable_cache_label
 from extract.scanning.repo_scan import _sha256_path

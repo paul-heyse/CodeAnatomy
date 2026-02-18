@@ -40,35 +40,38 @@ class EngineSession:
 
         Returns:
         -------
-        datafusion.SessionContext | None
-            Session context when available.
+        datafusion.SessionContext
+            Session context.
         """
-        if self.engine_runtime.session_context is not None:
-            return self.engine_runtime.session_context
-        return self.engine_runtime.datafusion_profile.session_runtime().ctx
+        return self.engine_runtime.session_context
 
     def df_runtime(self) -> SessionRuntime:
         """Return the DataFusion SessionRuntime when configured.
 
         Returns:
         -------
-        SessionRuntime | None
-            Session runtime when available.
+        SessionRuntime
+            Session runtime.
+
+        Raises:
+            RuntimeError: If no session runtime can be resolved for the extraction context.
         """
-        ctx = self.engine_runtime.session_context
-        if ctx is not None:
-            runtime = session_runtime_for_context(self.engine_runtime.datafusion_profile, ctx)
-            if runtime is not None:
-                return runtime
-        return self.engine_runtime.datafusion_profile.session_runtime()
+        runtime = session_runtime_for_context(
+            self.engine_runtime.datafusion_profile,
+            self.engine_runtime.session_context,
+        )
+        if runtime is None:
+            msg = "SessionRuntime could not be resolved for the Rust-built extraction session."
+            raise RuntimeError(msg)
+        return runtime
 
     def datafusion_facade(self) -> DataFusionExecutionFacade:
         """Return a DataFusion execution facade when configured.
 
         Returns:
         -------
-        DataFusionExecutionFacade | None
-            Execution facade when available.
+        DataFusionExecutionFacade
+            Execution facade.
         """
         session_runtime = self.df_runtime()
         return DataFusionExecutionFacade(

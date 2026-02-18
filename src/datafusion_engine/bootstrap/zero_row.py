@@ -546,8 +546,13 @@ def _materialize_delta_table(
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     compatible = _delta_compatible_schema(schema)
-    rows: list[dict[str, object]] = [] if seed_row is None else [dict(seed_row)]
-    table = pa.Table.from_pylist(rows, schema=compatible)
+    from deltalake import DeltaTable
+
+    if not (path / "_delta_log").exists():
+        DeltaTable.create(str(path), schema=compatible)
+    if seed_row is None:
+        return
+    table = pa.Table.from_pylist([dict(seed_row)], schema=compatible)
     from datafusion_engine.delta.transactions import write_transaction
     from datafusion_engine.delta.write_ipc_payload import (
         DeltaWriteRequestOptions,
@@ -558,8 +563,8 @@ def _materialize_delta_table(
         table_uri=str(path),
         table=table,
         options=DeltaWriteRequestOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
+            mode="append",
+            schema_mode=None,
             storage_options=None,
         ),
     )
@@ -727,6 +732,13 @@ def _register_dataset(
     if ctx.table_exist(name):
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table(name)
+    with contextlib.suppress(ImportError, OSError, RuntimeError, TypeError, ValueError):
+        from deltalake import DeltaTable
+
+        storage_options = dict(location.storage_options or {})
+        delta_table = DeltaTable(str(location.path), storage_options=storage_options or None)
+        adapter.register_arrow_table(name, delta_table.to_pyarrow_table(), overwrite=True)
+        return
     _ = DataFusionExecutionFacade(
         ctx=ctx,
         runtime_profile=profile,

@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
+from datafusion import SessionContext
 
 from obs.otel import SCOPE_SEMANTICS, stage_span
 from relspec.inference_confidence import InferenceConfidence
@@ -53,7 +54,7 @@ from semantics.types.core import (
 )
 
 if TYPE_CHECKING:
-    from datafusion import DataFrame, SessionContext
+    from datafusion import DataFrame
     from datafusion.expr import Expr
 
     from semantics.ir import SemanticIRJoinGroup

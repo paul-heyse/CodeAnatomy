@@ -39,7 +39,7 @@ def _register_semantic_outputs(
         # Skip rows that don't register as views (internal intermediates)
         if not row.register_view:
             continue
-        canonical_name = canonical_output_name(row.name)
+        canonical_name = canonical_output_name(row.name, manifest=None)
         if canonical_name != row.name:
             msg = (
                 "Semantic dataset rows must use canonical output names. "

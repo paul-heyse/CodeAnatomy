@@ -45,6 +45,35 @@ def _event_from_outcome(event: CqInvokeEvent) -> CqInvokeEvent:
     return build_invoke_event(event)
 
 
+def _build_event(
+    *,
+    ok: bool,
+    command: str | None,
+    parse_ms: float,
+    exec_ms: float,
+    exit_code: int,
+    event_id: str | None,
+    event_uuid_version: int | None,
+    event_created_ms: int | None,
+    error_class: str | None = None,
+    error_stage: str | None = None,
+) -> CqInvokeEvent:
+    return _event_from_outcome(
+        CqInvokeEvent(
+            ok=ok,
+            command=command,
+            parse_ms=parse_ms,
+            exec_ms=exec_ms,
+            exit_code=exit_code,
+            error_class=error_class,
+            error_stage=error_stage,
+            event_id=event_id,
+            event_uuid_version=event_uuid_version,
+            event_created_ms=event_created_ms,
+        )
+    )
+
+
 def invoke_with_telemetry(
     app: App,
     tokens: list[str] | None,
@@ -84,45 +113,11 @@ def invoke_with_telemetry(
                 result = dispatch_bound_command(command, bound)
             except CycloptsError as exc:
                 exec_ms = (time.perf_counter() - t1) * 1000.0
-                event = _event_from_outcome(
-                    CqInvokeEvent(
-                        ok=False,
-                        command=command_name,
-                        parse_ms=parse_ms,
-                        exec_ms=exec_ms,
-                        exit_code=2,
-                        error_class=f"cyclopts.{exc.__class__.__name__}",
-                        error_stage=_classify_error_stage(exc),
-                        event_id=event_identity.run_id,
-                        event_uuid_version=event_identity.run_uuid_version,
-                        event_created_ms=event_identity.run_created_ms,
-                    )
-                )
-                return 2, event
-            else:
-                exit_code = _apply_result_action(app, result)
-                exec_ms = (time.perf_counter() - t1) * 1000.0
-                event = _event_from_outcome(
-                    CqInvokeEvent(
-                        ok=True,
-                        command=command_name,
-                        parse_ms=parse_ms,
-                        exec_ms=exec_ms,
-                        exit_code=exit_code,
-                        event_id=event_identity.run_id,
-                        event_uuid_version=event_identity.run_uuid_version,
-                        event_created_ms=event_identity.run_created_ms,
-                    )
-                )
-                return exit_code, event
-        except CycloptsError as exc:
-            parse_ms = (time.perf_counter() - t0) * 1000.0
-            event = _event_from_outcome(
-                CqInvokeEvent(
+                event = _build_event(
                     ok=False,
                     command=command_name,
                     parse_ms=parse_ms,
-                    exec_ms=0.0,
+                    exec_ms=exec_ms,
                     exit_code=2,
                     error_class=f"cyclopts.{exc.__class__.__name__}",
                     error_stage=_classify_error_stage(exc),
@@ -130,23 +125,49 @@ def invoke_with_telemetry(
                     event_uuid_version=event_identity.run_uuid_version,
                     event_created_ms=event_identity.run_created_ms,
                 )
-            )
-            return 2, event
-        except _INVOCATION_RUNTIME_ERRORS as exc:
-            elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            event = _event_from_outcome(
-                CqInvokeEvent(
-                    ok=False,
+                return 2, event
+            else:
+                exit_code = _apply_result_action(app, result)
+                exec_ms = (time.perf_counter() - t1) * 1000.0
+                event = _build_event(
+                    ok=True,
                     command=command_name,
-                    parse_ms=elapsed_ms,
-                    exec_ms=elapsed_ms,
-                    exit_code=1,
-                    error_class=f"runtime.{exc.__class__.__name__}",
-                    error_stage="execution",
+                    parse_ms=parse_ms,
+                    exec_ms=exec_ms,
+                    exit_code=exit_code,
                     event_id=event_identity.run_id,
                     event_uuid_version=event_identity.run_uuid_version,
                     event_created_ms=event_identity.run_created_ms,
                 )
+                return exit_code, event
+        except CycloptsError as exc:
+            parse_ms = (time.perf_counter() - t0) * 1000.0
+            event = _build_event(
+                ok=False,
+                command=command_name,
+                parse_ms=parse_ms,
+                exec_ms=0.0,
+                exit_code=2,
+                error_class=f"cyclopts.{exc.__class__.__name__}",
+                error_stage=_classify_error_stage(exc),
+                event_id=event_identity.run_id,
+                event_uuid_version=event_identity.run_uuid_version,
+                event_created_ms=event_identity.run_created_ms,
+            )
+            return 2, event
+        except _INVOCATION_RUNTIME_ERRORS as exc:
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            event = _build_event(
+                ok=False,
+                command=command_name,
+                parse_ms=elapsed_ms,
+                exec_ms=elapsed_ms,
+                exit_code=1,
+                error_class=f"runtime.{exc.__class__.__name__}",
+                error_stage="execution",
+                event_id=event_identity.run_id,
+                event_uuid_version=event_identity.run_uuid_version,
+                event_created_ms=event_identity.run_created_ms,
             )
             return 1, event
 

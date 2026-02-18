@@ -22,7 +22,6 @@ from tools.cq.core.schema import (
     Finding,
     Section,
     assign_result_finding_ids,
-    mk_result,
     ms,
     update_result_summary,
 )
@@ -32,7 +31,6 @@ from tools.cq.core.summary_types import (
 )
 from tools.cq.core.summary_update_contracts import (
     EntitySummaryUpdateV1,
-    summary_update_mapping,
 )
 from tools.cq.core.types import (
     QueryLanguage,
@@ -41,7 +39,6 @@ from tools.cq.core.types import (
     file_extensions_for_language,
 )
 from tools.cq.orchestration.language_scope import execute_by_language_scope
-from tools.cq.query.enrichment import filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import (
     EntityQueryRequest,
@@ -49,9 +46,6 @@ from tools.cq.query.execution_requests import (
 )
 from tools.cq.query.executor_ast_grep import (
     collect_match_spans as _collect_match_spans,
-)
-from tools.cq.query.executor_ast_grep import (
-    execute_ast_grep_rules as _execute_ast_grep_rules,
 )
 from tools.cq.query.executor_ast_grep import (
     filter_records_by_spans as _filter_records_by_spans,
@@ -62,9 +56,6 @@ from tools.cq.query.executor_runtime_entity import (
 from tools.cq.query.planner import ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.query_scan import (
     scan_entity_records as _scan_entity_records,
-)
-from tools.cq.query.query_summary import (
-    build_runmeta as _build_runmeta,
 )
 from tools.cq.query.query_summary import (
     finalize_single_scope_summary as _finalize_single_scope_summary,
@@ -374,6 +365,118 @@ def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -
     )
 
 
+def empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
+    """Build a normalized empty result payload.
+
+    Returns:
+        CqResult: Empty result with scoped summary metadata applied.
+    """
+    return _empty_result(ctx, message)
+
+
+def resolve_symtable_enricher(ctx: QueryExecutionContext) -> SymtableEnricherPort:
+    """Resolve the symtable enricher bound to the execution context.
+
+    Returns:
+        SymtableEnricherPort: Enricher used for scope filtering/enrichment.
+    """
+    return _resolve_symtable_enricher(ctx)
+
+
+def apply_rule_spans(
+    ctx: QueryExecutionContext,
+    paths: list[Path],
+    scope_globs: list[str] | None,
+    candidates: EntityCandidates,
+    *,
+    match_spans: dict[str, list[tuple[int, int]]] | None = None,
+) -> EntityCandidates:
+    """Apply ast-grep rule spans to entity candidates.
+
+    Returns:
+        EntityCandidates: Candidates filtered by rule span constraints.
+    """
+    return _apply_rule_spans(
+        ctx,
+        paths,
+        scope_globs,
+        candidates,
+        match_spans=match_spans,
+    )
+
+
+def prepare_entity_state(ctx: QueryExecutionContext) -> EntityExecutionState | CqResult:
+    """Prepare state required to execute an entity query.
+
+    Returns:
+        EntityExecutionState | CqResult: Prepared state or early empty/error result.
+    """
+    return _prepare_entity_state(ctx)
+
+
+def serialize_file_filter_decisions(decisions: list[FileFilterDecision]) -> list[str]:
+    """Render file filter decisions for explain output.
+
+    Returns:
+        list[str]: Stable, human-readable file decision strings.
+    """
+    return _serialize_file_filter_decisions(decisions)
+
+
+def prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState | CqResult:
+    """Prepare state required to execute a pattern query.
+
+    Returns:
+        PatternExecutionState | CqResult: Prepared state or early empty/error result.
+    """
+    return _prepare_pattern_state(ctx)
+
+
+def summary_common_for_context(ctx: QueryExecutionContext) -> dict[str, object]:
+    """Build canonical query-summary common fields for one execution context.
+
+    Returns:
+        dict[str, object]: Summary payload fields shared by query result types.
+    """
+    return _summary_common_for_context(ctx)
+
+
+def maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> CqResult:
+    """Attach entity explain metadata when requested.
+
+    Returns:
+        CqResult: Result with optional explain metadata applied.
+    """
+    return _maybe_add_entity_explain(state, result)
+
+
+def maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -> CqResult:
+    """Attach pattern explain metadata when requested.
+
+    Returns:
+        CqResult: Result with optional explain metadata applied.
+    """
+    return _maybe_add_pattern_explain(state, result)
+
+
+def finalize_single_scope_summary(ctx: QueryExecutionContext, result: CqResult) -> CqResult:
+    """Finalize summary fields for a single-language query result.
+
+    Returns:
+        CqResult: Result with finalized single-scope summary fields.
+    """
+    return _finalize_single_scope_summary(ctx, result)
+
+
+def attach_entity_insight(result: CqResult, *, services: CqRuntimeServices) -> CqResult:
+    """Attach entity front-door insight to the result.
+
+    Returns:
+        CqResult: Result with front-door insight payload embedded.
+    """
+    return _attach_entity_insight(result, services=services)
+
+
 def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
     """Execute a ToolPlan and return results.
 
@@ -522,262 +625,47 @@ def _attach_entity_insight(result: CqResult, *, services: CqRuntimeServices) -> 
 
 
 def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
-    """Execute an entity-based query.
+    """Execute an entity-based query via extracted entity runtime module.
 
     Returns:
-    -------
-    CqResult
-        Query result with findings and summary metadata.
-
-    Raises:
-        ValueError: If called with a pattern-query execution plan.
+        CqResult: Entity query result from the extracted runtime path.
     """
-    if ctx.plan.is_pattern_query:
-        msg = "execute_entity_query called with a pattern query plan; use execute_pattern_query instead"
-        raise ValueError(msg)
-    state = _prepare_entity_state(ctx)
-    if isinstance(state, CqResult):
-        return state
+    from tools.cq.query.executor_runtime_entity import execute_entity_query as impl
 
-    result = mk_result(_build_runmeta(ctx))
-    summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    findings, sections, summary_updates = _apply_entity_handlers_impl(
-        state,
-        symtable=ctx.symtable_enricher,
-    )
-    summary_mapping = summary_update_mapping(summary_updates)
-    summary = apply_summary_mapping(
-        summary,
-        {
-            **summary_mapping,
-            "files_scanned": len({r.file for r in state.records}),
-        },
-    )
-    result = msgspec.structs.replace(
-        result,
-        summary=summary,
-        key_findings=findings,
-        sections=sections,
-    )
-    result = _maybe_add_entity_explain(state, result)
-    result = _finalize_single_scope_summary(ctx, result)
-    result = _attach_entity_insight(result, services=ctx.services)
-    result = update_result_summary(
-        result,
-        {"cache_backend": snapshot_backend_metrics(root=ctx.root)},
-    )
-    return assign_result_finding_ids(result)
+    return impl(ctx)
 
 
 def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
-    """Execute an entity query using pre-scanned records.
+    """Execute entity query from pre-scanned records via extracted module.
 
     Returns:
-    -------
-    CqResult
-        Query result with findings and summary metadata.
+        CqResult: Entity query result built from caller-provided records.
     """
-    ctx = QueryExecutionContext(
-        plan=request.plan,
-        query=request.query,
-        tc=request.tc,
-        root=request.root,
-        argv=request.argv,
-        started_ms=ms(),
-        run_id=request.run_id or uuid7_str(),
-        services=request.services,
-        query_text=request.query_text,
-        symtable_enricher=request.symtable,
-    )
-    scan_ctx = _build_scan_context(request.records)
-    candidates = _build_entity_candidates(scan_ctx, request.records)
-    candidates = _apply_rule_spans(
-        ctx,
-        request.paths,
-        request.scope_globs,
-        candidates,
-        match_spans=request.match_spans,
-    )
-    state = EntityExecutionState(
-        ctx=ctx,
-        paths=request.paths,
-        scope_globs=request.scope_globs,
-        records=request.records,
-        scan=scan_ctx,
-        candidates=candidates,
-    )
-    result = mk_result(_build_runmeta(ctx))
-    summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    findings, sections, summary_updates = _apply_entity_handlers_impl(
-        state, symtable=request.symtable
-    )
-    summary_mapping = summary_update_mapping(summary_updates)
-    summary = apply_summary_mapping(
-        summary,
-        {
-            **summary_mapping,
-            "files_scanned": len({r.file for r in state.records}),
-        },
-    )
-    result = msgspec.structs.replace(
-        result,
-        summary=summary,
-        key_findings=findings,
-        sections=sections,
-    )
-    result = _maybe_add_entity_explain(state, result)
-    result = _finalize_single_scope_summary(ctx, result)
-    result = _attach_entity_insight(result, services=ctx.services)
-    result = update_result_summary(
-        result,
-        {"cache_backend": snapshot_backend_metrics(root=ctx.root)},
-    )
-    return assign_result_finding_ids(result)
+    from tools.cq.query.executor_runtime_entity import execute_entity_query_from_records as impl
+
+    return impl(request)
 
 
 def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
-    """Execute a pattern-based query using inline ast-grep rules.
+    """Execute pattern query via extracted pattern runtime module.
 
     Returns:
-    -------
-    CqResult
-        Query result with findings and summary metadata.
-
-    Raises:
-        ValueError: If called with an entity-query execution plan.
+        CqResult: Pattern query result from the extracted runtime path.
     """
-    if not ctx.plan.is_pattern_query:
-        msg = "execute_pattern_query called with an entity query plan; use execute_entity_query instead"
-        raise ValueError(msg)
-    state = _prepare_pattern_state(ctx)
-    if isinstance(state, CqResult):
-        return state
+    from tools.cq.query.executor_runtime_pattern import execute_pattern_query as impl
 
-    findings, records, _ = _execute_ast_grep_rules(
-        state.ctx.plan.sg_rules,
-        state.file_result.files,
-        state.ctx.root,
-        state.ctx.query,
-        state.scope_globs,
-        state.ctx.run_id,
-    )
-
-    result = mk_result(_build_runmeta(ctx))
-    summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    key_findings = list(findings)
-
-    if state.ctx.query.scope_filter and findings:
-        enricher = _resolve_symtable_enricher(state.ctx)
-        key_findings = filter_by_scope(
-            key_findings,
-            state.ctx.query.scope_filter,
-            enricher,
-            records,
-        )
-
-    if state.ctx.query.limit and len(key_findings) > state.ctx.query.limit:
-        key_findings = key_findings[: state.ctx.query.limit]
-
-    summary = apply_summary_mapping(
-        summary,
-        {
-            "matches": len(key_findings),
-            "files_scanned": len({r.file for r in records}),
-        },
-    )
-    result = msgspec.structs.replace(
-        result,
-        summary=summary,
-        key_findings=key_findings,
-    )
-    result = _maybe_add_pattern_explain(state, result)
-    result = _finalize_single_scope_summary(ctx, result)
-    result = update_result_summary(
-        result,
-        {"cache_backend": snapshot_backend_metrics(root=ctx.root)},
-    )
-    return assign_result_finding_ids(result)
+    return impl(ctx)
 
 
 def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
-    """Execute a pattern query using a pre-tabulated file list.
+    """Execute pattern query with pre-tabulated files via extracted module.
 
     Returns:
-    -------
-    CqResult
-        Query result with findings and summary metadata.
+        CqResult: Pattern query result built from caller-provided file inputs.
     """
-    ctx = QueryExecutionContext(
-        plan=request.plan,
-        query=request.query,
-        tc=request.tc,
-        root=request.root,
-        argv=request.argv,
-        started_ms=ms(),
-        run_id=request.run_id or uuid7_str(),
-        services=request.services,
-        symtable_enricher=request.symtable,
-        query_text=request.query_text,
-    )
-    if not request.files:
-        result = _empty_result(ctx, "No files match scope after filtering")
-        if request.plan.explain and request.decisions is not None:
-            result = update_result_summary(
-                result,
-                {"file_filters": _serialize_file_filter_decisions(request.decisions)},
-            )
-        return result
+    from tools.cq.query.executor_runtime_pattern import execute_pattern_query_with_files as impl
 
-    state = PatternExecutionState(
-        ctx=ctx,
-        scope_globs=scope_to_globs(request.plan.scope),
-        file_result=FileTabulationResult(files=request.files, decisions=request.decisions or []),
-    )
-
-    findings, records, _ = _execute_ast_grep_rules(
-        state.ctx.plan.sg_rules,
-        state.file_result.files,
-        state.ctx.root,
-        state.ctx.query,
-        state.scope_globs,
-        state.ctx.run_id,
-    )
-
-    result = mk_result(_build_runmeta(ctx))
-    summary = apply_summary_mapping(result.summary, _summary_common_for_context(ctx))
-    key_findings = list(findings)
-
-    if state.ctx.query.scope_filter and findings:
-        enricher = _resolve_symtable_enricher(state.ctx)
-        key_findings = filter_by_scope(
-            key_findings,
-            state.ctx.query.scope_filter,
-            enricher,
-            records,
-        )
-
-    if state.ctx.query.limit and len(key_findings) > state.ctx.query.limit:
-        key_findings = key_findings[: state.ctx.query.limit]
-
-    summary = apply_summary_mapping(
-        summary,
-        {
-            "matches": len(key_findings),
-            "files_scanned": len({r.file for r in records}),
-        },
-    )
-    result = msgspec.structs.replace(
-        result,
-        summary=summary,
-        key_findings=key_findings,
-    )
-    result = _maybe_add_pattern_explain(state, result)
-    result = _finalize_single_scope_summary(ctx, result)
-    result = update_result_summary(
-        result,
-        {"cache_backend": snapshot_backend_metrics(root=ctx.root)},
-    )
-    return assign_result_finding_ids(result)
+    return impl(request)
 
 
 def process_decorator_query(
@@ -860,10 +748,22 @@ def rg_files_with_matches(
 
 __all__ = [
     "ExecutePlanRequestV1",
+    "apply_rule_spans",
+    "attach_entity_insight",
+    "execute_entity_query",
     "execute_entity_query_from_records",
+    "execute_pattern_query",
     "execute_pattern_query_with_files",
     "execute_plan",
+    "finalize_single_scope_summary",
+    "maybe_add_entity_explain",
+    "maybe_add_pattern_explain",
+    "prepare_entity_state",
+    "prepare_pattern_state",
     "process_call_query",
     "process_decorator_query",
+    "resolve_symtable_enricher",
     "rg_files_with_matches",
+    "serialize_file_filter_decisions",
+    "summary_common_for_context",
 ]

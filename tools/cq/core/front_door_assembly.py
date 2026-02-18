@@ -107,209 +107,51 @@ def augment_insight_with_semantic(
     *,
     preview_per_slice: int | None = None,
 ) -> FrontDoorInsightV1:
-    """Overlay static semantic data on top of an existing insight payload.
+    """Overlay static semantic data via extracted entity front-door module.
 
     Returns:
-        Insight payload augmented with static-semantic derived data.
+        Front-door insight payload with semantic overlays applied.
     """
-    limit = preview_per_slice or insight.budget.preview_per_slice
-    neighborhood = insight.neighborhood
+    from tools.cq.core.front_door_entity import augment_insight_with_semantic as impl
 
-    call_graph = semantic_payload.get("call_graph")
-    if isinstance(call_graph, dict):
-        callers_preview = _node_refs_from_semantic_entries(
-            call_graph.get("incoming_callers"), limit
-        )
-        callees_preview = _node_refs_from_semantic_entries(
-            call_graph.get("outgoing_callees"), limit
-        )
-        callers_total = _read_total(call_graph.get("incoming_total"), fallback=len(callers_preview))
-        callees_total = _read_total(call_graph.get("outgoing_total"), fallback=len(callees_preview))
-
-        neighborhood = msgspec.structs.replace(
-            neighborhood,
-            callers=_merge_slice(
-                neighborhood.callers,
-                total=callers_total,
-                preview=callers_preview,
-                source="semantic",
-            ),
-            callees=_merge_slice(
-                neighborhood.callees,
-                total=callees_total,
-                preview=callees_preview,
-                source="semantic",
-            ),
-        )
-
-    references_total = _read_reference_total(semantic_payload)
-    if references_total is not None:
-        neighborhood = msgspec.structs.replace(
-            neighborhood,
-            references=_merge_slice(
-                neighborhood.references,
-                total=references_total,
-                preview=neighborhood.references.preview,
-                source="semantic",
-            ),
-        )
-
-    target = insight.target
-    type_contract = semantic_payload.get("type_contract")
-    if isinstance(type_contract, dict):
-        signature = _string_or_none(type_contract.get("callable_signature"))
-        resolved_type = _string_or_none(type_contract.get("resolved_type"))
-        target = msgspec.structs.replace(
-            target,
-            signature=signature or resolved_type or target.signature,
-        )
-
-    confidence = msgspec.structs.replace(
-        insight.confidence,
-        evidence_kind=insight.confidence.evidence_kind
-        if insight.confidence.evidence_kind != "unknown"
-        else "resolved_static_semantic",
-        score=max(insight.confidence.score, 0.8),
-        bucket=_max_bucket(insight.confidence.bucket, "high"),
-    )
-    degradation = msgspec.structs.replace(insight.degradation, semantic="ok")
-
-    return msgspec.structs.replace(
+    return impl(
         insight,
-        target=target,
-        neighborhood=neighborhood,
-        confidence=confidence,
-        degradation=degradation,
+        semantic_payload,
+        preview_per_slice=preview_per_slice,
     )
 
 
 def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsightV1:
-    """Build search front-door insight payload.
+    """Build search front-door insight via extracted search module.
 
     Returns:
-        Front-door insight payload for search macro results.
+        Search front-door insight payload.
     """
-    target = _target_from_finding(
-        request.primary_target,
-        fallback_symbol=_string_or_none(summary_value(request.summary, "query")) or "search target",
-        fallback_kind="query",
-        selection_reason=(
-            "top_definition" if request.primary_target is not None else "fallback_query"
-        ),
-    )
-    confidence = _confidence_from_findings(request.target_candidates)
-    confidence = msgspec.structs.replace(
-        confidence,
-        evidence_kind=confidence.evidence_kind
-        if confidence.evidence_kind != "unknown"
-        else _string_or_none(summary_value(request.summary, "scan_method")) or "resolved_ast",
-    )
+    from tools.cq.core.front_door_search import build_search_insight as impl
 
-    neighborhood = request.neighborhood or _empty_neighborhood()
-    risk = request.risk
-    if risk is None:
-        risk = risk_from_counters(
-            InsightRiskCountersV1(
-                callers=neighborhood.callers.total,
-                callees=neighborhood.callees.total,
-            )
-        )
-    degradation = request.degradation or _degradation_from_summary(request.summary)
-    budget = request.budget or _default_search_budget(
-        target_candidate_count=len(request.target_candidates)
-    )
-
-    return FrontDoorInsightV1(
-        source="search",
-        target=target,
-        neighborhood=neighborhood,
-        risk=risk,
-        confidence=confidence,
-        degradation=degradation,
-        budget=budget,
-    )
+    return impl(request)
 
 
 def build_calls_insight(request: CallsInsightBuildRequestV1) -> FrontDoorInsightV1:
-    """Build calls front-door insight payload.
+    """Build calls front-door insight via extracted calls module.
 
     Returns:
-        Front-door insight payload for calls macro results.
+        Calls front-door insight payload.
     """
-    target = InsightTargetV1(
-        symbol=request.function_name,
-        kind="function",
-        location=request.location or InsightLocationV1(),
-        signature=request.signature,
-        selection_reason="resolved_calls_target",
-    )
+    from tools.cq.core.front_door_calls import build_calls_insight as impl
 
-    counters = InsightRiskCountersV1(
-        callers=request.neighborhood.callers.total,
-        callees=request.neighborhood.callees.total,
-        files_with_calls=request.files_with_calls,
-        arg_shape_count=request.arg_shape_count,
-        forwarding_count=request.forwarding_count,
-        hazard_count=sum(request.hazard_counts.values()),
-    )
-    risk = risk_from_counters(counters)
-    if request.hazard_counts:
-        drivers = tuple(sorted(request.hazard_counts.keys()))
-        risk = msgspec.structs.replace(
-            risk, drivers=tuple(dict.fromkeys([*risk.drivers, *drivers]))
-        )
-
-    return FrontDoorInsightV1(
-        source="calls",
-        target=target,
-        neighborhood=request.neighborhood,
-        risk=risk,
-        confidence=request.confidence,
-        degradation=request.degradation or InsightDegradationV1(),
-        budget=request.budget or _default_calls_budget(),
-    )
+    return impl(request)
 
 
 def build_entity_insight(request: EntityInsightBuildRequestV1) -> FrontDoorInsightV1:
-    """Build entity front-door insight payload.
+    """Build entity front-door insight via extracted entity module.
 
     Returns:
-        Front-door insight payload for entity query results.
+        Entity front-door insight payload.
     """
-    target = _target_from_finding(
-        request.primary_target,
-        fallback_symbol=_string_or_none(summary_value(request.summary, "query"))
-        or _string_or_none(summary_value(request.summary, "entity_kind"))
-        or "entity target",
-        fallback_kind=_string_or_none(summary_value(request.summary, "entity_kind")) or "entity",
-        selection_reason=(
-            "top_entity_result" if request.primary_target is not None else "fallback_query"
-        ),
-    )
+    from tools.cq.core.front_door_entity import build_entity_insight as impl
 
-    neighborhood = request.neighborhood or _empty_neighborhood()
-    risk = request.risk
-    if risk is None:
-        risk = risk_from_counters(
-            InsightRiskCountersV1(
-                callers=neighborhood.callers.total,
-                callees=neighborhood.callees.total,
-            )
-        )
-
-    confidence = request.confidence
-    if confidence is None:
-        confidence = InsightConfidenceV1(evidence_kind="resolved_ast", score=0.8, bucket="high")
-
-    return FrontDoorInsightV1(
-        source="entity",
-        target=target,
-        neighborhood=neighborhood,
-        risk=risk,
-        confidence=confidence,
-        degradation=request.degradation or InsightDegradationV1(),
-        budget=request.budget or _default_entity_budget(),
-    )
+    return impl(request)
 
 
 def _default_search_budget(*, target_candidate_count: int) -> InsightBudgetV1:
@@ -735,6 +577,143 @@ def _read_semantic_telemetry(summary: SummaryLike) -> tuple[int, int, int, int]:
     return attempted, applied, failed, timed_out
 
 
+def default_search_budget(*, target_candidate_count: int) -> InsightBudgetV1:
+    """Public wrapper for default search budget policy.
+
+    Returns:
+        InsightBudgetV1: Budget tuned to search target-cardinality.
+    """
+    return _default_search_budget(target_candidate_count=target_candidate_count)
+
+
+def default_calls_budget() -> InsightBudgetV1:
+    """Public wrapper for default calls budget policy.
+
+    Returns:
+        InsightBudgetV1: Standard calls insight budget defaults.
+    """
+    return _default_calls_budget()
+
+
+def default_entity_budget() -> InsightBudgetV1:
+    """Public wrapper for default entity budget policy.
+
+    Returns:
+        InsightBudgetV1: Standard entity insight budget defaults.
+    """
+    return _default_entity_budget()
+
+
+def target_from_finding(
+    finding: Finding | None,
+    *,
+    fallback_symbol: str,
+    fallback_kind: str,
+    selection_reason: str,
+) -> InsightTargetV1:
+    """Public wrapper for target extraction from findings.
+
+    Returns:
+        InsightTargetV1: Best target candidate with fallback resolution metadata.
+    """
+    return _target_from_finding(
+        finding,
+        fallback_symbol=fallback_symbol,
+        fallback_kind=fallback_kind,
+        selection_reason=selection_reason,
+    )
+
+
+def string_or_none(value: object) -> str | None:
+    """Public wrapper for non-empty string coercion.
+
+    Returns:
+        str | None: Non-empty trimmed string, otherwise None.
+    """
+    return _string_or_none(value)
+
+
+def confidence_from_findings(findings: Sequence[Finding]) -> InsightConfidenceV1:
+    """Public wrapper for confidence aggregation from findings.
+
+    Returns:
+        InsightConfidenceV1: Confidence bucket/score inferred from finding set.
+    """
+    return _confidence_from_findings(findings)
+
+
+def degradation_from_summary(summary: SummaryLike) -> InsightDegradationV1:
+    """Public wrapper for degradation derivation from summary payload.
+
+    Returns:
+        InsightDegradationV1: Degradation state derived from summary telemetry.
+    """
+    return _degradation_from_summary(summary)
+
+
+def empty_neighborhood() -> InsightNeighborhoodV1:
+    """Public wrapper for an unavailable neighborhood payload.
+
+    Returns:
+        InsightNeighborhoodV1: Placeholder neighborhood with unavailable slices.
+    """
+    return _empty_neighborhood()
+
+
+def node_refs_from_semantic_entries(
+    payload: object,
+    limit: int,
+) -> tuple[SemanticNodeRefV1, ...]:
+    """Public wrapper for semantic node-ref preview extraction.
+
+    Returns:
+        tuple[SemanticNodeRefV1, ...]: Truncated semantic node-reference preview.
+    """
+    return _node_refs_from_semantic_entries(payload, limit)
+
+
+def read_total(value: object, *, fallback: int) -> int:
+    """Public wrapper for integer-total coercion with fallback.
+
+    Returns:
+        int: Parsed total count or fallback when coercion fails.
+    """
+    return _read_total(value, fallback=fallback)
+
+
+def merge_slice(
+    original: InsightSliceV1,
+    *,
+    total: int,
+    preview: tuple[SemanticNodeRefV1, ...],
+    source: NeighborhoodSource,
+) -> InsightSliceV1:
+    """Public wrapper for slice merge policy.
+
+    Returns:
+        InsightSliceV1: Slice merged with semantic totals/preview/source metadata.
+    """
+    return _merge_slice(original, total=total, preview=preview, source=source)
+
+
+def read_reference_total(payload: dict[str, object]) -> int | None:
+    """Public wrapper for reference-total extraction.
+
+    Returns:
+        int | None: Reference total when present and coercible.
+    """
+    return _read_reference_total(payload)
+
+
+def max_bucket(lhs: str, rhs: str) -> str:
+    """Public wrapper for confidence bucket comparison.
+
+    Returns:
+        str: Higher-confidence bucket between the two inputs.
+    """
+    return _max_bucket(lhs, rhs)
+
+
 __all__ = [
     "DEFAULT_INSIGHT_THRESHOLDS",
     "Availability",
@@ -763,6 +742,19 @@ __all__ = [
     "build_entity_insight",
     "build_neighborhood_from_slices",
     "build_search_insight",
+    "confidence_from_findings",
+    "default_calls_budget",
+    "default_entity_budget",
+    "default_search_budget",
+    "degradation_from_summary",
+    "empty_neighborhood",
     "mark_partial_for_missing_languages",
+    "max_bucket",
+    "merge_slice",
+    "node_refs_from_semantic_entries",
+    "read_reference_total",
+    "read_total",
     "risk_from_counters",
+    "string_or_none",
+    "target_from_finding",
 ]

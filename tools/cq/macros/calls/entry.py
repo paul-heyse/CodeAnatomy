@@ -22,42 +22,28 @@ from tools.cq.core.schema import (
     update_result_summary,
 )
 from tools.cq.core.scoring import build_detail_payload
-from tools.cq.core.summary_types import build_semantic_telemetry
 from tools.cq.core.summary_update_contracts import summary_update_mapping
 from tools.cq.macros.calls.analysis import (
     CallSite,
 )
-from tools.cq.macros.calls.analysis_scan import (
-    analyze_sites as _analyze_sites,
-)
-from tools.cq.macros.calls.analysis_scan import (
-    collect_call_sites,
-)
-from tools.cq.macros.calls.analysis_scan import (
-    collect_call_sites_from_records as _collect_call_sites_from_records,
-)
+from tools.cq.macros.calls.analysis_scan import analyze_sites as _analyze_sites
+from tools.cq.macros.calls.entry_dispatch import scan_call_sites as _scan_call_sites_impl
+from tools.cq.macros.calls.entry_output import build_calls_result as _build_calls_result_impl
 from tools.cq.macros.calls.entry_summary import build_calls_summary
 from tools.cq.macros.calls.insight import (
     CallsFrontDoorState,
-    CallsInsightSummary,
     _add_context_section,
     _add_hazard_section,
     _add_kw_section,
     _add_shape_section,
     _add_sites_section,
     _build_call_scoring,
-    _build_calls_confidence,
-    _build_calls_front_door_insight,
-    _finalize_calls_semantic_state,
-    _find_function_signature,
 )
 from tools.cq.macros.calls.neighborhood import (
     CallAnalysisSummary,
     CallsNeighborhoodRequest,
     _build_calls_neighborhood,
 )
-from tools.cq.macros.calls.scanning import _group_candidates, _rg_find_candidates
-from tools.cq.macros.calls.semantic import CallsSemanticRequest, _apply_calls_semantic
 from tools.cq.macros.calls.target_runtime import (
     AttachTargetMetadataRequestV1,
     apply_target_metadata,
@@ -70,14 +56,10 @@ from tools.cq.macros.constants import (
 )
 from tools.cq.macros.contracts import CallsRequest
 from tools.cq.macros.result_builder import MacroResultBuilder
-from tools.cq.query.sg_parser import SgRecord, list_scan_files, sg_scan
-from tools.cq.search.pipeline.profiles import INTERACTIVE
-from tools.cq.search.rg.adapter import FilePatternSearchOptions, find_files_with_pattern
+from tools.cq.query.sg_parser import SgRecord
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_schema import FrontDoorInsightV1
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.core.types import QueryLanguage
     from tools.cq.macros.calls.analysis import CallSite
 
 logger = logging.getLogger(__name__)
@@ -116,72 +98,7 @@ def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
     CallScanResult
         Summary of scan inputs, outputs, and fallback status.
     """
-    search_name = function_name.rsplit(".", maxsplit=1)[-1]
-    pattern = rf"\b{search_name}\s*\("
-    target_language = infer_target_language(root_path, function_name) or "python"
-    candidate_files = find_files_with_pattern(
-        root_path,
-        pattern,
-        options=FilePatternSearchOptions(
-            limits=INTERACTIVE,
-            lang_scope=target_language,
-        ),
-    )
-
-    all_scan_files = list_scan_files([root_path], root=root_path, lang=target_language)
-    total_py_files = len(all_scan_files)
-
-    scan_files = candidate_files if candidate_files else all_scan_files
-
-    used_fallback = False
-    call_records: list[SgRecord] = []
-    if scan_files:
-        try:
-            call_records = sg_scan(
-                paths=scan_files,
-                record_types={"call"},
-                root=root_path,
-                lang=target_language,
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            logger.warning("Calls ast-grep scan failed for '%s': %s", function_name, exc)
-            used_fallback = True
-    else:
-        used_fallback = True
-
-    signature_info = (
-        _find_function_signature(root_path, function_name) if target_language == "python" else ""
-    )
-
-    if not used_fallback:
-        all_sites, files_with_calls = _collect_call_sites_from_records(
-            root_path,
-            call_records,
-            function_name,
-        )
-        rg_candidates = 0
-    else:
-        candidates = _rg_find_candidates(
-            function_name,
-            root_path,
-            lang_scope=target_language,
-        )
-        by_file = _group_candidates(candidates)
-        all_sites = collect_call_sites(root_path, by_file, function_name)
-        files_with_calls = len({site.file for site in all_sites})
-        rg_candidates = len(candidates)
-
-    return CallScanResult(
-        candidate_files=candidate_files,
-        scan_files=scan_files,
-        total_py_files=total_py_files,
-        call_records=call_records,
-        used_fallback=used_fallback,
-        all_sites=all_sites,
-        files_with_calls=files_with_calls,
-        rg_candidates=rg_candidates,
-        signature_info=signature_info,
-    )
+    return _scan_call_sites_impl(root_path, function_name)
 
 
 def scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
@@ -277,6 +194,20 @@ def _init_calls_result(
     )
 
 
+def init_calls_result(
+    ctx: CallsContext,
+    scan_result: CallScanResult,
+    *,
+    started_ms: float,
+) -> CqResult:
+    """Public initializer for the calls macro result skeleton.
+
+    Returns:
+        CqResult: Result seeded with run metadata and calls summary fields.
+    """
+    return _init_calls_result(ctx, scan_result, started_ms=started_ms)
+
+
 def _analyze_calls_sites(
     result: CqResult,
     *,
@@ -311,6 +242,21 @@ def _analyze_calls_sites(
     )
     result = _append_calls_findings(result, ctx, scan_result, analysis, score)
     return result, analysis, score
+
+
+def analyze_calls_sites(
+    result: CqResult,
+    *,
+    ctx: CallsContext,
+    scan_result: CallScanResult,
+) -> tuple[CqResult, CallAnalysisSummary, ScoreDetails | None]:
+    """Public wrapper for call-site analysis and findings assembly.
+
+    Returns:
+        tuple[CqResult, CallAnalysisSummary, ScoreDetails | None]: Updated result,
+            aggregate analysis counters, and optional scoring details.
+    """
+    return _analyze_calls_sites(result, ctx=ctx, scan_result=scan_result)
 
 
 def _build_calls_front_door_state(
@@ -375,6 +321,21 @@ def _build_calls_front_door_state(
     )
 
 
+def build_calls_front_door_state(
+    result: CqResult,
+    *,
+    ctx: CallsContext,
+    analysis: CallAnalysisSummary,
+    score: ScoreDetails | None,
+) -> tuple[CqResult, CallsFrontDoorState]:
+    """Public wrapper for calls front-door neighborhood + target state.
+
+    Returns:
+        tuple[CqResult, CallsFrontDoorState]: Updated result and front-door state.
+    """
+    return _build_calls_front_door_state(result, ctx=ctx, analysis=analysis, score=score)
+
+
 def _attach_calls_neighborhood_section(
     result: CqResult, neighborhood_findings: list[Finding]
 ) -> CqResult:
@@ -396,110 +357,13 @@ def _target_file_path_and_line(
     return root / target_location[0], int(target_location[1])
 
 
-def _apply_calls_semantic_with_telemetry(
-    result: CqResult,
-    *,
-    insight: FrontDoorInsightV1,
-    state: CallsFrontDoorState,
-    symbol_hint: str,
-) -> tuple[
-    FrontDoorInsightV1,
-    tuple[int, int, int, int],
-    tuple[str, ...],
-    dict[str, object] | None,
-]:
-    semantic_outcome = _apply_calls_semantic(
-        insight=insight,
-        request=CallsSemanticRequest(
-            root=Path(result.run.root),
-            target_file_path=state.target_file_path,
-            target_line=state.target_line,
-            target_language=state.target_language,
-            symbol_hint=symbol_hint,
-            preview_per_slice=FRONT_DOOR_PREVIEW_PER_SLICE,
-            run_id=result.run.run_id,
-        ),
-    )
-    insight, _language, attempted, applied, failed, timed_out, reasons, semantic_planes = (
-        semantic_outcome
-    )
-    return insight, (attempted, applied, failed, timed_out), reasons, semantic_planes
-
-
-def _attach_calls_semantic_summary(
-    result: CqResult,
-    target_language: QueryLanguage | None,
-    semantic_telemetry: tuple[int, int, int, int],
-) -> CqResult:
-    semantic_attempted, semantic_applied, semantic_failed, semantic_timed_out = semantic_telemetry
-    return update_result_summary(
-        result,
-        {
-            "python_semantic_telemetry": build_semantic_telemetry(
-                attempted=semantic_attempted if target_language == "python" else 0,
-                applied=semantic_applied if target_language == "python" else 0,
-                failed=semantic_failed if target_language == "python" else 0,
-                timed_out=semantic_timed_out if target_language == "python" else 0,
-            ),
-            "rust_semantic_telemetry": build_semantic_telemetry(
-                attempted=semantic_attempted if target_language == "rust" else 0,
-                applied=semantic_applied if target_language == "rust" else 0,
-                failed=semantic_failed if target_language == "rust" else 0,
-                timed_out=semantic_timed_out if target_language == "rust" else 0,
-            ),
-        },
-    )
-
-
 def _build_calls_result(
     ctx: CallsContext,
     scan_result: CallScanResult,
     *,
     started_ms: float,
 ) -> CqResult:
-    from tools.cq.core.front_door_render import to_public_front_door_insight_dict
-
-    result = _init_calls_result(ctx, scan_result, started_ms=started_ms)
-    result, analysis, score = _analyze_calls_sites(result, ctx=ctx, scan_result=scan_result)
-    result, state = _build_calls_front_door_state(result, ctx=ctx, analysis=analysis, score=score)
-    confidence = _build_calls_confidence(score)
-    summary_input = CallsInsightSummary(
-        function_name=ctx.function_name,
-        signature_info=scan_result.signature_info,
-        files_with_calls=scan_result.files_with_calls,
-        arg_shape_count=len(analysis.arg_shapes),
-        forwarding_count=analysis.forwarding_count,
-        hazard_counts=dict(analysis.hazard_counts),
-    )
-    insight = _build_calls_front_door_insight(
-        summary=summary_input,
-        confidence=confidence,
-        state=state,
-        used_fallback=scan_result.used_fallback,
-    )
-    insight, semantic_telemetry, semantic_reasons, semantic_planes = (
-        _apply_calls_semantic_with_telemetry(
-            result,
-            insight=insight,
-            state=state,
-            symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
-        )
-    )
-    if semantic_planes is not None:
-        result = update_result_summary(result, {"semantic_planes": semantic_planes})
-    result = _attach_calls_semantic_summary(result, state.target_language, semantic_telemetry)
-    insight = _finalize_calls_semantic_state(
-        insight=insight,
-        summary=result.summary,
-        target_language=state.target_language,
-        top_level_attempted=semantic_telemetry[0],
-        top_level_applied=semantic_telemetry[1],
-        reasons=semantic_reasons,
-    )
-    return update_result_summary(
-        result,
-        {"front_door_insight": to_public_front_door_insight_dict(insight)},
-    )
+    return _build_calls_result_impl(ctx, scan_result, started_ms=started_ms)
 
 
 def build_calls_result(
@@ -528,7 +392,10 @@ def cmd_calls(request: CallsRequest) -> CqResult:
 
 
 __all__ = [
+    "analyze_calls_sites",
+    "build_calls_front_door_state",
     "build_calls_result",
     "cmd_calls",
+    "init_calls_result",
     "scan_call_sites",
 ]

@@ -14,10 +14,16 @@ from pathspec import PathSpec
 from tools.cq.core.semantic_contracts import SemanticProvider
 from tools.cq.core.structs import CqOutputStruct, CqStruct
 from tools.cq.core.types import QueryLanguage
+from tools.cq.search._shared.enrichment_contracts import (
+    wrap_python_enrichment,
+    wrap_rust_enrichment,
+)
 from tools.cq.search.enrichment.core import (
     string_or_none as _string,
 )
 from tools.cq.search.enrichment.language_registry import get_language_adapter
+from tools.cq.search.enrichment.python_facts import PythonEnrichmentFacts
+from tools.cq.search.enrichment.rust_facts import RustEnrichmentFacts
 
 _SEMANTIC_PLANES_VERSION = "cq.semantic_planes.v2"
 _SEMANTIC_DISABLED_VALUES = {"0", "false", "no", "off"}
@@ -115,31 +121,63 @@ def match_path(spec: PathSpec, path: str | Path) -> bool:
     return spec.match_file(str(path))
 
 
-def _string_list(value: object, *, limit: int = 16) -> list[str]:
+def _coerce_string_rows(value: object, *, limit: int = 16) -> list[str]:
     if not isinstance(value, list):
         return []
     rows = [_string(item) for item in value]
     return [text for text in rows if text is not None][:limit]
 
 
-def _semantic_tokens_preview(payload: Mapping[str, object]) -> list[dict[str, object]]:
+def _semantic_tokens_preview(
+    payload: Mapping[str, object],
+    *,
+    python_facts: PythonEnrichmentFacts | None,
+    rust_facts: RustEnrichmentFacts | None,
+) -> list[dict[str, object]]:
     preview: list[dict[str, object]] = []
+    structure = (
+        python_facts.structure
+        if python_facts is not None
+        else (rust_facts.structure if rust_facts is not None else None)
+    )
     for key in ("node_kind", "item_role", "scope_kind"):
-        value = _string(payload.get(key))
+        value = (
+            _string(getattr(structure, key, None))
+            if structure is not None
+            else _string(payload.get(key))
+        )
         if value is not None:
             preview.append({"kind": key, "value": value})
-    signature = _string(payload.get("signature"))
+    signature_value = (
+        getattr(python_facts.signature, "signature", None)
+        if python_facts is not None and python_facts.signature is not None
+        else payload.get("signature")
+    )
+    signature = _string(signature_value)
     if signature is not None:
         preview.append({"kind": "signature", "value": signature[:180]})
     return preview[:8]
 
 
-def _locals_preview(payload: Mapping[str, object]) -> list[dict[str, object]]:
+def _build_locals_preview(
+    payload: Mapping[str, object],
+    *,
+    python_facts: PythonEnrichmentFacts | None,
+) -> list[dict[str, object]]:
+    scope_chain = (
+        list(python_facts.structure.scope_chain)
+        if python_facts is not None and python_facts.structure is not None
+        else _coerce_string_rows(payload.get("scope_chain"), limit=8)
+    )
     rows: list[dict[str, object]] = [
         {"kind": "scope", "name": scope}
-        for scope in _string_list(payload.get("scope_chain"), limit=8)
+        for scope in scope_chain[:8]
     ]
-    qualified = payload.get("qualified_name_candidates")
+    qualified = (
+        python_facts.resolution.qualified_name_candidates
+        if python_facts is not None and python_facts.resolution is not None
+        else payload.get("qualified_name_candidates")
+    )
     if isinstance(qualified, list):
         qualified_names = sorted(
             {
@@ -149,25 +187,42 @@ def _locals_preview(payload: Mapping[str, object]) -> list[dict[str, object]]:
             }
         )
         rows.extend({"kind": "qualified_name", "name": name} for name in qualified_names[:8])
-    locals_payload = payload.get("locals")
-    if isinstance(locals_payload, Mapping):
-        index_rows = locals_payload.get("index")
-        if isinstance(index_rows, list):
-            local_names = sorted(
-                {
-                    name
-                    for item in index_rows
-                    if isinstance(item, Mapping) and (name := _string(item.get("name"))) is not None
-                }
-            )
-            rows.extend({"kind": "local_definition", "name": name} for name in local_names[:8])
+    index_rows = (
+        python_facts.locals.index
+        if python_facts is not None and python_facts.locals is not None
+        else None
+    )
+    if index_rows is None:
+        locals_payload = payload.get("locals")
+        if isinstance(locals_payload, Mapping) and isinstance(locals_payload.get("index"), list):
+            index_rows = cast("list[object]", locals_payload.get("index"))
+    if isinstance(index_rows, list):
+        local_names = sorted(
+            {
+                name
+                for item in index_rows
+                if isinstance(item, Mapping) and (name := _string(item.get("name"))) is not None
+            }
+        )
+        rows.extend({"kind": "local_definition", "name": name} for name in local_names[:8])
     return rows[:12]
 
 
 def _injections_preview(
     language: QueryLanguage,
     payload: Mapping[str, object],
+    *,
+    rust_facts: RustEnrichmentFacts | None,
 ) -> list[dict[str, object]]:
+    if rust_facts is not None and rust_facts.macro_expansion is not None:
+        rows = rust_facts.macro_expansion.macro_expansion_results
+        preview: list[dict[str, object]] = [
+            {"kind": "macro_invocation", "name": name}
+            for item in rows
+            if isinstance(item, Mapping) and (name := _string(item.get("macro_name"))) is not None
+        ]
+        if preview:
+            return preview[:8]
     preview_fn = _INJECTION_PREVIEW_BY_LANGUAGE.get(language)
     if preview_fn is not None:
         return preview_fn(payload)
@@ -195,22 +250,42 @@ def build_static_semantic_planes(
             "sources": [],
         }
 
-    tokens_preview = _semantic_tokens_preview(payload)
-    locals_preview = _locals_preview(payload)
+    python_facts = None
+    rust_facts = None
+    status = _string(payload.get("enrichment_status"))
+    sources = _coerce_string_rows(payload.get("enrichment_sources"), limit=8)
+    if language == "python":
+        wrapped = wrap_python_enrichment(payload)
+        if wrapped is not None:
+            python_facts = wrapped.payload
+            if wrapped.meta is not None:
+                status = wrapped.meta.enrichment_status
+                sources = list(wrapped.meta.enrichment_sources)[:8]
+    elif language == "rust":
+        wrapped = wrap_rust_enrichment(payload)
+        if wrapped is not None:
+            rust_facts = wrapped.payload
+            if wrapped.meta is not None:
+                status = wrapped.meta.enrichment_status
+                sources = list(wrapped.meta.enrichment_sources)[:8]
+
+    tokens_preview = _semantic_tokens_preview(
+        payload,
+        python_facts=python_facts,
+        rust_facts=rust_facts,
+    )
+    locals_preview = _build_locals_preview(payload, python_facts=python_facts)
     adapter = get_language_adapter(language)
     diagnostics_preview: list[dict[str, object]] = (
         adapter.build_diagnostics(payload) if adapter is not None else list[dict[str, object]]()
     )
-    injections_preview = _injections_preview(language, payload)
+    injections_preview = _injections_preview(language, payload, rust_facts=rust_facts)
 
     degrade: list[str] = []
-    status = _string(payload.get("enrichment_status"))
     if status == "degraded":
         degrade.append("scope_resolution_partial")
     if diagnostics_preview:
         degrade.append("parse_error")
-
-    sources = _string_list(payload.get("enrichment_sources"), limit=8)
 
     return {
         "version": _SEMANTIC_PLANES_VERSION,

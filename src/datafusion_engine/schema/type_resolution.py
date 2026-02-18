@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pyarrow as pa
 
 from datafusion_engine.arrow.interop import DataTypeLike
@@ -62,7 +64,8 @@ def arrow_type_to_sql(arrow_type: pa.DataType | ArrowTypeBase) -> str:
         if arrow_type == candidate:
             return sql_type
     if pa.types.is_dictionary(arrow_type):
-        return arrow_type_to_sql(arrow_type.value_type)
+        dict_type = cast("pa.DictionaryType", arrow_type)
+        return arrow_type_to_sql(dict_type.value_type)
     storage_type = getattr(arrow_type, "storage_type", None)
     if isinstance(storage_type, pa.DataType) and storage_type is not arrow_type:
         return arrow_type_to_sql(storage_type)

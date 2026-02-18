@@ -293,7 +293,8 @@ def symtable_def_sites_df(ctx: SessionContext) -> DataFrame:
     )
     joined = bindings.join(
         defs,
-        join_keys=(["path", "name"], ["def_path", "def_name"]),
+        left_on=["path", "name"],
+        right_on=["def_path", "def_name"],
         how="inner",
         coalesce_duplicate_keys=True,
     )
@@ -348,7 +349,8 @@ def symtable_use_sites_df(ctx: SessionContext) -> DataFrame:
     )
     joined = bindings.join(
         refs,
-        join_keys=(["path", "name"], ["ref_path", "ref_text"]),
+        left_on=["path", "name"],
+        right_on=["ref_path", "ref_text"],
         how="inner",
         coalesce_duplicate_keys=True,
     )

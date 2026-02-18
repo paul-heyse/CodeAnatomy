@@ -42,7 +42,9 @@ def table_to_raw_ipc(table: pa.Table) -> msgspec.Raw:
     Returns:
         msgspec.Raw: Arrow IPC stream payload.
     """
-    return msgspec.Raw(table_to_ipc_stream_bytes(table))
+    # DeltaWriteRequest.data_ipc is msgpack-embedded raw data, so the IPC bytes
+    # must be msgpack-encoded before wrapping in msgspec.Raw.
+    return msgspec.Raw(msgspec.msgpack.encode(table_to_ipc_stream_bytes(table)))
 
 
 def reader_to_raw_ipc(reader: pa.RecordBatchReader) -> msgspec.Raw:

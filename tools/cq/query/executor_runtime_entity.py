@@ -9,10 +9,21 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
+from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
 from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.core.run_context import SymtableEnricherPort
-from tools.cq.core.schema import Anchor, CqResult, Finding, Section, mk_result
-from tools.cq.core.summary_update_contracts import EntitySummaryUpdateV1
+from tools.cq.core.schema import (
+    Anchor,
+    CqResult,
+    Finding,
+    Section,
+    assign_result_finding_ids,
+    mk_result,
+    ms,
+    update_result_summary,
+)
+from tools.cq.core.summary_types import apply_summary_mapping
+from tools.cq.core.summary_update_contracts import EntitySummaryUpdateV1, summary_update_mapping
 from tools.cq.query.execution_requests import DefQueryContext
 from tools.cq.query.executor_definitions import (
     def_to_finding as _def_to_finding,
@@ -48,7 +59,9 @@ from tools.cq.query.finding_builders import (
 from tools.cq.query.query_summary import (
     build_runmeta as _build_runmeta,
 )
-from tools.cq.query.scan import ScanContext
+from tools.cq.query.scan import EntityCandidates, ScanContext
+from tools.cq.query.scan import build_entity_candidates as _build_entity_candidates
+from tools.cq.query.scan import build_scan_context as _build_scan_context
 from tools.cq.query.shared_utils import extract_def_name
 
 if TYPE_CHECKING:
@@ -229,25 +242,115 @@ def process_call_query(
 def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     """Execute entity query for a prepared execution context.
 
-    Returns:
-        Entity query result payload.
-    """
-    from tools.cq.query.executor_runtime import execute_entity_query as execute_entity_query_impl
+    Raises:
+        ValueError: If called with a pattern query plan.
 
-    return execute_entity_query_impl(ctx)
+    Returns:
+        CqResult: Entity query result with summary, findings, and insight payloads.
+    """
+    from tools.cq.query import executor_runtime as runtime
+
+    if ctx.plan.is_pattern_query:
+        msg = "execute_entity_query called with a pattern query plan; use execute_pattern_query instead"
+        raise ValueError(msg)
+    state = runtime.prepare_entity_state(ctx)
+    if isinstance(state, CqResult):
+        return state
+
+    result = mk_result(_build_runmeta(ctx))
+    summary = apply_summary_mapping(result.summary, runtime.summary_common_for_context(ctx))
+    findings, sections, summary_updates = apply_entity_handlers(
+        state,
+        symtable=ctx.symtable_enricher,
+    )
+    summary = apply_summary_mapping(
+        summary,
+        {
+            **summary_update_mapping(summary_updates),
+            "files_scanned": len({r.file for r in state.records}),
+        },
+    )
+    result = msgspec.structs.replace(
+        result,
+        summary=summary,
+        key_findings=findings,
+        sections=sections,
+    )
+    result = runtime.maybe_add_entity_explain(state, result)
+    result = runtime.finalize_single_scope_summary(ctx, result)
+    result = runtime.attach_entity_insight(result, services=ctx.services)
+    result = update_result_summary(
+        result,
+        {"cache_backend": snapshot_backend_metrics(root=ctx.root)},
+    )
+    return assign_result_finding_ids(result)
 
 
 def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     """Execute entity query over pre-scanned records.
 
     Returns:
-        Entity query result payload.
+        CqResult: Entity query result assembled from externally supplied scan records.
     """
-    from tools.cq.query.executor_runtime import (
-        execute_entity_query_from_records as execute_entity_query_from_records_impl,
-    )
+    from tools.cq.query import executor_runtime as runtime
+    from tools.cq.query.execution_context import QueryExecutionContext
+    from tools.cq.query.executor_runtime import EntityExecutionState
 
-    return execute_entity_query_from_records_impl(request)
+    ctx = QueryExecutionContext(
+        plan=request.plan,
+        query=request.query,
+        tc=request.tc,
+        root=request.root,
+        argv=request.argv,
+        started_ms=ms(),
+        run_id=request.run_id or runtime.uuid7_str(),
+        services=request.services,
+        query_text=request.query_text,
+        symtable_enricher=request.symtable,
+    )
+    scan_ctx = _build_scan_context(request.records)
+    candidates: EntityCandidates = _build_entity_candidates(scan_ctx, request.records)
+    candidates = runtime.apply_rule_spans(
+        ctx,
+        request.paths,
+        request.scope_globs,
+        candidates,
+        match_spans=request.match_spans,
+    )
+    state = EntityExecutionState(
+        ctx=ctx,
+        paths=request.paths,
+        scope_globs=request.scope_globs,
+        records=request.records,
+        scan=scan_ctx,
+        candidates=candidates,
+    )
+    result = mk_result(_build_runmeta(ctx))
+    summary = apply_summary_mapping(result.summary, runtime.summary_common_for_context(ctx))
+    findings, sections, summary_updates = apply_entity_handlers(
+        state, symtable=request.symtable
+    )
+    summary = apply_summary_mapping(
+        summary,
+        {
+            **summary_update_mapping(summary_updates),
+            "files_scanned": len({r.file for r in state.records}),
+        },
+    )
+    result = msgspec.structs.replace(
+        result,
+        summary=summary,
+        key_findings=findings,
+        sections=sections,
+    )
+    result = runtime.maybe_add_entity_explain(state, result)
+    result = runtime.finalize_single_scope_summary(ctx, result)
+    result = runtime.attach_entity_insight(result, services=ctx.services)
+    result = update_result_summary(
+        result,
+        {"cache_backend": snapshot_backend_metrics(root=ctx.root)},
+    )
+    return assign_result_finding_ids(result)
 
 
 __all__ = [

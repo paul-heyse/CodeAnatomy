@@ -21,8 +21,6 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
-from tools.cq.search.rust.extractors_shared import RUST_SCOPE_KINDS, find_ancestor
-from tools.cq.search.rust.node_access import TreeSitterRustNodeAccess
 from tools.cq.search.tree_sitter.contracts.core_models import (
     ObjectEvidenceRowV1,
     QueryExecutionSettingsV1,
@@ -30,14 +28,11 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterDiagnosticV1,
     TreeSitterQueryHitV1,
 )
-from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_rust_lane_payload
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
-from tools.cq.search.tree_sitter.core.infrastructure import child_by_field
 from tools.cq.search.tree_sitter.core.lane_support import (
     ENRICHMENT_ERRORS,
     build_query_windows,
 )
-from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.core.query_pack_executor import (
     QueryPackExecutionContextV1,
     execute_pack_rows_with_matches,
@@ -51,17 +46,17 @@ from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
     make_query_predicate,
 )
+from tools.cq.search.tree_sitter.rust_lane.availability import (
+    is_tree_sitter_rust_available as _is_tree_sitter_rust_available,
+)
 from tools.cq.search.tree_sitter.rust_lane.bundle import (
     load_rust_grammar_bundle,
 )
-from tools.cq.search.tree_sitter.rust_lane.enrichment_extractors import (
-    extract_attributes_dict,
-    extract_call_target,
-    extract_enum_shape,
-    extract_function_signature,
-    extract_impl_context,
-    extract_struct_shape,
-    extract_visibility_dict,
+from tools.cq.search.tree_sitter.rust_lane.extractor_dispatch import (
+    _build_enrichment_payload as _build_enrichment_payload_from_dispatch,
+)
+from tools.cq.search.tree_sitter.rust_lane.extractor_dispatch import (
+    canonicalize_payload as _canonicalize_payload,
 )
 from tools.cq.search.tree_sitter.rust_lane.fact_extraction import (
     _extend_rust_fact_lists_from_rows,
@@ -77,10 +72,8 @@ from tools.cq.search.tree_sitter.rust_lane.injections import (
     build_injection_plan_from_matches,
 )
 from tools.cq.search.tree_sitter.rust_lane.query_cache import _pack_sources
-from tools.cq.search.tree_sitter.rust_lane.role_classification import classify_item_role
 from tools.cq.search.tree_sitter.rust_lane.runtime_cache import (
     _parse_with_session,
-    _rust_field_ids,
     _rust_language,
     clear_tree_sitter_rust_cache,
     get_tree_sitter_rust_cache_stats,
@@ -88,20 +81,17 @@ from tools.cq.search.tree_sitter.rust_lane.runtime_cache import (
 from tools.cq.search.tree_sitter.structural.exports import collect_diagnostic_rows
 from tools.cq.search.tree_sitter.tags import RustTagEventV1, build_tag_events
 
+try:
+    from tree_sitter import Point as _TreeSitterPoint
+except ImportError:  # pragma: no cover - availability guard
+    _TreeSitterPoint = None
+
 if TYPE_CHECKING:
     from tree_sitter import Node
 
     from tools.cq.search.tree_sitter.core.parse import ParseSession
 
-try:
-    from tree_sitter import Point as _TreeSitterPoint
-except ImportError:  # pragma: no cover - exercised via availability checks
-    _TreeSitterPoint = None
-
-_SCOPE_KINDS: tuple[str, ...] = tuple(sorted(RUST_SCOPE_KINDS - {"block"}))
-
 _DEFAULT_SCOPE_DEPTH = 24
-_MAX_SCOPE_NODES = 256
 MAX_SOURCE_BYTES = 5 * 1024 * 1024  # 5 MB
 logger = logging.getLogger(__name__)
 _REQUIRED_PAYLOAD_KEYS: tuple[str, ...] = (
@@ -277,21 +267,7 @@ def is_tree_sitter_rust_available() -> bool:
     bool
         True when runtime dependencies for Rust tree-sitter enrichment exist.
     """
-    from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
-
-    try:
-        from tree_sitter import Parser as _TreeSitterParser
-    except ImportError:  # pragma: no cover
-        return False
-
-    return all(
-        obj is not None
-        for obj in (
-            load_tree_sitter_language("rust"),
-            _TreeSitterParser,
-            _TreeSitterPoint,
-        )
-    )
+    return _is_tree_sitter_rust_available()
 
 
 # ---------------------------------------------------------------------------
@@ -299,345 +275,22 @@ def is_tree_sitter_rust_available() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _scope_name(scope_node: Node, source_bytes: bytes) -> str | None:
-    kind = scope_node.type
-    if kind == "impl_item":
-        return node_text(child_by_field(scope_node, "type", _rust_field_ids()), source_bytes)
-    if kind == "macro_invocation":
-        return node_text(
-            child_by_field(scope_node, "macro", _rust_field_ids()), source_bytes
-        ) or node_text(
-            child_by_field(scope_node, "name", _rust_field_ids()),
-            source_bytes,
-        )
-    return node_text(child_by_field(scope_node, "name", _rust_field_ids()), source_bytes)
-
-
-def _scope_chain(node: Node, source_bytes: bytes, *, max_depth: int) -> list[str]:
-    chain: list[str] = []
-    current: Node | None = node
-    depth = 0
-    nodes_visited = 0
-    while current is not None and depth < max_depth:
-        if nodes_visited >= _MAX_SCOPE_NODES:
-            break
-        if current.type in _SCOPE_KINDS:
-            name = _scope_name(current, source_bytes)
-            chain.append(f"{current.type}:{name}" if name else current.type)
-        current = current.parent
-        depth += 1
-        nodes_visited += 1
-    return chain
-
-
-def _find_scope(node: Node, *, max_depth: int) -> Node | None:
-    current: Node | None = node
-    depth = 0
-    while current is not None and depth < max_depth:
-        if current.type in _SCOPE_KINDS:
-            return current
-        current = current.parent
-        depth += 1
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Shared enrichment builder
-# ---------------------------------------------------------------------------
-
-_DEFINITION_SCOPE_KINDS: frozenset[str] = frozenset(_SCOPE_KINDS)
-
-_CALL_NODE_KINDS: frozenset[str] = frozenset({"call_expression", "macro_invocation"})
-
-
-def _try_extract(
-    label: str,
-    extractor: Callable[[Node, bytes], dict[str, object]],
-    target: Node,
-    source_bytes: bytes,
-) -> tuple[dict[str, object], str | None]:
-    """Call *extractor* on *target*, returning results or a degrade reason.
-
-    Parameters
-    ----------
-    label
-        Human label for the extractor (used in degradation messages).
-    extractor
-        Callable ``(Node, bytes) -> dict[str, object]``.
-    target
-        Node argument forwarded to extractor.
-    source_bytes
-        Source bytes forwarded to extractor.
-
-    Returns:
-    -------
-    tuple[dict[str, object], str | None]
-        Extracted fields and an optional degrade reason on failure.
-    """
-    try:
-        result = extractor(target, source_bytes)
-    except ENRICHMENT_ERRORS as exc:
-        logger.warning("Rust extractor degraded (%s): %s", label, type(exc).__name__)
-        return {}, f"{label}: {exc}"
-    else:
-        return result, None
-
-
-def _resolve_target(node: Node, scope: Node | None, kind: str) -> Node | None:
-    """Return the node or scope matching *kind*, preferring node.
-
-    Parameters
-    ----------
-    node
-        The direct match node.
-    scope
-        The enclosing scope node (may be ``None``).
-    kind
-        The target node type string.
-
-    Returns:
-    -------
-    Node | None
-        The matching node, or ``None``.
-    """
-    if node.type == kind:
-        return node
-    if scope is not None and scope.type == kind:
-        return scope
-    return None
-
-
-def _resolve_definition_target(node: Node, scope: Node | None) -> Node | None:
-    """Find the best definition-category node for visibility/attribute extraction.
-
-    Parameters
-    ----------
-    node
-        The direct match node.
-    scope
-        The enclosing scope node (may be ``None``).
-
-    Returns:
-    -------
-    Node | None
-        The first matching definition-scope node, or ``None``.
-    """
-    for kind in _DEFINITION_SCOPE_KINDS:
-        target = _resolve_target(node, scope, kind)
-        if target is not None:
-            return target
-    return None
-
-
-def _merge_result(
-    payload: dict[str, object],
-    reasons: list[str],
-    result: tuple[dict[str, object], str | None],
-) -> None:
-    """Merge an extractor result into *payload* and record any degrade reason.
-
-    Parameters
-    ----------
-    payload
-        Target dict to update.
-    reasons
-        Accumulator for degradation reason strings.
-    result
-        Return value from ``_try_extract``.
-    """
-    fields, reason = result
-    payload.update(fields)
-    if reason is not None:
-        reasons.append(reason)
-
-
-def _apply_extractors(
-    payload: dict[str, object],
-    node: Node,
-    scope: Node | None,
-    source_bytes: bytes,
-    *,
-    max_scope_depth: int,
-) -> None:
-    """Dispatch all applicable extractors, updating *payload* in place.
-
-    Parameters
-    ----------
-    payload
-        Target dict to populate with extractor fields.
-    node
-        The tree-sitter node at the match location.
-    scope
-        The nearest enclosing scope node, or ``None``.
-    source_bytes
-        Full source bytes.
-    max_scope_depth
-        Maximum ancestor levels for ancestor searches.
-    """
-    reasons: list[str] = []
-
-    sig_target = _resolve_target(node, scope, "function_item")
-    if sig_target is not None:
-        _merge_result(
-            payload,
-            reasons,
-            _try_extract("signature", extract_function_signature, sig_target, source_bytes),
-        )
-
-    vis_target = _resolve_definition_target(node, scope)
-    if vis_target is not None:
-        _enrich_visibility_and_attrs(payload, reasons, vis_target, source_bytes)
-
-    impl_target = _resolve_impl_ancestor(node, scope, max_scope_depth=max_scope_depth)
-    if impl_target is not None:
-        _merge_result(
-            payload,
-            reasons,
-            _try_extract("impl_context", extract_impl_context, impl_target, source_bytes),
-        )
-
-    if scope is not None and scope.type == "struct_item":
-        _merge_result(
-            payload,
-            reasons,
-            _try_extract("struct_shape", extract_struct_shape, scope, source_bytes),
-        )
-    if scope is not None and scope.type == "enum_item":
-        _merge_result(
-            payload, reasons, _try_extract("enum_shape", extract_enum_shape, scope, source_bytes)
-        )
-
-    if node.type in _CALL_NODE_KINDS:
-        _merge_result(
-            payload, reasons, _try_extract("call_target", extract_call_target, node, source_bytes)
-        )
-
-    # Classify item role using already-extracted attributes
-    extracted_attrs = payload.get("attributes")
-    attr_list: list[str] = extracted_attrs if isinstance(extracted_attrs, list) else []
-    try:
-        payload["item_role"] = classify_item_role(
-            node, scope, attr_list, max_scope_depth=max_scope_depth
-        )
-    except ENRICHMENT_ERRORS as exc:
-        logger.warning("Rust item_role classification degraded: %s", type(exc).__name__)
-        reasons.append(f"item_role: {exc}")
-
-    if reasons:
-        logger.warning("Rust tree-sitter enrichment degraded: %s", "; ".join(reasons))
-        payload["enrichment_status"] = "degraded"
-        payload["degrade_reason"] = "; ".join(reasons)
-
-
-def _enrich_visibility_and_attrs(
-    payload: dict[str, object],
-    reasons: list[str],
-    target: Node,
-    source_bytes: bytes,
-) -> None:
-    """Extract visibility and attributes for a definition node.
-
-    Parameters
-    ----------
-    payload
-        Target dict to update.
-    reasons
-        Accumulator for degradation reason strings.
-    target
-        A definition-category scope node.
-    source_bytes
-        Full source bytes.
-    """
-    fields, reason = _try_extract("visibility", extract_visibility_dict, target, source_bytes)
-    payload.update(fields)
-    if reason is not None:
-        reasons.append(reason)
-
-    fields, reason = _try_extract("attributes", extract_attributes_dict, target, source_bytes)
-    payload.update(fields)
-    if reason is not None:
-        reasons.append(reason)
-
-
-def _resolve_impl_ancestor(
-    node: Node,
-    scope: Node | None,
-    *,
-    max_scope_depth: int,
-) -> Node | None:
-    """Find the nearest ``impl_item`` from scope or ancestors.
-
-    Parameters
-    ----------
-    node
-        Match node.
-    scope
-        Enclosing scope node.
-    max_scope_depth
-        Maximum ancestor search depth.
-
-    Returns:
-    -------
-    Node | None
-        The impl node, or ``None``.
-    """
-    if scope is not None and scope.type == "impl_item":
-        return scope
-    ancestor = find_ancestor(
-        TreeSitterRustNodeAccess(node, b""),
-        "impl_item",
-        max_depth=max_scope_depth,
-    )
-    if isinstance(ancestor, TreeSitterRustNodeAccess):
-        return ancestor.node
-    return None
-
-
 def _build_enrichment_payload(
     node: Node,
-    scope: Node | None,
     source_bytes: bytes,
     *,
     max_scope_depth: int,
 ) -> dict[str, object]:
-    """Build the full enrichment payload from resolved node and scope.
-
-    This is the shared implementation called by both ``enrich_rust_context``
-    and ``enrich_rust_context_by_byte_range``.
-
-    Parameters
-    ----------
-    node
-        The tree-sitter node at the match location.
-    scope
-        The nearest enclosing scope node, or ``None``.
-    source_bytes
-        Full source bytes.
-    max_scope_depth
-        Maximum ancestor levels for scope chain traversal.
+    """Build the Rust enrichment payload via extracted dispatch helpers.
 
     Returns:
-    -------
-    dict[str, object]
-        The enrichment payload with all applicable fields.
+        dict[str, object]: Normalized enrichment payload for one Rust node match.
     """
-    chain = _scope_chain(node, source_bytes, max_depth=max_scope_depth)
-    payload: dict[str, object] = {
-        "node_kind": node.type,
-        "scope_chain": chain,
-        "language": "rust",
-        "enrichment_status": "applied",
-        "enrichment_sources": ["tree_sitter"],
-    }
-
-    if scope is not None:
-        payload["scope_kind"] = scope.type
-        scope_nm = _scope_name(scope, source_bytes)
-        if scope_nm:
-            payload["scope_name"] = scope_nm
-
-    _apply_extractors(payload, node, scope, source_bytes, max_scope_depth=max_scope_depth)
-    return payload
+    return _build_enrichment_payload_from_dispatch(
+        node,
+        source_bytes,
+        max_scope_depth=max_scope_depth,
+    )
 
 
 def _assert_required_payload_keys(payload: dict[str, object]) -> None:
@@ -1031,11 +684,9 @@ def _attach_query_pack_payload(
 
 
 def _collect_payload_with_timings(request: _RustPayloadBuildRequestV1) -> dict[str, object]:
-    scope = _find_scope(request.node, max_depth=request.max_scope_depth)
     payload_build_started = time.perf_counter()
     payload = _build_enrichment_payload(
         request.node,
-        scope,
         request.source_bytes,
         max_scope_depth=request.max_scope_depth,
     )
@@ -1081,7 +732,7 @@ def _finalize_enrichment_payload(
     total_started: float,
 ) -> dict[str, object]:
     attachment_started = time.perf_counter()
-    canonical = canonicalize_rust_lane_payload(payload)
+    canonical = _canonicalize_payload(payload)
     attachment_ms = max(0.0, (time.perf_counter() - attachment_started) * 1000.0)
     timings = _coerce_timings(canonical, key="stage_timings_ms")
     timings["attachment"] = attachment_ms

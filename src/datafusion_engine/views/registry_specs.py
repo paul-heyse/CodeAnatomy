@@ -159,16 +159,45 @@ def _semantic_cache_policy_for_row(
     Literal["none", "delta_staging", "delta_output"]
         Cache policy for the semantic dataset row.
     """
-    override = runtime_profile.semantic_cache_overrides().get(row.name)
+    override = _runtime_semantic_cache_overrides(runtime_profile).get(row.name)
+    override_policy = _coerce_cache_policy(override)
+    if override_policy is not None:
+        return override_policy
     if override is not None:
-        if override in {"none", "delta_staging", "delta_output"}:
-            return override
         return "none"
     if manifest.dataset_bindings.locations.get(row.name) is not None:
         return "delta_output"
     if runtime_profile.features.enable_delta_cdf and row.supports_cdf and row.merge_keys:
         return "delta_staging"
     return "none"
+
+
+def _coerce_cache_policy(
+    value: object,
+) -> Literal["none", "delta_staging", "delta_output"] | None:
+    if value == "none":
+        return "none"
+    if value == "delta_staging":
+        return "delta_staging"
+    if value == "delta_output":
+        return "delta_output"
+    return None
+
+
+def _runtime_semantic_cache_overrides(
+    runtime_profile: object,
+) -> Mapping[str, object]:
+    """Return semantic cache overrides when the runtime profile exposes them."""
+    accessor = getattr(runtime_profile, "semantic_cache_overrides", None)
+    if not callable(accessor):
+        return {}
+    try:
+        overrides = accessor()
+    except (RuntimeError, TypeError, ValueError, AttributeError):
+        return {}
+    if isinstance(overrides, Mapping):
+        return overrides
+    return {}
 
 
 def _bundle_deps_and_udfs(
@@ -523,8 +552,8 @@ def _build_semantic_view_node(
 
     row = dataset_row(name, strict=False)
     if row is None:
-        override = context.runtime_profile.semantic_cache_overrides().get(name)
-        cache_policy = override if override in {"none", "delta_staging", "delta_output"} else "none"
+        override = _runtime_semantic_cache_overrides(context.runtime_profile).get(name)
+        cache_policy = _coerce_cache_policy(override) or "none"
     else:
         cache_policy = _semantic_cache_policy_for_row(
             row,

@@ -22,29 +22,55 @@ def _missing_required_entrypoints(module: ModuleType) -> list[str]:
     ]
 
 
-def _load_internal_module() -> tuple[ModuleType, bool]:
-    module = importlib.import_module("datafusion._internal")
-    missing = _missing_required_entrypoints(module)
-    if not missing:
-        return module, False
+def _load_internal_module() -> tuple[ModuleType, ModuleType | None, bool]:
     try:
-        stub = importlib.import_module("test_support.datafusion_ext_stub")
+        module = importlib.import_module("datafusion._internal")
     except ImportError:
-        missing_csv = ", ".join(sorted(missing))
-        msg = f"datafusion._internal is missing required runtime entrypoints: {missing_csv}"
-        raise AttributeError(msg) from None
-    missing_stub = _missing_required_entrypoints(stub)
-    if missing_stub:
-        missing_csv = ", ".join(sorted(missing_stub))
-        msg = (
-            "test_support.datafusion_ext_stub is missing required runtime "
-            f"entrypoints: {missing_csv}"
-        )
-        raise AttributeError(msg)
-    return stub, True
+        try:
+            stub = importlib.import_module("test_support.datafusion_ext_stub")
+        except ImportError:
+            msg = "Neither datafusion._internal nor test_support.datafusion_ext_stub is available."
+            raise AttributeError(msg) from None
+        missing_stub = _missing_required_entrypoints(stub)
+        if missing_stub:
+            missing_csv = ", ".join(sorted(missing_stub))
+            msg = (
+                "test_support.datafusion_ext_stub is missing required runtime "
+                f"entrypoints: {missing_csv}"
+            )
+            raise AttributeError(msg) from None
+        return stub, None, True
+
+    fallback: ModuleType | None = None
+    missing = _missing_required_entrypoints(module)
+    if missing:
+        try:
+            fallback = importlib.import_module("test_support.datafusion_ext_stub")
+        except ImportError:
+            missing_csv = ", ".join(sorted(missing))
+            msg = f"datafusion._internal is missing required runtime entrypoints: {missing_csv}"
+            raise AttributeError(msg) from None
+        missing_stub = [name for name in missing if not callable(getattr(fallback, name, None))]
+        if missing_stub:
+            missing_csv = ", ".join(sorted(missing_stub))
+            msg = (
+                "test_support.datafusion_ext_stub is missing required runtime "
+                f"entrypoints: {missing_csv}"
+            )
+            raise AttributeError(msg)
+    return module, fallback, False
 
 
-_INTERNAL, IS_STUB = _load_internal_module()
+_INTERNAL, _FALLBACK_INTERNAL, IS_STUB = _load_internal_module()
+
+
+def _resolve_attr(name: str) -> Any:
+    if hasattr(_INTERNAL, name):
+        return getattr(_INTERNAL, name)
+    if _FALLBACK_INTERNAL is not None and hasattr(_FALLBACK_INTERNAL, name):
+        return getattr(_FALLBACK_INTERNAL, name)
+    msg = f"datafusion extension entrypoint is unavailable: {name}"
+    raise AttributeError(msg)
 
 
 def _normalize_ctx(value: Any) -> Any:
@@ -68,7 +94,7 @@ def _normalize_args(
 
 @cache
 def _wrapped_attr(name: str) -> Any:
-    attr = getattr(_INTERNAL, name)
+    attr = _resolve_attr(name)
     if not callable(attr):
         return attr
 
@@ -83,10 +109,14 @@ def _wrapped_attr(name: str) -> Any:
 
 
 def _require_internal_callable(name: str) -> Any:
-    attr = getattr(_INTERNAL, name, None)
+    try:
+        attr = _resolve_attr(name)
+    except AttributeError as exc:
+        msg = f"datafusion extension is missing required entrypoint: {name}"
+        raise AttributeError(msg) from exc
     if callable(attr):
         return attr
-    msg = f"datafusion._internal is missing required entrypoint: {name}"
+    msg = f"datafusion extension entrypoint is not callable: {name}"
     raise AttributeError(msg)
 
 
@@ -96,10 +126,17 @@ def ensure_required_runtime_entrypoints() -> None:
     Raises:
         AttributeError: If one or more required runtime entrypoints are missing.
     """
-    missing = _missing_required_entrypoints(_INTERNAL)
+    missing = [
+        name
+        for name in REQUIRED_RUNTIME_ENTRYPOINTS
+        if not callable(getattr(_INTERNAL, name, None))
+        and not (
+            _FALLBACK_INTERNAL is not None and callable(getattr(_FALLBACK_INTERNAL, name, None))
+        )
+    ]
     if missing:
         missing_csv = ", ".join(sorted(missing))
-        msg = f"datafusion._internal is missing required runtime entrypoints: {missing_csv}"
+        msg = f"datafusion extension is missing required runtime entrypoints: {missing_csv}"
         raise AttributeError(msg)
 
 

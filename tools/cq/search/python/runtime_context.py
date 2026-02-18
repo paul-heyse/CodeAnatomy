@@ -22,25 +22,23 @@ class PythonEnrichmentRuntimeContext(msgspec.Struct):
 
 
 _DEFAULT_PYTHON_RUNTIME_CONTEXT_LOCK = threading.Lock()
-_DEFAULT_PYTHON_RUNTIME_CONTEXT: PythonEnrichmentRuntimeContext | None = None
+_DEFAULT_PYTHON_RUNTIME_CONTEXT: list[PythonEnrichmentRuntimeContext | None] = [None]
 
 
 def get_default_python_runtime_context() -> PythonEnrichmentRuntimeContext:
     """Return process-default runtime context for Python enrichment."""
-    global _DEFAULT_PYTHON_RUNTIME_CONTEXT
     with _DEFAULT_PYTHON_RUNTIME_CONTEXT_LOCK:
-        context = _DEFAULT_PYTHON_RUNTIME_CONTEXT
+        context = _DEFAULT_PYTHON_RUNTIME_CONTEXT[0]
         if context is None:
             context = PythonEnrichmentRuntimeContext()
-            _DEFAULT_PYTHON_RUNTIME_CONTEXT = context
+            _DEFAULT_PYTHON_RUNTIME_CONTEXT[0] = context
         return context
 
 
 def set_default_python_runtime_context(context: PythonEnrichmentRuntimeContext | None) -> None:
     """Install or clear process-default Python runtime context."""
-    global _DEFAULT_PYTHON_RUNTIME_CONTEXT
     with _DEFAULT_PYTHON_RUNTIME_CONTEXT_LOCK:
-        _DEFAULT_PYTHON_RUNTIME_CONTEXT = context
+        _DEFAULT_PYTHON_RUNTIME_CONTEXT[0] = context
 
 
 def ensure_python_cache_registered(ctx: PythonEnrichmentRuntimeContext) -> None:

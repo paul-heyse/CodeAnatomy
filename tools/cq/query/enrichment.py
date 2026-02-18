@@ -12,7 +12,7 @@ import symtable
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.entity_kinds import ENTITY_KINDS
 from tools.cq.core.run_context import SymtableEnricherPort
@@ -406,7 +406,7 @@ class SymtableEnricher:
     def enrich_function_finding(
         self,
         finding: Finding,
-        record: SgRecord,
+        record: object,
     ) -> dict[str, object]:
         """Enrich a function finding with scope details.
 
@@ -431,7 +431,10 @@ class SymtableEnricher:
             return {}
 
         # Extract function name from record
-        func_name = extract_def_name(record)
+        try:
+            func_name = extract_def_name(cast("SgRecord", record))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return {}
         if not func_name:
             return {}
 

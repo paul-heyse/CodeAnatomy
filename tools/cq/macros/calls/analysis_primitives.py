@@ -54,7 +54,11 @@ def _preview_kwarg(kw: ast.keyword) -> str:
 
 
 def get_containing_function(tree: ast.AST, lineno: int) -> str:
-    """Find the function/method containing a line."""
+    """Find the function/method containing a line.
+
+    Returns:
+        str: Name of the containing function, or ``"<module>"``.
+    """
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             end_lineno = getattr(node, "end_lineno", None)
@@ -64,7 +68,11 @@ def get_containing_function(tree: ast.AST, lineno: int) -> str:
 
 
 def analyze_call(node: ast.Call) -> CallAnalysis:
-    """Analyze a call node for argument patterns."""
+    """Analyze a call node for argument patterns.
+
+    Returns:
+        CallAnalysis: Structured argument/hazard-ready call metadata.
+    """
     num_args = 0
     num_kwargs = 0
     kwargs: list[str] = []
@@ -103,7 +111,11 @@ def analyze_call(node: ast.Call) -> CallAnalysis:
 
 
 def matches_target_expr(func: ast.expr, target_name: str) -> bool:
-    """Check whether call expression matches target name."""
+    """Check whether call expression matches target name.
+
+    Returns:
+        bool: ``True`` when the expression resolves to the target token.
+    """
     parts = target_name.split(".")
     if isinstance(func, ast.Name):
         return func.id == target_name or func.id == parts[-1]
@@ -121,7 +133,11 @@ def matches_target_expr(func: ast.expr, target_name: str) -> bool:
 
 
 def build_call_index(tree: ast.AST) -> dict[tuple[int, int], ast.Call]:
-    """Build lookup from (line,col) to call AST node."""
+    """Build lookup from (line,col) to call AST node.
+
+    Returns:
+        dict[tuple[int, int], ast.Call]: Call nodes indexed by source coordinates.
+    """
     index: dict[tuple[int, int], ast.Call] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -130,7 +146,11 @@ def build_call_index(tree: ast.AST) -> dict[tuple[int, int], ast.Call]:
 
 
 def parse_call_expr(text: str) -> ast.Call | None:
-    """Parse expression text and return call node when present."""
+    """Parse expression text and return call node when present.
+
+    Returns:
+        ast.Call | None: Parsed call expression when valid.
+    """
     try:
         parsed = ast.parse(text.strip(), mode="eval")
     except (SyntaxError, ValueError):
@@ -141,7 +161,11 @@ def parse_call_expr(text: str) -> ast.Call | None:
 
 
 def detect_hazards(call: ast.Call, info: CallAnalysis) -> list[str]:
-    """Detect dynamic-call hazards for one call expression."""
+    """Detect dynamic-call hazards for one call expression.
+
+    Returns:
+        list[str]: Hazard tags describing dynamic invocation risk.
+    """
     hazards: list[str] = []
     if info.has_star_args:
         hazards.append("star_args")
@@ -176,7 +200,11 @@ def stable_callsite_id(
     callee: str,
     context: str,
 ) -> str:
-    """Build deterministic callsite id for one row."""
+    """Build deterministic callsite id for one row.
+
+    Returns:
+        str: Stable callsite identifier hash prefix.
+    """
     seed = f"{file}:{line}:{col}:{callee}:{context}"
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
 

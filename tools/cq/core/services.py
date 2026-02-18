@@ -16,7 +16,6 @@ from tools.cq.core.structs import CqStruct
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.core.types import QueryLanguageScope
-    from tools.cq.search._shared.types import SearchLimits
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
 
@@ -45,7 +44,7 @@ class SearchServiceRequest(CqStruct, frozen=True):
     exclude_globs: list[str] | None = None
     include_strings: bool = False
     with_neighborhood: bool = False
-    limits: SearchLimits | None = None
+    limits: object | None = None
     tc: Toolchain | None = None
     argv: list[str] | None = None
     run_id: str | None = None

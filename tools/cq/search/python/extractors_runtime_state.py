@@ -43,6 +43,11 @@ class PythonAgreementStage:
     call: PythonCallFacts | None = None
 
     def as_fields(self) -> dict[str, object]:
+        """Flatten agreement sections into one comparable field mapping.
+
+        Returns:
+            dict[str, object]: Combined section fields for agreement comparison.
+        """
         payload: dict[str, object] = {}
         for section in (self.resolution, self.structure, self.call):
             if section is None:
@@ -161,7 +166,11 @@ def _merge_stage_metadata_field(
 
 
 def build_stage_fact_patch(fields: Mapping[str, object]) -> PythonStageFactPatch:
-    """Build typed stage-fact patch from a raw field mapping."""
+    """Build typed stage-fact patch from a raw field mapping.
+
+    Returns:
+        PythonStageFactPatch: Parsed stage-fact patch for merge ingestion.
+    """
 
     def _convert_section[StructT](
         section: dict[str, object],
@@ -255,7 +264,11 @@ def merge_python_enrichment_stage_facts(
     current: PythonEnrichmentFacts,
     patch: PythonStageFactPatch,
 ) -> PythonEnrichmentFacts:
-    """Merge stage patch into current typed enrichment facts."""
+    """Merge stage patch into current typed enrichment facts.
+
+    Returns:
+        PythonEnrichmentFacts: Updated typed enrichment facts.
+    """
     return _merge_python_enrichment_stage_facts_shared(
         current,
         patch.facts,
@@ -264,12 +277,20 @@ def merge_python_enrichment_stage_facts(
 
 
 def flatten_python_enrichment_facts(facts: PythonEnrichmentFacts) -> dict[str, object]:
-    """Flatten typed enrichment facts into output payload fields."""
+    """Flatten typed enrichment facts into output payload fields.
+
+    Returns:
+        dict[str, object]: Flat enrichment payload mapping.
+    """
     return _flatten_python_enrichment_facts_shared(facts)
 
 
 def build_stage_facts_from_enrichment(facts: PythonEnrichmentFacts) -> PythonAgreementStage:
-    """Project agreement-relevant sections from typed enrichment facts."""
+    """Project agreement-relevant sections from typed enrichment facts.
+
+    Returns:
+        PythonAgreementStage: Agreement-stage projection.
+    """
     return PythonAgreementStage(
         resolution=facts.resolution,
         structure=facts.structure,
@@ -278,7 +299,11 @@ def build_stage_facts_from_enrichment(facts: PythonEnrichmentFacts) -> PythonAgr
 
 
 def build_stage_facts(fields: Mapping[str, object]) -> PythonAgreementStage:
-    """Build agreement-stage projection from raw stage fields."""
+    """Build agreement-stage projection from raw stage fields.
+
+    Returns:
+        PythonAgreementStage: Agreement-stage projection from raw fields.
+    """
     patch = build_stage_fact_patch(fields)
     return build_stage_facts_from_enrichment(patch.facts)
 
@@ -289,7 +314,11 @@ def build_agreement_section(
     python_resolution_stage: PythonAgreementStage,
     tree_sitter_stage: PythonAgreementStage,
 ) -> dict[str, object]:
-    """Build deterministic cross-source agreement payload."""
+    """Build deterministic cross-source agreement payload.
+
+    Returns:
+        dict[str, object]: Deterministic agreement payload mapping.
+    """
     return _build_agreement_section_shared(
         ast_fields=ast_stage.as_fields(),
         python_resolution_fields=python_resolution_stage.as_fields(),

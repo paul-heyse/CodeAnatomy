@@ -8,18 +8,18 @@ Implementation ownership is split across focused runtime modules:
 
 from __future__ import annotations
 
-import ast
 import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+import tools.cq.search.python.extractors_runtime_ast as runtime_ast
 from tools.cq.core.locations import byte_offset_to_line_col
-from tools.cq.search._shared.bounded_cache import BoundedCache
-from tools.cq.search._shared.helpers import (
-    line_col_to_byte_offset as _shared_line_col_to_byte_offset,
+from tools.cq.search._shared.enrichment_contracts import (
+    PythonEnrichmentV1,
+    python_enrichment_payload,
+    wrap_python_enrichment,
 )
-from tools.cq.search._shared.helpers import source_hash as shared_source_hash
 from tools.cq.search._shared.requests import (
     PythonByteRangeEnrichmentRequest,
     PythonNodeEnrichmentRequest,
@@ -27,19 +27,8 @@ from tools.cq.search._shared.requests import (
 from tools.cq.search.cache.registry import CACHE_REGISTRY
 from tools.cq.search.enrichment.python_facts import PythonEnrichmentFacts
 from tools.cq.search.python.analysis_session import PythonAnalysisSession
-from tools.cq.search.python.extractors_analysis import (
-    extract_behavior_summary as _extract_behavior_summary,
-)
-from tools.cq.search.python.extractors_analysis import (
-    extract_generator_flag as _extract_generator_flag,
-)
-from tools.cq.search.python.extractors_analysis import (
-    extract_import_detail as _extract_import_detail,
-)
-from tools.cq.search.python.extractors_analysis import find_ast_function as _find_ast_function
 from tools.cq.search.python.extractors_classification import (
     _is_function_node,
-    _unwrap_decorated,
 )
 from tools.cq.search.python.extractors_runtime_astgrep import (
     ENRICHABLE_KINDS as _ENRICHABLE_KINDS,
@@ -58,9 +47,6 @@ from tools.cq.search.python.extractors_runtime_astgrep import (
 )
 from tools.cq.search.python.extractors_runtime_astgrep import (
     promote_enrichment_node as _promote_enrichment_node,
-)
-from tools.cq.search.python.extractors_runtime_astgrep import (
-    try_extract as _try_extract,
 )
 from tools.cq.search.python.extractors_runtime_state import (
     PythonAgreementStage as _PythonAgreementStage,
@@ -86,40 +72,23 @@ from tools.cq.search.python.extractors_runtime_state import (
 from tools.cq.search.python.extractors_runtime_state import (
     ingest_stage_fact_patch as _ingest_stage_fact_patch,
 )
-from tools.cq.search.python.runtime_context import (
-    ensure_python_cache_registered,
-    get_default_python_runtime_context,
-)
 
 if TYPE_CHECKING:
+    import ast
+
     from ast_grep_py import SgNode, SgRoot
 
 logger = logging.getLogger(__name__)
-_CLEAR_CALLBACK_REGISTERED = False
+_CLEAR_CALLBACK_REGISTERED: list[bool] = [False]
 
 
-def _python_ast_cache() -> BoundedCache[str, tuple[ast.Module, str]]:
+def _python_ast_cache() -> object:
     ensure_python_clear_callback_registered()
-    ctx = get_default_python_runtime_context()
-    ensure_python_cache_registered(ctx)
-    return cast("BoundedCache[str, tuple[ast.Module, str]]", ctx.ast_cache)
+    return runtime_ast.python_ast_cache()
 
 
 def _get_ast(source_bytes: bytes, *, cache_key: str) -> ast.Module | None:
-    """Get or parse a cached Python AST module."""
-    content_hash = shared_source_hash(source_bytes)
-    ast_cache = _python_ast_cache()
-    cached = ast_cache.get(cache_key)
-    if cached is not None:
-        cached_tree, cached_hash = cached
-        if cached_hash == content_hash:
-            return cached_tree
-    try:
-        tree = ast.parse(source_bytes)
-    except SyntaxError:
-        return None
-    ast_cache.put(cache_key, (tree, content_hash))
-    return tree
+    return runtime_ast.get_ast(source_bytes, cache_key=cache_key)
 
 
 def _enrich_python_ast_tier(
@@ -127,30 +96,7 @@ def _enrich_python_ast_tier(
     source_bytes: bytes,
     cache_key: str,
 ) -> tuple[dict[str, object], list[str]]:
-    """Run the Python ast tier extractors for function nodes."""
-    payload: dict[str, object] = {}
-    degrade_reasons: list[str] = []
-
-    func_node = _unwrap_decorated(node)
-    func_line = func_node.range().start.line + 1
-    ast_tree = _get_ast(source_bytes, cache_key=cache_key)
-    if ast_tree is None:
-        return payload, degrade_reasons
-
-    func_ast = _find_ast_function(ast_tree, func_line)
-    if func_ast is not None:
-        gen_result, gen_reason = _try_extract("generator", _extract_generator_flag, func_ast)
-        if gen_result:
-            payload["is_generator"] = gen_result.get("is_generator", False)
-        if gen_reason:
-            degrade_reasons.append(gen_reason)
-
-        beh_result, beh_reason = _try_extract("behavior", _extract_behavior_summary, func_ast)
-        payload.update(beh_result)
-        if beh_reason:
-            degrade_reasons.append(beh_reason)
-
-    return payload, degrade_reasons
+    return runtime_ast.enrich_python_ast_tier(node, source_bytes, cache_key)
 
 
 def _enrich_import_tier(
@@ -159,23 +105,7 @@ def _enrich_import_tier(
     cache_key: str,
     line: int,
 ) -> tuple[dict[str, object], list[str]]:
-    """Run import detail extraction for import nodes."""
-    degrade_reasons: list[str] = []
-    ast_tree = _get_ast(source_bytes, cache_key=cache_key)
-    if ast_tree is None:
-        return {}, degrade_reasons
-
-    imp_result, imp_reason = _try_extract(
-        "import",
-        _extract_import_detail,
-        node,
-        source_bytes,
-        ast_tree,
-        line,
-    )
-    if imp_reason:
-        degrade_reasons.append(imp_reason)
-    return imp_result, degrade_reasons
+    return runtime_ast.enrich_import_tier(node, source_bytes, cache_key, line)
 
 
 def _resolve_python_enrichment_range(
@@ -187,16 +117,14 @@ def _resolve_python_enrichment_range(
     byte_start: int | None,
     byte_end: int | None,
 ) -> tuple[int | None, int | None]:
-    resolved_start = byte_start
-    if resolved_start is None:
-        resolved_start = _shared_line_col_to_byte_offset(source_bytes, line, col)
-    resolved_end = byte_end
-    if resolved_end is None and resolved_start is not None:
-        resolved_end = min(
-            len(source_bytes),
-            resolved_start + max(1, len(node.text().encode("utf-8"))),
-        )
-    return resolved_start, resolved_end
+    return runtime_ast.resolve_python_enrichment_range(
+        node=node,
+        source_bytes=source_bytes,
+        line=line,
+        col=col,
+        byte_start=byte_start,
+        byte_end=byte_end,
+    )
 
 
 def _run_ast_grep_stage(
@@ -380,7 +308,11 @@ def max_python_payload_bytes() -> int:
 
 
 def enrich_python_context(request: PythonNodeEnrichmentRequest) -> dict[str, object] | None:
-    """Enrich a Python match with structured context fields."""
+    """Enrich a Python match with structured context fields.
+
+    Returns:
+        dict[str, object] | None: Enrichment payload when node kind is supported.
+    """
     node = cast("SgNode", request.node)
     node_kind = node.kind()
     if node_kind not in _ENRICHABLE_KINDS:
@@ -436,10 +368,28 @@ def enrich_python_context(request: PythonNodeEnrichmentRequest) -> dict[str, obj
     return _finalize_python_enrichment_payload(state)
 
 
+def enrich_python_context_contract(
+    request: PythonNodeEnrichmentRequest,
+) -> PythonEnrichmentV1 | None:
+    """Enrich a Python match and return a typed enrichment wrapper.
+
+    Returns:
+        PythonEnrichmentV1 | None: Typed enrichment payload, when available.
+    """
+    payload = enrich_python_context(request)
+    if not isinstance(payload, dict):
+        return None
+    return wrap_python_enrichment(payload)
+
+
 def enrich_python_context_by_byte_range(
     request: PythonByteRangeEnrichmentRequest,
 ) -> dict[str, object] | None:
-    """Enrich using byte-range anchor (preferred for ripgrep integration)."""
+    """Enrich using byte-range anchor (preferred for ripgrep integration).
+
+    Returns:
+        dict[str, object] | None: Enrichment payload for the resolved byte span.
+    """
     if (
         request.byte_start < 0
         or request.byte_end <= request.byte_start
@@ -496,38 +446,64 @@ def enrich_python_context_by_byte_range(
     )
 
 
+def enrich_python_context_contract_by_byte_range(
+    request: PythonByteRangeEnrichmentRequest,
+) -> PythonEnrichmentV1 | None:
+    """Enrich by byte range and return a typed enrichment wrapper.
+
+    Returns:
+        PythonEnrichmentV1 | None: Typed enrichment payload for the byte-range anchor.
+    """
+    payload = enrich_python_context_by_byte_range(request)
+    if not isinstance(payload, dict):
+        return None
+    return wrap_python_enrichment(payload)
+
+
 def clear_python_enrichment_cache() -> None:
     """Clear per-process Python enrichment caches."""
-    _python_ast_cache().clear()
+    cache = _python_ast_cache()
+    clear = getattr(cache, "clear", None)
+    if callable(clear):
+        clear()
 
 
 def ensure_python_clear_callback_registered() -> None:
     """Lazily register Python enrichment clear callback once."""
-    global _CLEAR_CALLBACK_REGISTERED
-    if _CLEAR_CALLBACK_REGISTERED:
+    if _CLEAR_CALLBACK_REGISTERED[0]:
         return
     CACHE_REGISTRY.register_clear_callback("python", clear_python_enrichment_cache)
-    _CLEAR_CALLBACK_REGISTERED = True
+    _CLEAR_CALLBACK_REGISTERED[0] = True
 
 
 def extract_python_node(request: PythonNodeEnrichmentRequest) -> dict[str, object]:
-    """Compatibility wrapper for node-anchored extraction."""
-    payload = enrich_python_context(request)
-    return payload if isinstance(payload, dict) else {}
+    """Compatibility wrapper for node-anchored extraction.
+
+    Returns:
+        dict[str, object]: Legacy-compatible enrichment payload mapping.
+    """
+    contract = enrich_python_context_contract(request)
+    return python_enrichment_payload(contract)
 
 
 def extract_python_byte_range(
     request: PythonByteRangeEnrichmentRequest,
 ) -> dict[str, object]:
-    """Compatibility wrapper for byte-range extraction."""
-    payload = enrich_python_context_by_byte_range(request)
-    return payload if isinstance(payload, dict) else {}
+    """Compatibility wrapper for byte-range extraction.
+
+    Returns:
+        dict[str, object]: Legacy-compatible enrichment payload mapping.
+    """
+    contract = enrich_python_context_contract_by_byte_range(request)
+    return python_enrichment_payload(contract)
 
 
 __all__ = [
     "clear_python_enrichment_cache",
     "enrich_python_context",
     "enrich_python_context_by_byte_range",
+    "enrich_python_context_contract",
+    "enrich_python_context_contract_by_byte_range",
     "ensure_python_clear_callback_registered",
     "extract_python_byte_range",
     "extract_python_node",

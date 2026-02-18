@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from tools.cq.core.bootstrap import CqRuntimeServices
     from tools.cq.core.schema import Finding
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.query.sg_parser import SgRecord
 
 
 class SymtableEnricherPort(Protocol):
@@ -22,7 +21,7 @@ class SymtableEnricherPort(Protocol):
     def enrich_function_finding(
         self,
         finding: Finding,
-        record: SgRecord,
+        record: object,
     ) -> dict[str, object]:
         """Return scope-enrichment payload for one finding."""
         ...

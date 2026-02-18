@@ -9,25 +9,23 @@ from tools.cq.search.enrichment.adapter_registry import LanguageAdapterRegistry
 from tools.cq.search.enrichment.contracts import LanguageEnrichmentPort
 
 _DEFAULT_ADAPTER_REGISTRY_LOCK = threading.Lock()
-_DEFAULT_ADAPTER_REGISTRY: LanguageAdapterRegistry | None = None
+_DEFAULT_ADAPTER_REGISTRY: list[LanguageAdapterRegistry | None] = [None]
 
 
 def get_default_adapter_registry() -> LanguageAdapterRegistry:
     """Return process-default language-adapter registry."""
-    global _DEFAULT_ADAPTER_REGISTRY
     with _DEFAULT_ADAPTER_REGISTRY_LOCK:
-        registry = _DEFAULT_ADAPTER_REGISTRY
+        registry = _DEFAULT_ADAPTER_REGISTRY[0]
         if registry is None:
             registry = LanguageAdapterRegistry()
-            _DEFAULT_ADAPTER_REGISTRY = registry
+            _DEFAULT_ADAPTER_REGISTRY[0] = registry
         return registry
 
 
 def set_default_adapter_registry(registry: LanguageAdapterRegistry | None) -> None:
     """Set or reset process-default adapter registry (test seam)."""
-    global _DEFAULT_ADAPTER_REGISTRY
     with _DEFAULT_ADAPTER_REGISTRY_LOCK:
-        _DEFAULT_ADAPTER_REGISTRY = registry
+        _DEFAULT_ADAPTER_REGISTRY[0] = registry
 
 
 def register_language_adapter(lang: QueryLanguage, adapter: LanguageEnrichmentPort) -> None:

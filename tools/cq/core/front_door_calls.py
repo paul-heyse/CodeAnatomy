@@ -8,10 +8,12 @@ from tools.cq.core.front_door_contracts import (
     CallsInsightBuildRequestV1,
     FrontDoorInsightV1,
     InsightDegradationV1,
+    InsightLocationV1,
     InsightRiskCountersV1,
     InsightTargetV1,
 )
 from tools.cq.core.front_door_risk import risk_from_counters
+from tools.cq.core.front_door_support import default_calls_budget
 
 __all__ = ["build_calls_insight"]
 
@@ -22,12 +24,10 @@ def build_calls_insight(request: CallsInsightBuildRequestV1) -> FrontDoorInsight
     Returns:
         FrontDoorInsightV1: Calls insight card populated from macro summary data.
     """
-    from tools.cq.core import front_door_assembly as assembly
-
     target = InsightTargetV1(
         symbol=request.function_name,
         kind="function",
-        location=request.location or assembly.InsightLocationV1(),
+        location=request.location or InsightLocationV1(),
         signature=request.signature,
         selection_reason="resolved_calls_target",
     )
@@ -53,5 +53,5 @@ def build_calls_insight(request: CallsInsightBuildRequestV1) -> FrontDoorInsight
         risk=risk,
         confidence=request.confidence,
         degradation=request.degradation or InsightDegradationV1(),
-        budget=request.budget or assembly.default_calls_budget(),
+        budget=request.budget or default_calls_budget(),
     )

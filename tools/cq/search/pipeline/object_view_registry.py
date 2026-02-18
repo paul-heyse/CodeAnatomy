@@ -40,7 +40,7 @@ class SearchObjectViewRegistry:
 
 
 _DEFAULT_REGISTRY_LOCK = threading.Lock()
-_DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY: SearchObjectViewRegistry | None = None
+_DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY: list[SearchObjectViewRegistry | None] = [None]
 
 
 def get_default_search_object_view_registry() -> SearchObjectViewRegistry:
@@ -49,12 +49,11 @@ def get_default_search_object_view_registry() -> SearchObjectViewRegistry:
     Returns:
         SearchObjectViewRegistry: Process-wide run-id keyed object-view registry.
     """
-    global _DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY
     with _DEFAULT_REGISTRY_LOCK:
-        registry = _DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY
+        registry = _DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY[0]
         if registry is None:
             registry = SearchObjectViewRegistry()
-            _DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY = registry
+            _DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY[0] = registry
         return registry
 
 
@@ -62,9 +61,8 @@ def set_default_search_object_view_registry(
     registry: SearchObjectViewRegistry | None,
 ) -> None:
     """Set or reset process-default object-view registry (test seam)."""
-    global _DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY
     with _DEFAULT_REGISTRY_LOCK:
-        _DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY = registry
+        _DEFAULT_SEARCH_OBJECT_VIEW_REGISTRY[0] = registry
 
 
 __all__ = [

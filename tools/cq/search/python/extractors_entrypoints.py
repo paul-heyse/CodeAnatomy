@@ -8,29 +8,52 @@ stage-runtime helpers. Implementation ownership lives in
 from __future__ import annotations
 
 import tools.cq.search.python.extractors_runtime_core as core
+from tools.cq.search.python.extractors_analysis import (
+    extract_behavior_summary,
+    extract_generator_flag,
+    extract_import_detail,
+    find_ast_function,
+)
+from tools.cq.search.python.extractors_classification import (
+    _unwrap_decorated,
+    classify_item_role,
+)
+from tools.cq.search.python.extractors_runtime_astgrep import (
+    extract_call_target,
+    extract_class_context,
+    extract_decorators,
+    extract_scope_chain,
+    extract_signature,
+    extract_structural_context,
+    truncate,
+)
 from tools.cq.search.python.extractors_runtime_core import (
     _build_agreement_section,
-    _build_stage_facts,
-    _classify_item_role,
-    _extract_behavior_summary,
-    _extract_call_target,
-    _extract_class_context,
-    _extract_class_shape,
-    _extract_decorators,
-    _extract_generator_flag,
-    _extract_import_detail,
-    _extract_scope_chain,
-    _extract_signature,
-    _extract_structural_context,
-    _find_ast_function,
     _get_ast,
     _PythonEnrichmentState,
-    _truncate,
-    _unwrap_decorated,
 )
+from tools.cq.search.python.extractors_runtime_state import build_stage_facts
+from tools.cq.search.python.extractors_structure import extract_class_shape
+
+_build_stage_facts = build_stage_facts
+_classify_item_role = classify_item_role
+_extract_behavior_summary = extract_behavior_summary
+_extract_call_target = extract_call_target
+_extract_class_context = extract_class_context
+_extract_class_shape = extract_class_shape
+_extract_decorators = extract_decorators
+_extract_generator_flag = extract_generator_flag
+_extract_import_detail = extract_import_detail
+_extract_scope_chain = extract_scope_chain
+_extract_signature = extract_signature
+_extract_structural_context = extract_structural_context
+_find_ast_function = find_ast_function
+_truncate = truncate
 
 # Public entrypoints
 clear_python_enrichment_cache = core.clear_python_enrichment_cache
+enrich_python_context_contract = core.enrich_python_context_contract
+enrich_python_context_contract_by_byte_range = core.enrich_python_context_contract_by_byte_range
 enrich_python_context = core.enrich_python_context
 enrich_python_context_by_byte_range = core.enrich_python_context_by_byte_range
 ensure_python_clear_callback_registered = core.ensure_python_clear_callback_registered
@@ -75,6 +98,8 @@ __all__ = [
     "clear_python_enrichment_cache",
     "enrich_python_context",
     "enrich_python_context_by_byte_range",
+    "enrich_python_context_contract",
+    "enrich_python_context_contract_by_byte_range",
     "ensure_python_clear_callback_registered",
     "extract_python_byte_range",
     "extract_python_node",

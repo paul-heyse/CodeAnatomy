@@ -11,6 +11,17 @@ from tools.cq.core.front_door_contracts import (
     SearchInsightBuildRequestV1,
 )
 from tools.cq.core.front_door_risk import risk_from_counters
+from tools.cq.core.front_door_support import (
+    build_neighborhood_from_slices as build_neighborhood_from_support,
+)
+from tools.cq.core.front_door_support import (
+    confidence_from_findings,
+    default_search_budget,
+    degradation_from_summary,
+    empty_neighborhood,
+    string_or_none,
+    target_from_finding,
+)
 from tools.cq.core.render_utils import summary_value
 from tools.cq.core.snb_schema import NeighborhoodSliceV1
 
@@ -29,9 +40,7 @@ def build_neighborhood_from_slices(
     Returns:
         InsightNeighborhoodV1: Neighborhood slices normalized for front-door rendering.
     """
-    from tools.cq.core import front_door_assembly as assembly
-
-    return assembly.build_neighborhood_from_slices(
+    return build_neighborhood_from_support(
         slices,
         preview_per_slice=preview_per_slice,
         source=source,  # type: ignore[arg-type]
@@ -45,26 +54,22 @@ def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsig
     Returns:
         FrontDoorInsightV1: Search insight card derived from findings and summary.
     """
-    from tools.cq.core import front_door_assembly as assembly
-
-    target = assembly.target_from_finding(
+    target = target_from_finding(
         request.primary_target,
-        fallback_symbol=assembly.string_or_none(summary_value(request.summary, "query"))
-        or "search target",
+        fallback_symbol=string_or_none(summary_value(request.summary, "query")) or "search target",
         fallback_kind="query",
         selection_reason=(
             "top_definition" if request.primary_target is not None else "fallback_query"
         ),
     )
-    confidence = assembly.confidence_from_findings(request.target_candidates)
+    confidence = confidence_from_findings(request.target_candidates)
     confidence = msgspec.structs.replace(
         confidence,
         evidence_kind=confidence.evidence_kind
         if confidence.evidence_kind != "unknown"
-        else assembly.string_or_none(summary_value(request.summary, "scan_method"))
-        or "resolved_ast",
+        else string_or_none(summary_value(request.summary, "scan_method")) or "resolved_ast",
     )
-    neighborhood = request.neighborhood or assembly.empty_neighborhood()
+    neighborhood = request.neighborhood or empty_neighborhood()
     risk = request.risk
     if risk is None:
         risk = risk_from_counters(
@@ -73,8 +78,8 @@ def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsig
                 callees=neighborhood.callees.total,
             )
         )
-    degradation = request.degradation or assembly.degradation_from_summary(request.summary)
-    budget = request.budget or assembly.default_search_budget(
+    degradation = request.degradation or degradation_from_summary(request.summary)
+    budget = request.budget or default_search_budget(
         target_candidate_count=len(request.target_candidates)
     )
     return FrontDoorInsightV1(

@@ -112,7 +112,11 @@ def truncate(
     *,
     context: EnrichmentContext | None = None,
 ) -> str:
-    """Truncate text to max length and track truncated field names."""
+    """Truncate text to max length and track truncated field names.
+
+    Returns:
+        str: Original or truncated text value.
+    """
     truncated = shared_truncate(text, max_len)
     if truncated == text:
         return text
@@ -126,7 +130,11 @@ def try_extract(
     extractor: Callable[..., dict[str, object]],
     *args: object,
 ) -> tuple[dict[str, object], str | None]:
-    """Call extractor, returning payload and optional degrade reason."""
+    """Call extractor, returning payload and optional degrade reason.
+
+    Returns:
+        tuple[dict[str, object], str | None]: Extracted payload and failure reason.
+    """
     try:
         result = extractor(*args)
     except ENRICHMENT_ERRORS as exc:
@@ -178,7 +186,11 @@ def extract_signature(
     *,
     context: EnrichmentContext | None = None,
 ) -> dict[str, object]:
-    """Extract function signature details."""
+    """Extract function signature details.
+
+    Returns:
+        dict[str, object]: Signature-related enrichment fields.
+    """
     result: dict[str, object] = {}
     func_node = _unwrap_decorated(node)
     if func_node.kind() != "function_definition":
@@ -217,7 +229,11 @@ def extract_decorators(
     *,
     context: EnrichmentContext | None = None,
 ) -> dict[str, object]:
-    """Extract decorators from decorated definition node."""
+    """Extract decorators from decorated definition node.
+
+    Returns:
+        dict[str, object]: Decorator fields for the target node.
+    """
     if node.kind() != "decorated_definition":
         return {}
     decorators: list[str] = []
@@ -241,7 +257,11 @@ def extract_class_context(
     *,
     context: EnrichmentContext | None = None,
 ) -> dict[str, object]:
-    """Extract class context for a node inside class body."""
+    """Extract class context for a node inside class body.
+
+    Returns:
+        dict[str, object]: Class context fields when available.
+    """
     class_node = _find_enclosing_class(node)
     if class_node is None:
         return {}
@@ -266,7 +286,11 @@ def extract_call_target(
     *,
     context: EnrichmentContext | None = None,
 ) -> dict[str, object]:
-    """Extract call target metadata from a call node."""
+    """Extract call target metadata from a call node.
+
+    Returns:
+        dict[str, object]: Call target/arity fields for call nodes.
+    """
     if node.kind() != "call":
         return {}
 
@@ -327,7 +351,11 @@ def extract_call_target(
 
 
 def extract_scope_chain(node: SgNode) -> dict[str, object]:
-    """Extract scope chain from module to enclosing definitions."""
+    """Extract scope chain from module to enclosing definitions.
+
+    Returns:
+        dict[str, object]: Scope chain payload rooted at ``module``.
+    """
     chain: list[str] = []
     current = node.parent()
     depth = 0
@@ -353,7 +381,11 @@ def extract_scope_chain(node: SgNode) -> dict[str, object]:
 
 
 def extract_structural_context(node: SgNode) -> dict[str, object]:
-    """Extract nearest structural context label for a node."""
+    """Extract nearest structural context label for a node.
+
+    Returns:
+        dict[str, object]: Structural context label payload, when found.
+    """
     current = node.parent()
     depth = 0
     while current is not None and depth < MAX_PARENT_DEPTH:
@@ -457,7 +489,11 @@ def enrich_ast_grep_tier(
     *,
     context: EnrichmentContext | None = None,
 ) -> tuple[dict[str, object], list[str]]:
-    """Run ast-grep tier extractors and return payload + degrade reasons."""
+    """Run ast-grep tier extractors and return payload + degrade reasons.
+
+    Returns:
+        tuple[dict[str, object], list[str]]: Ast-grep payload plus degrade reasons.
+    """
     payload: dict[str, object] = {"node_kind": node_kind}
     degrade_reasons: list[str] = []
     _enrich_ast_grep_core(node, node_kind, source_bytes, payload, degrade_reasons, context=context)
@@ -470,7 +506,11 @@ def append_source(payload: dict[str, object], source_name: str) -> None:
 
 
 def promote_enrichment_node(node: SgNode) -> SgNode:
-    """Promote low-signal nodes to preferred enclosing enrichment kinds."""
+    """Promote low-signal nodes to preferred enclosing enrichment kinds.
+
+    Returns:
+        SgNode: Best candidate node for enrichment extraction.
+    """
     current = node
     depth = 0
     while current is not None and depth < MAX_PARENT_DEPTH:

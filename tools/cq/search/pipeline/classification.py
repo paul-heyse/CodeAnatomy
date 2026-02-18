@@ -24,12 +24,11 @@ from tools.cq.search._shared.enrichment_contracts import (
     python_enrichment_facts,
     rust_enrichment_payload,
     wrap_incremental_enrichment,
-    wrap_python_enrichment,
     wrap_rust_enrichment,
 )
 from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search._shared.requests import PythonByteRangeEnrichmentRequest
-from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
+from tools.cq.search.enrichment.core import normalize_rust_payload
 from tools.cq.search.enrichment.incremental_provider import (
     IncrementalAnchorRequestV1,
     enrich_incremental_anchor,
@@ -63,7 +62,7 @@ from tools.cq.search.pipeline.smart_search_types import (
 )
 from tools.cq.search.python.analysis_session import get_python_analysis_session
 from tools.cq.search.python.extractors_orchestrator import (
-    enrich_python_context_by_byte_range,
+    enrich_python_contract_by_byte_range,
 )
 from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
@@ -523,7 +522,7 @@ def _maybe_python_enrichment(
         return None
     byte_start, byte_end = abs_range
     try:
-        payload = enrich_python_context_by_byte_range(
+        payload = enrich_python_contract_by_byte_range(
             PythonByteRangeEnrichmentRequest(
                 sg_root=sg_root,
                 source_bytes=source_bytes,
@@ -537,7 +536,6 @@ def _maybe_python_enrichment(
                 session=session,
             )
         )
-        return wrap_python_enrichment(normalize_python_payload(payload))
     except ENRICHMENT_ERRORS as exc:
         logger.warning(
             "Python enrichment degraded for %s:%s (%s)",
@@ -546,6 +544,8 @@ def _maybe_python_enrichment(
             type(exc).__name__,
         )
         return None
+    else:
+        return payload
 
 
 def _maybe_incremental_enrichment(

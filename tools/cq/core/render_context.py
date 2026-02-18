@@ -15,20 +15,19 @@ if TYPE_CHECKING:
 else:
     RenderEnrichmentFactory = Callable[[], object | None]
 _DEFAULT_ENRICHMENT_FACTORY_LOCK = threading.Lock()
-_DEFAULT_ENRICHMENT_FACTORY: RenderEnrichmentFactory | None = None
+_DEFAULT_ENRICHMENT_FACTORY: list[RenderEnrichmentFactory | None] = [None]
 
 
 def get_default_render_enrichment_factory() -> RenderEnrichmentFactory | None:
     """Return process-default render enrichment factory."""
     with _DEFAULT_ENRICHMENT_FACTORY_LOCK:
-        return _DEFAULT_ENRICHMENT_FACTORY
+        return _DEFAULT_ENRICHMENT_FACTORY[0]
 
 
 def set_default_render_enrichment_factory(factory: RenderEnrichmentFactory | None) -> None:
     """Install or clear process-default render enrichment factory."""
-    global _DEFAULT_ENRICHMENT_FACTORY
     with _DEFAULT_ENRICHMENT_FACTORY_LOCK:
-        _DEFAULT_ENRICHMENT_FACTORY = factory
+        _DEFAULT_ENRICHMENT_FACTORY[0] = factory
 
 
 class RenderContext(CqStruct, frozen=True):

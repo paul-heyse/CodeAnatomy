@@ -73,6 +73,14 @@ if TYPE_CHECKING:
     from serde_schema_registry import ArtifactSpec
 
 logger = logging.getLogger(__name__)
+_DIAGNOSTICS_CAPTURE_ERRORS = (
+    AttributeError,
+    KeyError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    Exception,
+)
 
 
 def _resolved_table_schema(ctx: SessionContext, name: str) -> pa.Schema | None:
@@ -111,7 +119,7 @@ def _safe_table_pylist(ctx: SessionContext, name: str) -> tuple[list[dict[str, o
     try:
         table = ctx.table(name).to_arrow_table()
         return list(table.to_pylist()), None
-    except Exception as exc:  # noqa: BLE001
+    except _DIAGNOSTICS_CAPTURE_ERRORS as exc:
         return None, str(exc)
 
 
@@ -929,7 +937,7 @@ def _record_cst_schema_diagnostics(profile: DataFusionRuntimeProfile, ctx: Sessi
         payload["table_constraints"] = (
             list(introspector.table_constraints("libcst_files_v1")) or None
         )
-    except Exception as exc:  # noqa: BLE001
+    except _DIAGNOSTICS_CAPTURE_ERRORS as exc:
         payload["error"] = str(exc)
     profile.record_artifact(
         _get_datafusion_cst_schema_diagnostics_spec(),
@@ -965,7 +973,7 @@ def _record_tree_sitter_stats(profile: DataFusionRuntimeProfile, ctx: SessionCon
         payload["table_constraints"] = (
             list(introspector.table_constraints("tree_sitter_files_v1")) or None
         )
-    except Exception as exc:  # noqa: BLE001
+    except _DIAGNOSTICS_CAPTURE_ERRORS as exc:
         payload["error"] = str(exc)
     profile.record_artifact(_get_datafusion_tree_sitter_stats_spec(), payload)
 

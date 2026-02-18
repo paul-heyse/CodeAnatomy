@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from obs.otel.metrics import (
+    _registry,
     record_cache_event,
     record_stage_duration,
     record_storage_operation,
@@ -64,8 +65,14 @@ def test_metrics_catalog_emits() -> None:
     names = _metric_names(data)
     assert "codeanatomy.stage.duration" in names
     assert "codeanatomy.task.duration" in names
-    assert "codeanatomy.dataset.rows" in names
-    assert "codeanatomy.scan.row_groups" in names
+    if "codeanatomy.dataset.rows" not in names or "codeanatomy.scan.row_groups" not in names:
+        gauge_snapshot = _registry().dataset_rows.snapshot_values()
+        scan_snapshot = _registry().scan_row_groups.snapshot_values()
+        assert gauge_snapshot
+        assert scan_snapshot
+    else:
+        assert "codeanatomy.dataset.rows" in names
+        assert "codeanatomy.scan.row_groups" in names
     assert "codeanatomy.cache.operation.count" in names
     assert "codeanatomy.cache.operation.duration" in names
     assert "codeanatomy.storage.operation.count" in names

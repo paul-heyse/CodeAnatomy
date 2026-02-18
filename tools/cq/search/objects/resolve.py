@@ -47,6 +47,19 @@ _CALLABLE_KINDS = {
 _EMPTY_OBJECT_PAYLOAD: dict[str, object] = {}
 
 
+def _is_test_path(path: str | None) -> bool:
+    if not isinstance(path, str) or not path:
+        return False
+    normalized = path.replace("\\", "/")
+    parts = tuple(part for part in normalized.split("/") if part and part != ".")
+    if not parts:
+        return False
+    if "tests" in parts:
+        return True
+    leaf = parts[-1]
+    return leaf.startswith("test_") or leaf.endswith("_test.py")
+
+
 def _agreement_from_enrichment(payload: object) -> AgreementView:
     if not isinstance(payload, Mapping):
         return AgreementView()
@@ -109,7 +122,7 @@ def build_object_resolved_view(
 
     for match in matches:
         object_ref = _resolve_object_ref(match, query=query)
-        object_refs[object_ref.object_id] = object_ref
+        object_refs.setdefault(object_ref.object_id, object_ref)
         grouped[object_ref.object_id].append(match)
         occurrence_row = _build_occurrence_row(match, object_id=object_ref.object_id)
         occurrences.append(occurrence_row.occurrence)
@@ -393,10 +406,11 @@ def _resolve_object_ref(match: EnrichedMatch, *, query: str) -> ResolvedObjectRe
 
 
 def _representative_match(matches: list[EnrichedMatch]) -> EnrichedMatch:
-    def _score(match: EnrichedMatch) -> tuple[float, float, int]:
+    def _score(match: EnrichedMatch) -> tuple[int, int, float, int]:
         definition_bonus = 1 if match.category in _DEFINITION_CATEGORIES else 0
+        non_test_bonus = 0 if _is_test_path(match.file) else 1
         scope_bonus = 1 if isinstance(match.containing_scope, str) and match.containing_scope else 0
-        return (float(match.confidence), float(definition_bonus), int(scope_bonus))
+        return (definition_bonus, non_test_bonus, float(match.confidence), int(scope_bonus))
 
     return sorted(matches, key=_score, reverse=True)[0]
 
@@ -405,13 +419,62 @@ def _merge_object_ref_with_representative(
     object_ref: ResolvedObjectRef,
     representative: EnrichedMatch,
 ) -> ResolvedObjectRef:
-    if object_ref.canonical_file and object_ref.canonical_line:
+    canonical_file = object_ref.canonical_file
+    canonical_line = object_ref.canonical_line
+    if canonical_file is None or canonical_line is None:
+        return msgspec.structs.replace(
+            object_ref,
+            canonical_file=canonical_file or representative.file,
+            canonical_line=canonical_line or representative.line,
+        )
+    representative_is_definition = representative.category in _DEFINITION_CATEGORIES
+    if representative_is_definition and _is_test_path(canonical_file) and not _is_test_path(
+        representative.file
+    ):
+        return msgspec.structs.replace(
+            object_ref,
+            canonical_file=representative.file,
+            canonical_line=representative.line,
+        )
+    if not representative_is_definition:
         return object_ref
-    return msgspec.structs.replace(
-        object_ref,
-        canonical_file=object_ref.canonical_file or representative.file,
-        canonical_line=object_ref.canonical_line or representative.line,
-    )
+    if canonical_file == representative.file and canonical_line == representative.line:
+        return object_ref
+    if not _is_test_path(representative.file) and _is_test_path(canonical_file):
+        return msgspec.structs.replace(
+            object_ref,
+            canonical_file=representative.file,
+            canonical_line=representative.line,
+        )
+    return object_ref
+
+
+def _typed_dict_payload(value: object) -> dict[str, object]:
+    payload = msgspec.to_builtins(value, str_keys=True)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _rust_code_facts(match: EnrichedMatch) -> dict[str, object] | None:
+    rust_facts = rust_enrichment_facts(match.rust_tree_sitter)
+    if rust_facts is None:
+        return None
+    payload = _typed_dict_payload(rust_facts)
+    return payload if payload else None
+
+
+def _python_code_facts(match: EnrichedMatch) -> dict[str, object] | None:
+    python: dict[str, object] = {}
+    python_facts = python_enrichment_facts(match.python_enrichment)
+    if python_facts is not None:
+        python_payload = _typed_dict_payload(python_facts)
+        if python_payload:
+            python.update(python_payload)
+    incremental_facts = incremental_enrichment_facts(match.incremental_enrichment)
+    if incremental_facts is not None:
+        incremental_payload = _typed_dict_payload(incremental_facts)
+        if incremental_payload:
+            python["incremental"] = incremental_payload
+    return python or None
 
 
 def _code_facts_for_match(match: EnrichedMatch) -> dict[str, object]:
@@ -426,25 +489,12 @@ def _code_facts_for_match(match: EnrichedMatch) -> dict[str, object]:
     enrichment["item_role"] = match.category
     if isinstance(match.containing_scope, str) and match.containing_scope:
         enrichment["enclosing_callable"] = match.containing_scope
-    if match.rust_tree_sitter:
-        rust_facts = rust_enrichment_facts(match.rust_tree_sitter)
-        if rust_facts is not None:
-            rust_payload = msgspec.to_builtins(rust_facts, str_keys=True)
-            if isinstance(rust_payload, dict):
-                enrichment["rust"] = rust_payload
-    python: dict[str, object] = {}
-    python_facts = python_enrichment_facts(match.python_enrichment)
-    if python_facts is not None:
-        python_payload = msgspec.to_builtins(python_facts, str_keys=True)
-        if isinstance(python_payload, dict):
-            python.update(python_payload)
-    incremental_facts = incremental_enrichment_facts(match.incremental_enrichment)
-    if incremental_facts is not None:
-        incremental_payload = msgspec.to_builtins(incremental_facts, str_keys=True)
-        if isinstance(incremental_payload, dict):
-            python["incremental"] = incremental_payload
-    if python:
-        enrichment["python"] = python
+    rust_payload = _rust_code_facts(match)
+    if rust_payload is not None:
+        enrichment["rust"] = rust_payload
+    python_payload = _python_code_facts(match)
+    if python_payload is not None:
+        enrichment["python"] = python_payload
     facts["enrichment"] = enrichment
     return facts
 
@@ -466,9 +516,7 @@ def _coverage_for_match(
     python_facts = python_enrichment_facts(match.python_enrichment)
     reasons: list[str] = []
     stage_errors: dict[str, object] = (
-        incremental_facts.stage_errors
-        if incremental_facts is not None
-        else dict[str, object]()
+        incremental_facts.stage_errors if incremental_facts is not None else dict[str, object]()
     )
     reasons.extend(
         f"incremental:{key}:{value}"

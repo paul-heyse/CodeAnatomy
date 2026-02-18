@@ -244,9 +244,7 @@ def extract_decorators(
         if text.startswith("@"):
             text = text[1:]
         if text:
-            decorators.append(
-                truncate(text, MAX_DECORATOR_LEN, "decorator", context=context)
-            )
+            decorators.append(truncate(text, MAX_DECORATOR_LEN, "decorator", context=context))
         if len(decorators) >= MAX_DECORATORS:
             break
     return {"decorators": decorators} if decorators else {}

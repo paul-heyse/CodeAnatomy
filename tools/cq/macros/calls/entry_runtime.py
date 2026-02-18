@@ -25,7 +25,7 @@ from tools.cq.core.summary_update_contracts import summary_update_mapping
 from tools.cq.macros.calls.analysis import CallSite
 from tools.cq.macros.calls.analysis_scan import analyze_sites as _analyze_sites
 from tools.cq.macros.calls.entry_dispatch import scan_call_sites as _scan_call_sites_impl
-from tools.cq.macros.calls.entry_summary import build_calls_summary
+from tools.cq.macros.calls.entry_summary import CallsSummaryMetrics, build_calls_summary
 from tools.cq.macros.calls.insight import (
     CallsFrontDoorState,
     _add_context_section,
@@ -168,14 +168,16 @@ def init_calls_result(
             build_calls_summary(
                 function_name=ctx.function_name,
                 signature=scan_result.signature_info,
-                total_sites=len(scan_result.all_sites),
-                files_with_calls=scan_result.files_with_calls,
-                total_py_files=scan_result.total_py_files,
-                candidate_files=len(scan_result.candidate_files),
-                scanned_files=len(scan_result.scan_files),
-                call_records=len(scan_result.call_records),
-                rg_candidates=scan_result.rg_candidates,
-                used_fallback=scan_result.used_fallback,
+                metrics=CallsSummaryMetrics(
+                    total_sites=len(scan_result.all_sites),
+                    files_with_calls=scan_result.files_with_calls,
+                    total_py_files=scan_result.total_py_files,
+                    candidate_files=len(scan_result.candidate_files),
+                    scanned_files=len(scan_result.scan_files),
+                    call_records=len(scan_result.call_records),
+                    rg_candidates=scan_result.rg_candidates,
+                    used_fallback=scan_result.used_fallback,
+                ),
             )
         ),
     )

@@ -27,7 +27,7 @@ from tools.cq.query.query_summary import (
 __all__ = ["execute_pattern_query", "execute_pattern_query_with_files"]
 
 
-def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
+def _execute_pattern_query_impl(ctx: QueryExecutionContext) -> CqResult:
     """Execute a pattern-based query using inline ast-grep rules.
 
     Raises:
@@ -88,7 +88,7 @@ def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     return assign_result_finding_ids(result)
 
 
-def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
+def _execute_pattern_query_with_files_impl(request: PatternQueryRequest) -> CqResult:
     """Execute a pattern query using a pre-tabulated file list.
 
     Returns:
@@ -168,3 +168,25 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
         {"cache_backend": snapshot_backend_metrics(root=ctx.root)},
     )
     return assign_result_finding_ids(result)
+
+
+def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
+    """Delegate pattern query execution through the canonical runtime entrypoint.
+
+    Returns:
+        CqResult: Executed query result.
+    """
+    from tools.cq.query import executor_runtime as runtime
+
+    return runtime.execute_pattern_query(ctx)
+
+
+def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
+    """Delegate file-scoped pattern execution through the canonical runtime entrypoint.
+
+    Returns:
+        CqResult: Executed query result.
+    """
+    from tools.cq.query import executor_runtime as runtime
+
+    return runtime.execute_pattern_query_with_files(request)

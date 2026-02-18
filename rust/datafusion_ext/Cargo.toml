@@ -20,27 +20,27 @@ base64 = "0.22"
 blake2 = "0.10"
 chrono = "0.4"
 dashmap = "5.5.3"
-datafusion = { version = "51.0.0", default-features = false, features = ["parquet"] }
-datafusion-catalog-listing = "51.0.0"
-datafusion-common = "51.0.0"
-datafusion-datasource = { version = "51.0.0", default-features = false }
-datafusion-datasource-csv = { version = "51.0.0", default-features = false }
-datafusion-datasource-parquet = { version = "51.0.0", default-features = false }
-datafusion-doc = "51.0.0"
-datafusion-expr = "51.0.0"
-datafusion-expr-common = "51.0.0"
-datafusion-ffi = "51.0.0"
-datafusion-functions = "51.0.0"
-datafusion-functions-aggregate = "51.0.0"
-datafusion-functions-nested = "51.0.0"
-datafusion-functions-table = "51.0.0"
-datafusion-functions-window = "51.0.0"
-datafusion-functions-window-common = "51.0.0"
-datafusion-physical-expr-adapter = "51.0.0"
-datafusion-physical-expr-common = "51.0.0"
-datafusion-macros = "51.0.0"
+datafusion = { version = "52.1.0", default-features = false, features = ["parquet"] }
+datafusion-catalog-listing = "52.1.0"
+datafusion-common = "52.1.0"
+datafusion-datasource = { version = "52.1.0", default-features = false }
+datafusion-datasource-csv = { version = "52.1.0", default-features = false }
+datafusion-datasource-parquet = { version = "52.1.0", default-features = false }
+datafusion-doc = "52.1.0"
+datafusion-expr = "52.1.0"
+datafusion-expr-common = "52.1.0"
+datafusion-ffi = "52.1.0"
+datafusion-functions = "52.1.0"
+datafusion-functions-aggregate = "52.1.0"
+datafusion-functions-nested = "52.1.0"
+datafusion-functions-table = "52.1.0"
+datafusion-functions-window = "52.1.0"
+datafusion-functions-window-common = "52.1.0"
+datafusion-physical-expr-adapter = "52.1.0"
+datafusion-physical-expr-common = "52.1.0"
+datafusion-macros = "52.1.0"
 df_plugin_host = { path = "../df_plugin_host" }
-deltalake = { version = "0.30.1", features = ["datafusion"] }
+deltalake = { version = "0.31.0", features = ["datafusion"] }
 hex = "0.4"
 object_store = "0.12.5"
 regex = "1.10"

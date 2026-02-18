@@ -1,0 +1,223 @@
+    Checking foldhash v0.2.0
+    Checking futures-util v0.3.31
+    Checking datafusion-doc v52.1.0
+    Checking hashbrown v0.14.5
+   Compiling liblzma-sys v0.4.5
+    Checking compression-core v0.4.31
+   Compiling deltalake-derive v0.31.0
+    Checking hashbrown v0.16.1
+   Compiling datafusion-macros v52.1.0
+    Checking dashmap v6.1.0
+    Checking dashmap v5.5.3
+    Checking arrow-array v57.3.0
+    Checking indexmap v2.13.0
+    Checking h2 v0.4.13
+    Checking petgraph v0.8.3
+    Checking tower v0.5.3
+    Checking futures-executor v0.3.31
+    Checking futures v0.3.31
+    Checking datafusion-common-runtime v52.1.0
+    Checking tower-http v0.6.8
+    Checking arrow-select v57.3.0
+    Checking arrow-row v57.3.0
+    Checking arrow-arith v57.3.0
+    Checking arrow-ord v57.3.0
+    Checking arrow-ipc v57.3.0
+    Checking arrow-string v57.3.0
+    Checking arrow-cast v57.3.0
+    Checking liblzma v0.4.6
+    Checking hyper v1.8.1
+    Checking compression-codecs v0.4.36
+    Checking async-compression v0.4.39
+    Checking hyper-util v0.1.20
+    Checking arrow-csv v57.3.0
+    Checking arrow-json v57.3.0
+    Checking arrow v57.3.0
+    Checking df_plugin_common v0.1.0 (/Users/paulheyse/CodeAnatomy/rust/df_plugin_common)
+    Checking hyper-rustls v0.27.7
+    Checking reqwest v0.12.28
+    Checking object_store v0.12.5
+    Checking parquet v57.3.0
+    Checking datafusion-common v52.1.0
+    Checking delta_kernel v0.19.2
+    Checking datafusion-expr-common v52.1.0
+    Checking datafusion-proto-common v52.1.0
+    Checking datafusion-physical-expr-common v52.1.0
+    Checking datafusion-functions-aggregate-common v52.1.0
+    Checking datafusion-functions-window-common v52.1.0
+    Checking datafusion-expr v52.1.0
+    Checking datafusion-physical-expr v52.1.0
+    Checking datafusion-execution v52.1.0
+    Checking datafusion-sql v52.1.0
+    Checking datafusion-functions v52.1.0
+    Checking datafusion-functions-aggregate v52.1.0
+    Checking datafusion-optimizer v52.1.0
+    Checking datafusion-functions-window v52.1.0
+    Checking datafusion-physical-plan v52.1.0
+    Checking datafusion-physical-expr-adapter v52.1.0
+    Checking datafusion-functions-nested v52.1.0
+    Checking datafusion-session v52.1.0
+    Checking datafusion-datasource v52.1.0
+    Checking datafusion-catalog v52.1.0
+    Checking datafusion-pruning v52.1.0
+    Checking datafusion-datasource-csv v52.1.0
+    Checking datafusion-datasource-json v52.1.0
+    Checking datafusion-datasource-arrow v52.1.0
+    Checking datafusion-datasource-parquet v52.1.0
+    Checking datafusion-physical-optimizer v52.1.0
+    Checking datafusion-functions-table v52.1.0
+    Checking datafusion-catalog-listing v52.1.0
+    Checking datafusion-proto v52.1.0
+    Checking datafusion v52.1.0
+    Checking datafusion-ffi v52.1.0
+    Checking df_plugin_api v0.1.0 (/Users/paulheyse/CodeAnatomy/rust/df_plugin_api)
+    Checking deltalake-core v0.31.0
+    Checking deltalake v0.31.0
+    Checking df_plugin_host v0.1.0 (/Users/paulheyse/CodeAnatomy/rust/df_plugin_host)
+error[E0277]: the trait bound `ForeignScalarUDF: TryFrom<&FFI_ScalarUDF>` is not satisfied
+  --> df_plugin_host/src/registry_bridge.rs:56:27
+   |
+56 |             let foreign = ForeignScalarUDF::try_from(udf)?;
+   |                           ^^^^^^^^^^^^^^^^ the trait `std::convert::From<&FFI_ScalarUDF>` is not implemented for `ForeignScalarUDF`
+   |
+   = note: required for `&FFI_ScalarUDF` to implement `Into<ForeignScalarUDF>`
+   = note: required for `ForeignScalarUDF` to implement `TryFrom<&FFI_ScalarUDF>`
+
+error[E0277]: `?` couldn't convert the error to `DataFusionError`
+  --> df_plugin_host/src/registry_bridge.rs:56:58
+   |
+56 |             let foreign = ForeignScalarUDF::try_from(udf)?;
+   |                           -------------------------------^ the trait `std::convert::From<Infallible>` is not implemented for `DataFusionError`
+   |                           |
+   |                           this can't be annotated with `?` because it has type `Result<_, Infallible>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = help: the following other types implement trait `std::convert::From<T>`:
+             `DataFusionError` implements `std::convert::From<&Arc<DataFusionError>>`
+             `DataFusionError` implements `std::convert::From<Box<dyn std::error::Error + std::marker::Send + std::marker::Sync>>`
+             `DataFusionError` implements `std::convert::From<BuilderError>`
+             `DataFusionError` implements `std::convert::From<DeltaTableError>`
+             `DataFusionError` implements `std::convert::From<ObjectStoreError>`
+             `DataFusionError` implements `std::convert::From<arrow::error::ArrowError>`
+             `DataFusionError` implements `std::convert::From<datafusion::object_store::path::Error>`
+             `DataFusionError` implements `std::convert::From<datafusion::parquet::errors::ParquetError>`
+           and 5 others
+
+error[E0277]: the trait bound `ForeignAggregateUDF: TryFrom<&FFI_AggregateUDF>` is not satisfied
+  --> df_plugin_host/src/registry_bridge.rs:60:27
+   |
+60 |             let foreign = ForeignAggregateUDF::try_from(udaf)?;
+   |                           ^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<&FFI_AggregateUDF>` is not implemented for `ForeignAggregateUDF`
+   |
+   = note: required for `&FFI_AggregateUDF` to implement `Into<ForeignAggregateUDF>`
+   = note: required for `ForeignAggregateUDF` to implement `TryFrom<&FFI_AggregateUDF>`
+
+error[E0277]: `?` couldn't convert the error to `DataFusionError`
+  --> df_plugin_host/src/registry_bridge.rs:60:62
+   |
+60 |             let foreign = ForeignAggregateUDF::try_from(udaf)?;
+   |                           -----------------------------------^ the trait `std::convert::From<Infallible>` is not implemented for `DataFusionError`
+   |                           |
+   |                           this can't be annotated with `?` because it has type `Result<_, Infallible>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = help: the following other types implement trait `std::convert::From<T>`:
+             `DataFusionError` implements `std::convert::From<&Arc<DataFusionError>>`
+             `DataFusionError` implements `std::convert::From<Box<dyn std::error::Error + std::marker::Send + std::marker::Sync>>`
+             `DataFusionError` implements `std::convert::From<BuilderError>`
+             `DataFusionError` implements `std::convert::From<DeltaTableError>`
+             `DataFusionError` implements `std::convert::From<ObjectStoreError>`
+             `DataFusionError` implements `std::convert::From<arrow::error::ArrowError>`
+             `DataFusionError` implements `std::convert::From<datafusion::object_store::path::Error>`
+             `DataFusionError` implements `std::convert::From<datafusion::parquet::errors::ParquetError>`
+           and 5 others
+
+error[E0277]: the trait bound `ForeignWindowUDF: TryFrom<&FFI_WindowUDF>` is not satisfied
+  --> df_plugin_host/src/registry_bridge.rs:64:27
+   |
+64 |             let foreign = ForeignWindowUDF::try_from(udwf)?;
+   |                           ^^^^^^^^^^^^^^^^ the trait `std::convert::From<&FFI_WindowUDF>` is not implemented for `ForeignWindowUDF`
+   |
+   = note: required for `&FFI_WindowUDF` to implement `Into<ForeignWindowUDF>`
+   = note: required for `ForeignWindowUDF` to implement `TryFrom<&FFI_WindowUDF>`
+
+error[E0277]: `?` couldn't convert the error to `DataFusionError`
+  --> df_plugin_host/src/registry_bridge.rs:64:59
+   |
+64 |             let foreign = ForeignWindowUDF::try_from(udwf)?;
+   |                           --------------------------------^ the trait `std::convert::From<Infallible>` is not implemented for `DataFusionError`
+   |                           |
+   |                           this can't be annotated with `?` because it has type `Result<_, Infallible>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = help: the following other types implement trait `std::convert::From<T>`:
+             `DataFusionError` implements `std::convert::From<&Arc<DataFusionError>>`
+             `DataFusionError` implements `std::convert::From<Box<dyn std::error::Error + std::marker::Send + std::marker::Sync>>`
+             `DataFusionError` implements `std::convert::From<BuilderError>`
+             `DataFusionError` implements `std::convert::From<DeltaTableError>`
+             `DataFusionError` implements `std::convert::From<ObjectStoreError>`
+             `DataFusionError` implements `std::convert::From<arrow::error::ArrowError>`
+             `DataFusionError` implements `std::convert::From<datafusion::object_store::path::Error>`
+             `DataFusionError` implements `std::convert::From<datafusion::parquet::errors::ParquetError>`
+           and 5 others
+
+error[E0277]: the trait bound `ForeignScalarUDF: std::convert::From<&FFI_ScalarUDF>` is not satisfied
+  --> df_plugin_host/src/registry_bridge.rs:56:27
+   |
+56 |             let foreign = ForeignScalarUDF::try_from(udf)?;
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<&FFI_ScalarUDF>` is not implemented for `ForeignScalarUDF`
+   |
+   = note: required for `&FFI_ScalarUDF` to implement `Into<ForeignScalarUDF>`
+   = note: required for `ForeignScalarUDF` to implement `TryFrom<&FFI_ScalarUDF>`
+
+error[E0277]: the trait bound `ForeignAggregateUDF: std::convert::From<&FFI_AggregateUDF>` is not satisfied
+  --> df_plugin_host/src/registry_bridge.rs:60:27
+   |
+60 |             let foreign = ForeignAggregateUDF::try_from(udaf)?;
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<&FFI_AggregateUDF>` is not implemented for `ForeignAggregateUDF`
+   |
+   = note: required for `&FFI_AggregateUDF` to implement `Into<ForeignAggregateUDF>`
+   = note: required for `ForeignAggregateUDF` to implement `TryFrom<&FFI_AggregateUDF>`
+
+error[E0277]: the trait bound `ForeignWindowUDF: std::convert::From<&FFI_WindowUDF>` is not satisfied
+  --> df_plugin_host/src/registry_bridge.rs:64:27
+   |
+64 |             let foreign = ForeignWindowUDF::try_from(udwf)?;
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<&FFI_WindowUDF>` is not implemented for `ForeignWindowUDF`
+   |
+   = note: required for `&FFI_WindowUDF` to implement `Into<ForeignWindowUDF>`
+   = note: required for `ForeignWindowUDF` to implement `TryFrom<&FFI_WindowUDF>`
+
+error[E0308]: mismatched types
+  --> df_plugin_host/src/registry_bridge.rs:77:54
+   |
+77 |             let foreign = ForeignTableFunction::from(table_fn.function.clone());
+   |                           -------------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ForeignTableFunction`, found `FFI_TableFunction`
+   |                           |
+   |                           arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> /rustc/8387095803f21a256a9a772ac1f9b41ed4d5aa0a/library/core/src/convert/mod.rs:592:7
+
+error[E0308]: mismatched types
+   --> df_plugin_host/src/registry_bridge.rs:112:54
+    |
+112 |             let foreign = ForeignTableProvider::from(&provider);
+    |                           -------------------------- ^^^^^^^^^ expected `ForeignTableProvider`, found `&FFI_TableProvider`
+    |                           |
+    |                           arguments to this function are incorrect
+    |
+note: associated function defined here
+   --> /rustc/8387095803f21a256a9a772ac1f9b41ed4d5aa0a/library/core/src/convert/mod.rs:592:7
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `df_plugin_host` (lib) due to 11 previous errors
+Error: `"Cargo.toml"` is a virtual manifest.
+
+Listing or diffing the public API of an entire workspace is not supported.
+
+Try
+
+    cargo public-api -p specific-crate
+

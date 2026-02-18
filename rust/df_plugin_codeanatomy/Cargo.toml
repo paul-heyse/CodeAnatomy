@@ -14,9 +14,9 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 abi_stable = "0.11"
 base64 = "0.22"
-datafusion = { version = "51.0.0", default-features = false, features = ["parquet"] }
-datafusion-ffi = "51.0.0"
-deltalake = { version = "0.30.1", features = ["datafusion"] }
+datafusion = { version = "52.1.0", default-features = false, features = ["parquet"] }
+datafusion-ffi = "52.1.0"
+deltalake = { version = "0.31.0", features = ["datafusion"] }
 df_plugin_api = { path = "../df_plugin_api" }
 df_plugin_common = { path = "../df_plugin_common" }
 datafusion_ext = { path = "../datafusion_ext" }

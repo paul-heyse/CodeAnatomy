@@ -11,10 +11,10 @@ repository.workspace = true
 [dependencies]
 abi_stable = "0.11"
 arrow = "57.1.0"
-datafusion = { version = "51.0.0", default-features = false, features = ["parquet"] }
-datafusion-expr = "51.0.0"
-datafusion-ffi = "51.0.0"
-deltalake = { version = "0.30.1", features = ["datafusion"] }
+datafusion = { version = "52.1.0", default-features = false, features = ["parquet"] }
+datafusion-expr = "52.1.0"
+datafusion-ffi = "52.1.0"
+deltalake = { version = "0.31.0", features = ["datafusion"] }
 df_plugin_api = { path = "../df_plugin_api" }
 df_plugin_common = { path = "../df_plugin_common" }
 tokio = { version = "1.49.0", features = ["rt-multi-thread"] }

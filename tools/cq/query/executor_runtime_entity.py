@@ -239,7 +239,7 @@ def process_call_query(
     )
 
 
-def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
+def _execute_entity_query_impl(ctx: QueryExecutionContext) -> CqResult:
     """Execute entity query for a prepared execution context.
 
     Raises:
@@ -286,7 +286,7 @@ def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     return assign_result_finding_ids(result)
 
 
-def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
+def _execute_entity_query_from_records_impl(request: EntityQueryRequest) -> CqResult:
     """Execute entity query over pre-scanned records.
 
     Returns:
@@ -327,9 +327,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     )
     result = mk_result(_build_runmeta(ctx))
     summary = apply_summary_mapping(result.summary, runtime.summary_common_for_context(ctx))
-    findings, sections, summary_updates = apply_entity_handlers(
-        state, symtable=request.symtable
-    )
+    findings, sections, summary_updates = apply_entity_handlers(state, symtable=request.symtable)
     summary = apply_summary_mapping(
         summary,
         {
@@ -351,6 +349,28 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         {"cache_backend": snapshot_backend_metrics(root=ctx.root)},
     )
     return assign_result_finding_ids(result)
+
+
+def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
+    """Delegate entity query execution through the canonical runtime entrypoint.
+
+    Returns:
+        CqResult: Executed query result.
+    """
+    from tools.cq.query import executor_runtime as runtime
+
+    return runtime.execute_entity_query(ctx)
+
+
+def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
+    """Delegate record-based entity execution through the canonical runtime entrypoint.
+
+    Returns:
+        CqResult: Executed query result.
+    """
+    from tools.cq.query import executor_runtime as runtime
+
+    return runtime.execute_entity_query_from_records(request)
 
 
 __all__ = [

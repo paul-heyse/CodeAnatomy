@@ -1,0 +1,2 @@
+Snapshot unavailable: post-upgrade public-api extraction failed.
+See: docs/llm/public_api/2026-02-18/post_df52/datafusion_ext.err

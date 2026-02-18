@@ -238,4 +238,12 @@ def canonicalize_payload(payload: dict[str, object]) -> dict[str, object]:
     """
     canonical = canonicalize_rust_lane_payload(payload)
     builtins_value = msgspec.to_builtins(canonical, str_keys=True)
-    return builtins_value if isinstance(builtins_value, dict) else {}
+    if not isinstance(builtins_value, dict):
+        return dict(payload)
+    merged = dict(builtins_value)
+    for key, value in payload.items():
+        if key == "tree_sitter_diagnostics":
+            continue
+        if key not in merged:
+            merged[key] = value
+    return merged

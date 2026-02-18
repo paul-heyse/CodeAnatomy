@@ -165,70 +165,80 @@ def _merge_stage_metadata_field(
     metadata[key] = value
 
 
-def build_stage_fact_patch(fields: Mapping[str, object]) -> PythonStageFactPatch:
-    """Build typed stage-fact patch from a raw field mapping.
+_STAGE_FACT_BUCKET_KEYS: tuple[str, ...] = (
+    "resolution",
+    "behavior",
+    "structure",
+    "signature",
+    "call",
+    "import",
+    "class_shape",
+    "locals",
+    "parse_quality",
+)
+_RESOLUTION_SEQUENCE_FIELDS: tuple[str, ...] = (
+    "qualified_name_candidates",
+    "binding_candidates",
+    "import_alias_chain",
+)
+def _new_stage_fact_buckets() -> dict[str, dict[str, object]]:
+    return {key: {} for key in _STAGE_FACT_BUCKET_KEYS}
 
-    Returns:
-        PythonStageFactPatch: Parsed stage-fact patch for merge ingestion.
-    """
 
-    def _convert_section[StructT](
-        section: dict[str, object],
-        type_: type[StructT],
-    ) -> StructT | None:
-        if not section:
-            return None
-        try:
-            return msgspec.convert(section, type=type_, strict=False)
-        except (msgspec.ValidationError, TypeError, ValueError):
-            return None
+def _merge_mapping_fields(target: dict[str, object], payload: object) -> None:
+    if not isinstance(payload, Mapping):
+        return
+    target.update({key: value for key, value in payload.items() if isinstance(key, str)})
 
-    def _merge_mapping_fields(target: dict[str, object], payload: object) -> None:
-        if not isinstance(payload, Mapping):
-            return
-        target.update({key: value for key, value in payload.items() if isinstance(key, str)})
 
-    resolution: dict[str, object] = {}
-    behavior: dict[str, object] = {}
-    structure: dict[str, object] = {}
-    signature: dict[str, object] = {}
-    call: dict[str, object] = {}
-    import_: dict[str, object] = {}
-    class_shape: dict[str, object] = {}
-    locals_dict: dict[str, object] = {}
-    parse_quality: dict[str, object] = {}
-    metadata: dict[str, object] = {}
+def _merge_imports_payload(import_bucket: dict[str, object], payload: object) -> None:
+    if not isinstance(payload, Mapping):
+        return
+    modules = payload.get("modules")
+    aliases = payload.get("aliases")
+    if isinstance(modules, list) and modules:
+        import_bucket["import_module"] = next(
+            (item for item in modules if isinstance(item, str)),
+            import_bucket.get("import_module"),
+        )
+    if isinstance(aliases, list):
+        import_bucket["import_names"] = [item for item in aliases if isinstance(item, str)]
+
+
+def _merge_explicit_stage_sections(
+    fields: Mapping[str, object],
+    *,
+    buckets: dict[str, dict[str, object]],
+) -> None:
+    _merge_mapping_fields(buckets["resolution"], fields.get("resolution"))
+    _merge_mapping_fields(buckets["locals"], fields.get("locals"))
+    _merge_mapping_fields(buckets["parse_quality"], fields.get("parse_quality"))
+    _merge_imports_payload(buckets["import"], fields.get("imports"))
+
+
+def _assign_stage_fact_fields(
+    fields: Mapping[str, object],
+    *,
+    buckets: dict[str, dict[str, object]],
+    metadata: dict[str, object],
+) -> None:
     fact_buckets = {
-        "resolution": resolution,
-        "behavior": behavior,
-        "structure": structure,
-        "signature": signature,
-        "call": call,
-        "import": import_,
-        "class_shape": class_shape,
+        "resolution": buckets["resolution"],
+        "behavior": buckets["behavior"],
+        "structure": buckets["structure"],
+        "signature": buckets["signature"],
+        "call": buckets["call"],
+        "import": buckets["import"],
+        "class_shape": buckets["class_shape"],
     }
-
-    _merge_mapping_fields(resolution, fields.get("resolution"))
-    _merge_mapping_fields(locals_dict, fields.get("locals"))
-    _merge_mapping_fields(parse_quality, fields.get("parse_quality"))
-    imports_payload = fields.get("imports")
-    if isinstance(imports_payload, Mapping):
-        modules = imports_payload.get("modules")
-        aliases = imports_payload.get("aliases")
-        if isinstance(modules, list) and modules:
-            import_["import_module"] = next(
-                (item for item in modules if isinstance(item, str)),
-                import_.get("import_module"),
-            )
-        if isinstance(aliases, list):
-            import_["import_names"] = [item for item in aliases if isinstance(item, str)]
-
     for key, value in fields.items():
         if key in _PY_METADATA_FIELDS:
             _merge_stage_metadata_field(metadata=metadata, key=key, value=value)
         _assign_fact_field(key, value, buckets=fact_buckets)
 
-    for key in ("qualified_name_candidates", "binding_candidates", "import_alias_chain"):
+
+def _normalize_resolution_sequences(resolution: dict[str, object]) -> None:
+    for key in _RESOLUTION_SEQUENCE_FIELDS:
         raw = resolution.get(key)
         if not isinstance(raw, Sequence):
             continue
@@ -240,22 +250,62 @@ def build_stage_fact_patch(fields: Mapping[str, object]) -> PythonStageFactPatch
                 rows.append({"name": item})
         resolution[key] = rows
 
+
+def _derive_parse_quality_fields(parse_quality: dict[str, object]) -> None:
     if "error_nodes" in parse_quality and "error_count" not in parse_quality:
         nodes = parse_quality.get("error_nodes")
         parse_quality["error_count"] = len(nodes) if isinstance(nodes, list) else 0
 
+
+def _convert_section[StructT](section: dict[str, object], type_: type[StructT]) -> StructT | None:
+    if not section:
+        return None
+    try:
+        return msgspec.convert(section, type=type_, strict=False)
+    except (msgspec.ValidationError, TypeError, ValueError):
+        return None
+
+
+def _build_python_fact_structs(
+    buckets: Mapping[str, dict[str, object]],
+) -> PythonEnrichmentFacts:
+    resolution = _convert_section(buckets["resolution"], PythonResolutionFacts)
+    behavior = _convert_section(buckets["behavior"], PythonBehaviorFacts)
+    structure = _convert_section(buckets["structure"], PythonStructureFacts)
+    signature = _convert_section(buckets["signature"], PythonSignatureFacts)
+    call = _convert_section(buckets["call"], PythonCallFacts)
+    import_ = _convert_section(buckets["import"], PythonImportFacts)
+    class_shape = _convert_section(buckets["class_shape"], PythonClassShapeFacts)
+    locals_ = _convert_section(buckets["locals"], PythonLocalsFacts)
+    parse_quality = _convert_section(buckets["parse_quality"], PythonParseQualityFacts)
+    return PythonEnrichmentFacts(
+        resolution=resolution,
+        behavior=behavior,
+        structure=structure,
+        signature=signature,
+        call=call,
+        import_=import_,
+        class_shape=class_shape,
+        locals=locals_,
+        parse_quality=parse_quality,
+    )
+
+
+def build_stage_fact_patch(fields: Mapping[str, object]) -> PythonStageFactPatch:
+    """Build typed stage-fact patch from a raw field mapping.
+
+    Returns:
+        PythonStageFactPatch: Parsed stage-fact patch for merge ingestion.
+    """
+    buckets = _new_stage_fact_buckets()
+    metadata: dict[str, object] = {}
+    _merge_explicit_stage_sections(fields, buckets=buckets)
+    _assign_stage_fact_fields(fields, buckets=buckets, metadata=metadata)
+    _normalize_resolution_sequences(buckets["resolution"])
+    _derive_parse_quality_fields(buckets["parse_quality"])
+
     return PythonStageFactPatch(
-        facts=PythonEnrichmentFacts(
-            resolution=_convert_section(resolution, PythonResolutionFacts),
-            behavior=_convert_section(behavior, PythonBehaviorFacts),
-            structure=_convert_section(structure, PythonStructureFacts),
-            signature=_convert_section(signature, PythonSignatureFacts),
-            call=_convert_section(call, PythonCallFacts),
-            import_=_convert_section(import_, PythonImportFacts),
-            class_shape=_convert_section(class_shape, PythonClassShapeFacts),
-            locals=_convert_section(locals_dict, PythonLocalsFacts),
-            parse_quality=_convert_section(parse_quality, PythonParseQualityFacts),
-        ),
+        facts=_build_python_fact_structs(buckets),
         metadata=metadata,
     )
 

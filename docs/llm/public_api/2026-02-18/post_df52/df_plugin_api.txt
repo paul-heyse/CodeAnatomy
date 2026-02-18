@@ -1,0 +1,696 @@
+pub mod df_plugin_api
+pub mod df_plugin_api::caps
+pub const df_plugin_api::caps::AGG_UDF: u64
+pub const df_plugin_api::caps::SCALAR_UDF: u64
+pub const df_plugin_api::caps::TABLE_FUNCTION: u64
+pub const df_plugin_api::caps::TABLE_PROVIDER: u64
+pub const df_plugin_api::caps::WINDOW_UDF: u64
+#[repr(C)] pub struct df_plugin_api::DfPluginExportsV1
+pub df_plugin_api::DfPluginExportsV1::table_functions: abi_stable::std_types::vec::private::RVec<df_plugin_api::DfTableFunctionV1>
+pub df_plugin_api::DfPluginExportsV1::table_provider_names: abi_stable::std_types::vec::private::RVec<abi_stable::std_types::string::RString>
+pub df_plugin_api::DfPluginExportsV1::udf_bundle: df_plugin_api::DfUdfBundleV1
+impl abi_stable::abi_stability::get_static_equivalent::GetStaticEquivalent_ for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::StaticEquivalent = _static_DfPluginExportsV1
+impl abi_stable::abi_stability::stable_abi_trait::StableAbi for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::IsNonZeroType = core_extensions::type_level_bool::False
+pub const df_plugin_api::DfPluginExportsV1::LAYOUT: &'static abi_stable::type_layout::TypeLayout
+impl core::marker::Freeze for df_plugin_api::DfPluginExportsV1
+impl core::marker::Send for df_plugin_api::DfPluginExportsV1
+impl core::marker::Sync for df_plugin_api::DfPluginExportsV1
+impl core::marker::Unpin for df_plugin_api::DfPluginExportsV1
+impl core::marker::UnsafeUnpin for df_plugin_api::DfPluginExportsV1
+impl core::panic::unwind_safe::RefUnwindSafe for df_plugin_api::DfPluginExportsV1
+impl core::panic::unwind_safe::UnwindSafe for df_plugin_api::DfPluginExportsV1
+impl<S> repr_offset::ext::ROExtAcc for df_plugin_api::DfPluginExportsV1
+pub fn df_plugin_api::DfPluginExportsV1::f_get<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &F
+pub fn df_plugin_api::DfPluginExportsV1::f_get_mut<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &mut F
+pub fn df_plugin_api::DfPluginExportsV1::f_get_mut_ptr<F, A>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *mut F
+pub fn df_plugin_api::DfPluginExportsV1::f_get_ptr<F, A>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *const F
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Aligned> for df_plugin_api::DfPluginExportsV1
+pub fn df_plugin_api::DfPluginExportsV1::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginExportsV1::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginExportsV1::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, right: &mut S)
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Unaligned> for df_plugin_api::DfPluginExportsV1
+pub fn df_plugin_api::DfPluginExportsV1::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginExportsV1::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginExportsV1::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, right: &mut S)
+impl<T, U> core::convert::Into<U> for df_plugin_api::DfPluginExportsV1 where U: core::convert::From<T>
+pub fn df_plugin_api::DfPluginExportsV1::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for df_plugin_api::DfPluginExportsV1 where U: core::convert::Into<T>
+pub type df_plugin_api::DfPluginExportsV1::Error = core::convert::Infallible
+pub fn df_plugin_api::DfPluginExportsV1::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for df_plugin_api::DfPluginExportsV1 where U: core::convert::TryFrom<T>
+pub type df_plugin_api::DfPluginExportsV1::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn df_plugin_api::DfPluginExportsV1::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for df_plugin_api::DfPluginExportsV1 where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const df_plugin_api::DfPluginExportsV1::WITNESS: W
+impl<T> abi_stable::inline_storage::AlignerFor<1024> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo1024<T>
+impl<T> abi_stable::inline_storage::AlignerFor<128> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo128<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16384> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo16384<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo16<T>
+impl<T> abi_stable::inline_storage::AlignerFor<1> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo1<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2048> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo2048<T>
+impl<T> abi_stable::inline_storage::AlignerFor<256> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo256<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo2<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32768> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo32768<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo32<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4096> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo4096<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo4<T>
+impl<T> abi_stable::inline_storage::AlignerFor<512> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo512<T>
+impl<T> abi_stable::inline_storage::AlignerFor<64> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo64<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8192> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo8192<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8> for df_plugin_api::DfPluginExportsV1
+pub type df_plugin_api::DfPluginExportsV1::Aligner = abi_stable::inline_storage::alignment::AlignTo8<T>
+impl<T> arrow_buffer::alloc::Allocation for df_plugin_api::DfPluginExportsV1 where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> core::any::Any for df_plugin_api::DfPluginExportsV1 where T: 'static + ?core::marker::Sized
+pub fn df_plugin_api::DfPluginExportsV1::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for df_plugin_api::DfPluginExportsV1 where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginExportsV1::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for df_plugin_api::DfPluginExportsV1 where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginExportsV1::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for df_plugin_api::DfPluginExportsV1
+pub fn df_plugin_api::DfPluginExportsV1::from(t: T) -> T
+impl<T> core_extensions::self_ops::SelfOps for df_plugin_api::DfPluginExportsV1 where T: ?core::marker::Sized
+impl<T> core_extensions::type_identity::TypeIdentity for df_plugin_api::DfPluginExportsV1 where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginExportsV1::Type = T
+impl<T> either::into_either::IntoEither for df_plugin_api::DfPluginExportsV1
+impl<T> typewit::type_identity::Identity for df_plugin_api::DfPluginExportsV1 where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginExportsV1::Type = T
+pub const df_plugin_api::DfPluginExportsV1::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<This> abi_stable::pointer_trait::TransmuteElement for df_plugin_api::DfPluginExportsV1 where This: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for df_plugin_api::DfPluginExportsV1 where V: ppv_lite86::types::MultiLane<T>
+pub fn df_plugin_api::DfPluginExportsV1::vzip(self) -> V
+#[repr(C)] pub struct df_plugin_api::DfPluginManifestV1
+pub df_plugin_api::DfPluginManifestV1::arrow_major: u16
+pub df_plugin_api::DfPluginManifestV1::build_id: abi_stable::std_types::string::RString
+pub df_plugin_api::DfPluginManifestV1::capabilities: u64
+pub df_plugin_api::DfPluginManifestV1::datafusion_major: u16
+pub df_plugin_api::DfPluginManifestV1::df_ffi_major: u64
+pub df_plugin_api::DfPluginManifestV1::features: abi_stable::std_types::vec::private::RVec<abi_stable::std_types::string::RString>
+pub df_plugin_api::DfPluginManifestV1::plugin_abi_major: u16
+pub df_plugin_api::DfPluginManifestV1::plugin_abi_minor: u16
+pub df_plugin_api::DfPluginManifestV1::plugin_name: abi_stable::std_types::string::RString
+pub df_plugin_api::DfPluginManifestV1::plugin_version: abi_stable::std_types::string::RString
+pub df_plugin_api::DfPluginManifestV1::struct_size: u32
+impl abi_stable::abi_stability::get_static_equivalent::GetStaticEquivalent_ for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::StaticEquivalent = _static_DfPluginManifestV1
+impl abi_stable::abi_stability::stable_abi_trait::StableAbi for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::IsNonZeroType = core_extensions::type_level_bool::False
+pub const df_plugin_api::DfPluginManifestV1::LAYOUT: &'static abi_stable::type_layout::TypeLayout
+impl core::clone::Clone for df_plugin_api::DfPluginManifestV1
+pub fn df_plugin_api::DfPluginManifestV1::clone(&self) -> df_plugin_api::DfPluginManifestV1
+impl core::fmt::Debug for df_plugin_api::DfPluginManifestV1
+pub fn df_plugin_api::DfPluginManifestV1::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for df_plugin_api::DfPluginManifestV1
+impl core::marker::Send for df_plugin_api::DfPluginManifestV1
+impl core::marker::Sync for df_plugin_api::DfPluginManifestV1
+impl core::marker::Unpin for df_plugin_api::DfPluginManifestV1
+impl core::marker::UnsafeUnpin for df_plugin_api::DfPluginManifestV1
+impl core::panic::unwind_safe::RefUnwindSafe for df_plugin_api::DfPluginManifestV1
+impl core::panic::unwind_safe::UnwindSafe for df_plugin_api::DfPluginManifestV1
+impl<'a, T> abi_stable::std_types::cow::RCowCompatibleRef<'a> for df_plugin_api::DfPluginManifestV1 where T: core::clone::Clone + 'a
+pub type df_plugin_api::DfPluginManifestV1::ROwned = T
+pub type df_plugin_api::DfPluginManifestV1::RefC = &'a T
+pub fn df_plugin_api::DfPluginManifestV1::as_c_ref(from: &'a T) -> <T as abi_stable::std_types::cow::RCowCompatibleRef<'a>>::RefC
+pub fn df_plugin_api::DfPluginManifestV1::as_rust_ref(from: <T as abi_stable::std_types::cow::RCowCompatibleRef<'a>>::RefC) -> &'a T
+impl<S> repr_offset::ext::ROExtAcc for df_plugin_api::DfPluginManifestV1
+pub fn df_plugin_api::DfPluginManifestV1::f_get<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &F
+pub fn df_plugin_api::DfPluginManifestV1::f_get_mut<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &mut F
+pub fn df_plugin_api::DfPluginManifestV1::f_get_mut_ptr<F, A>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *mut F
+pub fn df_plugin_api::DfPluginManifestV1::f_get_ptr<F, A>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *const F
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Aligned> for df_plugin_api::DfPluginManifestV1
+pub fn df_plugin_api::DfPluginManifestV1::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginManifestV1::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginManifestV1::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, right: &mut S)
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Unaligned> for df_plugin_api::DfPluginManifestV1
+pub fn df_plugin_api::DfPluginManifestV1::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginManifestV1::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginManifestV1::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, right: &mut S)
+impl<T, U> core::convert::Into<U> for df_plugin_api::DfPluginManifestV1 where U: core::convert::From<T>
+pub fn df_plugin_api::DfPluginManifestV1::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for df_plugin_api::DfPluginManifestV1 where U: core::convert::Into<T>
+pub type df_plugin_api::DfPluginManifestV1::Error = core::convert::Infallible
+pub fn df_plugin_api::DfPluginManifestV1::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for df_plugin_api::DfPluginManifestV1 where U: core::convert::TryFrom<T>
+pub type df_plugin_api::DfPluginManifestV1::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn df_plugin_api::DfPluginManifestV1::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for df_plugin_api::DfPluginManifestV1 where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const df_plugin_api::DfPluginManifestV1::WITNESS: W
+impl<T> abi_stable::inline_storage::AlignerFor<1024> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo1024<T>
+impl<T> abi_stable::inline_storage::AlignerFor<128> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo128<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16384> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo16384<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo16<T>
+impl<T> abi_stable::inline_storage::AlignerFor<1> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo1<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2048> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo2048<T>
+impl<T> abi_stable::inline_storage::AlignerFor<256> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo256<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo2<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32768> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo32768<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo32<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4096> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo4096<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo4<T>
+impl<T> abi_stable::inline_storage::AlignerFor<512> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo512<T>
+impl<T> abi_stable::inline_storage::AlignerFor<64> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo64<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8192> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo8192<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8> for df_plugin_api::DfPluginManifestV1
+pub type df_plugin_api::DfPluginManifestV1::Aligner = abi_stable::inline_storage::alignment::AlignTo8<T>
+impl<T> alloc::borrow::ToOwned for df_plugin_api::DfPluginManifestV1 where T: core::clone::Clone
+pub type df_plugin_api::DfPluginManifestV1::Owned = T
+pub fn df_plugin_api::DfPluginManifestV1::clone_into(&self, target: &mut T)
+pub fn df_plugin_api::DfPluginManifestV1::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for df_plugin_api::DfPluginManifestV1 where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> core::any::Any for df_plugin_api::DfPluginManifestV1 where T: 'static + ?core::marker::Sized
+pub fn df_plugin_api::DfPluginManifestV1::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for df_plugin_api::DfPluginManifestV1 where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginManifestV1::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for df_plugin_api::DfPluginManifestV1 where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginManifestV1::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for df_plugin_api::DfPluginManifestV1 where T: core::clone::Clone
+pub unsafe fn df_plugin_api::DfPluginManifestV1::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for df_plugin_api::DfPluginManifestV1
+pub fn df_plugin_api::DfPluginManifestV1::from(t: T) -> T
+impl<T> core_extensions::self_ops::SelfOps for df_plugin_api::DfPluginManifestV1 where T: ?core::marker::Sized
+impl<T> core_extensions::type_identity::TypeIdentity for df_plugin_api::DfPluginManifestV1 where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginManifestV1::Type = T
+impl<T> either::into_either::IntoEither for df_plugin_api::DfPluginManifestV1
+impl<T> typewit::type_identity::Identity for df_plugin_api::DfPluginManifestV1 where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginManifestV1::Type = T
+pub const df_plugin_api::DfPluginManifestV1::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<This> abi_stable::pointer_trait::TransmuteElement for df_plugin_api::DfPluginManifestV1 where This: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for df_plugin_api::DfPluginManifestV1 where V: ppv_lite86::types::MultiLane<T>
+pub fn df_plugin_api::DfPluginManifestV1::vzip(self) -> V
+#[repr(C)] pub struct df_plugin_api::DfPluginMod
+pub df_plugin_api::DfPluginMod::create_table_provider: fn(name: abi_stable::std_types::str::RStr<'_>, options_json: abi_stable::std_types::option::ROption<abi_stable::std_types::string::RString>) -> df_plugin_api::DfResult<datafusion_ffi::table_provider::FFI_TableProvider>
+pub df_plugin_api::DfPluginMod::exports: fn() -> df_plugin_api::DfPluginExportsV1
+pub df_plugin_api::DfPluginMod::manifest: fn() -> df_plugin_api::DfPluginManifestV1
+pub df_plugin_api::DfPluginMod::udf_bundle_with_options: fn(options_json: abi_stable::std_types::option::ROption<abi_stable::std_types::string::RString>) -> df_plugin_api::DfResult<df_plugin_api::DfUdfBundleV1>
+impl abi_stable::prefix_type::PrefixTypeTrait for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::PrefixFields = df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod::PrefixRef = df_plugin_api::DfPluginMod_Ref
+pub const df_plugin_api::DfPluginMod::PT_FIELD_ACCESSIBILITY: abi_stable::prefix_type::accessible_fields::FieldAccessibility
+pub const df_plugin_api::DfPluginMod::PT_LAYOUT: &'static abi_stable::prefix_type::layout::PTStructLayout
+impl core::marker::Freeze for df_plugin_api::DfPluginMod
+impl core::marker::Send for df_plugin_api::DfPluginMod
+impl core::marker::Sync for df_plugin_api::DfPluginMod
+impl core::marker::Unpin for df_plugin_api::DfPluginMod
+impl core::marker::UnsafeUnpin for df_plugin_api::DfPluginMod
+impl core::panic::unwind_safe::RefUnwindSafe for df_plugin_api::DfPluginMod
+impl core::panic::unwind_safe::UnwindSafe for df_plugin_api::DfPluginMod
+impl<S> repr_offset::ext::ROExtAcc for df_plugin_api::DfPluginMod
+pub fn df_plugin_api::DfPluginMod::f_get<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &F
+pub fn df_plugin_api::DfPluginMod::f_get_mut<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &mut F
+pub fn df_plugin_api::DfPluginMod::f_get_mut_ptr<F, A>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *mut F
+pub fn df_plugin_api::DfPluginMod::f_get_ptr<F, A>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *const F
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Aligned> for df_plugin_api::DfPluginMod
+pub fn df_plugin_api::DfPluginMod::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginMod::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginMod::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, right: &mut S)
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Unaligned> for df_plugin_api::DfPluginMod
+pub fn df_plugin_api::DfPluginMod::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginMod::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginMod::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, right: &mut S)
+impl<T, U> core::convert::Into<U> for df_plugin_api::DfPluginMod where U: core::convert::From<T>
+pub fn df_plugin_api::DfPluginMod::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for df_plugin_api::DfPluginMod where U: core::convert::Into<T>
+pub type df_plugin_api::DfPluginMod::Error = core::convert::Infallible
+pub fn df_plugin_api::DfPluginMod::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for df_plugin_api::DfPluginMod where U: core::convert::TryFrom<T>
+pub type df_plugin_api::DfPluginMod::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn df_plugin_api::DfPluginMod::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for df_plugin_api::DfPluginMod where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const df_plugin_api::DfPluginMod::WITNESS: W
+impl<T> abi_stable::inline_storage::AlignerFor<1024> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo1024<T>
+impl<T> abi_stable::inline_storage::AlignerFor<128> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo128<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16384> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo16384<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo16<T>
+impl<T> abi_stable::inline_storage::AlignerFor<1> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo1<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2048> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo2048<T>
+impl<T> abi_stable::inline_storage::AlignerFor<256> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo256<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo2<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32768> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo32768<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo32<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4096> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo4096<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo4<T>
+impl<T> abi_stable::inline_storage::AlignerFor<512> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo512<T>
+impl<T> abi_stable::inline_storage::AlignerFor<64> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo64<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8192> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo8192<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8> for df_plugin_api::DfPluginMod
+pub type df_plugin_api::DfPluginMod::Aligner = abi_stable::inline_storage::alignment::AlignTo8<T>
+impl<T> arrow_buffer::alloc::Allocation for df_plugin_api::DfPluginMod where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> core::any::Any for df_plugin_api::DfPluginMod where T: 'static + ?core::marker::Sized
+pub fn df_plugin_api::DfPluginMod::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for df_plugin_api::DfPluginMod where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginMod::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for df_plugin_api::DfPluginMod where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginMod::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for df_plugin_api::DfPluginMod
+pub fn df_plugin_api::DfPluginMod::from(t: T) -> T
+impl<T> core_extensions::self_ops::SelfOps for df_plugin_api::DfPluginMod where T: ?core::marker::Sized
+impl<T> core_extensions::type_identity::TypeIdentity for df_plugin_api::DfPluginMod where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginMod::Type = T
+impl<T> either::into_either::IntoEither for df_plugin_api::DfPluginMod
+impl<T> typewit::type_identity::Identity for df_plugin_api::DfPluginMod where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginMod::Type = T
+pub const df_plugin_api::DfPluginMod::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<This> abi_stable::pointer_trait::TransmuteElement for df_plugin_api::DfPluginMod where This: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for df_plugin_api::DfPluginMod where V: ppv_lite86::types::MultiLane<T>
+pub fn df_plugin_api::DfPluginMod::vzip(self) -> V
+#[repr(C)] pub struct df_plugin_api::DfPluginMod_Prefix
+pub df_plugin_api::DfPluginMod_Prefix::create_table_provider: fn(name: abi_stable::std_types::str::RStr<'_>, options_json: abi_stable::std_types::option::ROption<abi_stable::std_types::string::RString>) -> df_plugin_api::DfResult<datafusion_ffi::table_provider::FFI_TableProvider>
+pub df_plugin_api::DfPluginMod_Prefix::exports: fn() -> df_plugin_api::DfPluginExportsV1
+pub df_plugin_api::DfPluginMod_Prefix::manifest: fn() -> df_plugin_api::DfPluginManifestV1
+pub df_plugin_api::DfPluginMod_Prefix::udf_bundle_with_options: fn(options_json: abi_stable::std_types::option::ROption<abi_stable::std_types::string::RString>) -> df_plugin_api::DfResult<df_plugin_api::DfUdfBundleV1>
+impl abi_stable::abi_stability::get_static_equivalent::GetStaticEquivalent_ for df_plugin_api::DfPluginMod_Prefix where df_plugin_api::DfPluginMod: abi_stable::prefix_type::PrefixTypeTrait
+pub type df_plugin_api::DfPluginMod_Prefix::StaticEquivalent = _static_DfPluginMod
+impl abi_stable::abi_stability::stable_abi_trait::PrefixStableAbi for df_plugin_api::DfPluginMod_Prefix where df_plugin_api::DfPluginMod: abi_stable::prefix_type::PrefixTypeTrait
+pub type df_plugin_api::DfPluginMod_Prefix::IsNonZeroType = core_extensions::type_level_bool::False
+pub const df_plugin_api::DfPluginMod_Prefix::LAYOUT: &'static abi_stable::type_layout::TypeLayout
+impl core::marker::Freeze for df_plugin_api::DfPluginMod_Prefix
+impl core::marker::Send for df_plugin_api::DfPluginMod_Prefix
+impl core::marker::Sync for df_plugin_api::DfPluginMod_Prefix
+impl core::marker::Unpin for df_plugin_api::DfPluginMod_Prefix
+impl core::marker::UnsafeUnpin for df_plugin_api::DfPluginMod_Prefix
+impl core::panic::unwind_safe::RefUnwindSafe for df_plugin_api::DfPluginMod_Prefix
+impl core::panic::unwind_safe::UnwindSafe for df_plugin_api::DfPluginMod_Prefix
+impl<S> repr_offset::ext::ROExtAcc for df_plugin_api::DfPluginMod_Prefix
+pub fn df_plugin_api::DfPluginMod_Prefix::f_get<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &F
+pub fn df_plugin_api::DfPluginMod_Prefix::f_get_mut<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &mut F
+pub fn df_plugin_api::DfPluginMod_Prefix::f_get_mut_ptr<F, A>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *mut F
+pub fn df_plugin_api::DfPluginMod_Prefix::f_get_ptr<F, A>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *const F
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Aligned> for df_plugin_api::DfPluginMod_Prefix
+pub fn df_plugin_api::DfPluginMod_Prefix::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginMod_Prefix::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginMod_Prefix::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, right: &mut S)
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Unaligned> for df_plugin_api::DfPluginMod_Prefix
+pub fn df_plugin_api::DfPluginMod_Prefix::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginMod_Prefix::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginMod_Prefix::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, right: &mut S)
+impl<T, U> core::convert::Into<U> for df_plugin_api::DfPluginMod_Prefix where U: core::convert::From<T>
+pub fn df_plugin_api::DfPluginMod_Prefix::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for df_plugin_api::DfPluginMod_Prefix where U: core::convert::Into<T>
+pub type df_plugin_api::DfPluginMod_Prefix::Error = core::convert::Infallible
+pub fn df_plugin_api::DfPluginMod_Prefix::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for df_plugin_api::DfPluginMod_Prefix where U: core::convert::TryFrom<T>
+pub type df_plugin_api::DfPluginMod_Prefix::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn df_plugin_api::DfPluginMod_Prefix::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for df_plugin_api::DfPluginMod_Prefix where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const df_plugin_api::DfPluginMod_Prefix::WITNESS: W
+impl<T> abi_stable::inline_storage::AlignerFor<1024> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo1024<T>
+impl<T> abi_stable::inline_storage::AlignerFor<128> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo128<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16384> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo16384<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo16<T>
+impl<T> abi_stable::inline_storage::AlignerFor<1> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo1<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2048> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo2048<T>
+impl<T> abi_stable::inline_storage::AlignerFor<256> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo256<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo2<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32768> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo32768<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo32<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4096> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo4096<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo4<T>
+impl<T> abi_stable::inline_storage::AlignerFor<512> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo512<T>
+impl<T> abi_stable::inline_storage::AlignerFor<64> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo64<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8192> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo8192<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8> for df_plugin_api::DfPluginMod_Prefix
+pub type df_plugin_api::DfPluginMod_Prefix::Aligner = abi_stable::inline_storage::alignment::AlignTo8<T>
+impl<T> arrow_buffer::alloc::Allocation for df_plugin_api::DfPluginMod_Prefix where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> core::any::Any for df_plugin_api::DfPluginMod_Prefix where T: 'static + ?core::marker::Sized
+pub fn df_plugin_api::DfPluginMod_Prefix::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for df_plugin_api::DfPluginMod_Prefix where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginMod_Prefix::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for df_plugin_api::DfPluginMod_Prefix where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginMod_Prefix::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for df_plugin_api::DfPluginMod_Prefix
+pub fn df_plugin_api::DfPluginMod_Prefix::from(t: T) -> T
+impl<T> core_extensions::self_ops::SelfOps for df_plugin_api::DfPluginMod_Prefix where T: ?core::marker::Sized
+impl<T> core_extensions::type_identity::TypeIdentity for df_plugin_api::DfPluginMod_Prefix where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginMod_Prefix::Type = T
+impl<T> either::into_either::IntoEither for df_plugin_api::DfPluginMod_Prefix
+impl<T> typewit::type_identity::Identity for df_plugin_api::DfPluginMod_Prefix where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginMod_Prefix::Type = T
+pub const df_plugin_api::DfPluginMod_Prefix::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<This> abi_stable::pointer_trait::TransmuteElement for df_plugin_api::DfPluginMod_Prefix where This: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for df_plugin_api::DfPluginMod_Prefix where V: ppv_lite86::types::MultiLane<T>
+pub fn df_plugin_api::DfPluginMod_Prefix::vzip(self) -> V
+#[repr(transparent)] pub struct df_plugin_api::DfPluginMod_Ref(pub abi_stable::prefix_type::prefix_ref::PrefixRef<df_plugin_api::DfPluginMod_Prefix>)
+impl df_plugin_api::DfPluginMod_Ref
+pub fn df_plugin_api::DfPluginMod_Ref::_prefix_type_layout(self) -> &'static abi_stable::prefix_type::layout::PTStructLayout
+impl df_plugin_api::DfPluginMod_Ref
+pub fn df_plugin_api::DfPluginMod_Ref::create_table_provider(&self) -> fn(name: abi_stable::std_types::str::RStr<'_>, options_json: abi_stable::std_types::option::ROption<abi_stable::std_types::string::RString>) -> df_plugin_api::DfResult<datafusion_ffi::table_provider::FFI_TableProvider>
+pub fn df_plugin_api::DfPluginMod_Ref::exports(&self) -> fn() -> df_plugin_api::DfPluginExportsV1
+pub fn df_plugin_api::DfPluginMod_Ref::manifest(&self) -> fn() -> df_plugin_api::DfPluginManifestV1
+pub fn df_plugin_api::DfPluginMod_Ref::udf_bundle_with_options(&self) -> fn(options_json: abi_stable::std_types::option::ROption<abi_stable::std_types::string::RString>) -> df_plugin_api::DfResult<df_plugin_api::DfUdfBundleV1>
+impl abi_stable::abi_stability::get_static_equivalent::GetStaticEquivalent_ for df_plugin_api::DfPluginMod_Ref where df_plugin_api::DfPluginMod: abi_stable::prefix_type::PrefixTypeTrait
+pub type df_plugin_api::DfPluginMod_Ref::StaticEquivalent = abi_stable::prefix_type::prefix_ref::PrefixRef<_static_DfPluginMod>
+impl abi_stable::abi_stability::stable_abi_trait::StableAbi for df_plugin_api::DfPluginMod_Ref where df_plugin_api::DfPluginMod: abi_stable::prefix_type::PrefixTypeTrait
+pub type df_plugin_api::DfPluginMod_Ref::IsNonZeroType = core_extensions::type_level_bool::True
+pub const df_plugin_api::DfPluginMod_Ref::LAYOUT: &'static abi_stable::type_layout::TypeLayout
+impl abi_stable::library::root_mod_trait::RootModule for df_plugin_api::DfPluginMod_Ref
+pub const df_plugin_api::DfPluginMod_Ref::BASE_NAME: &'static str
+pub const df_plugin_api::DfPluginMod_Ref::NAME: &'static str
+pub const df_plugin_api::DfPluginMod_Ref::VERSION_STRINGS: abi_stable::sabi_types::version::VersionStrings
+pub fn df_plugin_api::DfPluginMod_Ref::root_module_statics() -> &'static abi_stable::library::RootModuleStatics<df_plugin_api::DfPluginMod_Ref>
+impl abi_stable::pointer_trait::GetPointerKind for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Kind = abi_stable::pointer_trait::PK_Reference
+pub type df_plugin_api::DfPluginMod_Ref::PtrTarget = abi_stable::prefix_type::WithMetadata_<df_plugin_api::DfPluginMod_Prefix, df_plugin_api::DfPluginMod_Prefix>
+impl abi_stable::prefix_type::PrefixRefTrait for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::PrefixFields = df_plugin_api::DfPluginMod_Prefix
+impl core::clone::Clone for df_plugin_api::DfPluginMod_Ref
+pub fn df_plugin_api::DfPluginMod_Ref::clone(&self) -> Self
+impl core::marker::Copy for df_plugin_api::DfPluginMod_Ref
+impl core::marker::Freeze for df_plugin_api::DfPluginMod_Ref
+impl core::marker::Send for df_plugin_api::DfPluginMod_Ref
+impl core::marker::Sync for df_plugin_api::DfPluginMod_Ref
+impl core::marker::Unpin for df_plugin_api::DfPluginMod_Ref
+impl core::marker::UnsafeUnpin for df_plugin_api::DfPluginMod_Ref
+impl core::panic::unwind_safe::RefUnwindSafe for df_plugin_api::DfPluginMod_Ref
+impl core::panic::unwind_safe::UnwindSafe for df_plugin_api::DfPluginMod_Ref
+impl<'a, T> abi_stable::std_types::cow::RCowCompatibleRef<'a> for df_plugin_api::DfPluginMod_Ref where T: core::clone::Clone + 'a
+pub type df_plugin_api::DfPluginMod_Ref::ROwned = T
+pub type df_plugin_api::DfPluginMod_Ref::RefC = &'a T
+pub fn df_plugin_api::DfPluginMod_Ref::as_c_ref(from: &'a T) -> <T as abi_stable::std_types::cow::RCowCompatibleRef<'a>>::RefC
+pub fn df_plugin_api::DfPluginMod_Ref::as_rust_ref(from: <T as abi_stable::std_types::cow::RCowCompatibleRef<'a>>::RefC) -> &'a T
+impl<M> abi_stable::library::errors::IntoRootModuleResult for df_plugin_api::DfPluginMod_Ref where M: abi_stable::library::root_mod_trait::RootModule
+pub type df_plugin_api::DfPluginMod_Ref::Module = M
+pub fn df_plugin_api::DfPluginMod_Ref::into_root_module_result(self) -> core::result::Result<M, abi_stable::library::errors::RootModuleError>
+impl<S> repr_offset::ext::ROExtAcc for df_plugin_api::DfPluginMod_Ref
+pub fn df_plugin_api::DfPluginMod_Ref::f_get<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &F
+pub fn df_plugin_api::DfPluginMod_Ref::f_get_mut<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &mut F
+pub fn df_plugin_api::DfPluginMod_Ref::f_get_mut_ptr<F, A>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *mut F
+pub fn df_plugin_api::DfPluginMod_Ref::f_get_ptr<F, A>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *const F
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Aligned> for df_plugin_api::DfPluginMod_Ref
+pub fn df_plugin_api::DfPluginMod_Ref::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginMod_Ref::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginMod_Ref::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, right: &mut S)
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Unaligned> for df_plugin_api::DfPluginMod_Ref
+pub fn df_plugin_api::DfPluginMod_Ref::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfPluginMod_Ref::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, value: F) -> F
+pub fn df_plugin_api::DfPluginMod_Ref::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, right: &mut S)
+impl<T, U> core::convert::Into<U> for df_plugin_api::DfPluginMod_Ref where U: core::convert::From<T>
+pub fn df_plugin_api::DfPluginMod_Ref::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for df_plugin_api::DfPluginMod_Ref where U: core::convert::Into<T>
+pub type df_plugin_api::DfPluginMod_Ref::Error = core::convert::Infallible
+pub fn df_plugin_api::DfPluginMod_Ref::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for df_plugin_api::DfPluginMod_Ref where U: core::convert::TryFrom<T>
+pub type df_plugin_api::DfPluginMod_Ref::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn df_plugin_api::DfPluginMod_Ref::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for df_plugin_api::DfPluginMod_Ref where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const df_plugin_api::DfPluginMod_Ref::WITNESS: W
+impl<T> abi_stable::inline_storage::AlignerFor<1024> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo1024<T>
+impl<T> abi_stable::inline_storage::AlignerFor<128> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo128<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16384> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo16384<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo16<T>
+impl<T> abi_stable::inline_storage::AlignerFor<1> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo1<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2048> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo2048<T>
+impl<T> abi_stable::inline_storage::AlignerFor<256> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo256<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo2<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32768> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo32768<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo32<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4096> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo4096<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo4<T>
+impl<T> abi_stable::inline_storage::AlignerFor<512> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo512<T>
+impl<T> abi_stable::inline_storage::AlignerFor<64> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo64<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8192> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo8192<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8> for df_plugin_api::DfPluginMod_Ref
+pub type df_plugin_api::DfPluginMod_Ref::Aligner = abi_stable::inline_storage::alignment::AlignTo8<T>
+impl<T> abi_stable::pointer_trait::ImmutableRef for df_plugin_api::DfPluginMod_Ref where T: core::marker::Copy + abi_stable::pointer_trait::GetPointerKind<Kind = abi_stable::pointer_trait::PK_Reference>
+impl<T> alloc::borrow::ToOwned for df_plugin_api::DfPluginMod_Ref where T: core::clone::Clone
+pub type df_plugin_api::DfPluginMod_Ref::Owned = T
+pub fn df_plugin_api::DfPluginMod_Ref::clone_into(&self, target: &mut T)
+pub fn df_plugin_api::DfPluginMod_Ref::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for df_plugin_api::DfPluginMod_Ref where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> core::any::Any for df_plugin_api::DfPluginMod_Ref where T: 'static + ?core::marker::Sized
+pub fn df_plugin_api::DfPluginMod_Ref::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for df_plugin_api::DfPluginMod_Ref where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginMod_Ref::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for df_plugin_api::DfPluginMod_Ref where T: ?core::marker::Sized
+pub fn df_plugin_api::DfPluginMod_Ref::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for df_plugin_api::DfPluginMod_Ref where T: core::clone::Clone
+pub unsafe fn df_plugin_api::DfPluginMod_Ref::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for df_plugin_api::DfPluginMod_Ref
+pub fn df_plugin_api::DfPluginMod_Ref::from(t: T) -> T
+impl<T> core_extensions::self_ops::SelfOps for df_plugin_api::DfPluginMod_Ref where T: ?core::marker::Sized
+impl<T> core_extensions::type_identity::TypeIdentity for df_plugin_api::DfPluginMod_Ref where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginMod_Ref::Type = T
+impl<T> either::into_either::IntoEither for df_plugin_api::DfPluginMod_Ref
+impl<T> typewit::type_identity::Identity for df_plugin_api::DfPluginMod_Ref where T: ?core::marker::Sized
+pub type df_plugin_api::DfPluginMod_Ref::Type = T
+pub const df_plugin_api::DfPluginMod_Ref::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<This> abi_stable::pointer_trait::TransmuteElement for df_plugin_api::DfPluginMod_Ref where This: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for df_plugin_api::DfPluginMod_Ref where V: ppv_lite86::types::MultiLane<T>
+pub fn df_plugin_api::DfPluginMod_Ref::vzip(self) -> V
+#[repr(C)] pub struct df_plugin_api::DfTableFunctionV1
+pub df_plugin_api::DfTableFunctionV1::function: datafusion_ffi::udtf::FFI_TableFunction
+pub df_plugin_api::DfTableFunctionV1::name: abi_stable::std_types::string::RString
+impl abi_stable::abi_stability::get_static_equivalent::GetStaticEquivalent_ for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::StaticEquivalent = _static_DfTableFunctionV1
+impl abi_stable::abi_stability::stable_abi_trait::StableAbi for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::IsNonZeroType = core_extensions::type_level_bool::False
+pub const df_plugin_api::DfTableFunctionV1::LAYOUT: &'static abi_stable::type_layout::TypeLayout
+impl core::marker::Freeze for df_plugin_api::DfTableFunctionV1
+impl core::marker::Send for df_plugin_api::DfTableFunctionV1
+impl core::marker::Sync for df_plugin_api::DfTableFunctionV1
+impl core::marker::Unpin for df_plugin_api::DfTableFunctionV1
+impl core::marker::UnsafeUnpin for df_plugin_api::DfTableFunctionV1
+impl core::panic::unwind_safe::RefUnwindSafe for df_plugin_api::DfTableFunctionV1
+impl core::panic::unwind_safe::UnwindSafe for df_plugin_api::DfTableFunctionV1
+impl<S> repr_offset::ext::ROExtAcc for df_plugin_api::DfTableFunctionV1
+pub fn df_plugin_api::DfTableFunctionV1::f_get<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &F
+pub fn df_plugin_api::DfTableFunctionV1::f_get_mut<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &mut F
+pub fn df_plugin_api::DfTableFunctionV1::f_get_mut_ptr<F, A>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *mut F
+pub fn df_plugin_api::DfTableFunctionV1::f_get_ptr<F, A>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *const F
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Aligned> for df_plugin_api::DfTableFunctionV1
+pub fn df_plugin_api::DfTableFunctionV1::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfTableFunctionV1::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, value: F) -> F
+pub fn df_plugin_api::DfTableFunctionV1::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, right: &mut S)
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Unaligned> for df_plugin_api::DfTableFunctionV1
+pub fn df_plugin_api::DfTableFunctionV1::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfTableFunctionV1::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, value: F) -> F
+pub fn df_plugin_api::DfTableFunctionV1::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, right: &mut S)
+impl<T, U> core::convert::Into<U> for df_plugin_api::DfTableFunctionV1 where U: core::convert::From<T>
+pub fn df_plugin_api::DfTableFunctionV1::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for df_plugin_api::DfTableFunctionV1 where U: core::convert::Into<T>
+pub type df_plugin_api::DfTableFunctionV1::Error = core::convert::Infallible
+pub fn df_plugin_api::DfTableFunctionV1::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for df_plugin_api::DfTableFunctionV1 where U: core::convert::TryFrom<T>
+pub type df_plugin_api::DfTableFunctionV1::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn df_plugin_api::DfTableFunctionV1::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for df_plugin_api::DfTableFunctionV1 where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const df_plugin_api::DfTableFunctionV1::WITNESS: W
+impl<T> abi_stable::inline_storage::AlignerFor<1024> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo1024<T>
+impl<T> abi_stable::inline_storage::AlignerFor<128> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo128<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16384> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo16384<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo16<T>
+impl<T> abi_stable::inline_storage::AlignerFor<1> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo1<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2048> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo2048<T>
+impl<T> abi_stable::inline_storage::AlignerFor<256> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo256<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo2<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32768> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo32768<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo32<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4096> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo4096<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo4<T>
+impl<T> abi_stable::inline_storage::AlignerFor<512> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo512<T>
+impl<T> abi_stable::inline_storage::AlignerFor<64> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo64<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8192> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo8192<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8> for df_plugin_api::DfTableFunctionV1
+pub type df_plugin_api::DfTableFunctionV1::Aligner = abi_stable::inline_storage::alignment::AlignTo8<T>
+impl<T> arrow_buffer::alloc::Allocation for df_plugin_api::DfTableFunctionV1 where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> core::any::Any for df_plugin_api::DfTableFunctionV1 where T: 'static + ?core::marker::Sized
+pub fn df_plugin_api::DfTableFunctionV1::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for df_plugin_api::DfTableFunctionV1 where T: ?core::marker::Sized
+pub fn df_plugin_api::DfTableFunctionV1::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for df_plugin_api::DfTableFunctionV1 where T: ?core::marker::Sized
+pub fn df_plugin_api::DfTableFunctionV1::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for df_plugin_api::DfTableFunctionV1
+pub fn df_plugin_api::DfTableFunctionV1::from(t: T) -> T
+impl<T> core_extensions::self_ops::SelfOps for df_plugin_api::DfTableFunctionV1 where T: ?core::marker::Sized
+impl<T> core_extensions::type_identity::TypeIdentity for df_plugin_api::DfTableFunctionV1 where T: ?core::marker::Sized
+pub type df_plugin_api::DfTableFunctionV1::Type = T
+impl<T> either::into_either::IntoEither for df_plugin_api::DfTableFunctionV1
+impl<T> typewit::type_identity::Identity for df_plugin_api::DfTableFunctionV1 where T: ?core::marker::Sized
+pub type df_plugin_api::DfTableFunctionV1::Type = T
+pub const df_plugin_api::DfTableFunctionV1::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<This> abi_stable::pointer_trait::TransmuteElement for df_plugin_api::DfTableFunctionV1 where This: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for df_plugin_api::DfTableFunctionV1 where V: ppv_lite86::types::MultiLane<T>
+pub fn df_plugin_api::DfTableFunctionV1::vzip(self) -> V
+#[repr(C)] pub struct df_plugin_api::DfUdfBundleV1
+pub df_plugin_api::DfUdfBundleV1::aggregate: abi_stable::std_types::vec::private::RVec<datafusion_ffi::udaf::FFI_AggregateUDF>
+pub df_plugin_api::DfUdfBundleV1::scalar: abi_stable::std_types::vec::private::RVec<datafusion_ffi::udf::FFI_ScalarUDF>
+pub df_plugin_api::DfUdfBundleV1::window: abi_stable::std_types::vec::private::RVec<datafusion_ffi::udwf::FFI_WindowUDF>
+impl abi_stable::abi_stability::get_static_equivalent::GetStaticEquivalent_ for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::StaticEquivalent = _static_DfUdfBundleV1
+impl abi_stable::abi_stability::stable_abi_trait::StableAbi for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::IsNonZeroType = core_extensions::type_level_bool::False
+pub const df_plugin_api::DfUdfBundleV1::LAYOUT: &'static abi_stable::type_layout::TypeLayout
+impl core::marker::Freeze for df_plugin_api::DfUdfBundleV1
+impl core::marker::Send for df_plugin_api::DfUdfBundleV1
+impl core::marker::Sync for df_plugin_api::DfUdfBundleV1
+impl core::marker::Unpin for df_plugin_api::DfUdfBundleV1
+impl core::marker::UnsafeUnpin for df_plugin_api::DfUdfBundleV1
+impl core::panic::unwind_safe::RefUnwindSafe for df_plugin_api::DfUdfBundleV1
+impl core::panic::unwind_safe::UnwindSafe for df_plugin_api::DfUdfBundleV1
+impl<S> repr_offset::ext::ROExtAcc for df_plugin_api::DfUdfBundleV1
+pub fn df_plugin_api::DfUdfBundleV1::f_get<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &F
+pub fn df_plugin_api::DfUdfBundleV1::f_get_mut<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> &mut F
+pub fn df_plugin_api::DfUdfBundleV1::f_get_mut_ptr<F, A>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *mut F
+pub fn df_plugin_api::DfUdfBundleV1::f_get_ptr<F, A>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, A>) -> *const F
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Aligned> for df_plugin_api::DfUdfBundleV1
+pub fn df_plugin_api::DfUdfBundleV1::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfUdfBundleV1::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, value: F) -> F
+pub fn df_plugin_api::DfUdfBundleV1::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Aligned>, right: &mut S)
+impl<S> repr_offset::ext::ROExtOps<repr_offset::alignment::Unaligned> for df_plugin_api::DfUdfBundleV1
+pub fn df_plugin_api::DfUdfBundleV1::f_get_copy<F>(&self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>) -> F where F: core::marker::Copy
+pub fn df_plugin_api::DfUdfBundleV1::f_replace<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, value: F) -> F
+pub fn df_plugin_api::DfUdfBundleV1::f_swap<F>(&mut self, offset: repr_offset::struct_field_offset::FieldOffset<S, F, repr_offset::alignment::Unaligned>, right: &mut S)
+impl<T, U> core::convert::Into<U> for df_plugin_api::DfUdfBundleV1 where U: core::convert::From<T>
+pub fn df_plugin_api::DfUdfBundleV1::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for df_plugin_api::DfUdfBundleV1 where U: core::convert::Into<T>
+pub type df_plugin_api::DfUdfBundleV1::Error = core::convert::Infallible
+pub fn df_plugin_api::DfUdfBundleV1::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for df_plugin_api::DfUdfBundleV1 where U: core::convert::TryFrom<T>
+pub type df_plugin_api::DfUdfBundleV1::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn df_plugin_api::DfUdfBundleV1::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for df_plugin_api::DfUdfBundleV1 where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const df_plugin_api::DfUdfBundleV1::WITNESS: W
+impl<T> abi_stable::inline_storage::AlignerFor<1024> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo1024<T>
+impl<T> abi_stable::inline_storage::AlignerFor<128> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo128<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16384> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo16384<T>
+impl<T> abi_stable::inline_storage::AlignerFor<16> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo16<T>
+impl<T> abi_stable::inline_storage::AlignerFor<1> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo1<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2048> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo2048<T>
+impl<T> abi_stable::inline_storage::AlignerFor<256> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo256<T>
+impl<T> abi_stable::inline_storage::AlignerFor<2> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo2<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32768> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo32768<T>
+impl<T> abi_stable::inline_storage::AlignerFor<32> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo32<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4096> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo4096<T>
+impl<T> abi_stable::inline_storage::AlignerFor<4> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo4<T>
+impl<T> abi_stable::inline_storage::AlignerFor<512> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo512<T>
+impl<T> abi_stable::inline_storage::AlignerFor<64> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo64<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8192> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo8192<T>
+impl<T> abi_stable::inline_storage::AlignerFor<8> for df_plugin_api::DfUdfBundleV1
+pub type df_plugin_api::DfUdfBundleV1::Aligner = abi_stable::inline_storage::alignment::AlignTo8<T>
+impl<T> arrow_buffer::alloc::Allocation for df_plugin_api::DfUdfBundleV1 where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> core::any::Any for df_plugin_api::DfUdfBundleV1 where T: 'static + ?core::marker::Sized
+pub fn df_plugin_api::DfUdfBundleV1::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for df_plugin_api::DfUdfBundleV1 where T: ?core::marker::Sized
+pub fn df_plugin_api::DfUdfBundleV1::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for df_plugin_api::DfUdfBundleV1 where T: ?core::marker::Sized
+pub fn df_plugin_api::DfUdfBundleV1::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for df_plugin_api::DfUdfBundleV1
+pub fn df_plugin_api::DfUdfBundleV1::from(t: T) -> T
+impl<T> core_extensions::self_ops::SelfOps for df_plugin_api::DfUdfBundleV1 where T: ?core::marker::Sized
+impl<T> core_extensions::type_identity::TypeIdentity for df_plugin_api::DfUdfBundleV1 where T: ?core::marker::Sized
+pub type df_plugin_api::DfUdfBundleV1::Type = T
+impl<T> either::into_either::IntoEither for df_plugin_api::DfUdfBundleV1
+impl<T> typewit::type_identity::Identity for df_plugin_api::DfUdfBundleV1 where T: ?core::marker::Sized
+pub type df_plugin_api::DfUdfBundleV1::Type = T
+pub const df_plugin_api::DfUdfBundleV1::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<This> abi_stable::pointer_trait::TransmuteElement for df_plugin_api::DfUdfBundleV1 where This: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for df_plugin_api::DfUdfBundleV1 where V: ppv_lite86::types::MultiLane<T>
+pub fn df_plugin_api::DfUdfBundleV1::vzip(self) -> V
+pub const df_plugin_api::DF_PLUGIN_ABI_MAJOR: u16
+pub const df_plugin_api::DF_PLUGIN_ABI_MINOR: u16
+pub type df_plugin_api::DfResult<T> = abi_stable::std_types::result::RResult<T, abi_stable::std_types::string::RString>

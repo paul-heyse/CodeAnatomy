@@ -79,6 +79,11 @@ class GaugeStore:
         with self._lock:
             self._values[key] = value
 
+    def clear(self) -> None:
+        """Clear all stored gauge values."""
+        with self._lock:
+            self._values.clear()
+
     def snapshot_values(self) -> dict[str, float]:
         """Return the latest gauge values as a mapping.
 
@@ -127,7 +132,10 @@ class MetricsRegistry:
     scan_fragments_gauge: metrics.ObservableGauge
 
 
-_REGISTRY_CACHE: dict[str, MetricsRegistry | None] = {"value": None}
+_REGISTRY_CACHE: dict[str, MetricsRegistry | int | None] = {
+    "value": None,
+    "provider_id": None,
+}
 
 
 def _meter() -> metrics.Meter:
@@ -279,13 +287,24 @@ def metric_views() -> list[View]:
 
 
 def reset_metrics_registry() -> None:
-    """Reset cached metric instruments so they can be re-created."""
-    _REGISTRY_CACHE["value"] = None
+    """Reset runtime gauge values without breaking instrument callbacks."""
+    cached = _REGISTRY_CACHE["value"]
+    if isinstance(cached, MetricsRegistry):
+        cached.dataset_rows.clear()
+        cached.dataset_columns.clear()
+        cached.scan_row_groups.clear()
+        cached.scan_fragments.clear()
 
 
 def _registry() -> MetricsRegistry:
     cached = _REGISTRY_CACHE["value"]
-    if cached is not None:
+    current_provider_id = id(metrics.get_meter_provider())
+    cached_provider_id = _REGISTRY_CACHE["provider_id"]
+    if (
+        isinstance(cached, MetricsRegistry)
+        and isinstance(cached_provider_id, int)
+        and cached_provider_id == current_provider_id
+    ):
         return cached
     meter = _meter()
     dataset_rows_store = GaugeStore.create(
@@ -393,6 +412,7 @@ def _registry() -> MetricsRegistry:
         scan_fragments_gauge=scan_fragments_gauge,
     )
     _REGISTRY_CACHE["value"] = registry
+    _REGISTRY_CACHE["provider_id"] = current_provider_id
     return registry
 
 

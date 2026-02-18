@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from cyclopts import App
 from cyclopts.bind import normalize_tokens
@@ -15,7 +16,10 @@ from tools.cq.cli_app.result_action import (
     apply_result_action,
 )
 from tools.cq.cli_app.telemetry_events import CqInvokeEvent, build_invoke_event
-from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
+from tools.cq.utils.uuid_temporal_contracts import (
+    RunIdentityContractV1,
+    resolve_run_identity_contract,
+)
 
 _INVOCATION_RUNTIME_ERRORS = (OSError, RuntimeError, TypeError, ValueError)
 
@@ -45,31 +49,33 @@ def _event_from_outcome(event: CqInvokeEvent) -> CqInvokeEvent:
     return build_invoke_event(event)
 
 
+@dataclass(frozen=True, slots=True)
+class _InvokeOutcome:
+    ok: bool
+    command: str | None
+    parse_ms: float
+    exec_ms: float
+    exit_code: int
+    error_class: str | None = None
+    error_stage: str | None = None
+
+
 def _build_event(
-    *,
-    ok: bool,
-    command: str | None,
-    parse_ms: float,
-    exec_ms: float,
-    exit_code: int,
-    event_id: str | None,
-    event_uuid_version: int | None,
-    event_created_ms: int | None,
-    error_class: str | None = None,
-    error_stage: str | None = None,
+    outcome: _InvokeOutcome,
+    identity: RunIdentityContractV1,
 ) -> CqInvokeEvent:
     return _event_from_outcome(
         CqInvokeEvent(
-            ok=ok,
-            command=command,
-            parse_ms=parse_ms,
-            exec_ms=exec_ms,
-            exit_code=exit_code,
-            error_class=error_class,
-            error_stage=error_stage,
-            event_id=event_id,
-            event_uuid_version=event_uuid_version,
-            event_created_ms=event_created_ms,
+            ok=outcome.ok,
+            command=outcome.command,
+            parse_ms=outcome.parse_ms,
+            exec_ms=outcome.exec_ms,
+            exit_code=outcome.exit_code,
+            error_class=outcome.error_class,
+            error_stage=outcome.error_stage,
+            event_id=identity.run_id,
+            event_uuid_version=identity.run_uuid_version,
+            event_created_ms=identity.run_created_ms,
         )
     )
 
@@ -114,60 +120,60 @@ def invoke_with_telemetry(
             except CycloptsError as exc:
                 exec_ms = (time.perf_counter() - t1) * 1000.0
                 event = _build_event(
-                    ok=False,
-                    command=command_name,
-                    parse_ms=parse_ms,
-                    exec_ms=exec_ms,
-                    exit_code=2,
-                    error_class=f"cyclopts.{exc.__class__.__name__}",
-                    error_stage=_classify_error_stage(exc),
-                    event_id=event_identity.run_id,
-                    event_uuid_version=event_identity.run_uuid_version,
-                    event_created_ms=event_identity.run_created_ms,
+                    _InvokeOutcome(
+                        ok=False,
+                        command=command_name,
+                        parse_ms=parse_ms,
+                        exec_ms=exec_ms,
+                        exit_code=2,
+                        error_class=f"cyclopts.{exc.__class__.__name__}",
+                        error_stage=_classify_error_stage(exc),
+                    ),
+                    event_identity,
                 )
                 return 2, event
             else:
                 exit_code = _apply_result_action(app, result)
                 exec_ms = (time.perf_counter() - t1) * 1000.0
                 event = _build_event(
-                    ok=True,
-                    command=command_name,
-                    parse_ms=parse_ms,
-                    exec_ms=exec_ms,
-                    exit_code=exit_code,
-                    event_id=event_identity.run_id,
-                    event_uuid_version=event_identity.run_uuid_version,
-                    event_created_ms=event_identity.run_created_ms,
+                    _InvokeOutcome(
+                        ok=True,
+                        command=command_name,
+                        parse_ms=parse_ms,
+                        exec_ms=exec_ms,
+                        exit_code=exit_code,
+                    ),
+                    event_identity,
                 )
                 return exit_code, event
         except CycloptsError as exc:
             parse_ms = (time.perf_counter() - t0) * 1000.0
             event = _build_event(
-                ok=False,
-                command=command_name,
-                parse_ms=parse_ms,
-                exec_ms=0.0,
-                exit_code=2,
-                error_class=f"cyclopts.{exc.__class__.__name__}",
-                error_stage=_classify_error_stage(exc),
-                event_id=event_identity.run_id,
-                event_uuid_version=event_identity.run_uuid_version,
-                event_created_ms=event_identity.run_created_ms,
+                _InvokeOutcome(
+                    ok=False,
+                    command=command_name,
+                    parse_ms=parse_ms,
+                    exec_ms=0.0,
+                    exit_code=2,
+                    error_class=f"cyclopts.{exc.__class__.__name__}",
+                    error_stage=_classify_error_stage(exc),
+                ),
+                event_identity,
             )
             return 2, event
         except _INVOCATION_RUNTIME_ERRORS as exc:
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             event = _build_event(
-                ok=False,
-                command=command_name,
-                parse_ms=elapsed_ms,
-                exec_ms=elapsed_ms,
-                exit_code=1,
-                error_class=f"runtime.{exc.__class__.__name__}",
-                error_stage="execution",
-                event_id=event_identity.run_id,
-                event_uuid_version=event_identity.run_uuid_version,
-                event_created_ms=event_identity.run_created_ms,
+                _InvokeOutcome(
+                    ok=False,
+                    command=command_name,
+                    parse_ms=elapsed_ms,
+                    exec_ms=elapsed_ms,
+                    exit_code=1,
+                    error_class=f"runtime.{exc.__class__.__name__}",
+                    error_stage="execution",
+                ),
+                event_identity,
             )
             return 1, event
 

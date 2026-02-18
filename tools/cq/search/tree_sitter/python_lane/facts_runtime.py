@@ -580,7 +580,15 @@ def _build_payload(
         payload["enrichment_status"] = "degraded"
     canonical = canonicalize_python_lane_payload(payload)
     builtins_value = msgspec.to_builtins(canonical, str_keys=True)
-    return builtins_value if isinstance(builtins_value, dict) else payload
+    if not isinstance(builtins_value, dict):
+        return payload
+    merged = dict(builtins_value)
+    for key, value in payload.items():
+        if key == "tree_sitter_diagnostics":
+            continue
+        if key not in merged:
+            merged[key] = value
+    return merged
 
 
 def _build_query_settings(

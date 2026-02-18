@@ -338,3 +338,41 @@ NIGHTLY_TOOLCHAIN=nightly-2026-02-10 ./generate_df52_rustdoc_md.sh
 
 
 [1]: https://github.com/Crazytieguy/cargo-doc-md "GitHub - Crazytieguy/cargo-doc-md: Convert rustdoc JSON output to clean, LLM-friendly markdown documentation"
+
+Yes — **DataFusion 52 is compatible with delta-rs (`deltalake`)**, as long as you use a delta-rs release that’s built against the **DataFusion 52.x** crate line.
+
+In particular, **`deltalake-core 0.31.0`** has an *optional* dependency on **`datafusion ^52.1.0`** (and the related DataFusion crates) for its integration layer. ([Docs.rs][1])
+
+## Which Rust crates you need (delta-rs)
+
+### Minimal (local filesystem, just query Delta via DataFusion)
+
+* **`deltalake-core`** with feature **`datafusion`**
+  The `datafusion` feature pulls in DataFusion + the extra DataFusion crates delta-rs uses (`datafusion-datasource`, `datafusion-physical-expr-adapter`, `datafusion-proto`). ([Docs.rs][2])
+
+**Cargo.toml**
+
+```toml
+[dependencies]
+deltalake-core = { version = "0.31.0", features = ["datafusion"] }
+# optional: add explicitly if you want direct access; otherwise it comes via the feature
+datafusion = "52.1"
+```
+
+### If you want the “one dependency” umbrella + storage/catalog add-ons
+
+Use the meta crate **`deltalake`** (it depends on `deltalake-core`) and optionally pulls in extra crates for storage backends and catalogs, e.g.: ([Docs.rs][3])
+
+* `deltalake-aws` (S3/MinIO/R2)
+* `deltalake-azure` (Azure Blob / ADLS Gen2 / OneLake)
+* `deltalake-gcp` (GCS)
+* `deltalake-hdfs`
+* `deltalake-lakefs`
+* `deltalake-catalog-glue`, `deltalake-catalog-unity`
+
+(Delta tables can be registered into DataFusion and benefit from Delta’s log metadata for **file-level skipping**, on top of Parquet row-group pruning.) ([delta-io.github.io][4])
+
+[1]: https://docs.rs/crate/deltalake-core/%5E0.31.0 "deltalake-core 0.31.0 - Docs.rs"
+[2]: https://docs.rs/crate/deltalake-core/0.31.0/features "deltalake-core 0.31.0 - Docs.rs"
+[3]: https://docs.rs/crate/deltalake/latest "deltalake 0.31.0 - Docs.rs"
+[4]: https://delta-io.github.io/delta-rs/integrations/delta-lake-datafusion/ "DataFusion - Delta Lake Documentation"

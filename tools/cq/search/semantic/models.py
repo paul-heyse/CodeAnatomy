@@ -169,10 +169,7 @@ def _build_locals_preview(
         if python_facts is not None and python_facts.structure is not None
         else _coerce_string_rows(payload.get("scope_chain"), limit=8)
     )
-    rows: list[dict[str, object]] = [
-        {"kind": "scope", "name": scope}
-        for scope in scope_chain[:8]
-    ]
+    rows: list[dict[str, object]] = [{"kind": "scope", "name": scope} for scope in scope_chain[:8]]
     qualified = (
         python_facts.resolution.qualified_name_candidates
         if python_facts is not None and python_facts.resolution is not None

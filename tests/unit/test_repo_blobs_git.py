@@ -10,8 +10,17 @@ import pytest
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from extract.git.blobs import RepoBlobOptions, scan_repo_blobs
+from extraction.rust_session_bridge import build_extraction_session, extraction_session_payload
 
 pygit2 = pytest.importorskip("pygit2")
+
+try:
+    _ = build_extraction_session(extraction_session_payload())
+except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+    pytest.skip(
+        f"Rust extraction-session bridge unavailable for repo blob tests: {exc}",
+        allow_module_level=True,
+    )
 
 if TYPE_CHECKING:
     from pygit2 import Oid, Repository
@@ -41,7 +50,9 @@ def _commit_file(repo: Repository, path: Path, content: str) -> str:
     return str(commit_id)
 
 
-def test_repo_blobs_source_ref_uses_committed_bytes(tmp_path: Path) -> None:
+def test_repo_blobs_source_ref_uses_committed_bytes(
+    tmp_path: Path,
+) -> None:
     """Ensure source_ref reads blob bytes from git, not the working tree."""
     repo = pygit2.init_repository(tmp_path, bare=False)
     repo_path = tmp_path / "file.py"
@@ -66,7 +77,9 @@ def test_repo_blobs_source_ref_uses_committed_bytes(tmp_path: Path) -> None:
     assert row["encoding"] == "utf-8"
 
 
-def test_repo_blobs_respects_size_limits_with_source_ref(tmp_path: Path) -> None:
+def test_repo_blobs_respects_size_limits_with_source_ref(
+    tmp_path: Path,
+) -> None:
     """Ensure max_file_bytes still filters rows when reading from git."""
     repo = pygit2.init_repository(tmp_path, bare=False)
     repo_path = tmp_path / "file.py"

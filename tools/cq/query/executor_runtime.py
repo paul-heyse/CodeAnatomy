@@ -630,7 +630,7 @@ def execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     Returns:
         CqResult: Entity query result from the extracted runtime path.
     """
-    from tools.cq.query.executor_runtime_entity import execute_entity_query as impl
+    from tools.cq.query.executor_runtime_entity import _execute_entity_query_impl as impl
 
     return impl(ctx)
 
@@ -641,7 +641,9 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     Returns:
         CqResult: Entity query result built from caller-provided records.
     """
-    from tools.cq.query.executor_runtime_entity import execute_entity_query_from_records as impl
+    from tools.cq.query.executor_runtime_entity import (
+        _execute_entity_query_from_records_impl as impl,
+    )
 
     return impl(request)
 
@@ -652,7 +654,7 @@ def execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     Returns:
         CqResult: Pattern query result from the extracted runtime path.
     """
-    from tools.cq.query.executor_runtime_pattern import execute_pattern_query as impl
+    from tools.cq.query.executor_runtime_pattern import _execute_pattern_query_impl as impl
 
     return impl(ctx)
 
@@ -663,7 +665,9 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     Returns:
         CqResult: Pattern query result built from caller-provided file inputs.
     """
-    from tools.cq.query.executor_runtime_pattern import execute_pattern_query_with_files as impl
+    from tools.cq.query.executor_runtime_pattern import (
+        _execute_pattern_query_with_files_impl as impl,
+    )
 
     return impl(request)
 

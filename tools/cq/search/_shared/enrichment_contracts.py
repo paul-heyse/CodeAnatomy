@@ -107,6 +107,67 @@ def _typed_row(value: object) -> dict[str, object]:
     return built if isinstance(built, dict) else {}
 
 
+_PYTHON_FACT_EXPORTS: tuple[tuple[str, str], ...] = (
+    ("resolution", "resolution"),
+    ("behavior", "behavior"),
+    ("structure", "structure"),
+    ("signature", "signature"),
+    ("call", "call"),
+    ("import", "import_"),
+    ("class_shape", "class_shape"),
+    ("locals", "locals"),
+    ("parse_quality", "parse_quality"),
+)
+_INCREMENTAL_MAPPING_EXPORTS: tuple[str, ...] = (
+    "semantic",
+    "sym",
+    "dis",
+    "inspect",
+    "compound",
+    "stage_status",
+    "stage_errors",
+    "timings_ms",
+    "session_errors",
+)
+
+
+def _merge_meta_row(out: dict[str, object], meta: EnrichmentMeta | None) -> None:
+    if meta is None:
+        return
+    out.update(_typed_row(meta))
+    out.setdefault("language", meta.language)
+    out.setdefault("enrichment_status", meta.enrichment_status)
+    out.setdefault("enrichment_sources", list(meta.enrichment_sources))
+
+
+def _merge_python_fact_rows(
+    out: dict[str, object],
+    facts: PythonEnrichmentFacts | None,
+) -> None:
+    if facts is None:
+        return
+    for export_key, fact_attr in _PYTHON_FACT_EXPORTS:
+        row = getattr(facts, fact_attr)
+        if row is not None:
+            out[export_key] = _typed_row(row)
+
+
+def _merge_incremental_fact_rows(
+    out: dict[str, object],
+    facts: IncrementalFacts | None,
+) -> None:
+    if facts is None:
+        return
+    if facts.anchor is not None:
+        out["anchor"] = _typed_row(facts.anchor)
+    for field_name in _INCREMENTAL_MAPPING_EXPORTS:
+        value = getattr(facts, field_name)
+        if value:
+            out[field_name] = dict(value)
+    if facts.details:
+        out["details"] = [dict(item) for item in facts.details]
+
+
 def _python_extras(payload: Mapping[str, object]) -> dict[str, object]:
     consumed = {
         "meta",
@@ -287,8 +348,7 @@ def rust_enrichment_payload(payload: RustTreeSitterEnrichmentV1 | None) -> dict[
     if payload is None:
         return {}
     out = dict(payload.extras)
-    if payload.meta is not None:
-        out.update(_typed_row(payload.meta))
+    _merge_meta_row(out, payload.meta)
     facts = payload.payload
     if facts is None:
         return out
@@ -313,29 +373,8 @@ def python_enrichment_payload(payload: PythonEnrichmentV1 | None) -> dict[str, o
     if payload is None:
         return {}
     out = dict(payload.extras)
-    if payload.meta is not None:
-        out.update(_typed_row(payload.meta))
-    facts = payload.payload
-    if facts is None:
-        return out
-    if facts.resolution is not None:
-        out["resolution"] = _typed_row(facts.resolution)
-    if facts.behavior is not None:
-        out["behavior"] = _typed_row(facts.behavior)
-    if facts.structure is not None:
-        out["structure"] = _typed_row(facts.structure)
-    if facts.signature is not None:
-        out["signature"] = _typed_row(facts.signature)
-    if facts.call is not None:
-        out["call"] = _typed_row(facts.call)
-    if facts.import_ is not None:
-        out["import"] = _typed_row(facts.import_)
-    if facts.class_shape is not None:
-        out["class_shape"] = _typed_row(facts.class_shape)
-    if facts.locals is not None:
-        out["locals"] = _typed_row(facts.locals)
-    if facts.parse_quality is not None:
-        out["parse_quality"] = _typed_row(facts.parse_quality)
+    _merge_meta_row(out, payload.meta)
+    _merge_python_fact_rows(out, payload.payload)
     return out
 
 
@@ -350,31 +389,7 @@ def incremental_enrichment_payload(payload: IncrementalEnrichmentV1 | None) -> d
     out = dict(payload.extras)
     out["schema_version"] = payload.schema_version
     out["mode"] = payload.mode.value
-    facts = payload.payload
-    if facts is None:
-        return out
-    if facts.anchor is not None:
-        out["anchor"] = _typed_row(facts.anchor)
-    if facts.semantic:
-        out["semantic"] = dict(facts.semantic)
-    if facts.sym:
-        out["sym"] = dict(facts.sym)
-    if facts.dis:
-        out["dis"] = dict(facts.dis)
-    if facts.inspect:
-        out["inspect"] = dict(facts.inspect)
-    if facts.compound:
-        out["compound"] = dict(facts.compound)
-    if facts.details:
-        out["details"] = [dict(item) for item in facts.details]
-    if facts.stage_status:
-        out["stage_status"] = dict(facts.stage_status)
-    if facts.stage_errors:
-        out["stage_errors"] = dict(facts.stage_errors)
-    if facts.timings_ms:
-        out["timings_ms"] = dict(facts.timings_ms)
-    if facts.session_errors:
-        out["session_errors"] = dict(facts.session_errors)
+    _merge_incremental_fact_rows(out, payload.payload)
     return out
 
 

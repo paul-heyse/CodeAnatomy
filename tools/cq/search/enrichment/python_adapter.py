@@ -13,6 +13,7 @@ from tools.cq.search._shared.enrichment_contracts import (
     incremental_enrichment_facts,
     incremental_enrichment_payload,
     python_enrichment_facts,
+    python_enrichment_payload,
 )
 from tools.cq.search.enrichment.contracts import (
     EnrichmentMeta,
@@ -38,31 +39,38 @@ def _to_mapping(value: object) -> dict[str, object]:
     return built if isinstance(built, dict) else {}
 
 
+_META_FIELD_KEYS: tuple[str, ...] = (
+    "language",
+    "enrichment_status",
+    "enrichment_sources",
+    "degrade_reason",
+    "payload_size_hint",
+    "dropped_fields",
+    "truncated_fields",
+)
+
+
+def _extract_meta_fields(payload: dict[str, object]) -> dict[str, object]:
+    meta: dict[str, object] = {}
+    for key in _META_FIELD_KEYS:
+        if key in payload:
+            meta[key] = payload.pop(key)
+    return meta
+
+
 def _raw_python_payload(wrapper: PythonEnrichmentV1) -> dict[str, object]:
-    payload = dict(wrapper.extras)
-    if wrapper.meta is not None:
-        payload["meta"] = _to_mapping(wrapper.meta)
-    facts = wrapper.payload
-    if facts is None:
-        return payload
-    if facts.resolution is not None:
-        payload["resolution"] = _to_mapping(facts.resolution)
-    if facts.behavior is not None:
-        payload["behavior"] = _to_mapping(facts.behavior)
-    if facts.structure is not None:
-        payload["structural"] = _to_mapping(facts.structure)
-    if facts.signature is not None:
-        payload["signature"] = _to_mapping(facts.signature)
-    if facts.call is not None:
-        payload["call"] = _to_mapping(facts.call)
-    if facts.import_ is not None:
-        payload["import"] = _to_mapping(facts.import_)
-    if facts.class_shape is not None:
-        payload["class_shape"] = _to_mapping(facts.class_shape)
-    if facts.locals is not None:
-        payload["locals"] = _to_mapping(facts.locals)
-    if facts.parse_quality is not None:
-        payload["parse_quality"] = _to_mapping(facts.parse_quality)
+    payload = python_enrichment_payload(wrapper)
+    structure = payload.pop("structure", None)
+    if isinstance(structure, Mapping):
+        payload["structural"] = dict(structure)
+    payload_meta = _extract_meta_fields(payload)
+    meta = _to_mapping(wrapper.meta) if wrapper.meta is not None else payload_meta
+    if not meta:
+        meta = payload_meta
+    if meta and "enrichment_status" not in meta:
+        meta["enrichment_status"] = "applied"
+    if meta:
+        payload["meta"] = meta
     return payload
 
 

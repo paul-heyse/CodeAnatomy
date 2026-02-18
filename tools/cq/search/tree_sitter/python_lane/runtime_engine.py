@@ -554,6 +554,20 @@ def _apply_capture_fields(
         _mark_degraded(payload, reason=type(exc).__name__)
 
 
+def _canonicalize_python_payload(payload: dict[str, object]) -> dict[str, object]:
+    canonical = canonicalize_python_lane_payload(payload)
+    builtins_value = msgspec.to_builtins(canonical, str_keys=True)
+    if not isinstance(builtins_value, dict):
+        return dict(payload)
+    merged = dict(builtins_value)
+    for key, value in payload.items():
+        if key == "tree_sitter_diagnostics":
+            continue
+        if key not in merged:
+            merged[key] = value
+    return merged
+
+
 def enrich_python_context_by_byte_range(
     source: str,
     *,
@@ -590,9 +604,7 @@ def enrich_python_context_by_byte_range(
         payload["enrichment_status"] = "skipped"
         payload["degrade_reason"] = "source_too_large"
         payload["parse_quality"] = default_parse_quality()
-        canonical = canonicalize_python_lane_payload(payload)
-        builtins_value = msgspec.to_builtins(canonical, str_keys=True)
-        return builtins_value if isinstance(builtins_value, dict) else payload
+        return _canonicalize_python_payload(payload)
 
     parsed = _parse_tree_for_enrichment(
         payload,
@@ -601,9 +613,7 @@ def enrich_python_context_by_byte_range(
         parse_session=effective_runtime.parse_session,
     )
     if parsed is None:
-        canonical = canonicalize_python_lane_payload(payload)
-        builtins_value = msgspec.to_builtins(canonical, str_keys=True)
-        return builtins_value if isinstance(builtins_value, dict) else payload
+        return _canonicalize_python_payload(payload)
 
     root, source_bytes, changed_ranges = parsed
     capture_window = _effective_capture_window(
@@ -657,9 +667,7 @@ def enrich_python_context_by_byte_range(
             byte_end=byte_end,
         ),
     )
-    canonical = canonicalize_python_lane_payload(payload)
-    builtins_value = msgspec.to_builtins(canonical, str_keys=True)
-    return builtins_value if isinstance(builtins_value, dict) else payload
+    return _canonicalize_python_payload(payload)
 
 
 __all__ = [

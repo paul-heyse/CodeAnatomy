@@ -190,7 +190,9 @@ def run_tree_sitter_stage(
                 key: value for key, value in ts_payload.items() if isinstance(key, str)
             }
             stage_patch = entrypoints.build_stage_fact_patch(tree_sitter_payload)
-            state.tree_sitter_stage = entrypoints.build_stage_facts_from_enrichment(stage_patch.facts)
+            state.tree_sitter_stage = entrypoints.build_stage_facts_from_enrichment(
+                stage_patch.facts
+            )
             entrypoints.ingest_stage_fact_patch(state, stage_patch, source="tree_sitter")
             ts_status = ts_payload.get("enrichment_status")
             state.stage_status["tree_sitter"] = (

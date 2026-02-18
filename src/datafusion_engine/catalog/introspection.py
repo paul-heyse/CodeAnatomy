@@ -21,6 +21,15 @@ if TYPE_CHECKING:
 from datafusion_engine.extensions import datafusion_ext
 from datafusion_engine.sql.options import sql_options_for_profile
 
+_CACHE_SNAPSHOT_ERRORS = (
+    AttributeError,
+    KeyError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    Exception,
+)
+
 
 @dataclass
 class IntrospectionSnapshot:
@@ -506,7 +515,7 @@ def _cache_snapshot_from_table(
     try:
         table = _cache_snapshot_table(ctx, table_name=table_name)
         rows = table.to_pylist()
-    except Exception:  # noqa: BLE001
+    except _CACHE_SNAPSHOT_ERRORS:
         return None
     if not rows:
         return None

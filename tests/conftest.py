@@ -297,6 +297,7 @@ _WHEEL_GATED_TEST_FILES: tuple[str, ...] = (
     "tests/integration/test_df_delta_smoke.py",
     "tests/integration/test_engine_session_semantic_config.py",
     "tests/integration/test_engine_session_smoke.py",
+    "tests/integration/test_delta_protocol_and_schema_mode.py",
     "tests/integration/test_resolver_identity_integration.py",
     "tests/integration/test_snapshot_identity.py",
     "tests/integration/test_substrait_cross_validation.py",
@@ -309,9 +310,11 @@ _WHEEL_GATED_TEST_FILES: tuple[str, ...] = (
     "tests/unit/test_inferred_deps.py",
     "tests/unit/test_lineage_plan_variants.py",
     "tests/unit/test_prepared_statements.py",
+    "tests/unit/test_repo_blobs_git.py",
     "tests/unit/test_sql_param_binding.py",
     "tests/unit/test_substrait_validation.py",
     "tests/unit/test_view_registry_snapshot.py",
+    "tests/incremental/test_view_artifacts.py",
 )
 
 

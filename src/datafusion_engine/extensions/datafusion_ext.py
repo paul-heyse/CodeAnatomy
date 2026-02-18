@@ -89,6 +89,10 @@ def _normalize_args(
     normalized_kwargs = dict(kwargs)
     if "ctx" in normalized_kwargs:
         normalized_kwargs["ctx"] = _normalize_ctx(normalized_kwargs["ctx"])
+    if "df" in normalized_kwargs:
+        normalized_df = getattr(normalized_kwargs["df"], "df", None)
+        if normalized_df is not None:
+            normalized_kwargs["df"] = normalized_df
     return tuple(normalized_args), normalized_kwargs
 
 
@@ -261,7 +265,7 @@ def capture_plan_bundle_runtime(
     Raises:
         TypeError: If the extension response is not a mapping payload.
     """
-    response = _call_required("capture_plan_bundle_runtime", ctx, payload, df)
+    response = _call_required("capture_plan_bundle_runtime", ctx, payload, df=df)
     if isinstance(response, Mapping):
         return {str(key): value for key, value in response.items()}
     msg = "capture_plan_bundle_runtime returned a non-mapping payload."
@@ -282,7 +286,7 @@ def build_plan_bundle_artifact_with_warnings(
     Raises:
         TypeError: If the extension response is not a mapping payload.
     """
-    response = _call_required("build_plan_bundle_artifact_with_warnings", ctx, payload, df)
+    response = _call_required("build_plan_bundle_artifact_with_warnings", ctx, payload, df=df)
     if isinstance(response, Mapping):
         return {str(key): value for key, value in response.items()}
     msg = "build_plan_bundle_artifact_with_warnings returned a non-mapping payload."

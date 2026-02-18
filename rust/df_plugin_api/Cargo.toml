@@ -10,4 +10,4 @@ repository.workspace = true
 
 [dependencies]
 abi_stable = "0.11"
-datafusion-ffi = "51.0.0"
+datafusion-ffi = "52.1.0"

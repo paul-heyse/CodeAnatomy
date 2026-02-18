@@ -1,5 +1,8 @@
 """Shared enrichment contract and helper exports."""
 
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 from tools.cq.search.enrichment.contracts import (
     EnrichmentMeta,
     EnrichmentStatus,
@@ -26,12 +29,14 @@ from tools.cq.search.enrichment.incremental_inspect_plane import (
     build_inspect_bundle,
     inspect_object_inventory,
 )
-from tools.cq.search.enrichment.incremental_provider import enrich_incremental_anchor
 from tools.cq.search.enrichment.incremental_symtable_plane import (
     build_incremental_symtable_plane,
     build_sym_scope_graph,
     resolve_binding_id,
 )
+
+if TYPE_CHECKING:
+    from tools.cq.search.enrichment.incremental_provider import enrich_incremental_anchor
 
 __all__ = [
     "EnrichmentMeta",
@@ -57,3 +62,12 @@ __all__ = [
     "set_degraded",
     "trim_payload_to_budget",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name == "enrich_incremental_anchor":
+        module = import_module("tools.cq.search.enrichment.incremental_provider")
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(name)

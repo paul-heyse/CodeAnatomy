@@ -140,64 +140,64 @@ def _convert_or_none[StructT](value: object, type_: type[StructT]) -> StructT | 
         return None
 
 
-def _python_fact_sections(raw: Mapping[str, object]) -> dict[str, dict[str, object]]:
-    sections: dict[str, dict[str, object]] = {}
-    for key in (
-        "resolution",
-        "behavior",
-        "structure",
-        "signature",
-        "call",
-        "import_",
-        "class_shape",
-        "locals",
-        "parse_quality",
-    ):
-        mapped = _mapping_or_none(raw.get(key))
-        if mapped:
-            sections[key] = mapped
-    if "structure" not in sections:
-        structural = _mapping_or_none(raw.get("structural"))
-        if structural:
-            sections["structure"] = structural
-    if "import_" not in sections:
-        import_payload = _mapping_or_none(raw.get("import"))
-        if import_payload:
-            sections["import_"] = import_payload
-    if sections:
-        return sections
+_PYTHON_SECTION_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("resolution", ("resolution",)),
+    ("behavior", ("behavior",)),
+    ("structure", ("structure", "structural")),
+    ("signature", ("signature",)),
+    ("call", ("call",)),
+    ("import_", ("import_", "import")),
+    ("class_shape", ("class_shape",)),
+    ("locals", ("locals",)),
+    ("parse_quality", ("parse_quality",)),
+)
+_PYTHON_FLAT_SECTION_FIELDS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("resolution", frozenset(PythonResolutionFacts.__struct_fields__)),
+    ("behavior", frozenset(PythonBehaviorFacts.__struct_fields__)),
+    ("structure", frozenset(PythonStructureFacts.__struct_fields__)),
+    ("signature", frozenset(PythonSignatureFacts.__struct_fields__)),
+    ("call", frozenset(PythonCallFacts.__struct_fields__)),
+    ("import_", frozenset(PythonImportFacts.__struct_fields__)),
+    ("class_shape", frozenset(PythonClassShapeFacts.__struct_fields__)),
+    ("locals", frozenset(PythonLocalsFacts.__struct_fields__)),
+    ("parse_quality", frozenset(PythonParseQualityFacts.__struct_fields__)),
+)
 
-    flat_sections: dict[str, dict[str, object]] = {
-        "resolution": dict[str, object](),
-        "behavior": dict[str, object](),
-        "structure": dict[str, object](),
-        "signature": dict[str, object](),
-        "call": dict[str, object](),
-        "import_": dict[str, object](),
-        "class_shape": dict[str, object](),
-        "locals": dict[str, object](),
-        "parse_quality": dict[str, object](),
+
+def _named_python_sections(raw: Mapping[str, object]) -> dict[str, dict[str, object]]:
+    sections: dict[str, dict[str, object]] = {}
+    for section_name, aliases in _PYTHON_SECTION_ALIASES:
+        for alias in aliases:
+            mapped = _mapping_or_none(raw.get(alias))
+            if mapped:
+                sections[section_name] = mapped
+                break
+    return sections
+
+
+def _section_for_flat_python_field(key: str) -> str | None:
+    for section_name, fields in _PYTHON_FLAT_SECTION_FIELDS:
+        if key in fields:
+            return section_name
+    return None
+
+
+def _flat_python_sections(raw: Mapping[str, object]) -> dict[str, dict[str, object]]:
+    sections: dict[str, dict[str, object]] = {
+        section_name: {} for section_name, _ in _PYTHON_FLAT_SECTION_FIELDS
     }
     for key, value in raw.items():
-        if key in _PY_RESOLUTION_KEYS:
-            flat_sections["resolution"][key] = value
-        elif key in _PY_BEHAVIOR_KEYS:
-            flat_sections["behavior"][key] = value
-        elif key in _PY_STRUCTURAL_KEYS:
-            flat_sections["structure"][key] = value
-        elif key in PythonSignatureFacts.__struct_fields__:
-            flat_sections["signature"][key] = value
-        elif key in PythonCallFacts.__struct_fields__:
-            flat_sections["call"][key] = value
-        elif key in PythonImportFacts.__struct_fields__:
-            flat_sections["import_"][key] = value
-        elif key in PythonClassShapeFacts.__struct_fields__:
-            flat_sections["class_shape"][key] = value
-        elif key in PythonLocalsFacts.__struct_fields__:
-            flat_sections["locals"][key] = value
-        elif key in PythonParseQualityFacts.__struct_fields__:
-            flat_sections["parse_quality"][key] = value
-    return {key: value for key, value in flat_sections.items() if value}
+        section_name = _section_for_flat_python_field(key)
+        if section_name is not None:
+            sections[section_name][key] = value
+    return {key: value for key, value in sections.items() if value}
+
+
+def _python_fact_sections(raw: Mapping[str, object]) -> dict[str, dict[str, object]]:
+    sections = _named_python_sections(raw)
+    if sections:
+        return sections
+    return _flat_python_sections(raw)
 
 
 def parse_python_enrichment(raw: Mapping[str, object] | None) -> PythonEnrichmentFacts | None:
@@ -287,21 +287,29 @@ def parse_incremental_enrichment(raw: Mapping[str, object] | None) -> Incrementa
         timings_ms=_mapping_or_none(raw.get("timings_ms")) or {},
         session_errors=_mapping_or_none(raw.get("session_errors")) or {},
     )
-    if (
-        facts.anchor is None
-        and not facts.semantic
-        and not facts.sym
-        and not facts.dis
-        and not facts.inspect
-        and not facts.compound
-        and not facts.details
-        and not facts.stage_status
-        and not facts.stage_errors
-        and not facts.timings_ms
-        and not facts.session_errors
-    ):
+    if not _has_incremental_fact_content(facts):
         return None
     return facts
+
+
+def _has_incremental_fact_content(facts: IncrementalFacts) -> bool:
+    if facts.anchor is not None:
+        return True
+    for value in (
+        facts.semantic,
+        facts.sym,
+        facts.dis,
+        facts.inspect,
+        facts.compound,
+        facts.details,
+        facts.stage_status,
+        facts.stage_errors,
+        facts.timings_ms,
+        facts.session_errors,
+    ):
+        if value:
+            return True
+    return False
 
 
 def append_source(payload: dict[str, object], source: str) -> None:

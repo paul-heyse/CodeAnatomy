@@ -1,0 +1,3 @@
+pub mod df_plugin_codeanatomy
+#[no_mangle] pub static df_plugin_codeanatomy::_1as_0lib_1header_0root_bmodule_bloader: abi_stable::library::lib_header::LibHeader
+pub fn df_plugin_codeanatomy::get_library() -> df_plugin_api::DfPluginMod_Ref

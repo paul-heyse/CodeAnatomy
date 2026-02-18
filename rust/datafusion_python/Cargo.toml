@@ -64,7 +64,7 @@ version = "0.1.89"
 version = "0.2"
 
 [dependencies.datafusion]
-version = "51"
+version = "52.1.0"
 features = [
     "avro",
     "parquet",
@@ -72,13 +72,13 @@ features = [
 ]
 
 [dependencies.datafusion-ffi]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-proto]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-substrait]
-version = "51"
+version = "52.1.0"
 optional = true
 
 [dependencies.arrow-ipc]
@@ -91,55 +91,55 @@ version = "0.10"
 version = "0.4"
 
 [dependencies.datafusion-catalog-listing]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-common]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-datasource]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-datasource-csv]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-datasource-parquet]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-doc]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-expr]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-expr-common]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-functions]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-functions-aggregate]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-functions-nested]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-functions-table]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-functions-window]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-functions-window-common]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-macros]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-physical-expr-adapter]
-version = "51"
+version = "52.1.0"
 
 [dependencies.datafusion-physical-expr-common]
-version = "51"
+version = "52.1.0"
 
 [dependencies.df_plugin_host]
 path = "../df_plugin_host"
@@ -155,7 +155,7 @@ path = "../codeanatomy_engine"
 features = ["substrait"]
 
 [dependencies.deltalake]
-version = "0.30.1"
+version = "0.31.0"
 features = ["datafusion"]
 
 [dependencies.hex]

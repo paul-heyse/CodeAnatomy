@@ -8,6 +8,14 @@ stage-runtime helpers. Implementation ownership lives in
 from __future__ import annotations
 
 import tools.cq.search.python.extractors_runtime_core as core
+from tools.cq.search._shared.enrichment_contracts import (
+    python_enrichment_payload,
+    wrap_python_enrichment,
+)
+from tools.cq.search._shared.requests import (
+    PythonByteRangeEnrichmentRequest,
+    PythonNodeEnrichmentRequest,
+)
 from tools.cq.search.python.extractors_analysis import (
     extract_behavior_summary,
     extract_generator_flag,
@@ -57,8 +65,28 @@ enrich_python_context_contract_by_byte_range = core.enrich_python_context_contra
 enrich_python_context = core.enrich_python_context
 enrich_python_context_by_byte_range = core.enrich_python_context_by_byte_range
 ensure_python_clear_callback_registered = core.ensure_python_clear_callback_registered
-extract_python_byte_range = core.extract_python_byte_range
-extract_python_node = core.extract_python_node
+
+
+def extract_python_node(request: PythonNodeEnrichmentRequest) -> dict[str, object]:
+    """Compatibility wrapper for node-anchored extraction.
+
+    Returns:
+        dict[str, object]: Legacy-compatible enrichment payload mapping.
+    """
+    payload = enrich_python_context(request)
+    return python_enrichment_payload(wrap_python_enrichment(payload))
+
+
+def extract_python_byte_range(
+    request: PythonByteRangeEnrichmentRequest,
+) -> dict[str, object]:
+    """Compatibility wrapper for byte-range extraction.
+
+    Returns:
+        dict[str, object]: Legacy-compatible enrichment payload mapping.
+    """
+    payload = enrich_python_context_by_byte_range(request)
+    return python_enrichment_payload(wrap_python_enrichment(payload))
 
 # Stage-runtime ownership surface
 build_agreement_section = core.build_agreement_section

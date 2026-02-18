@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.schema import Anchor, Finding
 from tools.cq.search.objects.resolve import ObjectResolutionRuntime
+from tools.cq.search.pipeline.candidate_normalizer import (
+    definition_kind_from_text,
+    is_definition_candidate_match,
+)
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search_types import EnrichedMatch, LanguageSearchResult
 
@@ -27,12 +32,34 @@ _TARGET_CANDIDATE_KINDS: frozenset[str] = frozenset(
         "method",
         "class",
         "type",
-        "module",
         "callable",
     }
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_test_path(path: str | None) -> bool:
+    if not isinstance(path, str) or not path:
+        return False
+    normalized = path.replace("\\", "/")
+    parts = tuple(part for part in normalized.split("/") if part and part != ".")
+    if not parts:
+        return False
+    if "tests" in parts:
+        return True
+    leaf = parts[-1]
+    return leaf.startswith("test_") or leaf.endswith("_test.py")
+
+
+def _candidate_sort_key(summary: SearchObjectSummaryV1) -> tuple[int, str, str]:
+    object_ref = summary.object_ref
+    canonical_file = object_ref.canonical_file
+    return (
+        1 if _is_test_path(canonical_file) else 0,
+        canonical_file or "",
+        object_ref.object_id,
+    )
 
 
 def _normalize_target_candidate_kind(kind: str | None) -> str:
@@ -54,11 +81,11 @@ def _build_object_candidate_finding(
     *,
     summary: SearchObjectSummaryV1,
     representative: EnrichedMatch | None,
+    kind: str,
 ) -> Finding:
     from tools.cq.core.schema import DetailPayload
 
     object_ref = summary.object_ref
-    kind = _normalize_target_candidate_kind(object_ref.kind)
     symbol = object_ref.symbol
     anchor: Anchor | None = None
     if isinstance(object_ref.canonical_file, str) and isinstance(object_ref.canonical_line, int):
@@ -91,6 +118,16 @@ def _build_object_candidate_finding(
     )
 
 
+def _inferred_candidate_kind(
+    matches: Sequence[EnrichedMatch],
+) -> str | None:
+    for match in matches:
+        if not is_definition_candidate_match(match):
+            continue
+        return definition_kind_from_text(match.text)
+    return None
+
+
 def collect_definition_candidates(
     ctx: SearchConfig,
     object_runtime: ObjectResolutionRuntime,
@@ -103,13 +140,20 @@ def collect_definition_candidates(
     _ = ctx
     definition_matches: list[EnrichedMatch] = []
     candidate_findings: list[Finding] = []
+    summaries = sorted(object_runtime.view.summaries, key=_candidate_sort_key)
 
-    for summary in object_runtime.view.summaries:
+    for summary in summaries:
         object_ref = summary.object_ref
         kind = _normalize_target_candidate_kind(object_ref.kind)
         if kind not in _TARGET_CANDIDATE_KINDS:
+            kind = (
+                _inferred_candidate_kind(
+                    object_runtime.grouped_matches.get(object_ref.object_id, ())
+                )
+                or kind
+            )
+        if kind not in _TARGET_CANDIDATE_KINDS:
             continue
-
         representative = object_runtime.representative_matches.get(object_ref.object_id)
         if representative is not None:
             definition_matches.append(representative)
@@ -117,6 +161,7 @@ def collect_definition_candidates(
             _build_object_candidate_finding(
                 summary=summary,
                 representative=representative,
+                kind=kind,
             )
         )
         if len(candidate_findings) >= MAX_TARGET_CANDIDATES:
@@ -129,18 +174,6 @@ def collect_definition_candidates(
         )
         return definition_matches, candidate_findings
 
-    if not object_runtime.view.summaries:
-        return definition_matches, candidate_findings
-    fallback_summary = object_runtime.view.summaries[0]
-    representative = object_runtime.representative_matches.get(
-        fallback_summary.object_ref.object_id
-    )
-    if representative is not None:
-        definition_matches.append(representative)
-    candidate_findings.append(
-        _build_object_candidate_finding(summary=fallback_summary, representative=representative)
-    )
-    logger.debug("target_resolution.fallback_candidate_built")
     return definition_matches, candidate_findings
 
 

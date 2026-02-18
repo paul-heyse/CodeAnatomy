@@ -7,13 +7,20 @@ assembly, and pipeline-stage ownership live in dedicated runtime modules.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search.tree_sitter.rust_lane.availability import (
     is_tree_sitter_rust_available as _is_tree_sitter_rust_available,
 )
+from tools.cq.search.tree_sitter.rust_lane.extractor_dispatch import (
+    canonicalize_payload as _canonicalize_payload,
+)
 from tools.cq.search.tree_sitter.rust_lane.runtime_cache import (
+    _parse_with_session,
     clear_tree_sitter_rust_cache,
     get_tree_sitter_rust_cache_stats,
 )
@@ -26,9 +33,6 @@ from tools.cq.search.tree_sitter.rust_lane.runtime_pipeline_stages import (
 )
 from tools.cq.search.tree_sitter.rust_lane.runtime_pipeline_stages import (
     collect_payload_with_timings as _collect_payload_with_timings_impl,
-)
-from tools.cq.search.tree_sitter.rust_lane.runtime_pipeline_stages import (
-    run_rust_enrichment_pipeline as _run_rust_enrichment_pipeline_impl,
 )
 from tools.cq.search.tree_sitter.rust_lane.runtime_query_execution import (
     collect_query_pack_captures as _collect_query_pack_captures_impl,
@@ -75,6 +79,11 @@ class RustLaneRuntimeDepsV1:
 # Preserve private request type names for internal callsites during migration.
 _RustPayloadBuildRequestV1 = RustPayloadBuildRequestV1
 _RustPipelineRequestV1 = RustPipelineRequestV1
+_REQUIRED_PAYLOAD_KEYS: tuple[str, ...] = (
+    "language",
+    "enrichment_status",
+    "enrichment_sources",
+)
 
 
 def is_tree_sitter_rust_available() -> bool:
@@ -187,8 +196,96 @@ def collect_payload_with_timings(request: _RustPayloadBuildRequestV1) -> dict[st
     return _collect_payload_with_timings(request)
 
 
+def _coerce_timings(payload: Mapping[str, object], *, key: str) -> dict[str, float]:
+    value = payload.get(key)
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        stage: float(duration)
+        for stage, duration in value.items()
+        if isinstance(stage, str) and isinstance(duration, (int, float))
+    }
+
+
+def _coerce_status(payload: Mapping[str, object], *, key: str) -> dict[str, str]:
+    value = payload.get(key)
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        stage: stage_status
+        for stage, stage_status in value.items()
+        if isinstance(stage, str) and isinstance(stage_status, str)
+    }
+
+
+def _assert_required_payload_keys(payload: dict[str, object]) -> None:
+    missing = [key for key in _REQUIRED_PAYLOAD_KEYS if key not in payload]
+    if missing:
+        msg = f"Rust enrichment payload missing required keys: {missing}"
+        raise ValueError(msg)
+
+
+def _finalize_enrichment_payload(
+    *,
+    payload: dict[str, object],
+    total_started: float,
+) -> dict[str, object]:
+    attachment_started = time.perf_counter()
+    canonical = _canonicalize_payload(payload)
+    attachment_ms = max(0.0, (time.perf_counter() - attachment_started) * 1000.0)
+    timings = _coerce_timings(canonical, key="stage_timings_ms")
+    timings["attachment"] = attachment_ms
+    timings["total"] = max(0.0, (time.perf_counter() - total_started) * 1000.0)
+    canonical["stage_timings_ms"] = timings
+    stage_status = _coerce_status(canonical, key="stage_status")
+    stage_status.setdefault("ast_grep", "skipped")
+    stage_status.setdefault("query_pack", "applied")
+    stage_status.setdefault("payload_build", "applied")
+    stage_status["attachment"] = "applied"
+    canonical["stage_status"] = stage_status
+    return canonical
+
+
 def _run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, object] | None:
-    return _run_rust_enrichment_pipeline_impl(request)
+    total_started = time.perf_counter()
+    tree_sitter_started = time.perf_counter()
+    try:
+        _ = request.cache_backend
+        tree, source_bytes, changed_ranges = _parse_with_session(
+            request.source,
+            cache_key=request.cache_key,
+            parse_session=request.parse_session,
+        )
+        if tree is None:
+            return None
+        node = request.resolve_node(tree.root_node)
+        if node is None:
+            return None
+        payload = _collect_payload_with_timings(
+            _RustPayloadBuildRequestV1(
+                node=node,
+                tree_root=tree.root_node,
+                source_bytes=source_bytes,
+                changed_ranges=changed_ranges,
+                byte_span=request.byte_span_for_node(node),
+                max_scope_depth=request.max_scope_depth,
+                query_budget_ms=request.query_budget_ms,
+                file_key=request.cache_key,
+            )
+        )
+        _assert_required_payload_keys(payload)
+    except ENRICHMENT_ERRORS as exc:
+        logger.warning("%s failed: %s", request.error_prefix, type(exc).__name__)
+        return None
+    timings = _coerce_timings(payload, key="stage_timings_ms")
+    timings.setdefault("ast_grep", 0.0)
+    timings["tree_sitter"] = max(0.0, (time.perf_counter() - tree_sitter_started) * 1000.0)
+    payload["stage_timings_ms"] = timings
+    status = _coerce_status(payload, key="stage_status")
+    status.setdefault("ast_grep", "skipped")
+    status["tree_sitter"] = "applied"
+    payload["stage_status"] = status
+    return _finalize_enrichment_payload(payload=payload, total_started=total_started)
 
 
 def run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, object] | None:
@@ -197,7 +294,7 @@ def run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, o
     Returns:
         dict[str, object] | None: Canonical payload when enrichment succeeds.
     """
-    return _run_rust_enrichment_pipeline(request)
+    return _run_rust_enrichment_pipeline(cast("_RustPipelineRequestV1", request))
 
 
 def enrich_rust_context(

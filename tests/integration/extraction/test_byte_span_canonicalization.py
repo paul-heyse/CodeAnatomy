@@ -216,10 +216,10 @@ def test_col_unit_utf32_to_byte_conversion(unicode_python_file: tuple[Path, str]
 def test_span_normalization_with_missing_udf() -> None:
     """Test span normalization fails gracefully when UDF is missing.
 
-    Verifies that attempting span normalization without the col_to_byte UDF
+    Verifies that attempting span normalization without the canonicalize_byte_span UDF
     raises ValueError with a clear UDF-missing message.
     """
-    from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
 
     ctx = df_ctx()
 

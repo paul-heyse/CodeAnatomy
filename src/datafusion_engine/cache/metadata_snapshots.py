@@ -14,7 +14,7 @@ from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.facade import DataFusionExecutionFacade
 from datafusion_engine.session.helpers import deregister_table
-from utils.coercion import coerce_int_or_none
+from utils.value_coercion import coerce_int_or_none
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -23,15 +23,10 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
-_CACHE_SNAPSHOT_QUERIES: Mapping[str, str] = {
-    "df_metadata_cache": "metadata_cache",
-    "df_statistics_cache": "statistics_cache",
-    "df_list_files_cache": "list_files_cache",
-}
-_CACHE_NAME_BY_TABLE: Mapping[str, str] = {
-    "metadata_cache": "metadata",
-    "statistics_cache": "statistics",
-    "list_files_cache": "list_files",
+_CACHE_SNAPSHOT_NAMES: Mapping[str, str] = {
+    "df_metadata_cache": "metadata",
+    "df_statistics_cache": "statistics",
+    "df_list_files_cache": "list_files",
 }
 
 
@@ -80,8 +75,8 @@ def snapshot_datafusion_caches(
     cache_root.mkdir(parents=True, exist_ok=True)
     pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
     events: list[dict[str, object]] = []
-    for snapshot_name, table_name in _CACHE_SNAPSHOT_QUERIES.items():
-        sql = f"SELECT * FROM {table_name}()"
+    cache_rows = _cache_snapshot_rows(ctx)
+    for snapshot_name, cache_name in _CACHE_SNAPSHOT_NAMES.items():
         from datafusion_engine.cache.commit_metadata import (
             CacheCommitMetadataRequest,
             cache_commit_metadata,
@@ -92,6 +87,7 @@ def snapshot_datafusion_caches(
         )
         from obs.otel import cache_span
 
+        span = None
         try:
             with cache_span(
                 "cache.metadata.snapshot",
@@ -100,18 +96,15 @@ def snapshot_datafusion_caches(
                 operation="snapshot",
                 attributes={
                     "snapshot_name": snapshot_name,
-                    "cache_table": table_name,
+                    "cache_table": cache_name,
                 },
-            ) as (_span, set_result):
-                source: DataFrame | None = None
-                try:
-                    source = ctx.sql(sql)
-                except (AttributeError, RuntimeError, TypeError, ValueError):
-                    source = None
-                if source is None:
-                    source = ctx.from_arrow(
-                        _fallback_cache_snapshot_source(ctx, table_name=table_name)
+            ) as (span, set_result):
+                source: DataFrame = ctx.from_arrow(
+                    _cache_snapshot_source_table(
+                        cache_name,
+                        row=cache_rows.get(cache_name, {}),
                     )
+                )
                 path = cache_root / snapshot_name
                 commit_metadata = cache_commit_metadata(
                     CacheCommitMetadataRequest(
@@ -119,7 +112,7 @@ def snapshot_datafusion_caches(
                         cache_policy="metadata_snapshot",
                         cache_scope="metadata",
                         cache_key=snapshot_name,
-                        extra={"cache_table": table_name},
+                        extra={"cache_table": cache_name},
                     )
                 )
                 result = pipeline.write(
@@ -133,11 +126,13 @@ def snapshot_datafusion_caches(
                 )
                 set_result("write")
         except (RuntimeError, TypeError, ValueError) as exc:
+            if span is not None:
+                span.record_exception(exc)
             record_cache_snapshot_registry(
                 runtime_profile,
                 entry=CacheSnapshotRegistryEntry(
                     snapshot_name=snapshot_name,
-                    cache_table=table_name,
+                    cache_table=cache_name,
                     cache_path=None,
                     snapshot_version=None,
                     error=str(exc),
@@ -147,7 +142,7 @@ def snapshot_datafusion_caches(
             events.append(
                 CacheSnapshotEvent(
                     snapshot_name=snapshot_name,
-                    cache_table=table_name,
+                    cache_table=cache_name,
                     cache_path=None,
                     snapshot_version=None,
                     error=str(exc),
@@ -170,7 +165,7 @@ def snapshot_datafusion_caches(
             runtime_profile,
             entry=CacheSnapshotRegistryEntry(
                 snapshot_name=snapshot_name,
-                cache_table=table_name,
+                cache_table=cache_name,
                 cache_path=str(path),
                 snapshot_version=snapshot_version,
                 error=None,
@@ -180,7 +175,7 @@ def snapshot_datafusion_caches(
         events.append(
             CacheSnapshotEvent(
                 snapshot_name=snapshot_name,
-                cache_table=table_name,
+                cache_table=cache_name,
                 cache_path=str(path),
                 snapshot_version=snapshot_version,
             ).to_row()
@@ -188,17 +183,20 @@ def snapshot_datafusion_caches(
     return events
 
 
-def _fallback_cache_snapshot_source(ctx: SessionContext, *, table_name: str) -> pa.Table:
+def _cache_snapshot_rows(ctx: SessionContext) -> dict[str, Mapping[str, object]]:
     from datafusion_engine.catalog.introspection import capture_cache_diagnostics
 
-    cache_name = _CACHE_NAME_BY_TABLE.get(table_name, table_name)
     diagnostics = capture_cache_diagnostics(ctx)
     snapshots = diagnostics.get("cache_snapshots")
+    rows: dict[str, Mapping[str, object]] = {}
     if isinstance(snapshots, list):
         for row in snapshots:
-            if isinstance(row, Mapping) and str(row.get("cache_name")) == cache_name:
-                return _cache_snapshot_source_table(cache_name, row=row)
-    return _cache_snapshot_source_table(cache_name, row={})
+            if not isinstance(row, Mapping):
+                continue
+            cache_name = str(row.get("cache_name") or "")
+            if cache_name:
+                rows[cache_name] = row
+    return rows
 
 
 def _coerce_optional_str(value: object) -> str | None:

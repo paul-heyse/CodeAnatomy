@@ -745,6 +745,36 @@ fn col_to_byte_returns_expected() -> Result<()> {
 }
 
 #[test]
+fn canonicalize_byte_span_returns_expected() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let batches = run_query(
+        &ctx,
+        "SELECT canonicalize_byte_span(10, 'abcdef', 3, 20, 'ghijkl', 2, 'BYTE') AS span",
+    )?;
+    let array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("struct column");
+    let bstart = array
+        .column_by_name("bstart")
+        .expect("bstart field")
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("bstart int64");
+    let bend = array
+        .column_by_name("bend")
+        .expect("bend field")
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("bend int64");
+    assert_eq!(bstart.value(0), 13);
+    assert_eq!(bend.value(0), 22);
+    Ok(())
+}
+
+#[test]
 fn arrow_metadata_extracts_key() -> Result<()> {
     let mut metadata = HashMap::new();
     metadata.insert("line_base".to_string(), "10".to_string());

@@ -147,7 +147,7 @@ class DeltaDeleteRequest(StructBaseStrict, frozen=True):
     storage_options: Mapping[str, str] | None
     version: int | None
     timestamp: str | None
-    predicate: str | None
+    predicate: str
     extra_constraints: Sequence[str] | None
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None

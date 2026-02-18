@@ -20,7 +20,7 @@ use std::sync::Arc;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan, Statement};
 use datafusion_proto::logical_plan::{AsLogicalPlan, DefaultLogicalExtensionCodec};
 use prost::Message;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -115,6 +115,9 @@ impl PyLogicalPlan {
                     PyTransactionEnd::from(plan.clone()).to_variant(py)
                 }
                 Statement::SetVariable(plan) => PySetVariable::from(plan.clone()).to_variant(py),
+                Statement::ResetVariable(_plan) => Err(PyNotImplementedError::new_err(
+                    "ResetVariable statements are not yet supported in Python bindings.",
+                )),
                 Statement::Prepare(plan) => PyPrepare::from(plan.clone()).to_variant(py),
                 Statement::Execute(plan) => PyExecute::from(plan.clone()).to_variant(py),
                 Statement::Deallocate(plan) => PyDeallocate::from(plan.clone()).to_variant(py),

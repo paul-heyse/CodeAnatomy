@@ -191,7 +191,7 @@ def test_build_entity_insight_fallback_target_when_missing_findings() -> None:
 
 
 def test_render_insight_card_includes_budget_and_artifact_refs() -> None:
-    """Test render insight card includes budget and artifact refs."""
+    """Test render insight card shows target, neighborhood, and risk lines."""
     insight = _search_insight(
         SearchInsightBuildRequestV1(
             summary={"query": "target", "scan_method": "hybrid"},
@@ -206,8 +206,11 @@ def test_render_insight_card_includes_budget_and_artifact_refs() -> None:
     )
     rendered = "\n".join(render_insight_card(insight))
     assert "## Insight Card" in rendered
-    assert "Budget:" in rendered
-    assert "Artifact Refs:" in rendered
+    assert "Target:" in rendered
+    assert "Neighborhood:" in rendered
+    assert "Risk:" in rendered
+    assert "Budget:" not in rendered
+    assert "Artifact Refs:" not in rendered
 
 
 def test_mark_partial_for_missing_languages_downgrades_availability() -> None:

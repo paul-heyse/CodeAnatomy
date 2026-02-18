@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
-from datafusion import col, lit
-from datafusion import functions as f
+from datafusion import col
 
 from datafusion_engine.udf.expr import udf_expr
 
@@ -28,26 +27,26 @@ class LineIndexJoinOptions:
     path_col: str = "path"
 
 
-def byte_offset_expr(
-    line_start_col: str,
-    line_text_col: str,
-    char_col: str,
+def canonicalize_byte_span_expr(
+    start_line_start_col: str,
+    start_line_text_col: str,
+    start_col_col: str,
+    end_line_start_col: str,
+    end_line_text_col: str,
+    end_col_col: str,
     unit_expr: Expr,
-    *,
-    unit_col: str | None = None,
 ) -> Expr:
-    """Compute byte offset from line-start and character columns.
-
-    Returns:
-        Expr: DataFusion expression for byte offset with null-guarding.
-    """
-    base = col(line_start_col).cast(pa.int64())
-    char_val = col(char_col).cast(pa.int64())
-    offset = udf_expr("col_to_byte", col(line_text_col), char_val, unit_expr)
-    guard = col(line_start_col).is_null() | col(line_text_col).is_null() | col(char_col).is_null()
-    if unit_col is not None:
-        guard |= col(unit_col).is_null()
-    return f.when(guard, lit(None).cast(pa.int64())).otherwise(base + offset)
+    """Return canonicalized byte-span struct expression from line-index columns."""
+    return udf_expr(
+        "canonicalize_byte_span",
+        col(start_line_start_col).cast(pa.int64()),
+        col(start_line_text_col),
+        col(start_col_col).cast(pa.int64()),
+        col(end_line_start_col).cast(pa.int64()),
+        col(end_line_text_col),
+        col(end_col_col).cast(pa.int64()),
+        unit_expr,
+    )
 
 
 def line_index_join(
@@ -128,4 +127,4 @@ def line_index_join(
     )
 
 
-__all__ = ["LineIndexJoinOptions", "byte_offset_expr", "line_index_join"]
+__all__ = ["LineIndexJoinOptions", "canonicalize_byte_span_expr", "line_index_join"]

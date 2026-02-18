@@ -14,10 +14,6 @@ from datafusion import DataFrame, SessionContext, SQLOptions
 from datafusion_engine.schema.introspection_common import read_only_sql_options
 from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from datafusion_engine.schema.introspection_routines import _introspection_cache_for_ctx
-from datafusion_engine.session._session_caches import (
-    RUNTIME_SETTINGS_OVERLAY,
-    SESSION_RUNTIME_CACHE,
-)
 from datafusion_engine.sql.options import sql_options_for_profile
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from storage.ipc_utils import payload_hash
@@ -99,7 +95,7 @@ def _build_session_runtime_from_context(
     profile: DataFusionRuntimeProfile,
 ) -> SessionRuntime:
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.extension_core import rust_udf_snapshot, rust_udf_snapshot_hash
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, rust_udf_snapshot_hash
     from datafusion_engine.udf.metadata import rewrite_tag_index
 
     try:
@@ -169,15 +165,22 @@ def record_runtime_setting_override(
     *,
     key: str,
     value: str,
+    profile: DataFusionRuntimeProfile | None = None,
 ) -> None:
     """Record runtime settings that DataFusion does not surface via SQL."""
     if not key.startswith("datafusion.runtime."):
         return
-    overrides = RUNTIME_SETTINGS_OVERLAY.setdefault(ctx, {})
+    if profile is None:
+        return
+    overrides = profile.runtime_settings_overlay.setdefault(ctx, {})
     overrides[key] = value
 
 
-def runtime_setting_overrides(ctx: SessionContext) -> Mapping[str, str]:
+def runtime_setting_overrides(
+    ctx: SessionContext,
+    *,
+    profile: DataFusionRuntimeProfile | None,
+) -> Mapping[str, str]:
     """Return recorded runtime setting overrides for a SessionContext.
 
     Returns:
@@ -185,7 +188,9 @@ def runtime_setting_overrides(ctx: SessionContext) -> Mapping[str, str]:
     Mapping[str, str]
         Runtime setting overrides keyed by setting name.
     """
-    overrides = RUNTIME_SETTINGS_OVERLAY.get(ctx)
+    if profile is None:
+        return {}
+    overrides = profile.runtime_settings_overlay.get(ctx)
     return dict(overrides) if overrides else {}
 
 
@@ -208,7 +213,7 @@ def _merge_runtime_settings_rows(
         row[value_key] = value
         rows.append(row)
         name_to_row[key] = row
-    overrides = runtime_setting_overrides(ctx)
+    overrides = runtime_setting_overrides(ctx, profile=profile)
     for key, value in overrides.items():
         row = name_to_row.get(key)
         if row is None:
@@ -234,14 +239,14 @@ def build_session_runtime(profile: DataFusionRuntimeProfile) -> SessionRuntime:
         Planning-ready runtime with UDF identity and settings snapshots.
     """
     cache_key = profile.context_cache_key()
-    cached_obj = SESSION_RUNTIME_CACHE.get(cache_key)
+    cached_obj = profile.session_runtime_cache.get(cache_key)
     cached = cached_obj if isinstance(cached_obj, SessionRuntime) else None
     ctx = profile.session_context()
     # Guard against cache-key collisions across profile variants.
     if cached is not None and cached.profile == profile and cached.ctx is ctx:
         return cached
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.extension_core import rust_udf_snapshot, rust_udf_snapshot_hash
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, rust_udf_snapshot_hash
     from datafusion_engine.udf.metadata import rewrite_tag_index
 
     snapshot = rust_udf_snapshot(ctx, registries=profile.udf_extension_registries)
@@ -264,7 +269,7 @@ def build_session_runtime(profile: DataFusionRuntimeProfile) -> SessionRuntime:
         udf_snapshot=snapshot,
         df_settings=df_settings,
     )
-    SESSION_RUNTIME_CACHE[cache_key] = runtime
+    profile.session_runtime_cache[cache_key] = runtime
     return runtime
 
 
@@ -299,7 +304,7 @@ def refresh_session_runtime(
         msg = "DataFusionRuntimeProfile does not expose a session runtime builder."
         raise TypeError(msg)
     runtime = runtime_builder(resolved_ctx)
-    SESSION_RUNTIME_CACHE[profile.context_cache_key()] = runtime
+    profile.session_runtime_cache[profile.context_cache_key()] = runtime
     return runtime
 
 

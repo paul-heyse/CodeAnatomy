@@ -1,8 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int32Builder, Int64Array, Int64Builder};
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::array::{Array, ArrayRef, Int32Builder, Int64Array, Int64Builder, StructArray};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_macros::user_doc;
 
@@ -11,8 +11,9 @@ use crate::compat::{
     Signature, TypeSignature, Volatility,
 };
 use crate::udf::common::{
-    scalar_str, signature_with_names, string_array_any, string_int_string_signature,
-    SignatureEqHash, ENC_UTF16, ENC_UTF32, ENC_UTF8,
+    all_scalars, columnar_result, columnar_to_i64, columnar_to_optional_strings,
+    expand_string_signatures, scalar_str, signature_with_names, string_array_any,
+    string_int_string_signature, SignatureEqHash, ENC_UTF16, ENC_UTF32, ENC_UTF8,
 };
 
 #[derive(Clone, Copy)]
@@ -114,6 +115,23 @@ fn code_unit_offset_to_py_index(line: &str, offset: usize, unit: ColUnit) -> Res
 fn byte_offset_from_py_index(line: &str, py_index: usize) -> usize {
     let prefix: String = line.chars().take(py_index).collect();
     prefix.len()
+}
+
+fn canonicalize_side(line_start: i64, line_text: &str, col: i64, unit: ColUnit) -> Result<i64> {
+    let offset = if matches!(unit, ColUnit::Byte) {
+        clamp_offset(col, line_text.len()) as i64
+    } else {
+        let py_index = code_unit_offset_to_py_index(line_text, normalize_offset(col), unit)?;
+        byte_offset_from_py_index(line_text, py_index) as i64
+    };
+    Ok(line_start.saturating_add(offset))
+}
+
+fn canonicalize_span_type() -> DataType {
+    DataType::Struct(Fields::from(vec![
+        Field::new("bstart", DataType::Int64, true),
+        Field::new("bend", DataType::Int64, true),
+    ]))
 }
 
 #[user_doc(
@@ -378,6 +396,169 @@ impl ScalarUDFImpl for ColToByteUdf {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = "Canonicalize line/column spans to byte start/end offsets.",
+    syntax_example = "canonicalize_byte_span(start_line_start_byte, start_line_text, start_col, end_line_start_byte, end_line_text, end_col, col_unit)",
+    argument(
+        name = "start_line_start_byte",
+        description = "Start-line byte offset from file start."
+    ),
+    argument(
+        name = "start_line_text",
+        description = "Start-line text used for encoding-aware conversion."
+    ),
+    argument(name = "start_col", description = "Start column offset."),
+    argument(
+        name = "end_line_start_byte",
+        description = "End-line byte offset from file start."
+    ),
+    argument(
+        name = "end_line_text",
+        description = "End-line text used for encoding-aware conversion."
+    ),
+    argument(name = "end_col", description = "End column offset."),
+    argument(
+        name = "col_unit",
+        description = "Encoding unit (BYTE, UTF8, UTF16, UTF32)."
+    )
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(crate) struct CanonicalizeByteSpanUdf {
+    pub(crate) signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for CanonicalizeByteSpanUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "canonicalize_byte_span"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 7 {
+            return Err(DataFusionError::Plan(
+                "canonicalize_byte_span expects seven arguments".into(),
+            ));
+        }
+        Ok(vec![
+            DataType::Int64,
+            DataType::Utf8,
+            DataType::Int64,
+            DataType::Int64,
+            DataType::Utf8,
+            DataType::Int64,
+            DataType::Utf8,
+        ])
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(
+            self.name(),
+            canonicalize_span_type(),
+            nullable,
+        )))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(canonicalize_span_type())
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() != 7 {
+            return Err(DataFusionError::Plan(
+                "canonicalize_byte_span expects seven arguments".into(),
+            ));
+        }
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
+        let start_line_start_values = columnar_to_i64(
+            &args.args[0],
+            num_rows,
+            "canonicalize_byte_span start_line_start_byte must be int64-compatible",
+        )?;
+        let start_line_text_values = columnar_to_optional_strings(
+            &args.args[1],
+            num_rows,
+            "canonicalize_byte_span start_line_text must be string-compatible",
+        )?;
+        let start_col_values = columnar_to_i64(
+            &args.args[2],
+            num_rows,
+            "canonicalize_byte_span start_col must be int64-compatible",
+        )?;
+        let end_line_start_values = columnar_to_i64(
+            &args.args[3],
+            num_rows,
+            "canonicalize_byte_span end_line_start_byte must be int64-compatible",
+        )?;
+        let end_line_text_values = columnar_to_optional_strings(
+            &args.args[4],
+            num_rows,
+            "canonicalize_byte_span end_line_text must be string-compatible",
+        )?;
+        let end_col_values = columnar_to_i64(
+            &args.args[5],
+            num_rows,
+            "canonicalize_byte_span end_col must be int64-compatible",
+        )?;
+        let col_unit_values = columnar_to_optional_strings(
+            &args.args[6],
+            num_rows,
+            "canonicalize_byte_span col_unit must be string-compatible",
+        )?;
+
+        let mut bstart_builder = Int64Builder::with_capacity(num_rows);
+        let mut bend_builder = Int64Builder::with_capacity(num_rows);
+        for row in 0..num_rows {
+            let unit = col_unit_values[row].as_deref().map(col_unit_from_text);
+            if let (Some(line_start), Some(line_text), Some(col), Some(unit)) = (
+                start_line_start_values[row],
+                start_line_text_values[row].as_deref(),
+                start_col_values[row],
+                unit,
+            ) {
+                bstart_builder.append_value(canonicalize_side(line_start, line_text, col, unit)?);
+            } else {
+                bstart_builder.append_null();
+            }
+            if let (Some(line_start), Some(line_text), Some(col), Some(unit)) = (
+                end_line_start_values[row],
+                end_line_text_values[row].as_deref(),
+                end_col_values[row],
+                unit,
+            ) {
+                bend_builder.append_value(canonicalize_side(line_start, line_text, col, unit)?);
+            } else {
+                bend_builder.append_null();
+            }
+        }
+        let array = Arc::new(StructArray::new(
+            Fields::from(vec![
+                Field::new("bstart", DataType::Int64, true),
+                Field::new("bend", DataType::Int64, true),
+            ]),
+            vec![
+                Arc::new(bstart_builder.finish()) as ArrayRef,
+                Arc::new(bend_builder.finish()) as ArrayRef,
+            ],
+            None,
+        )) as ArrayRef;
+        columnar_result(array, all_scalar, "canonicalize_byte_span")
+    }
+}
+
 pub fn position_encoding_udf() -> ScalarUDF {
     let signature = signature_with_names(
         Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Immutable),
@@ -394,6 +575,35 @@ pub fn col_to_byte_udf() -> ScalarUDF {
         &["line_text", "col", "col_unit"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(ColToByteUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn canonicalize_byte_span_udf() -> ScalarUDF {
+    let signature = signature_with_names(
+        Signature::one_of(
+            expand_string_signatures(&[
+                DataType::Int64,
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Int64,
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Utf8,
+            ]),
+            Volatility::Immutable,
+        ),
+        &[
+            "start_line_start_byte",
+            "start_line_text",
+            "start_col",
+            "end_line_start_byte",
+            "end_line_text",
+            "end_col",
+            "col_unit",
+        ],
+    );
+    ScalarUDF::new_from_shared_impl(Arc::new(CanonicalizeByteSpanUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }

@@ -136,7 +136,8 @@ def udf_expr(
     """
     call_args = list(args)
     if kwargs:
-        call_args.extend(kwargs.values())
+        # Enforce deterministic keyword lowering into positional arguments.
+        call_args.extend(kwargs[key] for key in sorted(kwargs))
     call_name, call_args = _rewrite_variadic_hash_call(name, call_args)
     if ctx is not None:
         expr = _ctx_udf_expr(ctx, name=call_name, args=call_args)

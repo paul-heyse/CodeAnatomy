@@ -58,6 +58,7 @@ class FactClusterSpec(CqStruct, frozen=True):
 
     title: str
     fields: tuple[FactFieldSpec, ...]
+    verbose_only: bool = False
 
 
 class FactContext(CqStruct, frozen=True):
@@ -371,6 +372,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
     ),
     FactClusterSpec(
         title="Neighborhood Bundle",
+        verbose_only=True,
         fields=(
             FactFieldSpec(
                 label="Bundle ID",
@@ -416,6 +418,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
     ),
     FactClusterSpec(
         title="Incremental Enrichment",
+        verbose_only=True,
         fields=(
             FactFieldSpec(
                 label="Mode",
@@ -524,8 +527,18 @@ def resolve_fact_clusters(
     *,
     context: FactContext,
     language_payload: dict[str, object] | None,
+    include_verbose: bool = False,
 ) -> tuple[ResolvedFactCluster, ...]:
     """Resolve all fact clusters from enrichment payload.
+
+    Parameters
+    ----------
+    context : FactContext
+        Language and node-kind context for applicability.
+    language_payload : dict[str, object] | None
+        Enrichment payload to resolve.
+    include_verbose : bool
+        Include verbose-only clusters (tool internals).
 
     Returns:
     -------
@@ -534,6 +547,8 @@ def resolve_fact_clusters(
     """
     clusters: list[ResolvedFactCluster] = []
     for cluster in FACT_CLUSTERS:
+        if cluster.verbose_only and not include_verbose:
+            continue
         rows = tuple(
             _resolve_field(
                 field=field,

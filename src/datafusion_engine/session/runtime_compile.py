@@ -22,11 +22,10 @@ from datafusion_engine.lineage.diagnostics import record_artifact as _lineage_re
 from datafusion_engine.session.contracts import IdentifierNormalizationMode
 from datafusion_engine.session.runtime_config_policies import (
     DATAFUSION_MAJOR_VERSION,
-    DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
     _effective_catalog_autoload_for_profile,
 )
-from utils.coercion import coerce_bool, coerce_int
 from utils.env_utils import env_bool
+from utils.value_coercion import coerce_bool, coerce_int
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -120,6 +119,27 @@ class _CompileResolverInvariantInputs:
     violations: Sequence[str]
 
 
+def _coerce_required_int(value: object, *, field_name: str) -> int:
+    coerced = coerce_int(value, label=field_name)
+    if coerced is None:
+        message = f"Field {field_name!r} must be an integer."
+        raise TypeError(message)
+    return coerced
+
+
+def _coerce_required_bool(
+    value: object,
+    *,
+    field_name: str,
+    default: bool,
+) -> bool:
+    coerced = coerce_bool(value, default=default, label=field_name)
+    if coerced is None:
+        message = f"Field {field_name!r} must be a boolean."
+        raise TypeError(message)
+    return coerced
+
+
 def _parse_compile_resolver_invariant_inputs(
     invariants: _CompileResolverInvariantInputs | None,
     kwargs: Mapping[str, object],
@@ -130,13 +150,13 @@ def _parse_compile_resolver_invariant_inputs(
             raise TypeError(message)
         return invariants
     label = _coerce_str(kwargs.get("label"), "label")
-    compile_count = coerce_int(kwargs.get("compile_count"), label="compile_count")
-    max_compiles = coerce_int(kwargs.get("max_compiles"), label="max_compiles")
-    distinct_resolver_count = coerce_int(
+    compile_count = _coerce_required_int(kwargs.get("compile_count"), field_name="compile_count")
+    max_compiles = _coerce_required_int(kwargs.get("max_compiles"), field_name="max_compiles")
+    distinct_resolver_count = _coerce_required_int(
         kwargs.get("distinct_resolver_count"),
-        label="distinct_resolver_count",
+        field_name="distinct_resolver_count",
     )
-    strict = coerce_bool(kwargs.get("strict"), default=False, label="strict")
+    strict = _coerce_required_bool(kwargs.get("strict"), field_name="strict", default=False)
     violations = _coerce_str_sequence(kwargs.get("violations"), "violations")
     return _CompileResolverInvariantInputs(
         label=label,
@@ -240,7 +260,7 @@ def _resolve_prepared_statement_options(
 def _supports_explain_analyze_level() -> bool:
     if DATAFUSION_MAJOR_VERSION is None:
         return False
-    return DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
+    return DATAFUSION_MAJOR_VERSION >= 51
 
 
 def effective_catalog_autoload(

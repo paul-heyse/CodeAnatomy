@@ -22,7 +22,9 @@ require_delta_extension()
 import datafusion_ext
 
 if getattr(datafusion_ext, "IS_STUB", False):
-    pytest.skip("datafusion_ext stub detected; native extension is required.", allow_module_level=True)
+    pytest.skip(
+        "datafusion_ext stub detected; native extension is required.", allow_module_level=True
+    )
 if not callable(getattr(datafusion_ext, "delta_write_ipc", None)):
     pytest.skip(
         "datafusion_ext.delta_write_ipc unavailable; rebuild Rust artifacts.",

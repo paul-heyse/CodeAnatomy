@@ -121,18 +121,27 @@ def _walk_named(root: Node, *, max_nodes: int = _MAX_WALK_NODES) -> Iterable[Nod
         stack.extend(reversed(children))
 
 
+_MAX_DISPLAY_NAME_LEN = 120
+
+
 def _display_name(node: Node, source_bytes: bytes) -> str:
     name_node = node.child_by_field_name("name")
     if name_node is not None:
         name_text = node_text(name_node, source_bytes)
         if name_text:
-            return name_text
+            return name_text[:_MAX_DISPLAY_NAME_LEN]
     if node.type in {"identifier", "type_identifier"}:
         ident = node_text(node, source_bytes)
         if ident:
-            return ident
+            return ident[:_MAX_DISPLAY_NAME_LEN]
+    # For module/large nodes, use only the first line to avoid dumping entire files
     fallback = node_text(node, source_bytes)
-    return fallback or node.type
+    if not fallback:
+        return node.type
+    first_line = fallback.split("\n", 1)[0].strip()
+    if len(first_line) > _MAX_DISPLAY_NAME_LEN:
+        return first_line[:_MAX_DISPLAY_NAME_LEN] + "..."
+    return first_line or node.type
 
 
 def _node_id(node: Node, file_path: str) -> str:

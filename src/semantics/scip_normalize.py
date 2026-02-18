@@ -12,9 +12,13 @@ from datafusion import functions as f
 from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.schema.introspection_core import table_names_snapshot
 from datafusion_engine.udf.expr import udf_expr
-from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
+from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
 from obs.otel import SCOPE_SEMANTICS, stage_span
-from semantics.normalization_helpers import LineIndexJoinOptions, byte_offset_expr, line_index_join
+from semantics.normalization_helpers import (
+    LineIndexJoinOptions,
+    canonicalize_byte_span_expr,
+    line_index_join,
+)
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
@@ -83,7 +87,7 @@ def scip_to_byte_offsets(
 
         snapshot = rust_udf_snapshot(ctx)
         try:
-            validate_required_udfs(snapshot, required=("col_to_byte",))
+            validate_required_udfs(snapshot, required=("canonicalize_byte_span",))
         except ValueError as exc:
             LOGGER.warning(
                 "Missing required UDFs for SCIP normalization; returning empty table. %s",
@@ -124,28 +128,23 @@ def scip_to_byte_offsets(
         )
 
         df = joined.with_column(
-            "bstart",
-            byte_offset_expr(
+            "_tmp_span_bytes",
+            canonicalize_byte_span_expr(
                 "start_line_start_byte",
                 "start_line_text",
                 "start_char",
-                col("col_unit"),
-                unit_col="col_unit",
-            ),
-        )
-        df = df.with_column(
-            "bend",
-            byte_offset_expr(
                 "end_line_start_byte",
                 "end_line_text",
                 "end_char",
                 col("col_unit"),
-                unit_col="col_unit",
             ),
         )
+        df = df.with_column("bstart", col("_tmp_span_bytes")["bstart"])
+        df = df.with_column("bend", col("_tmp_span_bytes")["bend"])
         df = df.with_column("span", udf_expr("span_make", col("bstart"), col("bend")))
 
         return df.drop(
+            "_tmp_span_bytes",
             "start_line_no",
             "end_line_no",
             "start_file_id",

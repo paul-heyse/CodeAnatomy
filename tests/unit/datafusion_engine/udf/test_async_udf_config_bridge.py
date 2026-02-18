@@ -6,11 +6,12 @@ from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import cast
 
+import msgspec
 import pytest
 from datafusion import SessionContext
 
-from datafusion_engine.udf import extension_core
-from datafusion_engine.udf.extension_core import AsyncUdfPolicy, ExtensionRegistries
+from datafusion_engine.udf import extension_runtime
+from datafusion_engine.udf.extension_runtime import AsyncUdfPolicy, ExtensionRegistries
 
 
 def test_runtime_install_bridge_passes_async_udf_policy(
@@ -36,13 +37,35 @@ def test_runtime_install_bridge_passes_async_udf_policy(
     ) -> object:
         del ctx, args
         call_log.append((entrypoint, kwargs))
-        return {"snapshot": {"version": 1}}
+        return {
+            "snapshot_msgpack": msgspec.msgpack.encode(
+                {
+                    "version": 1,
+                    "scalar": [],
+                    "aggregate": [],
+                    "window": [],
+                    "table": [],
+                    "aliases": {},
+                    "parameter_names": {},
+                    "volatility": {},
+                    "rewrite_tags": {},
+                    "signature_inputs": {},
+                    "return_types": {},
+                    "simplify": {},
+                    "coerce_types": {},
+                    "short_circuits": {},
+                    "config_defaults": {},
+                    "custom_udfs": [],
+                    "pycapsule_udfs": [],
+                }
+            )
+        }
 
-    monkeypatch.setattr(extension_core, "_invoke_runtime_entrypoint", _fake_invoke)
-    monkeypatch.setattr(extension_core, "_datafusion_internal", lambda: internal)
+    monkeypatch.setattr(extension_runtime, "_invoke_runtime_entrypoint", _fake_invoke)
+    monkeypatch.setattr(extension_runtime, "_datafusion_internal", lambda: internal)
     registries.udf_policies[ctx] = AsyncUdfPolicy(enabled=True, timeout_ms=321, batch_size=64)
 
-    extension_core.__dict__["_build_registry_snapshot"](ctx, registries=registries)
+    extension_runtime.__dict__["_build_registry_snapshot"](ctx, registries=registries)
 
     assert call_log == [
         (

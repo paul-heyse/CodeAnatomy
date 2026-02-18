@@ -97,8 +97,10 @@ def select_context_candidate(
     candidates: list[tuple[str, object]] = [("outer", ctx)]
     if internal_ctx is not None and internal_ctx is not ctx:
         candidates.append(("internal", internal_ctx))
-    if allow_fallback and fallback_ctx is not None and all(
-        fallback_ctx is not candidate[1] for candidate in candidates
+    if (
+        allow_fallback
+        and fallback_ctx is not None
+        and all(fallback_ctx is not candidate[1] for candidate in candidates)
     ):
         candidates.append(("fallback", fallback_ctx))
     return tuple(candidates)

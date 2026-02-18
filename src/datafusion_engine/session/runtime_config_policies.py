@@ -1,4 +1,4 @@
-"""DataFusion config policy presets, schema hardening, and version-gated settings."""
+"""DataFusion config policy presets and schema hardening settings."""
 
 from __future__ import annotations
 
@@ -26,9 +26,7 @@ __all__ = [
     "CACHE_PROFILES",
     "CST_AUTOLOAD_DF_POLICY",
     "DATAFUSION_MAJOR_VERSION",
-    "DATAFUSION_OPTIMIZER_DYNAMIC_FILTER_SKIP_VERSION",
     "DATAFUSION_POLICY_PRESETS",
-    "DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION",
     "DEFAULT_DF_POLICY",
     "DEV_DF_POLICY",
     "GIB",
@@ -71,8 +69,6 @@ def _ansi_mode(settings: Mapping[str, str]) -> bool | None:
 
 # Version constants for DataFusion
 DATAFUSION_MAJOR_VERSION: int | None = parse_major_version(datafusion.__version__)
-DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION: int = 51
-DATAFUSION_OPTIMIZER_DYNAMIC_FILTER_SKIP_VERSION: int = 51
 
 
 class DataFusionConfigPolicy(StructBaseStrict, frozen=True):
@@ -108,13 +104,7 @@ class DataFusionConfigPolicy(StructBaseStrict, frozen=True):
         datafusion.SessionConfig
             Session config with policy settings applied.
         """
-        skip_runtime_settings = (
-            DATAFUSION_MAJOR_VERSION is not None
-            and DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
-        )
         for key, value in self.settings.items():
-            if skip_runtime_settings and key.startswith("datafusion.runtime."):
-                continue
             config = config.set(key, value)
         return config
 
@@ -126,6 +116,8 @@ class DataFusionFeatureGates(StructBaseStrict, frozen=True):
     enable_join_dynamic_filter_pushdown: bool = True
     enable_aggregate_dynamic_filter_pushdown: bool = True
     enable_topk_dynamic_filter_pushdown: bool = True
+    enable_sort_pushdown: bool = True
+    allow_symmetric_joins_without_pruning: bool = True
 
     def settings(self) -> dict[str, str]:
         """Return DataFusion config settings for the feature gates.
@@ -135,7 +127,7 @@ class DataFusionFeatureGates(StructBaseStrict, frozen=True):
         dict[str, str]
             Mapping of DataFusion config keys to string values.
         """
-        settings = {
+        return {
             "datafusion.optimizer.enable_dynamic_filter_pushdown": str(
                 self.enable_dynamic_filter_pushdown
             ).lower(),
@@ -148,13 +140,11 @@ class DataFusionFeatureGates(StructBaseStrict, frozen=True):
             "datafusion.optimizer.enable_topk_dynamic_filter_pushdown": str(
                 self.enable_topk_dynamic_filter_pushdown
             ).lower(),
+            "datafusion.optimizer.enable_sort_pushdown": str(self.enable_sort_pushdown).lower(),
+            "datafusion.optimizer.allow_symmetric_joins_without_pruning": str(
+                self.allow_symmetric_joins_without_pruning
+            ).lower(),
         }
-        if (
-            DATAFUSION_MAJOR_VERSION is not None
-            and DATAFUSION_MAJOR_VERSION >= DATAFUSION_OPTIMIZER_DYNAMIC_FILTER_SKIP_VERSION
-        ):
-            settings.pop("datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown", None)
-        return settings
 
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for feature gate settings.
@@ -171,6 +161,8 @@ class DataFusionFeatureGates(StructBaseStrict, frozen=True):
                 self.enable_aggregate_dynamic_filter_pushdown
             ),
             "enable_topk_dynamic_filter_pushdown": self.enable_topk_dynamic_filter_pushdown,
+            "enable_sort_pushdown": self.enable_sort_pushdown,
+            "allow_symmetric_joins_without_pruning": (self.allow_symmetric_joins_without_pruning),
         }
 
     def fingerprint(self) -> str:

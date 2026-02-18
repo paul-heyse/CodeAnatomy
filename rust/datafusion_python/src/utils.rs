@@ -26,7 +26,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::Volatility;
-use datafusion_ffi::table_provider::{FFI_TableProvider, ForeignTableProvider};
+use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
@@ -35,6 +35,7 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 use crate::common::data_type::PyScalarValue;
+use crate::context::PySessionContext;
 use crate::errors::{py_datafusion_err, to_datafusion_err, PyDataFusionError, PyDataFusionResult};
 use datafusion_ext::async_runtime::shared_runtime;
 
@@ -168,14 +169,19 @@ pub fn table_provider_from_pycapsule(
     obj: &Bound<PyAny>,
 ) -> PyResult<Option<Arc<dyn TableProvider>>> {
     if obj.hasattr("__datafusion_table_provider__")? {
-        let capsule = obj.getattr("__datafusion_table_provider__")?.call0()?;
+        let session = Py::new(
+            obj.py(),
+            PySessionContext::from(get_global_ctx().clone()),
+        )?;
+        let capsule = obj
+            .getattr("__datafusion_table_provider__")?
+            .call1((session,))?;
         let capsule = capsule.downcast::<PyCapsule>().map_err(py_datafusion_err)?;
         validate_pycapsule(capsule, "datafusion_table_provider")?;
 
         let provider = unsafe { capsule.reference::<FFI_TableProvider>() };
-        let provider: ForeignTableProvider = provider.into();
-
-        Ok(Some(Arc::new(provider)))
+        let provider: Arc<dyn TableProvider> = provider.into();
+        Ok(Some(provider))
     } else {
         Ok(None)
     }

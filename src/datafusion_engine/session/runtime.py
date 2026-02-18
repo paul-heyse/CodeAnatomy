@@ -42,17 +42,9 @@ from datafusion_engine.session.runtime_diagnostics_mixin import _RuntimeDiagnost
 
 # Delegation imports for extracted runtime modules.
 from datafusion_engine.session.runtime_extensions import (
-    _install_cache_tables,
     _install_delta_plan_codecs_extension,
-    _install_physical_expr_adapter_factory,
-    _install_planner_rules,
-    _install_tracing,
-    _install_udf_platform,
-    _record_cache_diagnostics,
     _record_delta_plan_codecs,
-    _record_extension_parity_validation,
     _validate_async_udf_policy,
-    _validate_rule_function_allowlist,
 )
 from datafusion_engine.session.runtime_hooks import (
     _apply_builder,
@@ -80,8 +72,6 @@ from datafusion_engine.session.runtime_schema_registry import (
     _ast_dataset_location,
     _bytecode_dataset_location,
     _dataset_template,
-    _install_schema_registry,
-    _prepare_statements,
 )
 from datafusion_engine.session.runtime_session import (
     DataFusionViewRegistry,
@@ -90,7 +80,8 @@ from datafusion_engine.session.runtime_session import (
     build_session_runtime,
 )
 from datafusion_engine.session.runtime_telemetry import _effective_ident_normalization
-from datafusion_engine.udf.extension_core import ExtensionRegistries
+from datafusion_engine.sql.options import sql_options_for_profile
+from datafusion_engine.udf.extension_runtime import ExtensionRegistries
 from datafusion_engine.udf.platform import RustUdfPlatformRegistries
 from serde_msgspec import MSGPACK_ENCODER, StructBaseStrict
 
@@ -98,6 +89,7 @@ _MISSING = object()
 _COMPILE_RESOLVER_STRICT_ENV = "CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT"
 _CI_ENV = "CI"
 _DEFAULT_PERFORMANCE_POLICY = PerformancePolicy()
+_MIN_TARGET_PARTITIONS_FOR_JOIN_REPARTITION = 2
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -204,6 +196,11 @@ class DataFusionRuntimeProfile(
     udf_catalog_cache: WeakKeyDictionary[SessionContext, UdfCatalog] = msgspec.field(
         default_factory=WeakKeyDictionary
     )
+    session_context_cache: dict[str, SessionContext] = msgspec.field(default_factory=dict)
+    session_runtime_cache: dict[str, object] = msgspec.field(default_factory=dict)
+    runtime_settings_overlay: WeakKeyDictionary[SessionContext, dict[str, str]] = msgspec.field(
+        default_factory=WeakKeyDictionary
+    )
     delta_commit_runs: dict[str, DataFusionRun] = msgspec.field(default_factory=dict)
 
     @property
@@ -246,6 +243,40 @@ class DataFusionRuntimeProfile(
     def semantic_cache_overrides(self) -> Mapping[str, CachePolicy]:
         """Return explicit semantic view cache policy overrides."""
         return dict(self.data_sources.semantic_output.cache_overrides)
+
+    def dataset_candidates(self, destination: str) -> tuple[tuple[str, DatasetLocation], ...]:
+        """Return dataset binding candidates for destination resolution."""
+        candidates = dict(self.data_sources.dataset_templates)
+        candidates.update(self.data_sources.extract_output.dataset_locations)
+        direct = candidates.get(destination)
+        if direct is not None:
+            return ((destination, direct),)
+        return tuple(candidates.items())
+
+    def join_repartition_enabled(self, keys: list[str]) -> bool:
+        """Return whether join repartitioning should be applied for keys."""
+        if not keys:
+            return False
+        if (
+            self.execution.target_partitions is None
+            or self.execution.target_partitions < _MIN_TARGET_PARTITIONS_FOR_JOIN_REPARTITION
+        ):
+            return False
+        join_policy = self.policies.join_policy
+        if join_policy is None:
+            return True
+        return bool(join_policy.repartition_joins)
+
+    def effective_sql_options(self) -> object:
+        """Return effective SQL options for the runtime profile."""
+        return sql_options_for_profile(self)
+
+    def schema_hardening_view_types(self) -> frozenset[str]:
+        """Return enabled schema-hardening view type labels."""
+        schema_hardening = resolved_schema_hardening(self)
+        if schema_hardening is None or not schema_hardening.enable_view_types:
+            return frozenset()
+        return frozenset({"view"})
 
     def cdf_cursor_store(self) -> CdfCursorStoreLike | None:
         """Return configured CDF cursor store."""
@@ -322,6 +353,11 @@ class DataFusionRuntimeProfile(
                     diagnostics_sink=diagnostics_sink,
                 ),
             )
+        # Runtime caches are ephemeral process-local state and must not be
+        # shared when profiles are cloned via msgspec.structs.replace().
+        object.__setattr__(self, "session_context_cache", {})
+        object.__setattr__(self, "session_runtime_cache", {})
+        object.__setattr__(self, "runtime_settings_overlay", WeakKeyDictionary())
         async_policy = _validate_async_udf_policy(self)
         if not async_policy["valid"]:
             msg = f"Async UDF policy invalid: {async_policy['errors']}."
@@ -418,21 +454,9 @@ class DataFusionRuntimeProfile(
             return cached
         ctx = self._build_session_context()
         ctx = self._apply_url_table(ctx)
-        self._register_local_filesystem(ctx)
-        self._install_input_plugins(ctx)
-        self._install_registry_catalogs(ctx)
-        self._install_view_schema(ctx)
-        _install_udf_platform(self, ctx)
-        _install_planner_rules(self, ctx)
-        _install_schema_registry(self, ctx)
-        _validate_rule_function_allowlist(self, ctx)
-        _prepare_statements(self, ctx)
-        self.delta_ops.ensure_delta_plan_codecs(ctx)
-        _record_extension_parity_validation(self, ctx)
-        _install_physical_expr_adapter_factory(self, ctx)
-        _install_tracing(self, ctx)
-        _install_cache_tables(self, ctx)
-        _record_cache_diagnostics(self, ctx)
+        from datafusion_engine.registry_facade import RegistrationPhaseOrchestrator
+
+        RegistrationPhaseOrchestrator.run(self._ephemeral_context_phases(ctx))
         self._cache_context(ctx)
         return ctx
 
@@ -444,7 +468,11 @@ class DataFusionRuntimeProfile(
         SessionContext
             Ephemeral session context configured for this profile.
         """
-        return self._apply_url_table(self._build_session_context())
+        from datafusion_engine.registry_facade import RegistrationPhaseOrchestrator
+
+        ctx = self._apply_url_table(self._build_session_context())
+        RegistrationPhaseOrchestrator.run(self._ephemeral_context_phases(ctx))
+        return ctx
 
     def ephemeral_context_phases(
         self,

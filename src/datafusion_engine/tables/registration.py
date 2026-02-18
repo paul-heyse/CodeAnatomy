@@ -16,11 +16,6 @@ from datafusion_engine.catalog.provider_registry import ProviderRegistry
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.io.adapter import DataFusionIOAdapter, ListingTableRegistration
-from datafusion_engine.session.runtime_config_policies import (
-    DATAFUSION_MAJOR_VERSION,
-    DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
-)
-from datafusion_engine.session.runtime_session import record_runtime_setting_override
 from datafusion_engine.sql import options as _sql_options
 from datafusion_engine.tables.spec import table_spec_from_location
 
@@ -148,7 +143,12 @@ def register_listing_table(
     scan = context.options.scan
     runtime_profile = context.runtime_profile
     sql_options = _sql_options.sql_options_for_profile(runtime_profile)
-    _apply_scan_settings(context.ctx, scan=scan, sql_options=sql_options)
+    _apply_scan_settings(
+        context.ctx,
+        scan=scan,
+        sql_options=sql_options,
+        runtime_profile=runtime_profile,
+    )
     provider: object
     registration_mode = "listing_table"
     if _can_use_listing_table(location):
@@ -180,13 +180,10 @@ def _apply_scan_settings(
     *,
     scan: DataFusionScanOptions | None,
     sql_options: SQLOptions,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> None:
     if scan is None:
         return
-    skip_runtime_settings = (
-        DATAFUSION_MAJOR_VERSION is not None
-        and DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
-    )
     settings: list[tuple[str, object | None, bool]] = [
         ("datafusion.execution.collect_statistics", scan.collect_statistics, True),
         ("datafusion.execution.meta_fetch_concurrency", scan.meta_fetch_concurrency, False),
@@ -207,9 +204,6 @@ def _apply_scan_settings(
         if value is None:
             continue
         text = str(value).lower() if lower else str(value)
-        if skip_runtime_settings and key.startswith("datafusion.runtime."):
-            record_runtime_setting_override(ctx, key=key, value=text)
-            continue
         _set_runtime_setting(ctx, key=key, value=text, sql_options=sql_options)
 
 

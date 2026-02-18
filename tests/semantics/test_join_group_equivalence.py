@@ -18,6 +18,7 @@ from semantics.quality import (
     SelectExpr,
     SignalsSpec,
 )
+from semantics.table_registry import TableRegistry
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
@@ -76,7 +77,7 @@ def test_join_group_equivalence() -> None:
         ],
     )
 
-    compiler = SemanticCompiler(ctx)
+    compiler = SemanticCompiler(ctx, table_registry=TableRegistry())
     direct_df = compiler.compile_relationship_with_quality(spec)
     join_group = SemanticIRJoinGroup(
         name="join_group_test",

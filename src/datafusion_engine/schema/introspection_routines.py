@@ -82,7 +82,7 @@ def _empty_parameters_table() -> pa.Table:
 
 def _registry_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:
     try:
-        from datafusion_engine.udf.extension_core import rust_udf_snapshot
+        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
     except ImportError:
         return None
     try:

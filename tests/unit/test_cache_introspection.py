@@ -72,6 +72,19 @@ def test_list_files_cache_snapshot() -> None:
     assert snapshot.config_limit is not None
 
 
+def test_list_files_cache_snapshot_uses_contract_probe(monkeypatch) -> None:
+    """list_files cache entry count comes from the DF52 contract probe."""
+    profile = df_profile()
+    ctx = profile.session_context()
+
+    monkeypatch.setattr(
+        "datafusion_engine.catalog.introspection.datafusion_ext.session_context_contract_probe",
+        lambda _ctx: {"list_files_cache_entries": 17},
+    )
+    snapshot = list_files_cache_snapshot(ctx)
+    assert snapshot.entry_count == 17
+
+
 def test_metadata_cache_snapshot() -> None:
     """metadata_cache_snapshot returns cache state."""
     profile = df_profile()
@@ -80,6 +93,25 @@ def test_metadata_cache_snapshot() -> None:
     assert snapshot.cache_name == "metadata"
     assert snapshot.event_time_unix_ms > 0
     assert snapshot.config_limit is not None
+
+
+def test_metadata_cache_snapshot_uses_contract_probe(monkeypatch) -> None:
+    """Metadata cache metrics are sourced from the DF52 contract probe."""
+    profile = df_profile()
+    ctx = profile.session_context()
+
+    monkeypatch.setattr(
+        "datafusion_engine.catalog.introspection.datafusion_ext.session_context_contract_probe",
+        lambda _ctx: {
+            "metadata_cache_entries": 9,
+            "metadata_cache_hits": 4,
+            "metadata_cache_limit_bytes": 2048,
+        },
+    )
+    snapshot = metadata_cache_snapshot(ctx)
+    assert snapshot.entry_count == 9
+    assert snapshot.hit_count == 4
+    assert snapshot.config_limit == "2048"
 
 
 def test_predicate_cache_snapshot() -> None:

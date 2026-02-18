@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from datafusion_engine.udf.extension_core import ExtensionRegistries, _normalize_registry_snapshot
+from datafusion_engine.udf.extension_runtime import (
+    ExtensionRegistries,
+    _normalize_registry_snapshot,
+)
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

@@ -173,8 +173,9 @@ pub(crate) fn register_df_plugin_udfs(
     plugin: Py<PyAny>,
     options_json: Option<String>,
 ) -> PyResult<()> {
+    let session_ctx = extract_session_ctx(ctx)?;
     let handle = extract_plugin_handle(py, &plugin)?;
-    let config_payload = udf_config_payload_from_ctx(&extract_session_ctx(ctx)?);
+    let config_payload = udf_config_payload_from_ctx(&session_ctx);
     let mut options_value = if let Some(raw) = options_json.as_deref() {
         serde_json::from_str::<JsonValue>(raw)
             .map_err(|err| PyValueError::new_err(format!("Invalid UDF options JSON: {err}")))?
@@ -198,7 +199,7 @@ pub(crate) fn register_df_plugin_udfs(
             PyValueError::new_err(format!("Failed to encode UDF options: {err}"))
         })?);
     handle
-        .register_udfs(&extract_session_ctx(ctx)?, options_json.as_deref())
+        .register_udfs(&session_ctx, options_json.as_deref())
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
     Ok(())
 }
@@ -209,9 +210,10 @@ pub(crate) fn register_df_plugin_table_functions(
     ctx: &Bound<'_, PyAny>,
     plugin: Py<PyAny>,
 ) -> PyResult<()> {
+    let session_ctx = extract_session_ctx(ctx)?;
     let handle = extract_plugin_handle(py, &plugin)?;
     handle
-        .register_table_functions(&extract_session_ctx(ctx)?)
+        .register_table_functions(&session_ctx)
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
         })?;
@@ -247,14 +249,14 @@ pub(crate) fn register_df_plugin_table_providers(
     table_names: Option<Vec<String>>,
     options_json: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    install_delta_plan_codecs_inner(&extract_session_ctx(ctx)?)?;
+    let session_ctx = extract_session_ctx(ctx)?;
+    install_delta_plan_codecs_inner(&session_ctx)?;
     let handle = extract_plugin_handle(py, &plugin)?;
     let mut resolved = HashMap::new();
     if let Some(options) = options_json {
         for (name, value) in options {
-            let injected =
-                inject_delta_scan_defaults(&extract_session_ctx(ctx)?, name.as_str(), Some(&value))
-                    .map_err(PyValueError::new_err)?;
+            let injected = inject_delta_scan_defaults(&session_ctx, name.as_str(), Some(&value))
+                .map_err(PyValueError::new_err)?;
             if let Some(injected) = injected {
                 resolved.insert(name, injected);
             }
@@ -264,9 +266,8 @@ pub(crate) fn register_df_plugin_table_providers(
         .as_ref()
         .map_or(true, |names| names.iter().any(|name| name == "delta"));
     if wants_delta && !resolved.contains_key("delta") {
-        if let Some(injected) =
-            inject_delta_scan_defaults(&extract_session_ctx(ctx)?, "delta", None)
-                .map_err(PyValueError::new_err)?
+        if let Some(injected) = inject_delta_scan_defaults(&session_ctx, "delta", None)
+            .map_err(PyValueError::new_err)?
         {
             resolved.insert("delta".to_string(), injected);
         }
@@ -278,7 +279,7 @@ pub(crate) fn register_df_plugin_table_providers(
     };
     handle
         .register_table_providers(
-            &extract_session_ctx(ctx)?,
+            &session_ctx,
             table_names.as_deref(),
             resolved_options.as_ref(),
         )
@@ -296,22 +297,22 @@ pub(crate) fn register_df_plugin(
     table_names: Option<Vec<String>>,
     options_json: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
+    let session_ctx = extract_session_ctx(ctx)?;
     let handle = extract_plugin_handle(py, &plugin)?;
     handle
-        .register_udfs(&extract_session_ctx(ctx)?, None)
+        .register_udfs(&session_ctx, None)
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
     handle
-        .register_table_functions(&extract_session_ctx(ctx)?)
+        .register_table_functions(&session_ctx)
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
         })?;
-    install_delta_plan_codecs_inner(&extract_session_ctx(ctx)?)?;
+    install_delta_plan_codecs_inner(&session_ctx)?;
     let resolved_options = if let Some(options) = options_json {
         let mut resolved = HashMap::with_capacity(options.len());
         for (name, value) in options {
-            let injected =
-                inject_delta_scan_defaults(&extract_session_ctx(ctx)?, name.as_str(), Some(&value))
-                    .map_err(PyValueError::new_err)?;
+            let injected = inject_delta_scan_defaults(&session_ctx, name.as_str(), Some(&value))
+                .map_err(PyValueError::new_err)?;
             if let Some(injected) = injected {
                 resolved.insert(name, injected);
             }
@@ -322,7 +323,7 @@ pub(crate) fn register_df_plugin(
     };
     handle
         .register_table_providers(
-            &extract_session_ctx(ctx)?,
+            &session_ctx,
             table_names.as_deref(),
             resolved_options.as_ref(),
         )

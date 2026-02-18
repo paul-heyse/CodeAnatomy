@@ -134,6 +134,8 @@ impl SessionFactory {
         config_opts.optimizer.max_passes = 3;
         config_opts.optimizer.enable_dynamic_filter_pushdown = true;
         config_opts.optimizer.enable_topk_dynamic_filter_pushdown = true;
+        config_opts.optimizer.enable_sort_pushdown = true;
+        config_opts.optimizer.allow_symmetric_joins_without_pruning = true;
         config_opts.execution.planning_concurrency = self.profile.target_partitions as usize;
         config_opts.sql_parser.enable_ident_normalization = false;
         config_opts.explain.show_statistics = true;
@@ -221,6 +223,9 @@ impl SessionFactory {
         opts.optimizer.enable_dynamic_filter_pushdown = profile.enable_dynamic_filter_pushdown;
         opts.optimizer.enable_topk_dynamic_filter_pushdown =
             profile.enable_topk_dynamic_filter_pushdown;
+        opts.optimizer.enable_sort_pushdown = profile.enable_sort_pushdown;
+        opts.optimizer.allow_symmetric_joins_without_pruning =
+            profile.allow_symmetric_joins_without_pruning;
         opts.sql_parser.enable_ident_normalization = profile.enable_ident_normalization;
         opts.explain.show_statistics = profile.show_statistics;
         opts.explain.show_schema = profile.show_schema;

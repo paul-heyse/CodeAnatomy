@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from datafusion_engine.sql.options import sql_options_for_profile
-from datafusion_engine.udf.extension_core import (
+from datafusion_engine.udf.extension_runtime import (
     rust_udf_snapshot,
     snapshot_function_names,
     snapshot_parameter_names,

@@ -40,6 +40,9 @@ from datafusion_engine.dataset.registration_provider import (
     update_table_provider_fingerprints as _update_table_provider_fingerprints,
 )
 from datafusion_engine.dataset.registration_provider import (
+    update_table_provider_pushdown_contract as _update_table_provider_pushdown_contract,
+)
+from datafusion_engine.dataset.registration_provider import (
     update_table_provider_scan_config as _update_table_provider_scan_config,
 )
 from datafusion_engine.dataset.resolution import (
@@ -283,6 +286,11 @@ def _register_delta_provider(
             state.resolution.provider_kind == "delta_cdf"
             or context.location.delta_cdf_options is not None
         ),
+    )
+    _update_table_provider_pushdown_contract(
+        context.ctx,
+        name=context.name,
+        provider=state.provider_to_register,
     )
     return _maybe_cache(context, result.df), result.cache_prefix
 

@@ -92,6 +92,8 @@ def test_render_markdown_hides_raw_diagnostic_payloads() -> None:
 
 
 def test_render_markdown_shows_artifact_refs_from_insight() -> None:
-    """Test render markdown shows artifact refs from insight."""
+    """Test render markdown renders the insight card without artifact refs lines."""
     output = render_markdown(_result_with_diagnostics())
-    assert ".cq/artifacts/search_diagnostics.json" in output
+    assert "## Insight Card" in output
+    assert "Artifact Refs:" not in output
+    assert "Budget:" not in output

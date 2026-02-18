@@ -79,7 +79,7 @@ def _extract_python_enrichment_pids(result: CqResult) -> set[int]:
 
 
 def test_render_summary_compacts_output() -> None:
-    """Test render summary compacts output."""
+    """Test render output uses Code Overview instead of Summary JSON section."""
     run = RunMeta(
         macro="q",
         argv=["cq", "q", "entity=function name=build_graph"],
@@ -105,15 +105,14 @@ def test_render_summary_compacts_output() -> None:
     )
 
     output = render_markdown(result)
-    assert "## Summary" in output
-    assert "- {" in output
-    assert '"query":"build_graph"' in output
-    assert '"mode":"identifier"' in output
-    assert "- **query**:" not in output
+    assert "## Summary" not in output
+    assert "## Code Overview" in output
+    assert "- Query: `build_graph`" in output
+    assert "- Mode: `identifier`" in output
 
 
 def test_render_search_hides_summary_and_context_blocks() -> None:
-    """Test render search hides summary and context blocks."""
+    """Test render search hides Summary JSON section and shows context snippets by default."""
     finding = Finding(
         category="definition",
         message="build_graph (src/module.py)",
@@ -134,7 +133,7 @@ def test_render_search_hides_summary_and_context_blocks() -> None:
     )
     output = render_markdown(result)
     assert "## Summary" not in output
-    assert "Context (lines" not in output
+    assert "Context (lines" in output
 
 
 def test_render_finding_includes_enrichment_tables() -> None:
@@ -333,7 +332,7 @@ def test_render_falls_back_to_top_level_enrichment_when_nested_language_payload_
 
 
 def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None:
-    """Test render query import finding attaches code facts."""
+    """Test render query import finding renders correctly in Code Overview."""
     repo = tmp_path / "repo"
     src = repo / "src"
     src.mkdir(parents=True)
@@ -357,25 +356,18 @@ def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None
     result = CqResult(run=run, key_findings=(finding,))
 
     output = render_markdown(result)
-    assert "Code Facts:" in output
-    assert "Incremental Enrichment" in output
-    assert "Enrichment Language: `python`" in output
+    assert "## Code Overview" in output
+    assert "import: os" in output
+    assert "Incremental Enrichment" not in output
+    assert "Enrichment Language:" not in output
 
 
 def test_render_query_finding_attaches_enrichment_without_context_by_default(
     tmp_path: Path,
 ) -> None:
-    """Test render query finding attaches enrichment without context by default."""
+    """Test render query finding renders correctly without enrichment payload or context snippet."""
     repo = tmp_path / "repo"
-    src = repo / "src"
-    src.mkdir(parents=True)
-    (src / "module.py").write_text(
-        "def helper():\n"
-        "    return 1\n\n"
-        "def target(value: int) -> int:\n"
-        "    return helper() + value\n",
-        encoding="utf-8",
-    )
+    repo.mkdir(parents=True)
     run = RunMeta(
         macro="q",
         argv=["cq", "q", "entity=function name=target"],
@@ -392,9 +384,11 @@ def test_render_query_finding_attaches_enrichment_without_context_by_default(
     )
     result = CqResult(run=run, key_findings=(finding,))
     output = render_markdown(result)
-    assert "Context (lines" not in output
-    assert "Code Facts:" in output
+    # No enrichment payload in finding details and no file to read, so no Code Facts
+    assert "Code Facts:" not in output
     assert "Details:" not in output
+    assert "## Code Overview" in output
+    assert "function: target" in output
 
 
 def test_render_code_overview_falls_back_for_run_query_mode() -> None:
@@ -601,7 +595,7 @@ def test_render_enrichment_can_attach_payloads_via_precompute(
 
 
 def test_render_markdown_keeps_compact_diagnostics_without_payload_dump() -> None:
-    """Test render markdown keeps compact diagnostics without payload dump."""
+    """Test render markdown omits Summary JSON section and never dumps raw diagnostic payloads."""
     run = RunMeta(
         macro="q",
         argv=["cq", "q", "entity=function name=target"],
@@ -623,7 +617,8 @@ def test_render_markdown_keeps_compact_diagnostics_without_payload_dump() -> Non
         key_findings=(Finding(category="definition", message="function: target"),),
     )
     output = render_markdown(result)
-    assert "Python semantic diagnostics: 1 items" in output
-    assert "Cross-lang: 1 diagnostics" in output
+    assert "## Summary" not in output
+    assert "## Code Overview" in output
     assert "Diagnostic Details" not in output
     assert '"message": "diag"' not in output
+    assert "python_semantic_diagnostics" not in output

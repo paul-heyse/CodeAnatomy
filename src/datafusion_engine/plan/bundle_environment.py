@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -219,17 +220,52 @@ def function_registry_hash(snapshot: Mapping[str, object]) -> str:
     return hash_msgpack_canonical(canonical)
 
 
+def function_registry_hash_for_context(
+    ctx: SessionContext,
+    *,
+    session_runtime: SessionRuntime | None,
+) -> str:
+    """Capture function-catalog payload and return its stable hash.
+
+    Returns:
+    -------
+    str
+        Stable hash value for the captured function catalog payload.
+    """
+    if not capture_udf_metadata_for_plan(session_runtime):
+        return function_registry_hash({"functions": []})
+
+    functions: Sequence[Mapping[str, object]] = ()
+    try:
+        sql_options = None
+        if session_runtime is not None:
+            sql_options = information_schema_sql_options(session_runtime)
+        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+        functions = introspector.function_catalog_snapshot(include_parameters=True)
+    except (RuntimeError, TypeError, ValueError, Warning):
+        functions = ()
+    snapshot: Mapping[str, object] = {"functions": list(functions)}
+    return function_registry_hash(snapshot)
+
+
+def suppress_introspection_errors() -> contextlib.AbstractContextManager[None]:
+    """Return an error-suppression context for introspection probes."""
+    return contextlib.suppress(RuntimeError, TypeError, ValueError)
+
+
 __all__ = [
     "build_introspector",
     "canonicalize_snapshot",
     "capture_udf_metadata_for_plan",
     "df_settings_snapshot",
     "function_registry_hash",
+    "function_registry_hash_for_context",
     "information_schema_hash",
     "information_schema_snapshot",
     "information_schema_sql_options",
     "routine_metadata_snapshot",
     "safe_introspection_rows",
     "settings_rows_to_mapping",
+    "suppress_introspection_errors",
     "table_definitions_snapshot",
 ]

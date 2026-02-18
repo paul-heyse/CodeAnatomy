@@ -37,7 +37,8 @@ def ir_cache_hint_to_execution_policy(hint: str | None) -> CachePolicy | None:
 
     The IR pipeline uses a simplified "eager"/"lazy" vocabulary based on
     graph topology. The execution layer uses a more detailed
-    "none"/"delta_staging"/"delta_output" vocabulary for cache materialization.
+    "none"/"memory"/"delta_staging"/"delta_output" vocabulary for cache
+    materialization.
 
     Parameters
     ----------
@@ -49,7 +50,7 @@ def ir_cache_hint_to_execution_policy(hint: str | None) -> CachePolicy | None:
     Returns:
     -------
     CachePolicy | None
-        "delta_staging" for "eager" (cache to avoid recomputation on high fan-out),
+        "memory" for "eager" (cache to avoid recomputation on high fan-out),
         "none" for "lazy" (terminal views don't need intermediate caching),
         None when no recommendation applies.
 
@@ -59,7 +60,7 @@ def ir_cache_hint_to_execution_policy(hint: str | None) -> CachePolicy | None:
     execution vocabulary (mechanism-based: where to materialize the cache).
     """
     if hint == "eager":
-        return "delta_staging"
+        return "memory"
     if hint == "lazy":
         return "none"
     return None

@@ -41,14 +41,10 @@ from tools.cq.core.render_summary import (
 from tools.cq.core.render_summary import (
     render_insight_card_from_summary as _render_insight_card_from_summary,
 )
-from tools.cq.core.render_summary import (
-    render_summary as _render_summary,
-)
 from tools.cq.core.render_utils import clean_scalar as _clean_scalar
 from tools.cq.core.render_utils import format_location as _format_location
 from tools.cq.core.render_utils import safe_int as _safe_int
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
-from tools.cq.core.summary_types import SummaryV1
 
 if TYPE_CHECKING:
     from tools.cq.core.ports import RenderEnrichmentPort
@@ -72,6 +68,17 @@ _SECTION_ORDER_MAP: dict[str, tuple[str, ...]] = {
         "Suggested Follow-ups",
         "Cross-Language Diagnostics",
     ),
+    "q": (
+        "Target Candidates",
+        "Neighborhood Preview",
+        "Resolved Objects",
+        "Occurrences",
+        "Uses by Kind",
+        "Non-Code Matches (Strings / Comments / Docstrings)",
+        "Hot Files",
+        "Suggested Follow-ups",
+        "Cross-Language Diagnostics",
+    ),
     "calls": (
         "Neighborhood Preview",
         "Target Callees",
@@ -80,6 +87,18 @@ _SECTION_ORDER_MAP: dict[str, tuple[str, ...]] = {
         "Keyword Argument Usage",
         "Calling Contexts",
         "Call Sites",
+    ),
+    "impact": (
+        "Callers (via rg)",
+        "Taint Flow",
+        "Hazards",
+        "Cross-Language Diagnostics",
+    ),
+    "sig-impact": (
+        "Break Sites",
+        "Ambiguous Sites",
+        "Ok Sites",
+        "Cross-Language Diagnostics",
     ),
 }
 
@@ -170,11 +189,11 @@ def _format_finding_prefix(finding: Finding) -> str:
 def _format_context_block(finding: Finding, *, enabled: bool = True) -> list[str]:
     if not enabled:
         return []
-    if os.environ.get(SHOW_CONTEXT_SNIPPETS_ENV, "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
+    if os.environ.get(SHOW_CONTEXT_SNIPPETS_ENV, "").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
     }:
         return []
     context_snippet = finding.details.get("context_snippet")
@@ -465,7 +484,6 @@ def _reorder_sections(sections: Sequence[Section], macro: str) -> list[Section]:
 def _assemble_report_body(
     *,
     result: CqResult,
-    compact_summary: SummaryV1 | dict[str, object],
     finding_context: _RenderPassContext,
     dedupe_context: _RenderPassContext,
 ) -> list[str]:
@@ -477,8 +495,6 @@ def _assemble_report_body(
     lines.extend(_render_sections(reordered, context=dedupe_context))
     lines.extend(_render_evidence(result.evidence, context=dedupe_context))
     lines.extend(_render_artifacts(result.artifacts))
-    if result.run.macro != "search":
-        lines.extend(_render_summary(compact_summary))
     return lines
 
 
@@ -624,18 +640,15 @@ def render_markdown(
         allowed_files=session.allowed_files,
         port=resolved_context.enrichment_port,
     )
-    compact_summary, _offloaded = compact_summary_for_rendering(session.summary_with_metrics)
-
-    show_context = result.run.macro != "search"
     base_context = _RenderPassContext(
-        show_context=show_context,
+        show_context=True,
         root=root,
         enrich_cache=session.cache,
         allowed_enrichment_files=session.allowed_files,
         port=resolved_context.enrichment_port,
     )
     dedupe_context = _RenderPassContext(
-        show_context=show_context,
+        show_context=False,
         root=root,
         enrich_cache=session.cache,
         allowed_enrichment_files=session.allowed_files,
@@ -644,7 +657,6 @@ def render_markdown(
     )
     lines = _assemble_report_body(
         result=result,
-        compact_summary=compact_summary,
         finding_context=base_context,
         dedupe_context=dedupe_context,
     )

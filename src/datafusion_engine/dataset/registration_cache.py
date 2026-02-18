@@ -12,7 +12,7 @@ from datafusion.dataframe import DataFrame
 
 from datafusion_engine.arrow.interop import arrow_schema_from_df
 from datafusion_engine.dataset.registration_core import (
-    DataFusionCacheSettings as _DataFusionCacheSettings,
+    _DataFusionCacheSettings,
 )
 from datafusion_engine.dataset.registration_scan import DEFAULT_CACHE_MAX_COLUMNS
 from datafusion_engine.dataset.registry import DatasetLocation

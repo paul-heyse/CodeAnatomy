@@ -13,6 +13,7 @@ from semantics.quality import (
     SignalsSpec,
 )
 from semantics.schema import SemanticSchemaError
+from semantics.table_registry import TableRegistry
 
 EXPECTED_INNER_JOIN_MATCH_COUNT = 2
 resolve_join_keys = SemanticCompiler.__dict__["_resolve_join_keys"]
@@ -190,7 +191,7 @@ class TestJoinKeyInferenceEndToEnd:
             {"file_id": ["f1"], "file_quality_score": [800.0]},
             name="file_quality_v1",
         )
-        compiler = SemanticCompiler(ctx=ctx)
+        compiler = SemanticCompiler(ctx=ctx, table_registry=TableRegistry())
         spec = QualityRelationshipSpec(
             name="test_inferred_e2e",
             left_view="left_e2e",
@@ -221,7 +222,7 @@ class TestJoinKeyInferenceEndToEnd:
         ctx = SessionContext()
         ctx.from_pydict({"x": [1], "y": [2]}, name="left_no_fileid")
         ctx.from_pydict({"a": [1], "b": [2]}, name="right_no_fileid")
-        compiler = SemanticCompiler(ctx=ctx)
+        compiler = SemanticCompiler(ctx=ctx, table_registry=TableRegistry())
         spec = QualityRelationshipSpec(
             name="test_no_keys",
             left_view="left_no_fileid",
@@ -247,7 +248,7 @@ class TestJoinKeyInferenceEndToEnd:
             {"file_id": ["f1"], "file_quality_score": [800.0]},
             name="file_quality_v1",
         )
-        compiler = SemanticCompiler(ctx=ctx)
+        compiler = SemanticCompiler(ctx=ctx, table_registry=TableRegistry())
         spec = QualityRelationshipSpec(
             name="test_explicit",
             left_view="left_explicit",
@@ -292,7 +293,7 @@ class TestJoinKeyInferenceEndToEnd:
             {"file_id": ["f1", "f2", "f3"], "file_quality_score": [800.0, 800.0, 800.0]},
             name="file_quality_v1",
         )
-        compiler = SemanticCompiler(ctx=ctx)
+        compiler = SemanticCompiler(ctx=ctx, table_registry=TableRegistry())
         spec = QualityRelationshipSpec(
             name="test_multi_row",
             left_view="left_multi",

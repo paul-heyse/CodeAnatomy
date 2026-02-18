@@ -126,7 +126,7 @@ def _ensure_required_udfs(
 ) -> bool:
     if not required:
         return True
-    from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
 
     try:
         snapshot = rust_udf_snapshot(ctx)
@@ -189,8 +189,7 @@ def _repartition_for_join(
     target_partitions = runtime_profile.execution.target_partitions
     if target_partitions is None or target_partitions < MIN_JOIN_PARTITIONS:
         return df
-    join_policy = runtime_profile.policies.join_policy
-    if join_policy is not None and not join_policy.repartition_joins:
+    if not runtime_profile.join_repartition_enabled(list(keys)):
         return df
     repartition_by_hash = getattr(df, "repartition_by_hash", None)
     if not callable(repartition_by_hash):
@@ -918,7 +917,76 @@ def _interval_left_only_output(
     )
 
 
+def _interval_align_rust_bridge(
+    left: TableLike,
+    right: TableLike,
+    *,
+    cfg: IntervalAlignOptions,
+) -> TableLike | None:
+    from datafusion_engine.extensions import datafusion_ext
+
+    bridge = getattr(datafusion_ext, "interval_align_table", None)
+    if not callable(bridge):
+        return None
+    payload = {
+        "mode": cfg.mode,
+        "how": cfg.how,
+        "left_path_col": cfg.left_path_col,
+        "left_start_col": cfg.left_start_col,
+        "left_end_col": cfg.left_end_col,
+        "right_path_col": cfg.right_path_col,
+        "right_start_col": cfg.right_start_col,
+        "right_end_col": cfg.right_end_col,
+        "select_left": list(cfg.select_left),
+        "select_right": list(cfg.select_right),
+        "tie_breakers": [{"column": key.column, "order": key.order} for key in cfg.tie_breakers],
+        "emit_match_meta": cfg.emit_match_meta,
+        "match_kind_col": cfg.match_kind_col,
+        "match_score_col": cfg.match_score_col,
+        "right_suffix": cfg.right_suffix,
+    }
+    try:
+        resolved = bridge(left, right, payload)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if resolved is None:
+        return None
+    from datafusion_engine.arrow.coercion import to_arrow_table
+
+    return cast("TableLike", to_arrow_table(resolved))
+
+
 def interval_align_kernel(
+    left: TableLike,
+    right: TableLike,
+    *,
+    cfg: IntervalAlignOptions,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> TableLike:
+    """Align intervals via the Rust bridge surface.
+
+    Returns:
+    -------
+    TableLike
+        Interval-aligned table produced by the bridge.
+
+    Raises:
+    ------
+    RuntimeError:
+        If the bridge entrypoint is unavailable or returns no payload.
+    """
+    _ = runtime_profile
+    bridged = _interval_align_rust_bridge(left, right, cfg=cfg)
+    if bridged is None:
+        msg = (
+            "interval_align_table bridge is unavailable. "
+            "DF52 hard cutover requires the Rust interval-align provider."
+        )
+        raise RuntimeError(msg)
+    return bridged
+
+
+def interval_align_kernel_datafusion(
     left: TableLike,
     right: TableLike,
     *,

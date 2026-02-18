@@ -8,6 +8,7 @@
 //! - Output DataFrame construction
 
 use datafusion::prelude::*;
+use datafusion::physical_plan::displayable;
 use datafusion_common::{DataFusionError, Result};
 use std::collections::{HashMap, VecDeque};
 #[cfg(feature = "tracing")]
@@ -440,11 +441,13 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// - EXPLAIN VERBOSE output via df.explain(true, false)?.collect().await?
     pub async fn validate_plan(df: &DataFrame) -> Result<PlanValidation> {
         // P0: Unoptimized logical plan
-        let unoptimized_plan = format!("{:?}", df.logical_plan());
+        let unoptimized_plan = df.logical_plan().display_indent().to_string();
 
         // P2: Physical plan
         let physical_plan_obj = df.clone().create_physical_plan().await?;
-        let physical_plan = format!("{:?}", physical_plan_obj);
+        let physical_plan = displayable(physical_plan_obj.as_ref())
+            .indent(true)
+            .to_string();
 
         // EXPLAIN VERBOSE
         let explain_df = df.clone().explain(true, false)?;

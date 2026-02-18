@@ -256,7 +256,7 @@ def _resolve_required_udfs(
                 sorted(set(extra)),
             )
     if resolved_udfs:
-        from datafusion_engine.udf.extension_core import validate_required_udfs
+        from datafusion_engine.udf.extension_runtime import validate_required_udfs
 
         validate_required_udfs(resolved_snapshot, required=resolved_udfs)
     return resolved_udfs

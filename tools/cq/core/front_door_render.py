@@ -28,12 +28,6 @@ def render_insight_card(insight: FrontDoorInsightV1) -> list[str]:
     lines = ["## Insight Card", _render_target_line(insight.target)]
     lines.extend(_render_neighborhood_lines(insight.neighborhood))
     lines.append(_render_risk_line(insight.risk))
-    lines.append(_render_confidence_line(insight.confidence))
-    lines.append(_render_degradation_line(insight.degradation))
-    lines.append(_render_budget_line(insight.budget))
-    artifact_refs_line = _render_artifact_refs_line(insight.artifact_refs)
-    if artifact_refs_line is not None:
-        lines.append(artifact_refs_line)
     lines.append("")
     return lines
 
@@ -76,15 +70,12 @@ def _render_neighborhood_lines(neighborhood: InsightNeighborhoodV1) -> list[str]
 def _render_risk_line(risk: InsightRiskV1) -> str:
     driver_text = ", ".join(risk.drivers) if risk.drivers else "none"
     counters = risk.counters
-    return (
-        "- Risk: "
-        f"level={risk.level}; "
-        f"drivers={driver_text}; "
-        f"callers={counters.callers}, "
-        f"callees={counters.callees}, "
-        f"hazards={counters.hazard_count}, "
-        f"forwarding={counters.forwarding_count}"
-    )
+    parts = [f"level={risk.level}", f"drivers={driver_text}"]
+    if counters.hazard_count:
+        parts.append(f"hazards={counters.hazard_count}")
+    if counters.forwarding_count:
+        parts.append(f"forwarding={counters.forwarding_count}")
+    return f"- Risk: {'; '.join(parts)}"
 
 
 def _render_confidence_line(confidence: InsightConfidenceV1) -> str:

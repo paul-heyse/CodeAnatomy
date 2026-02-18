@@ -6,11 +6,12 @@ import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from datafusion import SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
 
+from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.io import delta_write_handler, format_write_handler
@@ -105,8 +106,10 @@ class WritePipeline:
 
     @staticmethod
     def _df_has_rows(df: DataFrame) -> bool:
-        batches = df.collect()
-        return any(batch.num_rows > 0 for batch in batches)
+        from datafusion_engine.session.streaming import as_record_batch_reader
+
+        reader = as_record_batch_reader(df)
+        return any(batch.num_rows > 0 for batch in reader)
 
     def _execute_sql(self, sql: str) -> DataFrame:
         return self.ctx.sql_with_options(sql, self._resolved_sql_options())
@@ -149,9 +152,11 @@ class WritePipeline:
         )
         if validation is None:
             return
-        table = df.to_arrow_table()
+        from datafusion_engine.session.streaming import as_record_batch_reader
+
+        reader = as_record_batch_reader(df)
         validate_arrow_table(
-            table,
+            cast("TableLike", reader),
             spec=dataset_spec.table_spec,
             options=validation,
             runtime_profile=self.runtime_profile,
@@ -186,8 +191,7 @@ class WritePipeline:
                 normalized_destination=normalized_destination,
             )
         profile = self.runtime_profile
-        candidates = dict(profile.data_sources.dataset_templates)
-        candidates.update(profile.data_sources.extract_output.dataset_locations)
+        candidates = dict(profile.dataset_candidates(destination))
         loc = candidates.get(destination)
         if loc is not None:
             return destination, loc

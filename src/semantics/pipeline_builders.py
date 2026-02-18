@@ -92,8 +92,13 @@ def _normalize_builder(
 
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import SemanticCompiler
+        from semantics.table_registry import TableRegistry
 
-        return SemanticCompiler(inner_ctx, config=config).normalize(table, prefix=prefix)
+        return SemanticCompiler(
+            inner_ctx,
+            config=config,
+            table_registry=TableRegistry(),
+        ).normalize(table, prefix=prefix)
 
     return _builder
 
@@ -110,10 +115,15 @@ def _normalize_spec_builder(
         import msgspec
 
         from semantics.compiler import SemanticCompiler
+        from semantics.table_registry import TableRegistry
 
         resolved_table = input_mapping.get(spec.source_table, spec.source_table)
         resolved_spec = msgspec.structs.replace(spec.spec, table=resolved_table)
-        return SemanticCompiler(inner_ctx, config=config).normalize_from_spec(resolved_spec)
+        return SemanticCompiler(
+            inner_ctx,
+            config=config,
+            table_registry=TableRegistry(),
+        ).normalize_from_spec(resolved_spec)
 
     return _builder
 
@@ -146,8 +156,13 @@ def _relationship_builder(
 
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import RelationOptions, SemanticCompiler
+        from semantics.table_registry import TableRegistry
 
-        compiler = SemanticCompiler(inner_ctx, config=config)
+        compiler = SemanticCompiler(
+            inner_ctx,
+            config=config,
+            table_registry=TableRegistry(),
+        )
         if isinstance(spec, QualityRelationshipSpec):
             file_quality_df = None
             if spec.join_file_quality:
@@ -269,8 +284,13 @@ def _join_group_builder(
 
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import SemanticCompiler
+        from semantics.table_registry import TableRegistry
 
-        return SemanticCompiler(inner_ctx, config=config).build_join_group(group)
+        return SemanticCompiler(
+            inner_ctx,
+            config=config,
+            table_registry=TableRegistry(),
+        ).build_join_group(group)
 
     return _builder
 
@@ -284,8 +304,13 @@ def _union_nodes_builder(
 
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import SemanticCompiler
+        from semantics.table_registry import TableRegistry
 
-        return SemanticCompiler(inner_ctx, config=config).union_nodes(
+        return SemanticCompiler(
+            inner_ctx,
+            config=config,
+            table_registry=TableRegistry(),
+        ).union_nodes(
             names,
             discriminator="node_kind",
         )
@@ -302,8 +327,13 @@ def _union_edges_builder(
 
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import SemanticCompiler
+        from semantics.table_registry import TableRegistry
 
-        return SemanticCompiler(inner_ctx, config=config).union_edges(
+        return SemanticCompiler(
+            inner_ctx,
+            config=config,
+            table_registry=TableRegistry(),
+        ).union_edges(
             names,
             discriminator="edge_kind",
         )

@@ -672,7 +672,7 @@ def _validate_required_functions(
     resolved = catalog or _function_catalog(ctx)
     available = set(resolved.function_names) if resolved is not None else set()
     try:
-        from datafusion_engine.udf.extension_core import (
+        from datafusion_engine.udf.extension_runtime import (
             rust_udf_snapshot,
             udf_names_from_snapshot,
         )
@@ -1222,7 +1222,7 @@ def validate_required_engine_functions(ctx: SessionContext) -> None:
     Raises:
         ValueError: If the operation cannot be completed.
     """
-    from datafusion_engine.udf.extension_core import udf_backend_available
+    from datafusion_engine.udf.extension_runtime import udf_backend_available
 
     if not udf_backend_available():
         return

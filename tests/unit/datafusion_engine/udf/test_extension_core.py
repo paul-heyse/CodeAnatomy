@@ -11,7 +11,9 @@ def test_extension_registry_exports_registration_helpers() -> None:
     """Extension registry exports canonical registration helpers."""
     assert callable(extension_registry.register_rust_udfs)
     source = inspect.getsource(extension_registry)
-    assert "extension_core as _core" not in source
+    assert "extension_core" not in source
+    assert "extension_snapshot_runtime" not in source
+    assert "extension_runtime" in source
     assert "def register_rust_udfs" in source
 
 

@@ -18,6 +18,7 @@ pub mod compliance;
 pub mod contracts;
 pub mod executor;
 pub mod providers;
+pub mod python;
 pub mod rules;
 pub mod schema;
 pub mod session;

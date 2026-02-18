@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, cast
 
 from datafusion import SessionContext
-
-from datafusion_engine.plan.walk import looks_like_plan, walk_logical_complete
 
 if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
@@ -28,6 +26,43 @@ _SUBSTRAIT_WRAPPER_VARIANTS: dict[str, tuple[str, ...]] = {
     "RecursiveQuery": ("static_term", "recursive_term"),
     "Unnest": ("input",),
 }
+
+
+def _looks_like_plan(value: object | None) -> bool:
+    if value is None:
+        return False
+    return all(hasattr(value, name) for name in ("inputs", "to_variant", "display_indent"))
+
+
+def _embedded_plans(variant: object) -> list[object]:
+    plans: list[object] = []
+    for attr in ("subquery", "plan", "input"):
+        value = getattr(variant, attr, None)
+        if _looks_like_plan(value):
+            plans.append(value)
+    for attr in getattr(variant, "__dict__", {}):
+        value = getattr(variant, attr, None)
+        if _looks_like_plan(value):
+            plans.append(value)
+    return plans
+
+
+def _walk_logical_complete(root: object) -> tuple[object, ...]:
+    stack: list[object] = [root]
+    seen: set[int] = set()
+    ordered: list[object] = []
+    while stack:
+        node = stack.pop()
+        node_id = id(node)
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        ordered.append(node)
+        variant = _safe_plan_variant(node)
+        stack.extend(reversed(_safe_plan_inputs(node)))
+        if variant is not None:
+            stack.extend(reversed(_embedded_plans(variant)))
+    return tuple(ordered)
 
 
 def normalize_substrait_plan(
@@ -58,7 +93,7 @@ def normalize_substrait_plan(
 
 def _unsupported_substrait_variants(plan: DataFusionLogicalPlan) -> set[str]:
     unsupported: set[str] = set()
-    for node in walk_logical_complete(plan):
+    for node in _walk_logical_complete(plan):
         variant_name = _plan_variant_name(node)
         if variant_name in _UNSUPPORTED_SUBSTRAIT_VARIANTS:
             unsupported.add(variant_name)
@@ -93,7 +128,7 @@ def _unwrap_substrait_wrapper(plan: DataFusionLogicalPlan) -> DataFusionLogicalP
     return None
 
 
-def _safe_plan_inputs(plan: DataFusionLogicalPlan) -> list[object]:
+def _safe_plan_inputs(plan: object) -> list[object]:
     inputs = getattr(plan, "inputs", None)
     if not callable(inputs):
         return []
@@ -101,12 +136,12 @@ def _safe_plan_inputs(plan: DataFusionLogicalPlan) -> list[object]:
         children = inputs()
     except (RuntimeError, TypeError, ValueError):
         return []
-    if isinstance(children, Sequence) and not isinstance(children, (str, bytes)):
+    if isinstance(children, Iterable) and not isinstance(children, (str, bytes)):
         return [child for child in children if child is not None]
     return []
 
 
-def _safe_plan_variant(plan: DataFusionLogicalPlan) -> object | None:
+def _safe_plan_variant(plan: object) -> object | None:
     to_variant = getattr(plan, "to_variant", None)
     if not callable(to_variant):
         return None
@@ -129,17 +164,17 @@ def _safe_variant_attr(variant: object, attr: str) -> object | None:
 def _coerce_plan(value: object | None) -> DataFusionLogicalPlan | None:
     if value is None:
         return None
-    if looks_like_plan(value):
+    if _looks_like_plan(value):
         return cast("DataFusionLogicalPlan", value)
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         for entry in value:
-            if looks_like_plan(entry):
+            if _looks_like_plan(entry):
                 return cast("DataFusionLogicalPlan", entry)
     return None
 
 
 def _plan_variant_name(plan: object) -> str:
-    if not looks_like_plan(plan):
+    if not _looks_like_plan(plan):
         return type(plan).__name__
     to_variant = getattr(plan, "to_variant", None)
     if not callable(to_variant):

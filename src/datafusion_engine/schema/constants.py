@@ -11,6 +11,7 @@ ENGINE_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
         "array_sort",
         "array_to_string",
         "bool_or",
+        "canonicalize_byte_span",
         "coalesce",
         "col_to_byte",
         "concat_ws",

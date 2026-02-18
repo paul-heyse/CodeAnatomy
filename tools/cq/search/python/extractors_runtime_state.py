@@ -181,6 +181,8 @@ _RESOLUTION_SEQUENCE_FIELDS: tuple[str, ...] = (
     "binding_candidates",
     "import_alias_chain",
 )
+
+
 def _new_stage_fact_buckets() -> dict[str, dict[str, object]]:
     return {key: {} for key in _STAGE_FACT_BUCKET_KEYS}
 

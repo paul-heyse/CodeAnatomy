@@ -15,6 +15,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::optimizer::OptimizerConfig;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
+#[cfg(feature = "substrait")]
 use datafusion::prelude::DataFrame;
 use datafusion_common::Result;
 use datafusion_expr::lit;
@@ -29,8 +30,11 @@ use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyList, PyTuple};
 use serde::Deserialize;
 use tokio::runtime::Runtime;
 
+use codeanatomy_engine::compiler::lineage::{
+    extract_lineage as extract_lineage_native,
+    lineage_from_substrait as lineage_from_substrait_native,
+};
 use codeanatomy_engine::compiler::plan_bundle;
-use codeanatomy_engine::compiler::lineage::lineage_from_substrait as lineage_from_substrait_native;
 use codeanatomy_engine::session::extraction::{
     build_extraction_session as build_extraction_session_native, ExtractionConfig,
 };
@@ -43,6 +47,7 @@ use crate::delta_control_plane::{
 };
 use crate::delta_observability::add_action_payloads;
 use crate::expr::PyExpr;
+use crate::sql::logical::PyLogicalPlan;
 use crate::utils::py_obj_to_scalar_value;
 
 use super::helpers::{
@@ -160,6 +165,15 @@ pub(crate) fn lineage_from_substrait(
         PyRuntimeError::new_err(format!("Failed to encode lineage payload: {err}"))
     })?;
     json_to_py(py, &payload)
+}
+
+#[pyfunction]
+pub(crate) fn extract_lineage_json(plan: PyLogicalPlan) -> PyResult<String> {
+    let logical_plan = plan.plan();
+    let report = extract_lineage_native(logical_plan.as_ref())
+        .map_err(|err| PyRuntimeError::new_err(format!("Lineage extraction failed: {err}")))?;
+    serde_json::to_string(&report)
+        .map_err(|err| PyRuntimeError::new_err(format!("Failed to encode lineage payload: {err}")))
 }
 
 #[pyfunction]
@@ -730,6 +744,7 @@ pub(crate) fn session_context_contract_probe(
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(replay_substrait_plan, module)?)?;
     module.add_function(wrap_pyfunction!(lineage_from_substrait, module)?)?;
+    module.add_function(wrap_pyfunction!(extract_lineage_json, module)?)?;
     module.add_function(wrap_pyfunction!(build_extraction_session, module)?)?;
     module.add_function(wrap_pyfunction!(register_dataset_provider, module)?)?;
     module.add_function(wrap_pyfunction!(capture_plan_bundle_runtime, module)?)?;
@@ -752,6 +767,7 @@ pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
 pub(crate) fn register_internal_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(replay_substrait_plan, module)?)?;
     module.add_function(wrap_pyfunction!(lineage_from_substrait, module)?)?;
+    module.add_function(wrap_pyfunction!(extract_lineage_json, module)?)?;
     module.add_function(wrap_pyfunction!(build_extraction_session, module)?)?;
     module.add_function(wrap_pyfunction!(register_dataset_provider, module)?)?;
     module.add_function(wrap_pyfunction!(capture_plan_bundle_runtime, module)?)?;

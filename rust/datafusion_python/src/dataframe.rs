@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, RecordBatchReader};
@@ -39,6 +40,7 @@ use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::SortExpr;
 use datafusion::parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use datafusion::prelude::*;
+use datafusion_common::parquet_config::DFParquetWriterVersion;
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 use pyo3::exceptions::PyValueError;
@@ -194,6 +196,8 @@ impl PyParquetWriterOptions {
         maximum_parallel_row_group_writers: usize,
         maximum_buffered_record_batches_per_stream: usize,
     ) -> Self {
+        let writer_version = DFParquetWriterVersion::from_str(writer_version.as_str())
+            .unwrap_or_default();
         Self {
             options: ParquetOptions {
                 data_pagesize_limit,

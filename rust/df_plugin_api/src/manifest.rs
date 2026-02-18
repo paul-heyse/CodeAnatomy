@@ -10,6 +10,7 @@ pub mod caps {
     pub const AGG_UDF: u64 = 1 << 2;
     pub const WINDOW_UDF: u64 = 1 << 3;
     pub const TABLE_FUNCTION: u64 = 1 << 4;
+    pub const RELATION_PLANNER: u64 = 1 << 5;
 }
 
 #[repr(C)]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from datafusion_engine.plan import plan_introspection
+from datafusion_engine.plan import bundle_environment as plan_introspection
 
 
 def test_canonicalize_snapshot_sorts_nested_mappings_and_sequences() -> None:

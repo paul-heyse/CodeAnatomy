@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -15,7 +14,6 @@ const PREFIX: &str = "codeanatomy_physical";
 pub struct CodeAnatomyPhysicalConfig {
     pub enabled: bool,
     pub coalesce_partitions: bool,
-    pub coalesce_batches: bool,
 }
 
 impl Default for CodeAnatomyPhysicalConfig {
@@ -23,7 +21,6 @@ impl Default for CodeAnatomyPhysicalConfig {
         Self {
             enabled: true,
             coalesce_partitions: true,
-            coalesce_batches: true,
         }
     }
 }
@@ -48,11 +45,6 @@ crate::impl_extension_options!(
             coalesce_partitions,
             bool,
             "Coalesce partitions in the physical plan."
-        ),
-        (
-            coalesce_batches,
-            bool,
-            "Coalesce batches in the physical plan."
         ),
     ]
 );
@@ -85,6 +77,7 @@ pub fn ensure_physical_config(
 pub struct CodeAnatomyPhysicalRule;
 
 impl PhysicalOptimizerRule for CodeAnatomyPhysicalRule {
+    #[tracing::instrument(level = "debug", skip_all, fields(rule = "CodeAnatomyPhysicalRule"))]
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -97,9 +90,6 @@ impl PhysicalOptimizerRule for CodeAnatomyPhysicalRule {
         let mut optimized = plan;
         if policy.coalesce_partitions {
             optimized = Arc::new(CoalescePartitionsExec::new(optimized));
-        }
-        if policy.coalesce_batches {
-            optimized = CoalesceBatches::new().optimize(optimized, config)?;
         }
         Ok(optimized)
     }

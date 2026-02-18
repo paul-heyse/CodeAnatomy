@@ -14,16 +14,12 @@ from datafusion_engine.schema.introspection_core import (
     table_constraint_rows,
 )
 from datafusion_engine.session.introspection import schema_introspector_for_profile
-from datafusion_engine.session.runtime_config_policies import (
-    DATAFUSION_MAJOR_VERSION,
-    DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
-)
-from datafusion_engine.session.runtime_session import record_runtime_setting_override
 from datafusion_engine.sql import options as _sql_options
 from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registration_core import DataFusionRegistrationContext
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.scan_options import DataFusionScanOptions
 
 
@@ -32,13 +28,10 @@ def _apply_scan_settings(
     *,
     scan: DataFusionScanOptions | None,
     sql_options: SQLOptions,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> None:
     if scan is None:
         return
-    skip_runtime_settings = (
-        DATAFUSION_MAJOR_VERSION is not None
-        and DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
-    )
     settings: list[tuple[str, object | None, bool]] = [
         ("datafusion.execution.collect_statistics", scan.collect_statistics, True),
         ("datafusion.execution.meta_fetch_concurrency", scan.meta_fetch_concurrency, False),
@@ -59,9 +52,6 @@ def _apply_scan_settings(
         if value is None:
             continue
         text = str(value).lower() if lower else str(value)
-        if skip_runtime_settings and key.startswith("datafusion.runtime."):
-            record_runtime_setting_override(ctx, key=key, value=text)
-            continue
         _set_runtime_setting(ctx, key=key, value=text, sql_options=sql_options)
 
 
@@ -127,6 +117,11 @@ def _expected_column_defaults(schema: pa.Schema) -> dict[str, str]:
     return defaults
 
 
+def expected_column_defaults(schema: pa.Schema) -> dict[str, str]:
+    """Return default-value metadata for schema fields."""
+    return _expected_column_defaults(schema)
+
+
 def _validate_constraints_and_defaults(
     context: DataFusionRegistrationContext,
     *,
@@ -179,4 +174,4 @@ def _validate_constraints_and_defaults(
         )
 
 
-__all__: list[str] = []
+__all__: list[str] = ["expected_column_defaults"]

@@ -5,11 +5,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pyarrow.types as patypes
-from datafusion import SessionContext, col
 
 from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow.chunking import ChunkPolicy
@@ -17,12 +15,7 @@ from datafusion_engine.arrow.coercion import ensure_arrow_table
 from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.arrow.types import DEFAULT_DICTIONARY_INDEX_TYPE
-from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.schema.type_resolution import ensure_arrow_dtype
-from datafusion_engine.session.helpers import temp_table
-
-if TYPE_CHECKING:
-    from datafusion.expr import Expr
 
 logger = logging.getLogger(__name__)
 
@@ -80,17 +73,48 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     if not policy.dictionary_cols:
         logger.debug("Encoding policy contains no dictionary columns; returning input table")
         return table
-    df_ctx = _datafusion_context()
     resolved = ensure_arrow_table(table, label="table")
     logger.debug(
         "Applying dictionary encoding to %s columns for table with %s rows",
         len(policy.dictionary_cols),
         resolved.num_rows,
     )
-    with temp_table(df_ctx, resolved, prefix="_encoding_") as table_name:
-        df = df_ctx.table(table_name)
-        selections = _encoding_select_expr(schema=resolved.schema, policy=policy)
-        return df.select(*selections).to_arrow_table()
+    encoded_columns: list[pa.ChunkedArray] = []
+    encoded_fields: list[pa.Field] = []
+    for schema_field, column in zip(resolved.schema, resolved.columns, strict=True):
+        if schema_field.name not in policy.dictionary_cols or patypes.is_dictionary(
+            schema_field.type
+        ):
+            encoded_columns.append(column)
+            encoded_fields.append(schema_field)
+            continue
+        index_type = policy.dictionary_index_types.get(
+            schema_field.name,
+            policy.dictionary_index_type,
+        )
+        if index_type is None:
+            index_type = DEFAULT_DICTIONARY_INDEX_TYPE
+        ordered = policy.dictionary_ordered_flags.get(
+            schema_field.name,
+            policy.dictionary_ordered,
+        )
+        dict_type = pa.dictionary(
+            ensure_arrow_dtype(index_type),
+            ensure_arrow_dtype(schema_field.type),
+            ordered=ordered,
+        )
+        encoded_column = column.dictionary_encode().cast(dict_type)
+        encoded_columns.append(encoded_column)
+        encoded_fields.append(
+            pa.field(
+                schema_field.name,
+                encoded_column.type,
+                nullable=schema_field.nullable,
+                metadata=schema_field.metadata,
+            ),
+        )
+    encoded_schema = pa.schema(encoded_fields, metadata=resolved.schema.metadata)
+    return pa.Table.from_arrays(encoded_columns, schema=encoded_schema)
 
 
 def encode_table(table: TableLike, *, columns: Sequence[str]) -> TableLike:
@@ -105,38 +129,6 @@ def encode_table(table: TableLike, *, columns: Sequence[str]) -> TableLike:
         return table
     policy = EncodingPolicy(dictionary_cols=frozenset(columns))
     return apply_encoding(table, policy=policy)
-
-
-def _encoding_select_expr(
-    *,
-    schema: pa.Schema,
-    policy: EncodingPolicy,
-) -> list[Expr]:
-    selections: list[Expr] = []
-    logger.debug("Building encoding selection expressions for %s fields", len(schema))
-    for schema_field in schema:
-        name = schema_field.name
-        if name not in policy.dictionary_cols:
-            selections.append(col(name))
-            continue
-        if patypes.is_dictionary(schema_field.type):
-            selections.append(col(name))
-            continue
-        index_type = policy.dictionary_index_types.get(name, policy.dictionary_index_type)
-        if index_type is None:
-            index_type = DEFAULT_DICTIONARY_INDEX_TYPE
-        ordered = policy.dictionary_ordered_flags.get(name, policy.dictionary_ordered)
-        dict_type = pa.dictionary(
-            ensure_arrow_dtype(index_type),
-            ensure_arrow_dtype(schema_field.type),
-            ordered=ordered,
-        )
-        selections.append(safe_cast(col(name), dict_type).alias(name))
-    return selections
-
-
-def _datafusion_context() -> SessionContext:
-    return SessionContext()
 
 
 __all__ = [

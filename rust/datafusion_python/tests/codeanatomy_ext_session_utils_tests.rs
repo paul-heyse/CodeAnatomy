@@ -11,6 +11,7 @@ fn session_utils_surface_registers() {
         for name in [
             "replay_substrait_plan",
             "lineage_from_substrait",
+            "extract_lineage_json",
             "build_extraction_session",
             "register_dataset_provider",
             "session_context_contract_probe",

@@ -38,7 +38,7 @@ def view_udf_parity_payload(
     ctx: SessionContext | None = None,
 ) -> dict[str, object]:
     """Return a diagnostics payload describing view/UDF parity."""
-    from datafusion_engine.udf.extension_core import udf_names_from_snapshot
+    from datafusion_engine.udf.extension_runtime import udf_names_from_snapshot
 
     def _required_udfs(node: ViewNodeLike) -> tuple[str, ...]:
         return tuple(node.required_udfs)
@@ -112,7 +112,7 @@ def view_fingerprint_payload(
 
 def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, object]:
     """Return a diagnostics payload summarizing a Rust UDF snapshot."""
-    from datafusion_engine.udf.extension_core import (
+    from datafusion_engine.udf.extension_runtime import (
         rust_udf_snapshot_hash,
         udf_names_from_snapshot,
     )

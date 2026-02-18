@@ -215,6 +215,13 @@ _SQL_STATEMENT_PREFIXES: tuple[str, ...] = ("explain", "analyze", "vacuum", "opt
 _NAMED_ARG_PATTERN = re.compile(r"(?:[@:$][A-Za-z_][A-Za-z0-9_]*|\b[A-Za-z_][A-Za-z0-9_]*\s*=>)")
 
 
+class SqlPolicyViolationError(ValueError):
+    """Raised when SQL text violates configured runtime SQL policy."""
+
+
+SqlPolicyViolation = SqlPolicyViolationError
+
+
 def _preflight_sql(
     sql: str,
     *,
@@ -224,13 +231,13 @@ def _preflight_sql(
     head = _sql_head(sql)
     if not policy.allow_ddl and _sql_starts_with(head, _SQL_DDL_PREFIXES):
         msg = "SQL execution failed under safe options: DDL statements are disabled."
-        raise ValueError(msg)
+        raise SqlPolicyViolation(msg)
     if not policy.allow_dml and _sql_starts_with(head, _SQL_DML_PREFIXES):
         msg = "DML is blocked by SQL policy."
-        raise PermissionError(msg)
+        raise SqlPolicyViolation(msg)
     if not policy.allow_statements and _sql_starts_with(head, _SQL_STATEMENT_PREFIXES):
         msg = "SQL execution failed under safe options: statements are disabled."
-        raise ValueError(msg)
+        raise SqlPolicyViolation(msg)
     if _contains_named_args(sql):
         allow_named_args = (
             runtime_profile is not None
@@ -239,7 +246,7 @@ def _preflight_sql(
         )
         if not allow_named_args:
             msg = "SQL execution failed under safe options: named arguments."
-            raise ValueError(msg)
+            raise SqlPolicyViolation(msg)
 
 
 def _resolved_sql_policy(
@@ -276,4 +283,4 @@ def _contains_named_args(sql: str) -> bool:
     return _NAMED_ARG_PATTERN.search(sql) is not None
 
 
-__all__ = ["SqlBindings", "safe_sql"]
+__all__ = ["SqlBindings", "SqlPolicyViolation", "safe_sql"]

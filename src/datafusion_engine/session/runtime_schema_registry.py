@@ -107,7 +107,9 @@ def _resolved_table_schema(ctx: SessionContext, name: str) -> pa.Schema | None:
     return None
 
 
-def _safe_table_pylist(ctx: SessionContext, name: str) -> tuple[list[dict[str, object]] | None, str | None]:
+def _safe_table_pylist(
+    ctx: SessionContext, name: str
+) -> tuple[list[dict[str, object]] | None, str | None]:
     """Safely read a session table into Python rows for diagnostics payloads.
 
     Returns:

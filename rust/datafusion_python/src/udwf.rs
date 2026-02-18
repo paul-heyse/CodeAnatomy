@@ -30,7 +30,7 @@ use datafusion::logical_expr::{
     PartitionEvaluator, PartitionEvaluatorFactory, Signature, Volatility, WindowUDF, WindowUDFImpl,
 };
 use datafusion::scalar::ScalarValue;
-use datafusion_ffi::udwf::{FFI_WindowUDF, ForeignWindowUDF};
+use datafusion_ffi::udwf::FFI_WindowUDF;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyList, PyTuple};
@@ -256,10 +256,10 @@ impl PyWindowUDF {
             validate_pycapsule(capsule, "datafusion_window_udf")?;
 
             let udwf = unsafe { capsule.reference::<FFI_WindowUDF>() };
-            let udwf: ForeignWindowUDF = udwf.try_into()?;
+            let udwf_impl: Arc<dyn WindowUDFImpl> = udwf.into();
 
             Ok(Self {
-                function: udwf.into(),
+                function: WindowUDF::new_from_shared_impl(udwf_impl),
             })
         } else {
             Err(crate::errors::PyDataFusionError::Common(

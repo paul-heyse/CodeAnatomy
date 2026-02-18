@@ -88,6 +88,10 @@ pub struct RuntimeProfileSpec {
     pub enable_dynamic_filter_pushdown: bool,
     /// Enable top-K dynamic filter pushdown.
     pub enable_topk_dynamic_filter_pushdown: bool,
+    /// Enable sort pushdown.
+    pub enable_sort_pushdown: bool,
+    /// Allow symmetric joins without pruning.
+    pub allow_symmetric_joins_without_pruning: bool,
     /// Enable recursive CTEs.
     pub enable_recursive_ctes: bool,
 
@@ -142,6 +146,8 @@ impl RuntimeProfileSpec {
             filter_null_join_keys: true,
             enable_dynamic_filter_pushdown: true,
             enable_topk_dynamic_filter_pushdown: true,
+            enable_sort_pushdown: true,
+            allow_symmetric_joins_without_pruning: true,
             enable_recursive_ctes: true,
             enable_ident_normalization: false,
             show_statistics: true,

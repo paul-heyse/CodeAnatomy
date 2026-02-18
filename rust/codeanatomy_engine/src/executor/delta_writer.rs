@@ -1,10 +1,12 @@
 //! Delta output table creation and schema enforcement.
 
 use std::collections::{BTreeMap, HashMap};
+use std::io::Cursor;
 
 use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef,
 };
+use arrow::ipc::reader::StreamReader;
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, Result};
@@ -12,7 +14,11 @@ use datafusion_ext::delta_control_plane::{
     delta_provider_from_session_request, DeltaProviderFromSessionRequest, DeltaScanOverrides,
 };
 use datafusion_ext::delta_protocol::TableVersion;
+use datafusion_ext::delta_mutations::{
+    delta_write_batches_request, DeltaMutationReport, DeltaWriteBatchesRequest,
+};
 use datafusion_ext::DeltaFeatureGate;
+use deltalake::errors::DeltaTableError;
 use deltalake::delta_datafusion::DeltaScanConfig;
 use deltalake::kernel::{
     ArrayType as DeltaArrayType, DataType as DeltaDataType, MapType as DeltaMapType, PrimitiveType,
@@ -231,6 +237,76 @@ pub fn validate_output_schema(
 /// This helper sums the row counts across all batches.
 pub fn extract_row_count(batches: &[RecordBatch]) -> u64 {
     batches.iter().map(|b| b.num_rows() as u64).sum()
+}
+
+fn decode_batches_from_ipc(data_ipc: &[u8]) -> std::result::Result<Vec<RecordBatch>, DeltaTableError> {
+    let reader = StreamReader::try_new(Cursor::new(data_ipc.to_vec()), None).map_err(|err| {
+        DeltaTableError::Generic(format!("Failed to decode Arrow IPC stream: {err}"))
+    })?;
+    let mut batches: Vec<RecordBatch> = Vec::new();
+    for batch in reader {
+        let batch = batch
+            .map_err(|err| DeltaTableError::Generic(format!("Invalid Arrow IPC batch: {err}")))?;
+        batches.push(batch);
+    }
+    Ok(batches)
+}
+
+#[derive(Debug, Clone)]
+pub struct DeltaWritePayload {
+    pub table_uri: String,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub table_version: TableVersion,
+    pub save_mode: deltalake::protocol::SaveMode,
+    pub schema_mode_label: Option<String>,
+    pub partition_columns: Option<Vec<String>>,
+    pub target_file_size: Option<usize>,
+    pub gate: Option<DeltaFeatureGate>,
+    pub commit_options: Option<datafusion_ext::DeltaCommitOptions>,
+    pub extra_constraints: Option<Vec<String>>,
+}
+
+pub async fn execute_delta_write(
+    session_ctx: &SessionContext,
+    payload: DeltaWritePayload,
+    batches: Vec<RecordBatch>,
+) -> std::result::Result<DeltaMutationReport, DeltaTableError> {
+    let DeltaWritePayload {
+        table_uri,
+        storage_options,
+        table_version,
+        save_mode,
+        schema_mode_label,
+        partition_columns,
+        target_file_size,
+        gate,
+        commit_options,
+        extra_constraints,
+    } = payload;
+    delta_write_batches_request(DeltaWriteBatchesRequest {
+        session_ctx,
+        table_uri: &table_uri,
+        storage_options,
+        table_version,
+        batches,
+        save_mode,
+        schema_mode_label,
+        partition_columns,
+        target_file_size,
+        gate,
+        commit_options,
+        extra_constraints,
+    })
+    .await
+}
+
+pub async fn execute_delta_write_ipc(
+    session_ctx: &SessionContext,
+    payload: DeltaWritePayload,
+    data_ipc: &[u8],
+) -> std::result::Result<DeltaMutationReport, DeltaTableError> {
+    let batches = decode_batches_from_ipc(data_ipc)?;
+    execute_delta_write(session_ctx, payload, batches).await
 }
 
 /// Best-effort read-back of Delta table metadata after a write.

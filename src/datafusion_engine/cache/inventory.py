@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
@@ -15,18 +15,18 @@ from datafusion_engine.arrow.field_builders import (
     list_field,
     string_field,
 )
+from datafusion_engine.cache._ports import _WriterPort
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write_core import (
     WriteFormat,
     WriteMode,
     WriteRequest,
-    WriteResult,
     build_write_pipeline,
 )
 from datafusion_engine.session.facade import DataFusionExecutionFacade
 from obs.otel import get_run_id
-from utils.coercion import coerce_int_or_none
+from utils.value_coercion import coerce_int_or_none
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -86,12 +86,6 @@ class CacheInventoryEntry:
             "file_count": self.file_count,
             "partition_by": list(self.partition_by),
         }
-
-
-class _WriterPort(Protocol):
-    """Minimal writer surface used by cache inventory persistence."""
-
-    def write(self, request: WriteRequest) -> WriteResult: ...
 
 
 def _default_write_pipeline(

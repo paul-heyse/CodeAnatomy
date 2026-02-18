@@ -13,7 +13,6 @@ from datafusion_engine.compile.options import DataFusionSqlPolicy, resolve_sql_p
 from datafusion_engine.registry_facade import RegistrationPhase
 from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from datafusion_engine.schema.introspection_routines import _introspection_cache_for_ctx
-from datafusion_engine.session._session_caches import SESSION_CONTEXT_CACHE
 from datafusion_engine.session.runtime_config_policies import (
     DataFusionConfigPolicy,
     SchemaHardeningProfile,
@@ -201,7 +200,7 @@ class _RuntimeContextMixin:
         """
         if not self.features.enable_function_factory:
             return None
-        from datafusion_engine.udf.extension_core import rust_udf_snapshot
+        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
         from datafusion_engine.udf.factory import function_factory_policy_hash
 
         snapshot = rust_udf_snapshot(ctx, registries=self.udf_extension_registries)
@@ -395,12 +394,12 @@ class _RuntimeContextMixin:
     def _cached_context(self) -> SessionContext | None:
         if not self.execution.share_context or self.diagnostics.diagnostics_sink is not None:
             return None
-        return SESSION_CONTEXT_CACHE.get(self._cache_key())
+        return self.session_context_cache.get(self._cache_key())
 
     def _cache_context(self, ctx: SessionContext) -> None:
         if not self.execution.share_context:
             return
-        SESSION_CONTEXT_CACHE[self._cache_key()] = ctx
+        self.session_context_cache[self._cache_key()] = ctx
 
     def _build_session_context(self) -> SessionContext:
         """Create the SessionContext base for this runtime profile.

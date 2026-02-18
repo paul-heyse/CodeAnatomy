@@ -53,14 +53,18 @@ def reader_to_raw_ipc(reader: pa.RecordBatchReader) -> msgspec.Raw:
     Returns:
         msgspec.Raw: Arrow IPC stream payload.
     """
-    table = reader.read_all()
-    return table_to_raw_ipc(table)
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, reader.schema) as writer:
+        for batch in reader:
+            writer.write_batch(batch)
+    return msgspec.Raw(msgspec.msgpack.encode(sink.getvalue().to_pybytes()))
 
 
 def build_delta_write_request(
     *,
     table_uri: str,
-    table: pa.Table,
+    table: pa.Table | None = None,
+    reader: pa.RecordBatchReader | None = None,
     options: DeltaWriteRequestOptions,
 ) -> DeltaWriteRequest:
     """Build a control-plane DeltaWriteRequest from an Arrow table payload.
@@ -68,12 +72,16 @@ def build_delta_write_request(
     Returns:
         DeltaWriteRequest: Normalized Delta write request.
     """
+    if table is None and reader is None:
+        msg = "build_delta_write_request requires either table or reader payload."
+        raise ValueError(msg)
+    data_ipc = table_to_raw_ipc(table) if table is not None else reader_to_raw_ipc(reader)
     return DeltaWriteRequest(
         table_uri=table_uri,
         storage_options=options.storage_options,
         version=None,
         timestamp=None,
-        data_ipc=table_to_raw_ipc(table),
+        data_ipc=data_ipc,
         mode=options.mode,
         schema_mode=options.schema_mode,
         partition_columns=options.partition_columns,

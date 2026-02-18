@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.interop import arrow_schema_from_df
-from datafusion_engine.udf.extension_core import udf_names_from_snapshot
+from datafusion_engine.udf.extension_runtime import udf_names_from_snapshot
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.reporting import LineageReport

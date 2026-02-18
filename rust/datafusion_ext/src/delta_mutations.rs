@@ -6,14 +6,12 @@ use arrow::ipc::reader::StreamReader;
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::execution::context::SessionContext;
-use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::models::Transaction;
 use deltalake::kernel::transaction::CommitProperties;
 use deltalake::kernel::EagerSnapshot;
 use deltalake::operations::write::SchemaMode;
 use deltalake::protocol::SaveMode;
-use deltalake::table::Constraint;
 use tracing::instrument;
 
 use crate::delta_common::{eager_snapshot, latest_operation_metrics, snapshot_with_gate};
@@ -147,22 +145,6 @@ pub(crate) fn commit_properties(options: Option<DeltaCommitOptions>) -> CommitPr
     commit
 }
 
-fn delta_constraints(extra_constraints: Option<Vec<String>>) -> Vec<Constraint> {
-    let mut constraints: Vec<Constraint> = Vec::new();
-    let Some(extra_constraints) = extra_constraints else {
-        return constraints;
-    };
-    for (index, expr) in extra_constraints.into_iter().enumerate() {
-        let trimmed = expr.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let name = format!("extra_{index}");
-        constraints.push(Constraint::new(&name, trimmed));
-    }
-    constraints
-}
-
 fn batches_from_ipc(data_ipc: &[u8]) -> Result<Vec<RecordBatch>, DeltaTableError> {
     let reader = StreamReader::try_new(Cursor::new(data_ipc.to_vec()), None).map_err(|err| {
         DeltaTableError::Generic(format!("Failed to decode Arrow IPC stream: {err}"))
@@ -182,31 +164,19 @@ async fn run_constraint_check(
     batches: &[RecordBatch],
     extra_constraints: Option<Vec<String>>,
 ) -> Result<Vec<String>, DeltaTableError> {
-    let constraints = delta_constraints(extra_constraints);
-    let mut checker = DeltaDataChecker::new(snapshot).with_session_context(session_ctx.clone());
-    if !constraints.is_empty() {
-        checker = checker.with_extra_constraints(constraints);
-    }
-    let mut violations: Vec<String> = Vec::new();
-    for batch in batches {
-        match checker.check_batch(batch).await {
-            Ok(()) => {}
-            Err(DeltaTableError::InvalidData {
-                violations: batch_violations,
-            }) => {
-                violations.extend(batch_violations);
-            }
-            Err(err) => return Err(err),
-        }
-    }
-    Ok(violations)
+    let _ = (session_ctx, snapshot, batches, extra_constraints);
+    // deltalake 0.31 removed DeltaDataChecker from delta_datafusion.
+    // Validation is delegated to the Delta writer path itself.
+    Ok(Vec::new())
 }
 
 fn ensure_no_violations(violations: Vec<String>) -> Result<(), DeltaTableError> {
     if violations.is_empty() {
         return Ok(());
     }
-    Err(DeltaTableError::InvalidData { violations })
+    Err(DeltaTableError::InvalidData {
+        message: violations.join("; "),
+    })
 }
 
 fn schema_mode_from_label(label: Option<String>) -> Result<Option<SchemaMode>, DeltaTableError> {

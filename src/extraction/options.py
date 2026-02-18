@@ -7,7 +7,7 @@ from pathlib import Path
 
 import msgspec
 
-from utils.coercion import coerce_bool
+from utils.value_coercion import coerce_bool
 
 
 class RepoScanDiffOptions(msgspec.Struct, frozen=True):
@@ -83,14 +83,16 @@ def normalize_extraction_options(
     include_globs = _coerce_globs(options.get("include_globs"))
     exclude_globs = _coerce_globs(options.get("exclude_globs"))
 
-    tree_sitter_enabled = coerce_bool(
+    tree_sitter_enabled = _coerce_bool_with_default(
         options.get("tree_sitter_enabled"),
         default=default_tree_sitter_enabled,
+        field_name="tree_sitter_enabled",
     )
     if "tree_sitter_enabled" not in options:
-        tree_sitter_enabled = coerce_bool(
+        tree_sitter_enabled = _coerce_bool_with_default(
             options.get("enable_tree_sitter"),
             default=default_tree_sitter_enabled,
+            field_name="enable_tree_sitter",
         )
 
     max_workers = _coerce_positive_int(options.get("max_workers"), default=default_max_workers)
@@ -118,10 +120,26 @@ def normalize_extraction_options(
     return ExtractionRunOptions(
         include_globs=include_globs,
         exclude_globs=exclude_globs,
-        include_untracked=coerce_bool(options.get("include_untracked"), default=True),
-        include_submodules=coerce_bool(options.get("include_submodules"), default=False),
-        include_worktrees=coerce_bool(options.get("include_worktrees"), default=False),
-        follow_symlinks=coerce_bool(options.get("follow_symlinks"), default=False),
+        include_untracked=_coerce_bool_with_default(
+            options.get("include_untracked"),
+            default=True,
+            field_name="include_untracked",
+        ),
+        include_submodules=_coerce_bool_with_default(
+            options.get("include_submodules"),
+            default=False,
+            field_name="include_submodules",
+        ),
+        include_worktrees=_coerce_bool_with_default(
+            options.get("include_worktrees"),
+            default=False,
+            field_name="include_worktrees",
+        ),
+        follow_symlinks=_coerce_bool_with_default(
+            options.get("follow_symlinks"),
+            default=False,
+            field_name="follow_symlinks",
+        ),
         tree_sitter_enabled=tree_sitter_enabled,
         max_workers=max_workers,
         diff_base_ref=diff_base_ref,
@@ -137,12 +155,20 @@ def _coerce_incremental_diff(value: object) -> RepoScanDiffOptions:
         return RepoScanDiffOptions(
             diff_base_ref=_coerce_optional_ref(value.get("git_base_ref")),
             diff_head_ref=_coerce_optional_ref(value.get("git_head_ref")),
-            changed_only=coerce_bool(value.get("git_changed_only"), default=False),
+            changed_only=_coerce_bool_with_default(
+                value.get("git_changed_only"),
+                default=False,
+                field_name="git_changed_only",
+            ),
         )
     return RepoScanDiffOptions(
         diff_base_ref=_coerce_optional_ref(getattr(value, "git_base_ref", None)),
         diff_head_ref=_coerce_optional_ref(getattr(value, "git_head_ref", None)),
-        changed_only=coerce_bool(getattr(value, "git_changed_only", None), default=False),
+        changed_only=_coerce_bool_with_default(
+            getattr(value, "git_changed_only", None),
+            default=False,
+            field_name="git_changed_only",
+        ),
     )
 
 
@@ -203,6 +229,14 @@ def _coerce_positive_int(value: object, *, default: int) -> int:
             if parsed > 0:
                 return parsed
     return default
+
+
+def _coerce_bool_with_default(value: object, *, default: bool, field_name: str) -> bool:
+    coerced = coerce_bool(value, default=default, label=field_name)
+    if coerced is None:
+        msg = f"{field_name} could not be coerced to bool."
+        raise TypeError(msg)
+    return coerced
 
 
 __all__ = [

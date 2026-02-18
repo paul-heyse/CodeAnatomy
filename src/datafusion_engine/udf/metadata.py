@@ -13,7 +13,7 @@ from datafusion_engine.schema.introspection_core import (
     parameters_snapshot_table,
     routines_snapshot_table,
 )
-from datafusion_engine.udf.extension_core import (
+from datafusion_engine.udf.extension_runtime import (
     snapshot_function_names,
     snapshot_parameter_names,
     snapshot_return_types,
@@ -29,7 +29,7 @@ from utils.registry_protocol import Registry, SnapshotRegistry
 
 if TYPE_CHECKING:
     from datafusion_engine.schema.introspection_core import SchemaIntrospector
-    from datafusion_engine.udf.extension_core import ExtensionRegistries
+    from datafusion_engine.udf.extension_runtime import ExtensionRegistries
 
 # UdfTier type - Rust-only execution
 UdfTier = Literal["builtin"]
@@ -90,16 +90,6 @@ class DataFusionUdfSpec:
     capsule_id: str | None = None
     udf_tier: UdfTier = "builtin"
     rewrite_tags: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        """Validate UDF tier values.
-
-        Raises:
-            ValueError: If the operation cannot be completed.
-        """
-        if self.udf_tier != "builtin":
-            msg = f"Only Rust builtin UDFs are supported. Received tier {self.udf_tier!r}."
-            raise ValueError(msg)
 
     def to_snapshot(self) -> DataFusionUdfSpecSnapshot:
         """Return a serializable snapshot of this UDF spec.
@@ -726,13 +716,8 @@ class UdfCatalog:
 
         Returns:
             tuple[str, ...]: Result.
-
-        Raises:
-            ValueError: If the operation cannot be completed.
         """
-        if tier != "builtin":
-            msg = f"Unsupported UDF tier: {tier!r}."
-            raise ValueError(msg)
+        _ = tier
         catalog = self._require_runtime_catalog()
         return tuple(sorted(catalog.function_names))
 
@@ -1159,7 +1144,7 @@ def _rust_udf_snapshot(
     *,
     registries: ExtensionRegistries | None = None,
 ) -> Mapping[str, object]:
-    from datafusion_engine.udf.extension_core import rust_udf_snapshot
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
 
     return rust_udf_snapshot(ctx, registries=registries)
 

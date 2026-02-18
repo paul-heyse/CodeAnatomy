@@ -14,19 +14,11 @@ from datafusion.dataframe import DataFrame
 from arrow_utils.core.ordering import OrderingLevel
 from datafusion_engine.arrow.metadata import ordering_from_schema, schema_constraints_from_metadata
 from datafusion_engine.dataset.registration_core import (
-    DDL_IDENTIFIER_RE as _DDL_IDENTIFIER_RE,
-)
-from datafusion_engine.dataset.registration_core import (
-    ExternalTableDdlRequest as _ExternalTableDdlRequest,
-)
-from datafusion_engine.dataset.registration_core import (
-    invalidate_information_schema_cache as _invalidate_information_schema_cache,
-)
-from datafusion_engine.dataset.registration_core import (
-    resolve_dataset_caches as _resolve_dataset_caches,
-)
-from datafusion_engine.dataset.registration_core import (
-    sql_type_name as _sql_type_name,
+    _DDL_IDENTIFIER_RE,
+    _ExternalTableDdlRequest,
+    _invalidate_information_schema_cache,
+    _resolve_dataset_caches,
+    _sql_type_name,
 )
 from datafusion_engine.dataset.registration_projection import (
     _apply_projection_exprs,

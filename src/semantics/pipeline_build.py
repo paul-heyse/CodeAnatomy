@@ -425,7 +425,7 @@ def _execute_cpg_build(
     input_mapping = compile_resolution.input_mapping
     use_cdf = compile_resolution.use_cdf
     resolved_outputs = compile_resolution.resolved_outputs
-    from datafusion_engine.udf.extension_core import rust_udf_snapshot
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
     from datafusion_engine.views.graph import (
         ViewGraphOptions,
         ViewGraphRuntimeOptions,

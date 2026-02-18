@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping, Sequence
+
+import msgspec
 from datafusion import Expr, SessionContext, lit
 
 IS_STUB: bool = True
+_CACHE_FANOUT_THRESHOLD = 2
 
 
 def plugin_library_path() -> str:
@@ -181,6 +186,16 @@ def install_expr_planners(ctx: SessionContext, planners: object) -> None:
     _ = (ctx, planners)
 
 
+def install_planner_rules(ctx: SessionContext) -> None:
+    """Install stub logical planner rules."""
+    _ = ctx
+
+
+def install_physical_rules(ctx: SessionContext) -> None:
+    """Install stub physical optimizer rules."""
+    _ = ctx
+
+
 def delta_scan_config_from_session(ctx: SessionContext, *_args: object) -> dict[str, object]:
     """Return a stub Delta scan config payload.
 
@@ -231,6 +246,11 @@ def session_context_contract_probe(ctx: SessionContext) -> dict[str, object]:
     return {
         "ok": True,
         "plugin_abi": {"major": 1, "minor": 1},
+        "metadata_cache_limit_bytes": 0,
+        "metadata_cache_entries": 0,
+        "metadata_cache_hits": 0,
+        "list_files_cache_entries": 0,
+        "statistics_cache_entries": 0,
         "udf_registry": {
             "scalar": 0,
             "aggregate": 0,
@@ -239,6 +259,192 @@ def session_context_contract_probe(ctx: SessionContext) -> dict[str, object]:
             "custom": 0,
             "hash": "",
         },
+    }
+
+
+def derive_cache_policies(payload: Mapping[str, object]) -> dict[str, str]:
+    """Return deterministic cache-policy decisions from a graph payload."""
+    graph = payload.get("graph")
+    if not isinstance(graph, Mapping):
+        return {}
+    out_degree_payload = graph.get("out_degree")
+    if not isinstance(out_degree_payload, Mapping):
+        return {}
+    outputs_payload = payload.get("outputs")
+    output_names = (
+        {str(item) for item in outputs_payload}
+        if isinstance(outputs_payload, list | tuple)
+        else set()
+    )
+    overrides_payload = payload.get("cache_overrides")
+    overrides = (
+        {str(key): str(value) for key, value in overrides_payload.items()}
+        if isinstance(overrides_payload, Mapping)
+        else {}
+    )
+    workload_raw = payload.get("workload_class")
+    workload = str(workload_raw).strip().lower() if workload_raw is not None else None
+    if not workload:
+        workload = None
+    policies: dict[str, str] = {}
+    for task_name, raw_out_degree in out_degree_payload.items():
+        name = str(task_name)
+        try:
+            out_degree = int(raw_out_degree)
+        except (TypeError, ValueError):
+            out_degree = 0
+        is_output = name in output_names
+        if is_output:
+            policy_value = "delta_output"
+        elif out_degree > _CACHE_FANOUT_THRESHOLD:
+            policy_value = "delta_staging"
+        elif out_degree == 0:
+            policy_value = "none"
+        else:
+            policy_value = "delta_staging"
+        if (
+            workload == "interactive_query"
+            and policy_value == "delta_staging"
+            and out_degree <= 1
+            and not is_output
+        ):
+            policy_value = "none"
+        if workload == "compile_replay" and policy_value == "delta_staging" and not is_output:
+            policy_value = "none"
+        override = overrides.get(name)
+        if override in {"none", "delta_staging", "delta_output"}:
+            policy_value = override
+        policies[name] = policy_value
+    return policies
+
+
+def interval_align_table(
+    left: object,
+    right: object,
+    payload: Mapping[str, object] | None = None,
+) -> object:
+    """Interval-align bridge surface backed by DataFusion kernel helpers in stub mode.
+
+    Returns:
+    -------
+    object
+        Interval-aligned table-like payload.
+    """
+    from datafusion_engine import kernels as kernels_mod
+
+    payload_map = dict(payload or {})
+    tie_breakers_raw = payload_map.get("tie_breakers")
+    tie_breakers: list[kernels_mod.SortKey] = []
+    if isinstance(tie_breakers_raw, Sequence) and not isinstance(
+        tie_breakers_raw,
+        (str, bytes, bytearray),
+    ):
+        for entry in tie_breakers_raw:
+            if not isinstance(entry, Mapping):
+                continue
+            column = str(entry.get("column") or "").strip()
+            if not column:
+                continue
+            order_raw = str(entry.get("order") or "ascending").strip().lower()
+            order = "descending" if order_raw == "descending" else "ascending"
+            tie_breakers.append(kernels_mod.SortKey(column=column, order=order))
+
+    cfg = kernels_mod.IntervalAlignOptions(
+        mode=str(payload_map.get("mode") or "CONTAINED_BEST"),
+        how=str(payload_map.get("how") or "inner"),
+        left_path_col=str(payload_map.get("left_path_col") or "path"),
+        left_start_col=str(payload_map.get("left_start_col") or "bstart"),
+        left_end_col=str(payload_map.get("left_end_col") or "bend"),
+        right_path_col=str(payload_map.get("right_path_col") or "path"),
+        right_start_col=str(payload_map.get("right_start_col") or "bstart"),
+        right_end_col=str(payload_map.get("right_end_col") or "bend"),
+        select_left=tuple(payload_map.get("select_left") or ()),
+        select_right=tuple(payload_map.get("select_right") or ()),
+        tie_breakers=tuple(tie_breakers),
+        emit_match_meta=bool(payload_map.get("emit_match_meta", True)),
+        match_kind_col=str(payload_map.get("match_kind_col") or "match_kind"),
+        match_score_col=str(payload_map.get("match_score_col") or "match_score"),
+        right_suffix=str(payload_map.get("right_suffix") or "__r"),
+    )
+    return kernels_mod.interval_align_kernel_datafusion(
+        left,
+        right,
+        cfg=cfg,
+        runtime_profile=None,
+    )
+
+
+def extract_tree_sitter_batch(
+    source: str,
+    file_path: str,
+    payload: Mapping[str, object] | None = None,
+) -> object:
+    """Tree-sitter extraction bridge surface backed by local tree-sitter parsing.
+
+    Returns:
+    -------
+    object
+        Mapping payload containing extracted tree-sitter rows.
+    """
+    from extract.coordination.context import SpanSpec, span_dict
+    from tree_sitter_language_pack import get_parser
+
+    payload_map = dict(payload or {})
+    parser = get_parser("python")
+    source_bytes = source.encode("utf-8")
+    tree = parser.parse(source_bytes)
+    if tree is None:
+        return {}
+
+    node_rows: list[dict[str, object]] = []
+    stack: list[object] = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node is None:
+            continue
+        node_id = len(node_rows)
+        bstart = int(getattr(node, "start_byte", 0))
+        bend = int(getattr(node, "end_byte", bstart))
+        node_rows.append(
+            {
+                "id": f"{payload_map.get('file_id') or file_path}:{node_id}",
+                "kind": str(getattr(node, "type", "unknown")),
+                "span": span_dict(
+                    SpanSpec(
+                        start_line0=None,
+                        start_col=None,
+                        end_line0=None,
+                        end_col=None,
+                        end_exclusive=True,
+                        col_unit="byte",
+                        byte_start=bstart,
+                        byte_len=max(0, bend - bstart),
+                    )
+                ),
+            }
+        )
+        children = list(getattr(node, "children", []) or [])
+        for child in reversed(children):
+            stack.append(child)
+
+    return {
+        "repo": "",
+        "path": file_path,
+        "file_id": str(payload_map.get("file_id") or file_path),
+        "file_sha256": (
+            str(payload_map["file_sha256"]) if payload_map.get("file_sha256") is not None else None
+        ),
+        "nodes": node_rows,
+        "edges": [],
+        "errors": [],
+        "missing": [],
+        "captures": [],
+        "defs": [],
+        "calls": [],
+        "imports": [],
+        "docstrings": [],
+        "stats": None,
+        "attrs": {},
     }
 
 
@@ -255,6 +461,7 @@ def install_codeanatomy_runtime(
     return {
         "contract_version": 3,
         "runtime_install_mode": "unified",
+        "snapshot_msgpack": registry_snapshot_msgpack(ctx),
         "snapshot": snapshot,
         "udf_installed": True,
         "function_factory_installed": True,
@@ -294,6 +501,20 @@ def lineage_from_substrait(payload_bytes: bytes) -> dict[str, object]:
         "required_udfs": [],
         "required_rewrite_tags": [],
     }
+
+
+def extract_lineage_json(plan: object) -> str:
+    """Return a minimal lineage JSON payload for a LogicalPlan in stub mode."""
+    _ = plan
+    payload: dict[str, object] = {
+        "scans": [],
+        "required_columns_by_dataset": {},
+        "filters": [],
+        "referenced_tables": [],
+        "required_udfs": [],
+        "required_rewrite_tags": [],
+    }
+    return json.dumps(payload, ensure_ascii=True)
 
 
 def build_extraction_session(config_payload: object) -> SessionContext:
@@ -350,7 +571,31 @@ def delta_write_ipc_request(ctx: SessionContext, request_msgpack: bytes) -> dict
     }
 
 
-def delta_merge_request_payload(ctx: SessionContext, request_msgpack: bytes) -> dict[str, object]:
+def delta_delete_request(ctx: SessionContext, request_msgpack: bytes) -> dict[str, object]:
+    """Return a stub Delta delete result payload."""
+    _ = (ctx, request_msgpack)
+    return {
+        "version": 0,
+        "num_added_files": 0,
+        "num_removed_files": 0,
+        "num_copied_rows": 0,
+        "num_deleted_rows": 0,
+    }
+
+
+def delta_update_request(ctx: SessionContext, request_msgpack: bytes) -> dict[str, object]:
+    """Return a stub Delta update result payload."""
+    _ = (ctx, request_msgpack)
+    return {
+        "version": 0,
+        "num_added_files": 0,
+        "num_removed_files": 0,
+        "num_copied_rows": 0,
+        "num_updated_rows": 0,
+    }
+
+
+def delta_merge_request(ctx: SessionContext, request_msgpack: bytes) -> dict[str, object]:
     """Return a stub Delta merge result payload."""
     _ = (ctx, request_msgpack)
     return {
@@ -433,6 +678,11 @@ def registry_snapshot(ctx: SessionContext) -> dict[str, object]:
         "short_circuits": {},
         "custom_udfs": [],
     }
+
+
+def registry_snapshot_msgpack(ctx: SessionContext) -> bytes:
+    """Return msgpack bytes for the registry snapshot payload."""
+    return msgspec.msgpack.encode(registry_snapshot(ctx))
 
 
 def udf_docs_snapshot(ctx: SessionContext) -> dict[str, object]:
@@ -1241,10 +1491,32 @@ def col_to_byte(line_text: Expr, col_index: Expr, col_unit: Expr) -> Expr:
     return _stub_expr(line_text, col_index, col_unit)
 
 
+def canonicalize_byte_span(
+    start_line_start_byte: Expr,
+    start_line_text: Expr,
+    start_col: Expr,
+    end_line_start_byte: Expr,
+    end_line_text: Expr,
+    end_col: Expr,
+    col_unit: Expr,
+) -> Expr:
+    """Return a stub expression for canonicalize_byte_span."""
+    return _stub_expr(
+        start_line_start_byte,
+        start_line_text,
+        start_col,
+        end_line_start_byte,
+        end_line_text,
+        end_col,
+        col_unit,
+    )
+
+
 __all__ = [
     "arrow_metadata",
     "arrow_stream_to_batches",
     "build_plan_bundle_artifact_with_warnings",
+    "canonicalize_byte_span",
     "capabilities_snapshot",
     "capture_plan_bundle_runtime",
     "cdf_change_rank",
@@ -1282,6 +1554,7 @@ __all__ = [
     "register_df_plugin_table_providers",
     "register_df_plugin_udfs",
     "registry_snapshot",
+    "registry_snapshot_msgpack",
     "row_number_window",
     "semantic_tag",
     "span_contains",

@@ -15,6 +15,14 @@ from typing import Any
 
 from datafusion_engine.extensions.required_entrypoints import REQUIRED_RUNTIME_ENTRYPOINTS
 
+_DF52_PROVIDER_METHODS: frozenset[str] = frozenset(
+    {
+        "__datafusion_table_provider__",
+        "__datafusion_catalog_provider__",
+        "__datafusion_schema_provider__",
+    }
+)
+
 
 def _missing_required_entrypoints(module: ModuleType) -> list[str]:
     return [
@@ -79,9 +87,14 @@ def _normalize_ctx(value: Any) -> Any:
 
 
 def _normalize_args(
-    args: tuple[Any, ...], kwargs: dict[str, Any]
+    name: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
-    if not args and "ctx" not in kwargs:
+    if not args and "ctx" not in kwargs and "session" not in kwargs:
+        if name in _DF52_PROVIDER_METHODS and "session" not in kwargs:
+            msg = f"{name} requires a session argument for DF52 provider capsule calls."
+            raise ValueError(msg)
         return args, kwargs
     normalized_args = list(args)
     if normalized_args:
@@ -89,10 +102,22 @@ def _normalize_args(
     normalized_kwargs = dict(kwargs)
     if "ctx" in normalized_kwargs:
         normalized_kwargs["ctx"] = _normalize_ctx(normalized_kwargs["ctx"])
+    if "session" in normalized_kwargs:
+        normalized_kwargs["session"] = _normalize_ctx(normalized_kwargs["session"])
     if "df" in normalized_kwargs:
         normalized_df = getattr(normalized_kwargs["df"], "df", None)
         if normalized_df is not None:
             normalized_kwargs["df"] = normalized_df
+    if name in _DF52_PROVIDER_METHODS:
+        has_session_positional = bool(normalized_args) and (
+            normalized_kwargs.get("session") is None
+        )
+        if not has_session_positional:
+            session = normalized_kwargs.pop("session", None)
+            if session is None:
+                msg = f"{name} requires a session argument for DF52 provider capsule calls."
+                raise ValueError(msg)
+            normalized_args = [session, *normalized_args]
     return tuple(normalized_args), normalized_kwargs
 
 
@@ -103,7 +128,7 @@ def _wrapped_attr(name: str) -> Any:
         return attr
 
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
-        call_args, call_kwargs = _normalize_args(args, kwargs)
+        call_args, call_kwargs = _normalize_args(name, args, kwargs)
         return attr(*call_args, **call_kwargs)
 
     _wrapped.__name__ = getattr(attr, "__name__", name)
@@ -146,7 +171,7 @@ def ensure_required_runtime_entrypoints() -> None:
 
 def _call_required(name: str, *args: Any, **kwargs: Any) -> Any:
     fn = _require_internal_callable(name)
-    call_args, call_kwargs = _normalize_args(args, kwargs)
+    call_args, call_kwargs = _normalize_args(name, args, kwargs)
     return fn(*call_args, **call_kwargs)
 
 
@@ -251,6 +276,29 @@ def replay_substrait_plan(ctx: Any, payload_bytes: bytes) -> Any:
     return _call_required("replay_substrait_plan", ctx, payload_bytes)
 
 
+def extract_lineage_json(plan: Any) -> str:
+    """Extract lineage JSON payload for a LogicalPlan via native extension.
+
+    Returns:
+    -------
+    str
+        JSON-encoded lineage payload.
+
+    Raises:
+        TypeError: If the resolved extension entrypoint is non-callable or
+            returns a non-string payload.
+    """
+    payload = _resolve_attr("extract_lineage_json")
+    if not callable(payload):
+        msg = "datafusion extension entrypoint is not callable: extract_lineage_json"
+        raise TypeError(msg)
+    raw = payload(plan)
+    if isinstance(raw, str):
+        return raw
+    msg = "extract_lineage_json returned a non-string payload."
+    raise TypeError(msg)
+
+
 def capture_plan_bundle_runtime(
     ctx: Any,
     payload: Mapping[str, object],
@@ -306,6 +354,7 @@ __all__ = [
     "build_plan_bundle_artifact_with_warnings",
     "capture_plan_bundle_runtime",
     "ensure_required_runtime_entrypoints",
+    "extract_lineage_json",
     "install_codeanatomy_runtime",
     "install_physical_rules",
     "install_planner_rules",

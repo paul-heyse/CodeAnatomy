@@ -2,11 +2,12 @@
 
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProvider;
 use datafusion::execution::context::SessionContext;
+use datafusion::execution::TaskContextProvider;
 use datafusion_ext::DeltaFeatureGate;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use deltalake::delta_datafusion::DeltaScanConfig;
@@ -28,6 +29,7 @@ use crate::delta_observability::{
     scan_config_schema_ipc, snapshot_info_as_values,
 };
 use crate::delta_protocol::{gate_from_parts, DeltaSnapshotInfo, TableVersion};
+use crate::utils::get_global_ctx;
 
 /// Extract the underlying DataFusion `SessionContext` from a Python object.
 pub(crate) fn extract_session_ctx(ctx: &Bound<'_, PyAny>) -> PyResult<SessionContext> {
@@ -129,11 +131,24 @@ pub(crate) fn runtime() -> PyResult<Runtime> {
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))
 }
 
+pub(crate) fn global_task_ctx_provider() -> Arc<dyn TaskContextProvider> {
+    static TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
+    let provider = TASK_CTX_PROVIDER.get_or_init(|| Arc::new(get_global_ctx().clone()));
+    Arc::clone(provider) as Arc<dyn TaskContextProvider>
+}
+
 pub(crate) fn provider_capsule(
     py: Python<'_>,
     provider: Arc<dyn TableProvider>,
 ) -> PyResult<Py<PyAny>> {
-    let ffi_provider = FFI_TableProvider::new(provider, true, None);
+    let task_ctx_provider = global_task_ctx_provider();
+    let ffi_provider = FFI_TableProvider::new(
+        provider,
+        true,
+        None,
+        &task_ctx_provider,
+        None,
+    );
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;

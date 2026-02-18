@@ -8,6 +8,8 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::EagerSnapshot;
 use serde::{Deserialize, Serialize};
 
+use crate::providers::pushdown_contract::FilterPushdownStatus;
+
 /// Build a standardized scan config for CPG extraction inputs.
 ///
 /// All extraction inputs use the same base config:
@@ -118,22 +120,26 @@ pub fn lineage_column_name(config: &DeltaScanConfig) -> Option<&str> {
 /// scan config. Used for execution planning and observability.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderCapabilities {
-    pub predicate_pushdown: bool,
-    pub projection_pushdown: bool,
-    pub partition_pruning: bool,
+    pub predicate_pushdown: Option<FilterPushdownStatus>,
+    pub projection_pushdown: Option<FilterPushdownStatus>,
+    pub partition_pruning: Option<FilterPushdownStatus>,
 }
 
 /// Infer provider capabilities from a DeltaScanConfig.
 ///
-/// Maps config flags to capability booleans:
-/// - predicate_pushdown: from enable_parquet_pushdown
-/// - projection_pushdown: always true (Delta providers always support)
-/// - partition_pruning: from wrap_partition_values
+/// Maps config flags to optional pushdown status values:
+/// - predicate_pushdown: ``Some(Inexact)`` when parquet pushdown is enabled
+/// - projection_pushdown: ``Some(Exact)`` (Delta providers support projection pushdown)
+/// - partition_pruning: ``Some(Inexact)`` when partition wrapping is enabled
 pub fn infer_capabilities(config: &DeltaScanConfig) -> ProviderCapabilities {
     ProviderCapabilities {
-        predicate_pushdown: config.enable_parquet_pushdown,
-        projection_pushdown: true,
-        partition_pruning: config.wrap_partition_values,
+        predicate_pushdown: config
+            .enable_parquet_pushdown
+            .then_some(FilterPushdownStatus::Inexact),
+        projection_pushdown: Some(FilterPushdownStatus::Exact),
+        partition_pruning: config
+            .wrap_partition_values
+            .then_some(FilterPushdownStatus::Inexact),
     }
 }
 
@@ -143,31 +149,9 @@ pub fn infer_capabilities(config: &DeltaScanConfig) -> ProviderCapabilities {
 /// While `ProviderCapabilities` captures coarse boolean flags inferred from
 /// scan configuration, `PushdownStatus` maps these to the three-level contract
 /// model for introspection and documentation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PushdownStatus {
-    /// Pushdown is not supported by this capability dimension.
-    Unsupported,
-
-    /// Pushdown is supported but no per-filter exactness guarantee is modeled
-    /// at the config level. Actual exactness depends on the provider and filter.
-    Supported,
-}
-
-impl PushdownStatus {
-    /// Convert a boolean capability flag to a `PushdownStatus`.
-    pub fn from_capability(enabled: bool) -> Self {
-        if enabled {
-            PushdownStatus::Supported
-        } else {
-            PushdownStatus::Unsupported
-        }
-    }
-}
-
 /// Derive a pushdown status summary from provider capabilities.
 ///
-/// Maps each boolean capability dimension to a `PushdownStatus` for
+/// Maps each capability dimension to optional `FilterPushdownStatus` for
 /// use in documentation and introspection tooling.
 ///
 /// # Arguments
@@ -179,18 +163,18 @@ pub fn pushdown_status_from_capabilities(
     capabilities: &ProviderCapabilities,
 ) -> CapabilityPushdownSummary {
     CapabilityPushdownSummary {
-        predicate: PushdownStatus::from_capability(capabilities.predicate_pushdown),
-        projection: PushdownStatus::from_capability(capabilities.projection_pushdown),
-        partition_pruning: PushdownStatus::from_capability(capabilities.partition_pruning),
+        predicate: capabilities.predicate_pushdown,
+        projection: capabilities.projection_pushdown,
+        partition_pruning: capabilities.partition_pruning,
     }
 }
 
 /// Summary of pushdown status across all capability dimensions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityPushdownSummary {
-    pub predicate: PushdownStatus,
-    pub projection: PushdownStatus,
-    pub partition_pruning: PushdownStatus,
+    pub predicate: Option<FilterPushdownStatus>,
+    pub projection: Option<FilterPushdownStatus>,
+    pub partition_pruning: Option<FilterPushdownStatus>,
 }
 
 #[cfg(test)]
@@ -257,9 +241,12 @@ mod tests {
     fn test_capabilities_inferred_from_config() {
         let config = baseline_config();
         let caps = infer_capabilities(&config);
-        assert_eq!(caps.predicate_pushdown, config.enable_parquet_pushdown);
-        assert!(caps.projection_pushdown);
-        assert_eq!(caps.partition_pruning, config.wrap_partition_values);
+        assert_eq!(
+            caps.predicate_pushdown.is_some(),
+            config.enable_parquet_pushdown
+        );
+        assert_eq!(caps.projection_pushdown, Some(FilterPushdownStatus::Exact));
+        assert_eq!(caps.partition_pruning.is_some(), config.wrap_partition_values);
     }
 
     #[test]
@@ -268,64 +255,43 @@ mod tests {
         config.enable_parquet_pushdown = false;
         config.wrap_partition_values = false;
         let caps = infer_capabilities(&config);
-        assert!(!caps.predicate_pushdown);
-        assert!(caps.projection_pushdown); // always true
-        assert!(!caps.partition_pruning);
-    }
-
-    #[test]
-    fn test_pushdown_status_from_capability() {
-        assert_eq!(
-            PushdownStatus::from_capability(true),
-            PushdownStatus::Supported
-        );
-        assert_eq!(
-            PushdownStatus::from_capability(false),
-            PushdownStatus::Unsupported
-        );
-    }
-
-    #[test]
-    fn test_pushdown_status_serde_roundtrip() {
-        for status in [PushdownStatus::Supported, PushdownStatus::Unsupported] {
-            let json = serde_json::to_string(&status).unwrap();
-            let deserialized: PushdownStatus = serde_json::from_str(&json).unwrap();
-            assert_eq!(status, deserialized);
-        }
+        assert!(caps.predicate_pushdown.is_none());
+        assert_eq!(caps.projection_pushdown, Some(FilterPushdownStatus::Exact));
+        assert!(caps.partition_pruning.is_none());
     }
 
     #[test]
     fn test_pushdown_status_from_capabilities_all_enabled() {
         let caps = ProviderCapabilities {
-            predicate_pushdown: true,
-            projection_pushdown: true,
-            partition_pruning: true,
+            predicate_pushdown: Some(FilterPushdownStatus::Exact),
+            projection_pushdown: Some(FilterPushdownStatus::Exact),
+            partition_pruning: Some(FilterPushdownStatus::Inexact),
         };
         let summary = pushdown_status_from_capabilities(&caps);
-        assert_eq!(summary.predicate, PushdownStatus::Supported);
-        assert_eq!(summary.projection, PushdownStatus::Supported);
-        assert_eq!(summary.partition_pruning, PushdownStatus::Supported);
+        assert_eq!(summary.predicate, Some(FilterPushdownStatus::Exact));
+        assert_eq!(summary.projection, Some(FilterPushdownStatus::Exact));
+        assert_eq!(summary.partition_pruning, Some(FilterPushdownStatus::Inexact));
     }
 
     #[test]
     fn test_pushdown_status_from_capabilities_mixed() {
         let caps = ProviderCapabilities {
-            predicate_pushdown: false,
-            projection_pushdown: true,
-            partition_pruning: false,
+            predicate_pushdown: None,
+            projection_pushdown: Some(FilterPushdownStatus::Exact),
+            partition_pruning: None,
         };
         let summary = pushdown_status_from_capabilities(&caps);
-        assert_eq!(summary.predicate, PushdownStatus::Unsupported);
-        assert_eq!(summary.projection, PushdownStatus::Supported);
-        assert_eq!(summary.partition_pruning, PushdownStatus::Unsupported);
+        assert_eq!(summary.predicate, None);
+        assert_eq!(summary.projection, Some(FilterPushdownStatus::Exact));
+        assert_eq!(summary.partition_pruning, None);
     }
 
     #[test]
     fn test_capability_pushdown_summary_serde_roundtrip() {
         let summary = CapabilityPushdownSummary {
-            predicate: PushdownStatus::Supported,
-            projection: PushdownStatus::Supported,
-            partition_pruning: PushdownStatus::Unsupported,
+            predicate: Some(FilterPushdownStatus::Inexact),
+            projection: Some(FilterPushdownStatus::Exact),
+            partition_pruning: None,
         };
         let json = serde_json::to_string(&summary).unwrap();
         let deserialized: CapabilityPushdownSummary = serde_json::from_str(&json).unwrap();

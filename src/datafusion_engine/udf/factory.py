@@ -234,6 +234,15 @@ def _load_extension() -> object:
     raise ImportError(msg)
 
 
+def function_factory_extension_available() -> bool:
+    """Return whether the native extension exposes FunctionFactory hooks."""
+    try:
+        module = importlib.import_module(EXTENSION_MODULE_PATH)
+    except ImportError:
+        return False
+    return callable(getattr(module, "install_function_factory", None))
+
+
 def _install_native_function_factory(ctx: SessionContext, *, payload: bytes) -> None:
     """Install the native FunctionFactory into the session.
 
@@ -618,6 +627,7 @@ __all__ = [
     "build_create_function_sql",
     "create_udaf_spec",
     "create_udwf_spec",
+    "function_factory_extension_available",
     "function_factory_payloads",
     "function_factory_policy_from_snapshot",
     "function_factory_policy_hash",

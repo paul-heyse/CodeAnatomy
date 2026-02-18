@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 from datafusion import SessionContext, lit
 
-from semantics.normalization_helpers import LineIndexJoinOptions, byte_offset_expr, line_index_join
+from semantics.normalization_helpers import (
+    LineIndexJoinOptions,
+    canonicalize_byte_span_expr,
+    line_index_join,
+)
 
 EXPECTED_END_LINE_START_BYTE = 10
 
@@ -74,13 +78,29 @@ def test_line_index_join_requires_file_or_path() -> None:
         )
 
 
-def test_byte_offset_expr_uses_col_to_byte_udf() -> None:
-    """byte_offset_expr builds a UDF-based offset expression."""
-    expr = byte_offset_expr(
-        "line_start",
-        "line_text",
-        "char_no",
+def test_canonicalize_byte_span_expr_uses_rust_udf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """canonicalize_byte_span_expr builds a canonicalization UDF expression."""
+    captured: dict[str, object] = {}
+
+    def _fake_udf_expr(name: str, *args: object, **_kwargs: object) -> object:
+        captured["name"] = name
+        captured["args"] = args
+        return lit(1)
+
+    monkeypatch.setattr("semantics.normalization_helpers.udf_expr", _fake_udf_expr)
+    expr = canonicalize_byte_span_expr(
+        "start_line_start_byte",
+        "start_line_text",
+        "start_char",
+        "end_line_start_byte",
+        "end_line_text",
+        "end_char",
         lit("utf16"),
     )
 
-    assert "col_to_byte" in str(expr)
+    assert "1" in str(expr)
+    assert captured["name"] == "canonicalize_byte_span"
+    args = captured["args"]
+    assert isinstance(args, tuple)
+    assert "CAST(start_line_start_byte AS Int64)" in str(args[0])
+    assert "CAST(end_char AS Int64)" in str(args[5])

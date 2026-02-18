@@ -19,6 +19,7 @@ from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from semantics.compiler import SemanticCompiler, SemanticSchemaError
 from semantics.joins import JoinStrategyType, infer_join_strategy
 from semantics.quality import QualityRelationshipSpec
+from semantics.table_registry import TableRegistry
 from semantics.types import AnnotatedSchema
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.datafusion_runtime import df_ctx
@@ -77,7 +78,7 @@ def test_join_key_type_mismatch_error_quality() -> None:
         origin="tests",
     )
 
-    compiler = SemanticCompiler(ctx)
+    compiler = SemanticCompiler(ctx, table_registry=TableRegistry())
     with pytest.raises(SemanticSchemaError, match="Join key semantic type mismatch") as exc_info:
         _ = compiler.compile_relationship_with_quality(spec)
 
@@ -96,7 +97,7 @@ def test_missing_udf_signature_metadata() -> None:
     signature_inputs, validate_required_udfs raises ValueError with
     "Missing Rust UDF signature metadata" naming the UDF.
     """
-    from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
 
     ctx = df_ctx()
 
@@ -125,7 +126,7 @@ def test_missing_udf_return_metadata() -> None:
     return_types, validate_required_udfs raises ValueError with
     "Missing Rust UDF return metadata" naming the UDF.
     """
-    from datafusion_engine.udf.extension_core import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
 
     ctx = df_ctx()
 
@@ -180,7 +181,7 @@ def test_semantic_type_validation_accepts_zero_row_metadata_table(
 @pytest.mark.integration
 def test_udf_alias_resolution() -> None:
     """Alias mappings should resolve to canonical UDF names in snapshots."""
-    from datafusion_engine.udf.extension_core import (
+    from datafusion_engine.udf.extension_runtime import (
         rust_udf_snapshot,
         snapshot_alias_mapping,
         validate_required_udfs,
@@ -259,7 +260,7 @@ def test_relationship_failure_does_not_abort_pipeline() -> None:
         origin="tests",
     )
 
-    compiler = SemanticCompiler(ctx)
+    compiler = SemanticCompiler(ctx, table_registry=TableRegistry())
     failures: list[tuple[str, str]] = []
     compiled: dict[str, DataFrame] = {}
     for spec in (bad_spec, good_spec):

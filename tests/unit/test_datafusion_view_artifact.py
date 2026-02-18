@@ -88,6 +88,7 @@ def test_datafusion_view_artifact_diagnostics_payload() -> None:
     assert "schema_provenance_msgpack" in payload
     assert payload["required_udfs"] == []
     assert payload["referenced_tables"] == []
+    assert payload["pushdown_contracts"] == {}
 
 
 def test_build_view_artifact_from_bundle(mock_plan_bundle: DataFusionPlanArtifact) -> None:
@@ -109,6 +110,12 @@ def test_build_view_artifact_from_bundle(mock_plan_bundle: DataFusionPlanArtifac
                 required_udfs=("udf_a",),
                 referenced_tables=("table1",),
             ),
+            pushdown_contracts={
+                "table1": {
+                    "statuses": {"predicate_pushdown": "inexact"},
+                    "counts": {"exact": 0, "inexact": 1, "unsupported": 0},
+                }
+            },
         ),
     )
 
@@ -120,6 +127,7 @@ def test_build_view_artifact_from_bundle(mock_plan_bundle: DataFusionPlanArtifac
     assert artifact.schema == schema
     assert artifact.required_udfs == ("udf_a",)
     assert artifact.referenced_tables == ("table1",)
+    assert artifact.pushdown_contracts["table1"]["statuses"]["predicate_pushdown"] == "inexact"
 
 
 @pytest.fixture

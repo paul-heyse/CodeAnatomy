@@ -6,12 +6,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
 from datafusion_engine.arrow.field_builders import int64_field, string_field
 from datafusion_engine.arrow.interop import empty_table_for_schema
+from datafusion_engine.cache._ports import _WriterPort
 from datafusion_engine.cache.commit_metadata import (
     CacheCommitMetadataRequest,
     cache_commit_metadata,
@@ -22,7 +23,6 @@ from datafusion_engine.io.write_core import (
     WriteFormat,
     WriteMode,
     WriteRequest,
-    WriteResult,
     build_write_pipeline,
 )
 from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -41,12 +41,6 @@ CACHE_SNAPSHOT_REGISTRY_TABLE_NAME = "datafusion_cache_snapshot_registry_v1"
 
 def _append_source_name(table_name: str) -> str:
     return f"{table_name}_append_{uuid7_hex()}"
-
-
-class _WriterPort(Protocol):
-    """Minimal writer surface for cache-ledger writes."""
-
-    def write(self, request: WriteRequest) -> WriteResult: ...
 
 
 def _default_write_pipeline(

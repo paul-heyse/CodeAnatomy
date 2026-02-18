@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 from extract.coordination.context import FileContext
 from extract.extractors.ast import AstExtractOptions
-from extract.extractors.ast.builders_runtime import _extract_ast_for_context
+from extract.extractors.ast.builders import _extract_ast_for_context
 
 
 def _as_mapping(value: object) -> dict[str, object]:

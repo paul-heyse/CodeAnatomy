@@ -575,7 +575,7 @@ def _run_maintenance_operation[T](
             TypeError,
             ValueError,
             OSError,
-        ):
+        ) as exc:
             duration_s = time.perf_counter() - start
             record_delta_maintenance_run(
                 operation=operation,
@@ -583,6 +583,7 @@ def _run_maintenance_operation[T](
                 duration_s=duration_s,
             )
             span.set_attribute("status", "error")
+            span.record_exception(exc)
             logger.exception(
                 "Delta maintenance operation failed table_uri=%s operation=%s",
                 table_uri,

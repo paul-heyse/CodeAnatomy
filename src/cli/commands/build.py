@@ -29,33 +29,6 @@ if TYPE_CHECKING:
     from core_types import DeterminismTier, JsonValue
 
 
-@dataclass(frozen=True)
-class _ScipPayload:
-    """Structured SCIP payload extracted from config."""
-
-    enabled: bool
-    output_dir: str
-    index_path_override: str | None
-    env_json_path: str | None
-    scip_python_bin: str
-    scip_cli_bin: str
-    target_only: str | None
-    node_max_old_space_mb: int | None
-    timeout_s: int | None
-    extra_args: tuple[str, ...]
-    generate_env_json: bool
-    use_incremental_shards: bool
-    shards_dir: str | None
-    shards_manifest_path: str | None
-    run_scip_print: bool
-    scip_print_path: str | None
-    run_scip_snapshot: bool
-    scip_snapshot_dir: str | None
-    scip_snapshot_comment_syntax: str
-    run_scip_test: bool
-    scip_test_args: tuple[str, ...]
-
-
 _DEFAULT_SCIP_PYTHON = "scip-python"
 
 
@@ -540,20 +513,30 @@ def build_command(
         overrides=cli_overrides,
     )
 
-    scip_config = _build_scip_config(
+    scip_overrides = _ScipOverrides(
+        disable_scip=options.disable_scip,
+        scip_output_dir=options.scip_output_dir,
+        scip_index_path_override=options.scip_index_path_override,
+        scip_env_json=options.scip_env_json,
+        scip_python_bin=options.scip_python_bin,
+        scip_target_only=options.scip_target_only,
+        scip_timeout_s=options.scip_timeout_s,
+        node_max_old_space_mb=options.node_max_old_space_mb,
+        scip_extra_args=options.scip_extra_args,
+    )
+    scip_config = ScipIndexConfig.from_cli_overrides(
         config_contents,
-        resolved_repo_root,
-        overrides=_ScipOverrides(
-            disable_scip=options.disable_scip,
-            scip_output_dir=options.scip_output_dir,
-            scip_index_path_override=options.scip_index_path_override,
-            scip_env_json=options.scip_env_json,
-            scip_python_bin=options.scip_python_bin,
-            scip_target_only=options.scip_target_only,
-            scip_timeout_s=options.scip_timeout_s,
-            node_max_old_space_mb=options.node_max_old_space_mb,
-            scip_extra_args=options.scip_extra_args,
-        ),
+        repo_root=resolved_repo_root,
+        disable_scip=scip_overrides.disable_scip,
+        scip_output_dir=scip_overrides.scip_output_dir,
+        scip_index_path_override=scip_overrides.scip_index_path_override,
+        scip_env_json=scip_overrides.scip_env_json,
+        scip_python_bin=scip_overrides.scip_python_bin,
+        default_scip_python=_DEFAULT_SCIP_PYTHON,
+        scip_target_only=scip_overrides.scip_target_only,
+        scip_timeout_s=scip_overrides.scip_timeout_s,
+        node_max_old_space_mb=scip_overrides.node_max_old_space_mb,
+        scip_extra_args=scip_overrides.scip_extra_args,
     )
 
     scip_identity = None
@@ -730,176 +713,6 @@ def _build_incremental_config(
         git_head_ref=overrides.git_head_ref,
         git_changed_only=overrides.git_changed_only,
     )
-
-
-def _build_scip_config(
-    config_contents: Mapping[str, JsonValue],
-    repo_root: Path,
-    *,
-    overrides: _ScipOverrides,
-) -> ScipIndexConfig:
-    payload = _scip_payload_from_config(config_contents)
-    resolved_output = (
-        str(resolve_path(repo_root, overrides.scip_output_dir))
-        if overrides.scip_output_dir is not None
-        else None
-    )
-    resolved_index = (
-        str(resolve_path(repo_root, overrides.scip_index_path_override))
-        if overrides.scip_index_path_override is not None
-        else None
-    )
-    resolved_env = (
-        str(resolve_path(repo_root, overrides.scip_env_json))
-        if overrides.scip_env_json is not None
-        else None
-    )
-
-    enabled = payload.enabled
-    if overrides.disable_scip:
-        enabled = False
-
-    output_dir = resolved_output or payload.output_dir
-    scip_python = payload.scip_python_bin
-    if overrides.scip_python_bin != _DEFAULT_SCIP_PYTHON:
-        scip_python = overrides.scip_python_bin
-
-    return ScipIndexConfig(
-        enabled=enabled,
-        output_dir=output_dir,
-        index_path_override=resolved_index or payload.index_path_override,
-        env_json_path=resolved_env or payload.env_json_path,
-        scip_python_bin=scip_python,
-        scip_cli_bin=payload.scip_cli_bin,
-        target_only=overrides.scip_target_only or payload.target_only,
-        node_max_old_space_mb=(
-            overrides.node_max_old_space_mb
-            if overrides.node_max_old_space_mb is not None
-            else payload.node_max_old_space_mb
-        ),
-        timeout_s=overrides.scip_timeout_s
-        if overrides.scip_timeout_s is not None
-        else payload.timeout_s,
-        extra_args=overrides.scip_extra_args or payload.extra_args,
-        generate_env_json=payload.generate_env_json,
-        use_incremental_shards=payload.use_incremental_shards,
-        shards_dir=payload.shards_dir,
-        shards_manifest_path=payload.shards_manifest_path,
-        run_scip_print=payload.run_scip_print,
-        scip_print_path=payload.scip_print_path,
-        run_scip_snapshot=payload.run_scip_snapshot,
-        scip_snapshot_dir=payload.scip_snapshot_dir,
-        scip_snapshot_comment_syntax=payload.scip_snapshot_comment_syntax,
-        run_scip_test=payload.run_scip_test,
-        scip_test_args=payload.scip_test_args,
-    )
-
-
-def _scip_payload_from_config(config_contents: Mapping[str, JsonValue]) -> _ScipPayload:
-    scip_config = config_contents.get("scip")
-    payload: dict[str, JsonValue] = {}
-    if isinstance(scip_config, dict):
-        payload = {str(key): value for key, value in scip_config.items()}
-    defaults = ScipIndexConfig()
-    extra_args = _tuple_from_payload(payload.get("extra_args")) or defaults.extra_args
-    scip_test_args = _tuple_from_payload(payload.get("scip_test_args")) or defaults.scip_test_args
-    node_max_old_space_mb = _optional_int(payload.get("node_max_old_space_mb"))
-    if node_max_old_space_mb is None:
-        node_max_old_space_mb = defaults.node_max_old_space_mb
-    timeout_s = _optional_int(payload.get("timeout_s"))
-    if timeout_s is None:
-        timeout_s = defaults.timeout_s
-    return _ScipPayload(
-        enabled=_bool_from_payload(payload.get("enabled"), default=defaults.enabled),
-        output_dir=_str_from_payload(payload.get("output_dir"), default=defaults.output_dir),
-        index_path_override=_optional_str(payload.get("index_path_override")),
-        env_json_path=_optional_str(payload.get("env_json_path")),
-        scip_python_bin=_str_from_payload(
-            payload.get("scip_python_bin"),
-            default=defaults.scip_python_bin,
-        ),
-        scip_cli_bin=_str_from_payload(payload.get("scip_cli_bin"), default=defaults.scip_cli_bin),
-        target_only=_optional_str(payload.get("target_only")) or defaults.target_only,
-        node_max_old_space_mb=node_max_old_space_mb,
-        timeout_s=timeout_s,
-        extra_args=extra_args,
-        generate_env_json=_bool_from_payload(
-            payload.get("generate_env_json"),
-            default=defaults.generate_env_json,
-        ),
-        use_incremental_shards=_bool_from_payload(
-            payload.get("use_incremental_shards"),
-            default=defaults.use_incremental_shards,
-        ),
-        shards_dir=_optional_str(payload.get("shards_dir")) or defaults.shards_dir,
-        shards_manifest_path=(
-            _optional_str(payload.get("shards_manifest_path")) or defaults.shards_manifest_path
-        ),
-        run_scip_print=_bool_from_payload(
-            payload.get("run_scip_print"),
-            default=defaults.run_scip_print,
-        ),
-        scip_print_path=_optional_str(payload.get("scip_print_path")) or defaults.scip_print_path,
-        run_scip_snapshot=_bool_from_payload(
-            payload.get("run_scip_snapshot"),
-            default=defaults.run_scip_snapshot,
-        ),
-        scip_snapshot_dir=(
-            _optional_str(payload.get("scip_snapshot_dir")) or defaults.scip_snapshot_dir
-        ),
-        scip_snapshot_comment_syntax=_str_from_payload(
-            payload.get("scip_snapshot_comment_syntax"),
-            default=defaults.scip_snapshot_comment_syntax,
-        ),
-        run_scip_test=_bool_from_payload(
-            payload.get("run_scip_test"),
-            default=defaults.run_scip_test,
-        ),
-        scip_test_args=scip_test_args,
-    )
-
-
-def _bool_from_payload(value: JsonValue | None, *, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    return default
-
-
-def _optional_int(value: JsonValue | None) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _str_from_payload(value: JsonValue | None, *, default: str) -> str:
-    if isinstance(value, str) and value:
-        return value
-    return default
-
-
-def _optional_str(value: JsonValue | None) -> str | None:
-    if isinstance(value, str) and value:
-        return value
-    return None
-
-
-def _tuple_from_payload(value: JsonValue | None) -> tuple[str, ...]:
-    if isinstance(value, str):
-        return (value,)
-    if isinstance(value, tuple):
-        return tuple(str(item) for item in value)
-    if isinstance(value, list):
-        return tuple(str(item) for item in value)
-    return ()
 
 
 __all__ = ["build_command"]

@@ -22,7 +22,7 @@ from serde_msgspec import (
 )
 from utils.hashing import hash_msgpack_canonical, hash_settings
 
-CachePolicy = Literal["none", "delta_staging", "delta_output"]
+CachePolicy = Literal["none", "memory", "delta_staging", "delta_output"]
 
 if TYPE_CHECKING:
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
@@ -69,6 +69,7 @@ class DataFusionViewArtifact(StructBaseCompat, frozen=True):
     cache_policy: CachePolicy = "none"
     schema_describe: tuple[Mapping[str, object], ...] = ()
     schema_provenance: Mapping[str, object] | None = None
+    pushdown_contracts: Mapping[str, Mapping[str, object]] = msgspec.field(default_factory=dict)
 
     def payload(self) -> dict[str, object]:
         """Return a JSON-ready payload for diagnostics and persistence.
@@ -131,6 +132,10 @@ class DataFusionViewArtifact(StructBaseCompat, frozen=True):
             ),
             "required_udfs": list(self.required_udfs),
             "referenced_tables": list(self.referenced_tables),
+            "pushdown_contracts": {
+                str(key): dict(value)
+                for key, value in sorted(self.pushdown_contracts.items(), key=lambda item: item[0])
+            },
         }
 
 
@@ -188,6 +193,7 @@ class ViewArtifactRequest(StructBaseStrict, frozen=True):
     lineage: ViewArtifactLineage
     runtime_hash: str | None = None
     cache_policy: CachePolicy = "none"
+    pushdown_contracts: Mapping[str, Mapping[str, object]] | None = None
 
 
 def build_view_artifact_from_bundle(
@@ -222,6 +228,7 @@ def build_view_artifact_from_bundle(
         cache_policy=request.cache_policy,
         schema_describe=schema_describe,
         schema_provenance=schema_provenance,
+        pushdown_contracts=request.pushdown_contracts or {},
     )
 
 

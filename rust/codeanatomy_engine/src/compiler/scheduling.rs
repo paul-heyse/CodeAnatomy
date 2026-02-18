@@ -46,6 +46,96 @@ pub struct TaskSchedule {
     pub slack_by_task: BTreeMap<String, f64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CachePolicyDecision {
+    pub view_name: String,
+    pub policy: String,
+    pub confidence: f64,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CachePolicyRequest {
+    pub out_degree: BTreeMap<String, usize>,
+    pub outputs: BTreeSet<String>,
+    pub cache_overrides: BTreeMap<String, String>,
+    pub workload_class: Option<String>,
+}
+
+fn normalize_workload_class(workload_class: Option<&str>) -> Option<String> {
+    workload_class
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+}
+
+fn workload_adjusted_policy(
+    base_policy: &str,
+    out_degree: usize,
+    is_output: bool,
+    workload_class: Option<&str>,
+) -> String {
+    if is_output {
+        return base_policy.to_string();
+    }
+    match workload_class {
+        Some("interactive_query") if base_policy == "delta_staging" && out_degree <= 1 => {
+            "none".to_string()
+        }
+        Some("compile_replay") if base_policy == "delta_staging" => "none".to_string(),
+        _ => base_policy.to_string(),
+    }
+}
+
+fn normalized_override(value: Option<&str>) -> Option<String> {
+    match value {
+        Some("none") => Some("none".to_string()),
+        Some("delta_staging") => Some("delta_staging".to_string()),
+        Some("delta_output") => Some("delta_output".to_string()),
+        _ => None,
+    }
+}
+
+/// Derive deterministic cache policy decisions from task-graph out-degree metadata.
+pub fn derive_cache_policies(request: &CachePolicyRequest) -> Vec<CachePolicyDecision> {
+    let workload = normalize_workload_class(request.workload_class.as_deref());
+    let mut decisions: Vec<CachePolicyDecision> = Vec::with_capacity(request.out_degree.len());
+    let mut keys: Vec<&String> = request.out_degree.keys().collect();
+    keys.sort();
+    for task_name in keys {
+        let out_degree = *request.out_degree.get(task_name).unwrap_or(&0usize);
+        let is_output = request.outputs.contains(task_name);
+        let base_policy = if is_output {
+            "delta_output"
+        } else if out_degree > 2 {
+            "delta_staging"
+        } else if out_degree == 0 {
+            "none"
+        } else {
+            "delta_staging"
+        };
+        let mut policy =
+            workload_adjusted_policy(base_policy, out_degree, is_output, workload.as_deref());
+        let mut rationale = format!(
+            "derived_from_topology: out_degree={out_degree}, is_output={is_output}"
+        );
+        let mut confidence = if is_output { 1.0 } else { 0.85 };
+        if let Some(override_policy) =
+            normalized_override(request.cache_overrides.get(task_name).map(String::as_str))
+        {
+            policy = override_policy;
+            rationale = "explicit_override".to_string();
+            confidence = 1.0;
+        }
+        decisions.push(CachePolicyDecision {
+            view_name: task_name.clone(),
+            policy,
+            confidence,
+            rationale,
+        });
+    }
+    decisions
+}
+
 impl TaskGraph {
     pub fn from_inferred_deps(
         view_deps: &[(String, Vec<String>)],
@@ -256,5 +346,59 @@ impl TaskGraph {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{derive_cache_policies, CachePolicyRequest};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn cache_policy_derivation_is_deterministic() {
+        let request = CachePolicyRequest {
+            out_degree: BTreeMap::from([
+                ("leaf".to_string(), 0usize),
+                ("fanout".to_string(), 4usize),
+                ("output".to_string(), 1usize),
+            ]),
+            outputs: BTreeSet::from(["output".to_string()]),
+            cache_overrides: BTreeMap::new(),
+            workload_class: Some("compile_replay".to_string()),
+        };
+        let decisions = derive_cache_policies(&request);
+        assert_eq!(decisions[0].view_name, "fanout");
+        assert_eq!(decisions[1].view_name, "leaf");
+        assert_eq!(decisions[2].view_name, "output");
+        let fanout = decisions
+            .iter()
+            .find(|item| item.view_name == "fanout")
+            .expect("fanout decision");
+        let leaf = decisions
+            .iter()
+            .find(|item| item.view_name == "leaf")
+            .expect("leaf decision");
+        let output = decisions
+            .iter()
+            .find(|item| item.view_name == "output")
+            .expect("output decision");
+        assert_eq!(fanout.policy, "none");
+        assert_eq!(leaf.policy, "none");
+        assert_eq!(output.policy, "delta_output");
+    }
+
+    #[test]
+    fn cache_policy_overrides_take_precedence() {
+        let request = CachePolicyRequest {
+            out_degree: BTreeMap::from([("view".to_string(), 5usize)]),
+            outputs: BTreeSet::new(),
+            cache_overrides: BTreeMap::from([("view".to_string(), "delta_output".to_string())]),
+            workload_class: None,
+        };
+        let decisions = derive_cache_policies(&request);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].policy, "delta_output");
+        assert_eq!(decisions[0].rationale, "explicit_override");
+        assert!((decisions[0].confidence - 1.0).abs() < f64::EPSILON);
     }
 }

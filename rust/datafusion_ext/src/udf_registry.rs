@@ -42,6 +42,7 @@ pub fn scalar_udf_specs() -> Vec<ScalarUdfSpec> {
         "cdf_is_upsert" => udf::cdf_is_upsert_udf;
         "cdf_is_delete" => udf::cdf_is_delete_udf;
         "col_to_byte" => udf::col_to_byte_udf;
+        "canonicalize_byte_span" => udf::canonicalize_byte_span_udf;
     ]
 }
 
@@ -161,6 +162,7 @@ mod tests {
             "prefixed_hash64",
             "stable_id",
             "col_to_byte",
+            "canonicalize_byte_span",
         ] {
             assert!(names.contains(name), "missing {name}");
         }

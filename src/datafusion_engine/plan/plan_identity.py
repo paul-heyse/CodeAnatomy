@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from serde_artifacts import DeltaInputPin, PlanArtifacts
 
+PLAN_IDENTITY_PAYLOAD_VERSION = 4
+
 
 def _delta_inputs_payload(
     delta_inputs: Sequence[DeltaInputPin],
@@ -105,7 +107,7 @@ def plan_identity_payload(inputs: PlanIdentityInputs) -> Mapping[str, object]:
         sorted((str(key), str(value)) for key, value in inputs.artifacts.df_settings.items())
     )
     return {
-        "version": 4,
+        "version": PLAN_IDENTITY_PAYLOAD_VERSION,
         "plan_fingerprint": inputs.plan_fingerprint,
         "udf_snapshot_hash": inputs.artifacts.udf_snapshot_hash,
         "function_registry_hash": inputs.artifacts.function_registry_hash,
@@ -124,4 +126,4 @@ def plan_identity_payload(inputs: PlanIdentityInputs) -> Mapping[str, object]:
     }
 
 
-__all__ = ["PlanIdentityInputs", "plan_identity_payload"]
+__all__ = ["PLAN_IDENTITY_PAYLOAD_VERSION", "PlanIdentityInputs", "plan_identity_payload"]

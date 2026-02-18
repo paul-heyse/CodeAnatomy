@@ -59,12 +59,12 @@ def collect_udf_artifacts(
             domain_planner_names=session_runtime.domain_planner_names,
         )
     else:
-        from datafusion_engine.udf.extension_core import rust_udf_snapshot
+        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
 
         snapshot = rust_udf_snapshot(ctx)
 
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.extension_core import (
+    from datafusion_engine.udf.extension_runtime import (
         rust_udf_snapshot_hash,
         validate_rust_udf_snapshot,
     )

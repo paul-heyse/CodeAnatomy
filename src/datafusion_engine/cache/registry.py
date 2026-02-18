@@ -18,8 +18,8 @@ from datafusion_engine.cache.inventory import (
 from datafusion_engine.delta.contracts import enforce_schema_evolution
 from datafusion_engine.session.facade import DataFusionExecutionFacade
 from storage.deltalake import DeltaSchemaRequest
-from utils.coercion import coerce_int_or_none, coerce_opt_str, coerce_str_tuple
 from utils.registry_protocol import MutableRegistry, Registry, SnapshotRegistry
+from utils.value_coercion import coerce_int_or_none, coerce_opt_str, coerce_str_tuple
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

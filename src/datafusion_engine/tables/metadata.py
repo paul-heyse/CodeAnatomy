@@ -90,6 +90,9 @@ class TableProviderMetadata:
         Stable identity hash for the Delta scan configuration.
     delta_scan_effective : dict[str, object] | None
         Effective Delta scan configuration payload resolved by the provider.
+    pushdown_contract : dict[str, object] | None
+        Per-provider pushdown status payload retaining exact/inexact/unsupported
+        semantics for predicate/projection/limit capabilities.
     """
 
     table_name: str
@@ -109,6 +112,7 @@ class TableProviderMetadata:
     delta_scan_config: dict[str, object] | None = None
     delta_scan_identity_hash: str | None = None
     delta_scan_effective: dict[str, object] | None = None
+    pushdown_contract: dict[str, object] | None = None
 
 
 @dataclass

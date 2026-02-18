@@ -2,4 +2,9 @@
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from datafusion_engine.expr.relation_planner import (
+    CodeAnatomyRelationPlanner,
+    RelationPlannerPort,
+)
+
+__all__ = ["CodeAnatomyRelationPlanner", "RelationPlannerPort"]

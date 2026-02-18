@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 from urllib.parse import urlparse
 
 from deltalake import CommitProperties
@@ -28,9 +28,8 @@ from storage.deltalake.delta_read import (
     cdf_options_to_spec,
     read_delta_cdf_eager,
 )
-from utils.coercion import coerce_int
 from utils.storage_options import merged_storage_options
-from utils.value_coercion import coerce_str_list
+from utils.value_coercion import coerce_int, coerce_str_list
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -44,6 +43,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 type StorageOptions = Mapping[str, str]
+_T = TypeVar("_T")
 
 
 def runtime_profile_for_delta(
@@ -194,6 +194,36 @@ def delta_retry_delay(attempt: int, *, policy: DeltaRetryPolicy) -> float:
     return min(delay, float(policy.max_delay_s))
 
 
+def retry_with_policy(
+    operation: Callable[[], _T],
+    *,
+    policy: DeltaRetryPolicy,
+    span: Span | None = None,
+) -> tuple[_T, int]:
+    """Run an operation with Delta retry classification/backoff semantics.
+
+    Returns:
+    -------
+    tuple[_T, int]
+        Operation result and retry attempt count.
+    """
+    attempts = 0
+    while True:
+        try:
+            return operation(), attempts
+        except Exception as exc:  # pragma: no cover - retry paths depend on delta-rs
+            classification = delta_retry_classification(exc, policy=policy)
+            if classification != "retryable":
+                raise
+            attempts += 1
+            if attempts >= policy.max_attempts:
+                raise
+            delay = delta_retry_delay(attempts - 1, policy=policy)
+            if span is not None:
+                span.set_attribute("codeanatomy.retry_attempt", attempts)
+            time.sleep(delay)
+
+
 def resolve_merge_actions(
     request: DeltaMergeArrowRequest,
 ) -> tuple[str, str, dict[str, str], dict[str, str], bool]:
@@ -271,22 +301,11 @@ def execute_delta_merge(
     """
     from datafusion_engine.delta.control_plane_core import delta_merge
 
-    attempts = 0
-    while True:
-        try:
-            report = delta_merge(ctx, request=request)
-        except Exception as exc:  # pragma: no cover - retry paths depend on delta-rs
-            classification = delta_retry_classification(exc, policy=retry_policy)
-            if classification != "retryable":
-                raise
-            attempts += 1
-            if attempts >= retry_policy.max_attempts:
-                raise
-            delay = delta_retry_delay(attempts - 1, policy=retry_policy)
-            span.set_attribute("codeanatomy.retry_attempt", attempts)
-            time.sleep(delay)
-        else:
-            return report, attempts
+    return retry_with_policy(
+        lambda: delta_merge(ctx, request=request),
+        policy=retry_policy,
+        span=span,
+    )
 
 
 def storage_span_attributes(
@@ -974,6 +993,7 @@ __all__ = [
     "record_mutation_artifact",
     "resolve_delta_mutation_policy",
     "resolve_merge_actions",
+    "retry_with_policy",
     "runtime_profile_for_delta",
     "storage_span_attributes",
 ]

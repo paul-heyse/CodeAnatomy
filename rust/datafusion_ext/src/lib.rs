@@ -74,17 +74,25 @@ pub fn install_expr_planners_native(ctx: &SessionContext, planner_names: &[&str]
             unknown.join(", ")
         )));
     }
+    let planners = if install_domain {
+        domain_expr_planners()
+    } else {
+        vec![
+            Arc::new(datafusion_functions_nested::planner::NestedFunctionPlanner)
+                as Arc<dyn ExprPlanner>,
+            Arc::new(datafusion_functions_nested::planner::FieldAccessPlanner)
+                as Arc<dyn ExprPlanner>,
+        ]
+    };
     let state_ref = ctx.state_ref();
     let mut state = state_ref.write();
-    state.register_expr_planner(Arc::new(
-        datafusion_functions_nested::planner::NestedFunctionPlanner,
-    ))?;
-    state.register_expr_planner(Arc::new(
-        datafusion_functions_nested::planner::FieldAccessPlanner,
-    ))?;
+    for planner in planners {
+        state.register_expr_planner(planner)?;
+    }
     if install_domain {
-        state.register_expr_planner(Arc::new(expr_planner::CodeAnatomyDomainPlanner))?;
-        state.register_function_rewrite(Arc::new(function_rewrite::CodeAnatomyOperatorRewrite))?;
+        for rewrite in domain_function_rewrites() {
+            state.register_function_rewrite(rewrite)?;
+        }
     }
     Ok(())
 }

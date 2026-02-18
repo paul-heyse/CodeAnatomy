@@ -11,7 +11,11 @@ from datafusion.dataframe import DataFrame
 
 from datafusion_engine.udf.expr import udf_expr
 from obs.otel import SCOPE_SEMANTICS, stage_span
-from semantics.normalization_helpers import LineIndexJoinOptions, byte_offset_expr, line_index_join
+from semantics.normalization_helpers import (
+    LineIndexJoinOptions,
+    canonicalize_byte_span_expr,
+    line_index_join,
+)
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -106,7 +110,11 @@ def normalize_byte_span_df(
         if cfg.force_col_unit is not None:
             df = df.with_column(cfg.col_unit_col, lit(cfg.force_col_unit))
 
-        tmp_cols = [name for name in ("_tmp_bstart", "_tmp_bend") if name in df.schema().names]
+        tmp_cols = [
+            name
+            for name in ("_tmp_bstart", "_tmp_bend", "_tmp_span_bytes")
+            if name in df.schema().names
+        ]
         if tmp_cols:
             df = df.drop(*tmp_cols)
 
@@ -195,25 +203,19 @@ def _normalize_via_line_index(
     unit_expr = col(cfg.col_unit_col) if cfg.col_unit_col in names else lit("byte")
 
     joined = joined.with_column(
-        "_tmp_bstart",
-        byte_offset_expr(
+        "_tmp_span_bytes",
+        canonicalize_byte_span_expr(
             "start_line_start_byte",
             "start_line_text",
             cfg.start_col_col,
-            unit_expr,
-            unit_col=cfg.col_unit_col if cfg.col_unit_col in names else None,
-        ),
-    )
-    joined = joined.with_column(
-        "_tmp_bend",
-        byte_offset_expr(
             "end_line_start_byte",
             "end_line_text",
             cfg.end_col_col,
             unit_expr,
-            unit_col=cfg.col_unit_col if cfg.col_unit_col in names else None,
         ),
     )
+    joined = joined.with_column("_tmp_bstart", col("_tmp_span_bytes")["bstart"])
+    joined = joined.with_column("_tmp_bend", col("_tmp_span_bytes")["bend"])
     joined = joined.drop(
         "start_file_id",
         "start_path",

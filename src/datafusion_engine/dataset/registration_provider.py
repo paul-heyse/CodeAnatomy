@@ -82,21 +82,63 @@ def _provider_capsule_id(
     return repr(provider)
 
 
-def _provider_pushdown_value(provider: object, *, names: Sequence[str]) -> str | bool | None:
+def _normalize_pushdown_status(value: object) -> str | None:
+    if isinstance(value, bool):
+        return "exact" if value else "unsupported"
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"exact", "unsupported", "inexact"}:
+        return text
+    if text.endswith(".exact"):
+        return "exact"
+    if text.endswith(".inexact"):
+        return "inexact"
+    if text.endswith(".unsupported"):
+        return "unsupported"
+    if "unsupported" in text:
+        return "unsupported"
+    if "inexact" in text:
+        return "inexact"
+    if "exact" in text:
+        return "exact"
+    return None
+
+
+def _coerce_pushdown_status(value: object) -> str | None:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        statuses = tuple(
+            status
+            for status in (_normalize_pushdown_status(item) for item in value)
+            if status is not None
+        )
+        if not statuses:
+            return None
+        if "unsupported" in statuses:
+            return "unsupported"
+        if "inexact" in statuses:
+            return "inexact"
+        return "exact"
+    return _normalize_pushdown_status(value)
+
+
+def _provider_pushdown_value(provider: object, *, names: Sequence[str]) -> str | None:
     for name in names:
         attr = getattr(provider, name, None)
         if isinstance(attr, bool):
-            return attr
+            return _normalize_pushdown_status(attr)
         if callable(attr):
             try:
                 value = attr()
             except TypeError:
-                continue
-            if isinstance(value, bool):
-                return value
-            if value is None:
-                return None
-            return str(value)
+                if name == "supports_filters_pushdown":
+                    try:
+                        value = attr([])
+                    except TypeError:
+                        continue
+                else:
+                    continue
+            return _coerce_pushdown_status(value)
     return None
 
 
@@ -118,6 +160,28 @@ def _provider_pushdown_hints(provider: object) -> dict[str, object]:
             provider,
             names=("supports_limit_pushdown",),
         ),
+    }
+
+
+def _pushdown_status_counts(statuses: Mapping[str, object]) -> dict[str, int]:
+    counts = {"exact": 0, "inexact": 0, "unsupported": 0}
+    for raw in statuses.values():
+        status = _normalize_pushdown_status(raw)
+        if status is None:
+            continue
+        counts[status] += 1
+    return counts
+
+
+def _provider_pushdown_contract(provider: object) -> dict[str, object]:
+    statuses = _provider_pushdown_hints(provider)
+    counts = _pushdown_status_counts(statuses)
+    return {
+        "statuses": statuses,
+        "counts": counts,
+        "all_exact": counts["exact"] > 0 and counts["inexact"] == 0 and counts["unsupported"] == 0,
+        "has_inexact": counts["inexact"] > 0,
+        "has_unsupported": counts["unsupported"] > 0,
     }
 
 
@@ -200,6 +264,7 @@ def record_table_provider_artifact(
         "capsule_id": capsule_id,
     }
     if artifact.provider is not None:
+        payload["pushdown_contract"] = _provider_pushdown_contract(artifact.provider)
         payload.update(_provider_pushdown_hints(artifact.provider))
     if artifact.details:
         payload.update(artifact.details)
@@ -244,6 +309,24 @@ def update_table_provider_scan_config(
         delta_scan_config=delta_scan_snapshot_payload(delta_scan_snapshot),
         delta_scan_identity_hash=delta_scan_identity_hash,
         delta_scan_effective=dict(delta_scan_effective) if delta_scan_effective else None,
+    )
+    record_table_provider_metadata(ctx, metadata=updated)
+
+
+def update_table_provider_pushdown_contract(
+    ctx: SessionContext,
+    *,
+    name: str,
+    provider: object | None,
+) -> None:
+    """Update pushdown-contract metadata for a registered table provider."""
+    metadata = table_provider_metadata(ctx, table_name=name)
+    if metadata is None:
+        return
+    pushdown_contract = _provider_pushdown_contract(provider) if provider is not None else None
+    updated = replace(
+        metadata,
+        pushdown_contract=dict(pushdown_contract) if pushdown_contract is not None else None,
     )
     record_table_provider_metadata(ctx, metadata=updated)
 
@@ -296,5 +379,6 @@ __all__ = [
     "table_provider_capsule",
     "update_table_provider_capabilities",
     "update_table_provider_fingerprints",
+    "update_table_provider_pushdown_contract",
     "update_table_provider_scan_config",
 ]

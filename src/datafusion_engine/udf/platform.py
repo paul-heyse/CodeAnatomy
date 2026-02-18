@@ -45,7 +45,7 @@ from datafusion_engine.expr.planner import (
     install_expr_planners,
 )
 from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
-from datafusion_engine.udf.extension_core import (
+from datafusion_engine.udf.extension_runtime import (
     ExtensionRegistries,
     register_rust_udfs,
     rust_runtime_install_payload,

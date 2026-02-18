@@ -24,7 +24,7 @@ from tools.cq.core.render_utils import safe_int as _safe_int
 from tools.cq.core.schema import Finding
 from tools.cq.core.serialization import to_builtins
 
-MAX_FACT_VALUE_ITEMS = 8
+MAX_FACT_VALUE_ITEMS = 3
 MAX_FACT_MAPPING_SCALAR_PAIRS = 4
 SHOW_UNRESOLVED_FACTS_ENV = "CQ_SHOW_UNRESOLVED_FACTS"
 
@@ -300,8 +300,6 @@ def format_enrichment_facts(payload: dict[str, object]) -> list[str]:
 
     # Suppress raw JSON "Additional Facts" payloads in markdown output.
     _ = additional_language_payload(language_payload)
-    if isinstance(language, str):
-        lines.append(f"  - Enrichment Language: `{language}`")
     return lines
 
 

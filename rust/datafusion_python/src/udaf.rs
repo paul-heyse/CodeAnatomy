@@ -23,9 +23,9 @@ use datafusion::arrow::pyarrow::PyArrowType;
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
 use datafusion::logical_expr::{
-    create_udaf, Accumulator, AccumulatorFactoryFunction, AggregateUDF,
+    create_udaf, Accumulator, AccumulatorFactoryFunction, AggregateUDF, AggregateUDFImpl,
 };
-use datafusion_ffi::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
+use datafusion_ffi::udaf::FFI_AggregateUDF;
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyTuple};
 use tracing::instrument;
@@ -156,9 +156,8 @@ fn aggregate_udf_from_capsule(capsule: &Bound<'_, PyCapsule>) -> PyDataFusionRes
     validate_pycapsule(capsule, "datafusion_aggregate_udf")?;
 
     let udaf = unsafe { capsule.reference::<FFI_AggregateUDF>() };
-    let udaf: ForeignAggregateUDF = udaf.try_into()?;
-
-    Ok(udaf.into())
+    let udaf_impl: Arc<dyn AggregateUDFImpl> = udaf.into();
+    Ok(AggregateUDF::new_from_shared_impl(udaf_impl))
 }
 
 /// Represents an AggregateUDF

@@ -18,7 +18,7 @@ from datafusion_engine.arrow.metadata import (
 )
 from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from datafusion_engine.schema.contracts import SchemaContract
-from datafusion_engine.udf.extension_core import validate_rust_udf_snapshot
+from datafusion_engine.udf.extension_runtime import validate_rust_udf_snapshot
 from datafusion_engine.views.bundle_extraction import (
     extract_lineage_from_bundle,
     resolve_required_udfs_from_bundle,
@@ -148,7 +148,7 @@ def _semantic_cache_policy_for_row(
     *,
     runtime_profile: DataFusionRuntimeProfile,
     manifest: SemanticProgramManifest,
-) -> Literal["none", "delta_staging", "delta_output"]:
+) -> Literal["none", "memory", "delta_staging", "delta_output"]:
     """Determine cache policy for a semantic dataset row.
 
     Cache policy is derived from semantic metadata (CDF support, category,
@@ -156,7 +156,7 @@ def _semantic_cache_policy_for_row(
 
     Returns:
     -------
-    Literal["none", "delta_staging", "delta_output"]
+    Literal["none", "memory", "delta_staging", "delta_output"]
         Cache policy for the semantic dataset row.
     """
     override = _runtime_semantic_cache_overrides(runtime_profile).get(row.name)
@@ -174,9 +174,11 @@ def _semantic_cache_policy_for_row(
 
 def _coerce_cache_policy(
     value: object,
-) -> Literal["none", "delta_staging", "delta_output"] | None:
+) -> Literal["none", "memory", "delta_staging", "delta_output"] | None:
     if value == "none":
         return "none"
+    if value == "memory":
+        return "memory"
     if value == "delta_staging":
         return "delta_staging"
     if value == "delta_output":

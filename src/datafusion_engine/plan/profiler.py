@@ -61,7 +61,7 @@ def capture_explain(
     ExplainCapture | None
         Captured explain output and metrics, or ``None`` if unavailable.
     """
-    if os.environ.get("CODEANATOMY_DISABLE_DF_EXPLAIN", "1") == "1":
+    if os.environ.get("CODEANATOMY_ENABLE_DF_EXPLAIN", "0") != "1":
         return None
     explain_method = getattr(df, "explain", None)
     if not callable(explain_method):

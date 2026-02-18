@@ -18,7 +18,7 @@ use crate::udf::{
         StableHashAnyUdf, StableIdPartsUdf, StableIdUdf,
     },
     metadata::{ArrowMetadataUdf, CpgScoreUdf},
-    position::{ColToByteUdf, PositionEncodingUdf},
+    position::{CanonicalizeByteSpanUdf, ColToByteUdf, PositionEncodingUdf},
     span::{
         IntervalAlignScoreUdf, SpanContainsUdf, SpanIdUdf, SpanLenUdf, SpanMakeUdf, SpanOverlapsUdf,
     },
@@ -418,6 +418,11 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         "col_to_byte" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(ColToByteUdf {
             signature: SignatureEqHash::new(signature),
         }))),
+        "canonicalize_byte_span" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            CanonicalizeByteSpanUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
         "semantic_tag" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SemanticTagUdf {
             signature: SignatureEqHash::new(signature),
         }))),

@@ -67,6 +67,20 @@ def default_expr_planner_policy(
     return ExprPlannerPolicy(planner_names=tuple(planner_names))
 
 
+def expr_planner_extension_available() -> bool:
+    """Return whether the native extension exposes ExprPlanner hooks."""
+    module_name = "datafusion_engine.extensions.datafusion_ext"
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name != module_name:
+            return False
+        return False
+    except ImportError:
+        return False
+    return callable(getattr(module, "install_expr_planners", None))
+
+
 def _load_extension() -> object:
     """Import the native DataFusion extension module.
 
@@ -149,6 +163,7 @@ def expr_planner_payloads(planner_names: Sequence[str]) -> Mapping[str, object]:
 __all__ = [
     "ExprPlannerPolicy",
     "default_expr_planner_policy",
+    "expr_planner_extension_available",
     "expr_planner_payloads",
     "install_expr_planners",
 ]

@@ -50,7 +50,7 @@ def test_view_udf_parity_payload_reports_missing_snapshot_udfs(
 ) -> None:
     """Parity payload should flag views missing UDFs in snapshot coverage."""
     monkeypatch.setattr(
-        "datafusion_engine.udf.extension_core.udf_names_from_snapshot",
+        "datafusion_engine.udf.extension_runtime.udf_names_from_snapshot",
         lambda _snapshot: frozenset({"udf_present"}),
     )
 
@@ -72,11 +72,11 @@ def test_rust_udf_snapshot_payload_summarizes_counts(
 ) -> None:
     """Snapshot payload should aggregate UDF family and metadata counts."""
     monkeypatch.setattr(
-        "datafusion_engine.udf.extension_core.rust_udf_snapshot_hash",
+        "datafusion_engine.udf.extension_runtime.rust_udf_snapshot_hash",
         lambda _snapshot: "snapshot_hash",
     )
     monkeypatch.setattr(
-        "datafusion_engine.udf.extension_core.udf_names_from_snapshot",
+        "datafusion_engine.udf.extension_runtime.udf_names_from_snapshot",
         lambda _snapshot: frozenset({"a", "b"}),
     )
 

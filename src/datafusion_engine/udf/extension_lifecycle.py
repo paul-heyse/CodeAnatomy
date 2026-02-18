@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 from datafusion import SessionContext
 
-from datafusion_engine.udf.extension_core import (
+from datafusion_engine.udf.extension_runtime import (
     ExtensionRegistries,
     register_rust_udfs,
     register_udfs_via_ddl,

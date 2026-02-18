@@ -2,14 +2,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use abi_stable::std_types::{ROption, RResult, RStr, RString};
+use datafusion::catalog::{TableFunctionImpl, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionContext;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
-use datafusion_ffi::table_provider::{FFI_TableProvider, ForeignTableProvider};
-use datafusion_ffi::udaf::ForeignAggregateUDF;
-use datafusion_ffi::udf::ForeignScalarUDF;
-use datafusion_ffi::udtf::ForeignTableFunction;
-use datafusion_ffi::udwf::ForeignWindowUDF;
+use datafusion_expr::{
+    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
+};
+use datafusion_ffi::table_provider::FFI_TableProvider;
 use deltalake::delta_datafusion::{DeltaLogicalCodec, DeltaPhysicalCodec};
 
 use df_plugin_api::{caps, DfResult};
@@ -53,16 +52,16 @@ impl PluginHandle {
             self.require_capability(caps::WINDOW_UDF, "window_udf")?;
         }
         for udf in udf_bundle.scalar.iter() {
-            let foreign = ForeignScalarUDF::try_from(udf)?;
-            ctx.register_udf(ScalarUDF::new_from_shared_impl(Arc::new(foreign)));
+            let foreign_impl: Arc<dyn ScalarUDFImpl> = udf.into();
+            ctx.register_udf(ScalarUDF::new_from_shared_impl(foreign_impl));
         }
         for udaf in udf_bundle.aggregate.iter() {
-            let foreign = ForeignAggregateUDF::try_from(udaf)?;
-            ctx.register_udaf(AggregateUDF::new_from_shared_impl(Arc::new(foreign)));
+            let foreign_impl: Arc<dyn AggregateUDFImpl> = udaf.into();
+            ctx.register_udaf(AggregateUDF::new_from_shared_impl(foreign_impl));
         }
         for udwf in udf_bundle.window.iter() {
-            let foreign = ForeignWindowUDF::try_from(udwf)?;
-            ctx.register_udwf(WindowUDF::new_from_shared_impl(Arc::new(foreign)));
+            let foreign_impl: Arc<dyn WindowUDFImpl> = udwf.into();
+            ctx.register_udwf(WindowUDF::new_from_shared_impl(foreign_impl));
         }
         Ok(())
     }
@@ -74,8 +73,8 @@ impl PluginHandle {
         }
         for table_fn in exports.table_functions.iter() {
             let name = table_fn.name.to_string();
-            let foreign = ForeignTableFunction::from(table_fn.function.clone());
-            ctx.register_udtf(name.as_str(), Arc::new(foreign));
+            let foreign_fn: Arc<dyn TableFunctionImpl> = table_fn.function.clone().into();
+            ctx.register_udtf(name.as_str(), foreign_fn);
         }
         Ok(())
     }
@@ -109,8 +108,8 @@ impl PluginHandle {
             let create_table_provider = self.module().create_table_provider();
             let provider = create_table_provider(RStr::from_str(name_str.as_str()), options);
             let provider = df_result_to_result(provider)?;
-            let foreign = ForeignTableProvider::from(&provider);
-            ctx.register_table(name_str.as_str(), Arc::new(foreign))?;
+            let foreign_provider: Arc<dyn TableProvider> = (&provider).into();
+            ctx.register_table(name_str.as_str(), foreign_provider)?;
         }
         if let Some(requested) = requested {
             let missing: Vec<String> = requested.difference(&found).cloned().collect();

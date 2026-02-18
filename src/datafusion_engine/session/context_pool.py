@@ -7,12 +7,9 @@ from collections import deque
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol
 
-import datafusion
 from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
-
-from datafusion_engine.session._session_constants import parse_major_version
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -32,11 +29,6 @@ from datafusion_engine.session.delta_session_builder import (
 )
 from datafusion_engine.session.helpers import deregister_table
 
-_DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION = 51
-
-
-_DATAFUSION_MAJOR_VERSION = parse_major_version(datafusion.__version__)
-
 
 class _SettingsProvider(Protocol):
     def settings(self) -> Mapping[str, str]:
@@ -44,39 +36,11 @@ class _SettingsProvider(Protocol):
         ...
 
 
-def _apply_setting(
-    config: SessionConfig,
-    *,
-    method: str | None,
-    key: str,
-    value: int | bool | str | None,
-) -> SessionConfig:
-    if value is None:
-        return config
-    if method is not None:
-        updater = getattr(config, method, None)
-        if callable(updater):
-            updated = updater(value)
-            return cast("SessionConfig", updated)
-    setter = getattr(config, "set", None)
-    if callable(setter):
-        str_value = str(value).lower() if isinstance(value, bool) else str(value)
-        updated = setter(key, str_value)
-        return cast("SessionConfig", updated)
-    return config
-
-
 def _apply_settings_overrides(
     config: SessionConfig,
     overrides: Mapping[str, str],
 ) -> SessionConfig:
     for key, value in overrides.items():
-        if (
-            key.startswith("datafusion.runtime.")
-            and _DATAFUSION_MAJOR_VERSION is not None
-            and _DATAFUSION_MAJOR_VERSION >= _DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
-        ):
-            continue
         config = config.set(key, str(value))
     return config
 
@@ -115,7 +79,7 @@ def _apply_feature_settings(
     for key, value in settings_map.items():
         try:
             config = config.set(key, value)
-        except (RuntimeError, TypeError, ValueError) as exc:
+        except BaseException as exc:
             message = str(exc)
             if "Config value" in message and "not found" in message:
                 continue
@@ -291,66 +255,66 @@ class SessionFactory:
             config,
             enable_ident_normalization=effective_ident_normalization(profile),
         )
-        config = _apply_setting(
-            config,
-            method="with_target_partitions",
-            key="datafusion.execution.target_partitions",
-            value=profile.execution.target_partitions,
-        )
-        config = _apply_setting(
-            config,
-            method="with_batch_size",
-            key="datafusion.execution.batch_size",
-            value=profile.execution.batch_size,
-        )
-        config = _apply_setting(
-            config,
-            method="with_repartition_aggregations",
-            key="datafusion.optimizer.repartition_aggregations",
-            value=profile.execution.repartition_aggregations,
-        )
-        config = _apply_setting(
-            config,
-            method="with_repartition_windows",
-            key="datafusion.optimizer.repartition_windows",
-            value=profile.execution.repartition_windows,
-        )
-        config = _apply_setting(
-            config,
-            method="with_repartition_file_scans",
-            key="datafusion.execution.repartition_file_scans",
-            value=profile.execution.repartition_file_scans,
-        )
-        config = _apply_setting(
-            config,
-            method=None,
-            key="datafusion.execution.repartition_file_min_size",
-            value=profile.execution.repartition_file_min_size,
-        )
-        config = _apply_setting(
-            config,
-            method=None,
-            key="datafusion.execution.minimum_parallel_output_files",
-            value=profile.execution.minimum_parallel_output_files,
-        )
-        config = _apply_setting(
-            config,
-            method=None,
-            key="datafusion.execution.soft_max_rows_per_output_file",
-            value=profile.execution.soft_max_rows_per_output_file,
-        )
-        config = _apply_setting(
-            config,
-            method=None,
-            key="datafusion.execution.maximum_parallel_row_group_writers",
-            value=profile.execution.maximum_parallel_row_group_writers,
-        )
-        config = _apply_setting(
-            config,
-            method=None,
-            key="datafusion.execution.objectstore_writer_buffer_size",
-            value=profile.execution.objectstore_writer_buffer_size,
-        )
+        target_partitions = profile.execution.target_partitions
+        if target_partitions is not None:
+            config = config.set(
+                "datafusion.execution.target_partitions",
+                str(target_partitions),
+            )
+        batch_size = profile.execution.batch_size
+        if batch_size is not None:
+            config = config.set(
+                "datafusion.execution.batch_size",
+                str(batch_size),
+            )
+        repartition_aggregations = profile.execution.repartition_aggregations
+        if repartition_aggregations is not None:
+            config = config.set(
+                "datafusion.optimizer.repartition_aggregations",
+                str(repartition_aggregations).lower(),
+            )
+        repartition_windows = profile.execution.repartition_windows
+        if repartition_windows is not None:
+            config = config.set(
+                "datafusion.optimizer.repartition_windows",
+                str(repartition_windows).lower(),
+            )
+        repartition_file_scans = profile.execution.repartition_file_scans
+        if repartition_file_scans is not None:
+            config = config.set(
+                "datafusion.execution.repartition_file_scans",
+                str(repartition_file_scans).lower(),
+            )
+        repartition_file_min_size = profile.execution.repartition_file_min_size
+        if repartition_file_min_size is not None:
+            config = config.set(
+                "datafusion.execution.repartition_file_min_size",
+                str(repartition_file_min_size),
+            )
+        minimum_parallel_output_files = profile.execution.minimum_parallel_output_files
+        if minimum_parallel_output_files is not None:
+            config = config.set(
+                "datafusion.execution.minimum_parallel_output_files",
+                str(minimum_parallel_output_files),
+            )
+        soft_max_rows_per_output_file = profile.execution.soft_max_rows_per_output_file
+        if soft_max_rows_per_output_file is not None:
+            config = config.set(
+                "datafusion.execution.soft_max_rows_per_output_file",
+                str(soft_max_rows_per_output_file),
+            )
+        maximum_parallel_row_group_writers = profile.execution.maximum_parallel_row_group_writers
+        if maximum_parallel_row_group_writers is not None:
+            config = config.set(
+                "datafusion.execution.maximum_parallel_row_group_writers",
+                str(maximum_parallel_row_group_writers),
+            )
+        objectstore_writer_buffer_size = profile.execution.objectstore_writer_buffer_size
+        if objectstore_writer_buffer_size is not None:
+            config = config.set(
+                "datafusion.execution.objectstore_writer_buffer_size",
+                str(objectstore_writer_buffer_size),
+            )
         catalog_location, catalog_format = effective_catalog_autoload(profile)
         config = _apply_catalog_autoload(
             config,

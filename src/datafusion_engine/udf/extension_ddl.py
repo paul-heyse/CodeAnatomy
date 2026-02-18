@@ -5,11 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
-import pyarrow as pa
-import pyarrow.types as patypes
 from datafusion import SessionContext
 
-from datafusion_engine.dataset.ddl_types import DDL_COMPLEX_TYPE_TOKENS, ddl_type_alias
+from datafusion_engine.dataset.ddl_types import ddl_type_name
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -72,60 +70,6 @@ def _alias_list(value: object) -> tuple[str, ...]:
     return ()
 
 
-def _ddl_type_name_from_arrow(dtype: pa.DataType) -> str | None:
-    if patypes.is_dictionary(dtype):
-        return _ddl_type_name(dtype.value_type)
-    result: str | None = None
-    if patypes.is_decimal(dtype):
-        result = f"DECIMAL({dtype.precision},{dtype.scale})"
-    elif patypes.is_timestamp(dtype):
-        result = "TIMESTAMP"
-    elif patypes.is_date(dtype):
-        result = "DATE"
-    elif patypes.is_time(dtype):
-        result = "TIME"
-    varchar_checks = (
-        patypes.is_struct,
-        patypes.is_list,
-        patypes.is_large_list,
-        patypes.is_fixed_size_list,
-        patypes.is_map,
-        patypes.is_union,
-        patypes.is_binary,
-        patypes.is_large_binary,
-        patypes.is_fixed_size_binary,
-    )
-    if result is None and any(check(dtype) for check in varchar_checks):
-        result = "VARCHAR"
-    return result
-
-
-def _ddl_type_name_from_string(dtype_name: str) -> str:
-    if dtype_name.startswith("timestamp"):
-        return "TIMESTAMP"
-    if dtype_name.startswith("date"):
-        return "DATE"
-    if dtype_name.startswith("time"):
-        return "TIME"
-    if any(token in dtype_name for token in DDL_COMPLEX_TYPE_TOKENS) or dtype_name in {
-        "any",
-        "variant",
-        "json",
-    }:
-        return "VARCHAR"
-    alias = ddl_type_alias(dtype_name)
-    return alias or dtype_name.upper()
-
-
-def _ddl_type_name(dtype: object) -> str:
-    if isinstance(dtype, pa.DataType):
-        arrow_name = _ddl_type_name_from_arrow(dtype)
-        if arrow_name is not None:
-            return arrow_name
-    dtype_name = str(dtype).strip().lower()
-    return _ddl_type_name_from_string(dtype_name)
-
-
 def _ddl_config_for_spec(
     spec: DataFusionUdfSpec,
     *,
@@ -155,7 +99,7 @@ def _ddl_args(spec: DataFusionUdfSpec) -> tuple[FunctionArgSpec, ...]:
     if arg_names is None or len(arg_names) != len(spec.input_types):
         arg_names = tuple(f"arg{idx}" for idx in range(len(spec.input_types)))
     return tuple(
-        FunctionArgSpec(name=name, dtype=_ddl_type_name(dtype))
+        FunctionArgSpec(name=name, dtype=ddl_type_name(dtype))
         for name, dtype in zip(arg_names, spec.input_types, strict=False)
     )
 
@@ -163,7 +107,7 @@ def _ddl_args(spec: DataFusionUdfSpec) -> tuple[FunctionArgSpec, ...]:
 def _ddl_return_type(spec: DataFusionUdfSpec) -> str | None:
     if spec.kind == "table":
         return None
-    return _ddl_type_name(spec.return_type)
+    return ddl_type_name(spec.return_type)
 
 
 def _ddl_body_sql(target_name: str, arg_count: int, *, kind: str) -> str:

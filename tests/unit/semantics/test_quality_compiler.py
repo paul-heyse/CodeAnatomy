@@ -9,6 +9,7 @@ from semantics.exprs import c, eq
 from semantics.ir import SemanticIRJoinGroup
 from semantics.quality import Feature, HardPredicate, QualityRelationshipSpec, SignalsSpec
 from semantics.quality_compiler import build_join_group, compile_relationship_with_quality
+from semantics.table_registry import TableRegistry
 
 
 def _seed_tables(ctx: SessionContext) -> None:
@@ -37,7 +38,7 @@ def test_build_join_group_returns_prefixed_join() -> None:
     """Join-group helper builds prefixed joined rows."""
     ctx = SessionContext()
     _seed_tables(ctx)
-    compiler = SemanticCompiler(ctx)
+    compiler = SemanticCompiler(ctx, table_registry=TableRegistry())
 
     joined = build_join_group(
         compiler,
@@ -75,7 +76,10 @@ def test_compile_relationship_with_quality_returns_confidence_and_score() -> Non
         ),
     )
 
-    result = compile_relationship_with_quality(SemanticCompiler(ctx), spec)
+    result = compile_relationship_with_quality(
+        SemanticCompiler(ctx, table_registry=TableRegistry()),
+        spec,
+    )
 
     cols = set(result.schema().names)
     assert "score" in cols

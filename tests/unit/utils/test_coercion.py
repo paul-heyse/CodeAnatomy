@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from utils.coercion import coerce_bool, coerce_int, coerce_opt_int
+from utils.value_coercion import coerce_bool, coerce_int, coerce_opt_int
 
 EXPECTED_INT_VALUE = 12
 

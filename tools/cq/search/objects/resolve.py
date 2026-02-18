@@ -428,8 +428,10 @@ def _merge_object_ref_with_representative(
             canonical_line=canonical_line or representative.line,
         )
     representative_is_definition = representative.category in _DEFINITION_CATEGORIES
-    if representative_is_definition and _is_test_path(canonical_file) and not _is_test_path(
-        representative.file
+    if (
+        representative_is_definition
+        and _is_test_path(canonical_file)
+        and not _is_test_path(representative.file)
     ):
         return msgspec.structs.replace(
             object_ref,

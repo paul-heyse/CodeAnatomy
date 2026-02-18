@@ -51,49 +51,12 @@ from datafusion_engine.catalog.introspection import (
 )
 from datafusion_engine.dataset.ddl_types import ddl_type_alias
 from datafusion_engine.dataset.registration_delta_helpers import (
-    _cache_prefix_for_registration,
-    _delta_cdf_artifact_payload,
-    _delta_provider_artifact_payload,
-    _delta_pruning_predicate,
-    _DeltaProviderArtifactContext,
-    _DeltaProviderRegistration,
-    _DeltaRegistrationResult,
-    _DeltaRegistrationState,
-    _enforce_delta_native_provider_policy,
-    _PartitionSchemaContext,
     _populate_schema_adapter_factories,
-    _provider_for_registration,
-    _record_delta_cdf_artifact,
-    _record_delta_log_health,
-    _record_delta_snapshot_if_applicable,
     _scheme_prefix,
 )
 from datafusion_engine.dataset.registration_input import (
     dataset_input_plugin,
     input_plugin_prefixes,
-)
-from datafusion_engine.dataset.registration_projection import (
-    _apply_projection_exprs,
-    _projection_exprs_for_schema,
-    _sql_literal_for_field,
-)
-from datafusion_engine.dataset.registration_provider import (
-    TableProviderArtifact as _TableProviderArtifact,
-)
-from datafusion_engine.dataset.registration_provider import (
-    record_table_provider_artifact as _record_table_provider_artifact,
-)
-from datafusion_engine.dataset.registration_provider import (
-    table_provider_capsule as _table_provider_capsule,
-)
-from datafusion_engine.dataset.registration_provider import (
-    update_table_provider_capabilities as _update_table_provider_capabilities,
-)
-from datafusion_engine.dataset.registration_provider import (
-    update_table_provider_fingerprints as _update_table_provider_fingerprints,
-)
-from datafusion_engine.dataset.registration_provider import (
-    update_table_provider_scan_config as _update_table_provider_scan_config,
 )
 from datafusion_engine.dataset.registration_scan import (
     apply_scan_defaults as _apply_scan_defaults,
@@ -613,76 +576,14 @@ def cached_dataset_names(
     return _cached_dataset_names(ctx, caches=caches)
 
 
-# Public aliases used by extracted registration modules to avoid private imports.
-DataFusionCacheSettings = _DataFusionCacheSettings
-DDL_IDENTIFIER_RE = _DDL_IDENTIFIER_RE
-ExternalTableDdlRequest = _ExternalTableDdlRequest
-PartitionSchemaContext = _PartitionSchemaContext
-DeltaProviderArtifactContext = _DeltaProviderArtifactContext
-DeltaProviderRegistration = _DeltaProviderRegistration
-DeltaRegistrationState = _DeltaRegistrationState
-DeltaRegistrationResult = _DeltaRegistrationResult
-TableProviderArtifact = _TableProviderArtifact
-apply_projection_exprs = _apply_projection_exprs
-cache_prefix_for_registration = _cache_prefix_for_registration
-delta_cdf_artifact_payload = _delta_cdf_artifact_payload
-delta_provider_artifact_payload = _delta_provider_artifact_payload
-delta_pruning_predicate = _delta_pruning_predicate
-enforce_delta_native_provider_policy = _enforce_delta_native_provider_policy
-expected_column_defaults = _expected_column_defaults
-invalidate_information_schema_cache = _invalidate_information_schema_cache
-maybe_cache = _maybe_cache
-projection_exprs_for_schema = _projection_exprs_for_schema
-provider_for_registration = _provider_for_registration
-record_delta_cdf_artifact = _record_delta_cdf_artifact
-record_delta_log_health = _record_delta_log_health
-record_delta_snapshot_if_applicable = _record_delta_snapshot_if_applicable
-record_table_provider_artifact = _record_table_provider_artifact
-resolve_dataset_caches = _resolve_dataset_caches
-sql_literal_for_field = _sql_literal_for_field
-sql_type_name = _sql_type_name
-table_provider_capsule = _table_provider_capsule
-update_table_provider_capabilities = _update_table_provider_capabilities
-update_table_provider_fingerprints = _update_table_provider_fingerprints
-update_table_provider_scan_config = _update_table_provider_scan_config
-
-
 __all__ = [
-    "DDL_IDENTIFIER_RE",
     "DataFusionCachePolicy",
-    "DataFusionCacheSettings",
+    "DataFusionRegistrationContext",
     "DataFusionRegistryOptions",
-    "DeltaProviderArtifactContext",
-    "DeltaProviderRegistration",
-    "DeltaRegistrationResult",
-    "DeltaRegistrationState",
-    "ExternalTableDdlRequest",
-    "PartitionSchemaContext",
-    "TableProviderArtifact",
-    "apply_projection_exprs",
-    "cache_prefix_for_registration",
+    "DatasetCaches",
+    "DeltaCdfArtifact",
     "cached_dataset_names",
     "dataset_input_plugin",
-    "delta_cdf_artifact_payload",
-    "delta_provider_artifact_payload",
-    "delta_pruning_predicate",
-    "enforce_delta_native_provider_policy",
-    "expected_column_defaults",
     "input_plugin_prefixes",
-    "invalidate_information_schema_cache",
-    "maybe_cache",
-    "projection_exprs_for_schema",
-    "provider_for_registration",
-    "record_delta_cdf_artifact",
-    "record_delta_log_health",
-    "record_delta_snapshot_if_applicable",
-    "record_table_provider_artifact",
     "register_dataset_df",
-    "resolve_dataset_caches",
-    "sql_literal_for_field",
-    "sql_type_name",
-    "table_provider_capsule",
-    "update_table_provider_capabilities",
-    "update_table_provider_fingerprints",
-    "update_table_provider_scan_config",
 ]

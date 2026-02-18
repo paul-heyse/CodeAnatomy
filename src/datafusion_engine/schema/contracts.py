@@ -44,7 +44,9 @@ from datafusion_engine.schema.divergence import (
     compute_schema_divergence,
 )
 from datafusion_engine.schema.introspection_core import schema_from_table
-from datafusion_engine.schema.type_normalization import normalize_contract_type
+from datafusion_engine.schema.type_normalization import (
+    normalize_type_string,
+)
 from datafusion_engine.schema.type_resolution import arrow_type_to_sql as _arrow_type_to_sql
 from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
@@ -490,13 +492,7 @@ class SchemaContract:
 
     @staticmethod
     def _normalize_type_string(value: str) -> str:
-        normalized = value.lower().replace(" ", "")
-        normalized = normalized.replace("largeutf8", "string")
-        normalized = normalized.replace("utf8", "string")
-        normalized = normalized.replace("non-null", "")
-        normalized = normalized.replace("nonnull", "")
-        normalized = normalized.replace("'", "").replace('"', "")
-        return normalize_contract_type(normalized)
+        return normalize_type_string(value)
 
     @staticmethod
     def _types_compatible(expected: str, actual: str) -> bool:

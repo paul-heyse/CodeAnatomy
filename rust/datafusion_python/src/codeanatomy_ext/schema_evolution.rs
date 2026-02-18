@@ -11,7 +11,7 @@ use arrow::array::{MapBuilder, StringBuilder};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::physical_expr_adapter::{
-    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
+    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
@@ -33,24 +33,11 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
 
-use super::helpers::extract_session_ctx;
+use super::helpers::{extract_session_ctx, global_task_ctx_provider};
 
 fn decode_schema_ipc(schema_ipc: &[u8]) -> PyResult<SchemaRef> {
     schema_from_ipc(schema_ipc)
         .map_err(|err| PyValueError::new_err(format!("Failed to decode schema IPC: {err}")))
-}
-
-#[derive(Debug, Default)]
-struct SchemaEvolutionAdapterFactory;
-
-impl PhysicalExprAdapterFactory for SchemaEvolutionAdapterFactory {
-    fn create(
-        &self,
-        logical_file_schema: SchemaRef,
-        physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        DefaultPhysicalExprAdapterFactory.create(logical_file_schema, physical_file_schema)
-    }
 }
 
 #[derive(Debug)]
@@ -262,7 +249,8 @@ fn listing_table_plan(
 
 #[pyfunction]
 pub(crate) fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    let factory: Arc<dyn PhysicalExprAdapterFactory> = Arc::new(SchemaEvolutionAdapterFactory);
+    let factory: Arc<dyn PhysicalExprAdapterFactory> =
+        Arc::new(DefaultPhysicalExprAdapterFactory);
     let name = CString::new("datafusion_ext.SchemaEvolutionAdapterFactory")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, factory, Some(name))?;
@@ -341,7 +329,7 @@ pub(crate) fn parquet_listing_table_provider(
         let factory: &Arc<dyn PhysicalExprAdapterFactory> = unsafe { capsule.reference() };
         factory.clone()
     } else {
-        Arc::new(SchemaEvolutionAdapterFactory)
+        Arc::new(DefaultPhysicalExprAdapterFactory)
     };
     let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
@@ -375,7 +363,14 @@ pub(crate) fn parquet_listing_table_provider(
         defaults,
         constraints,
     );
-    let ffi_provider = FFI_TableProvider::new(Arc::new(wrapped), true, None);
+    let task_ctx_provider = global_task_ctx_provider();
+    let ffi_provider = FFI_TableProvider::new(
+        Arc::new(wrapped),
+        true,
+        None,
+        &task_ctx_provider,
+        None,
+    );
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;

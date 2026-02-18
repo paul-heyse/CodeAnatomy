@@ -11,8 +11,9 @@ This module centralizes access to the Rust Delta control plane exposed via
 from __future__ import annotations
 
 import base64
+import importlib
 from collections.abc import Mapping, Sequence
-from typing import NoReturn, cast
+from typing import TYPE_CHECKING, NoReturn, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -282,55 +283,171 @@ def _scan_effective_payload(payload: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-from datafusion_engine.delta import control_plane_provider as _control_plane_provider
+_LAZY_EXPORT_MODULES: dict[str, str] = {
+    "delta_provider_from_session": "datafusion_engine.delta.control_plane_provider",
+    "delta_provider_with_files": "datafusion_engine.delta.control_plane_provider",
+    "delta_cdf_provider": "datafusion_engine.delta.control_plane_provider",
+    "delta_snapshot_info": "datafusion_engine.delta.control_plane_provider",
+    "delta_add_actions": "datafusion_engine.delta.control_plane_provider",
+    "delta_write_ipc": "datafusion_engine.delta.control_plane_mutation",
+    "delta_delete": "datafusion_engine.delta.control_plane_mutation",
+    "delta_update": "datafusion_engine.delta.control_plane_mutation",
+    "delta_merge": "datafusion_engine.delta.control_plane_mutation",
+    "delta_optimize_compact": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_vacuum": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_restore": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_set_properties": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_add_features": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_add_constraints": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_drop_constraints": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_create_checkpoint": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_cleanup_metadata": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_column_mapping": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_deletion_vectors": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_row_tracking": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_change_data_feed": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_generated_columns": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_invariants": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_check_constraints": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_in_commit_timestamps": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_v2_checkpoints": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_vacuum_protocol_check": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_enable_checkpoint_protection": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_change_data_feed": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_deletion_vectors": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_row_tracking": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_in_commit_timestamps": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_vacuum_protocol_check": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_checkpoint_protection": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_column_mapping": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_generated_columns": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_invariants": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_check_constraints": "datafusion_engine.delta.control_plane_maintenance",
+    "delta_disable_v2_checkpoints": "datafusion_engine.delta.control_plane_maintenance",
+}
 
-delta_provider_from_session = _control_plane_provider.delta_provider_from_session
-delta_provider_with_files = _control_plane_provider.delta_provider_with_files
-delta_cdf_provider = _control_plane_provider.delta_cdf_provider
-delta_snapshot_info = _control_plane_provider.delta_snapshot_info
-delta_add_actions = _control_plane_provider.delta_add_actions
 
-from datafusion_engine.delta import control_plane_mutation as _control_plane_mutation
-
-delta_write_ipc = _control_plane_mutation.delta_write_ipc
-delta_delete = _control_plane_mutation.delta_delete
-delta_update = _control_plane_mutation.delta_update
-delta_merge = _control_plane_mutation.delta_merge
+def _resolve_lazy_export(name: str) -> object:
+    module_name = _LAZY_EXPORT_MODULES.get(name)
+    if module_name is None:
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+    module = importlib.import_module(module_name)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
 
 
-from datafusion_engine.delta import control_plane_maintenance as _control_plane_maintenance
+class _LazyExportProxy:
+    def __init__(self, name: str) -> None:
+        self._name = name
 
-delta_optimize_compact = _control_plane_maintenance.delta_optimize_compact
-delta_vacuum = _control_plane_maintenance.delta_vacuum
-delta_restore = _control_plane_maintenance.delta_restore
-delta_set_properties = _control_plane_maintenance.delta_set_properties
-delta_add_features = _control_plane_maintenance.delta_add_features
-delta_add_constraints = _control_plane_maintenance.delta_add_constraints
-delta_drop_constraints = _control_plane_maintenance.delta_drop_constraints
-delta_create_checkpoint = _control_plane_maintenance.delta_create_checkpoint
-delta_cleanup_metadata = _control_plane_maintenance.delta_cleanup_metadata
-delta_enable_column_mapping = _control_plane_maintenance.delta_enable_column_mapping
-delta_enable_deletion_vectors = _control_plane_maintenance.delta_enable_deletion_vectors
-delta_enable_row_tracking = _control_plane_maintenance.delta_enable_row_tracking
-delta_enable_change_data_feed = _control_plane_maintenance.delta_enable_change_data_feed
-delta_enable_generated_columns = _control_plane_maintenance.delta_enable_generated_columns
-delta_enable_invariants = _control_plane_maintenance.delta_enable_invariants
-delta_enable_check_constraints = _control_plane_maintenance.delta_enable_check_constraints
-delta_enable_in_commit_timestamps = _control_plane_maintenance.delta_enable_in_commit_timestamps
-delta_enable_v2_checkpoints = _control_plane_maintenance.delta_enable_v2_checkpoints
-delta_enable_vacuum_protocol_check = _control_plane_maintenance.delta_enable_vacuum_protocol_check
-delta_enable_checkpoint_protection = _control_plane_maintenance.delta_enable_checkpoint_protection
-delta_disable_change_data_feed = _control_plane_maintenance.delta_disable_change_data_feed
-delta_disable_deletion_vectors = _control_plane_maintenance.delta_disable_deletion_vectors
-delta_disable_row_tracking = _control_plane_maintenance.delta_disable_row_tracking
-delta_disable_in_commit_timestamps = _control_plane_maintenance.delta_disable_in_commit_timestamps
-delta_disable_vacuum_protocol_check = _control_plane_maintenance.delta_disable_vacuum_protocol_check
-delta_disable_checkpoint_protection = _control_plane_maintenance.delta_disable_checkpoint_protection
-delta_disable_column_mapping = _control_plane_maintenance.delta_disable_column_mapping
-delta_disable_generated_columns = _control_plane_maintenance.delta_disable_generated_columns
-delta_disable_invariants = _control_plane_maintenance.delta_disable_invariants
-delta_disable_check_constraints = _control_plane_maintenance.delta_disable_check_constraints
-delta_disable_v2_checkpoints = _control_plane_maintenance.delta_disable_v2_checkpoints
+    def _resolve(self) -> object:
+        return _resolve_lazy_export(self._name)
+
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        target = self._resolve()
+        if not callable(target):
+            msg = f"Delta control-plane export {self._name!r} is not callable."
+            raise TypeError(msg)
+        return target(*args, **kwargs)
+
+    def __getattr__(self, attr: str) -> object:
+        return getattr(self._resolve(), attr)
+
+
+if TYPE_CHECKING:
+    from datafusion_engine.delta.control_plane_maintenance import (
+        delta_add_constraints,
+        delta_add_features,
+        delta_cleanup_metadata,
+        delta_create_checkpoint,
+        delta_disable_change_data_feed,
+        delta_disable_check_constraints,
+        delta_disable_checkpoint_protection,
+        delta_disable_column_mapping,
+        delta_disable_deletion_vectors,
+        delta_disable_generated_columns,
+        delta_disable_in_commit_timestamps,
+        delta_disable_invariants,
+        delta_disable_row_tracking,
+        delta_disable_v2_checkpoints,
+        delta_disable_vacuum_protocol_check,
+        delta_drop_constraints,
+        delta_enable_change_data_feed,
+        delta_enable_check_constraints,
+        delta_enable_checkpoint_protection,
+        delta_enable_column_mapping,
+        delta_enable_deletion_vectors,
+        delta_enable_generated_columns,
+        delta_enable_in_commit_timestamps,
+        delta_enable_invariants,
+        delta_enable_row_tracking,
+        delta_enable_v2_checkpoints,
+        delta_enable_vacuum_protocol_check,
+        delta_optimize_compact,
+        delta_restore,
+        delta_set_properties,
+        delta_vacuum,
+    )
+    from datafusion_engine.delta.control_plane_mutation import (
+        delta_delete,
+        delta_merge,
+        delta_update,
+        delta_write_ipc,
+    )
+    from datafusion_engine.delta.control_plane_provider import (
+        delta_add_actions,
+        delta_cdf_provider,
+        delta_provider_from_session,
+        delta_provider_with_files,
+        delta_snapshot_info,
+    )
+else:
+    delta_add_actions = _LazyExportProxy("delta_add_actions")
+    delta_add_constraints = _LazyExportProxy("delta_add_constraints")
+    delta_add_features = _LazyExportProxy("delta_add_features")
+    delta_cdf_provider = _LazyExportProxy("delta_cdf_provider")
+    delta_cleanup_metadata = _LazyExportProxy("delta_cleanup_metadata")
+    delta_create_checkpoint = _LazyExportProxy("delta_create_checkpoint")
+    delta_delete = _LazyExportProxy("delta_delete")
+    delta_disable_change_data_feed = _LazyExportProxy("delta_disable_change_data_feed")
+    delta_disable_check_constraints = _LazyExportProxy("delta_disable_check_constraints")
+    delta_disable_checkpoint_protection = _LazyExportProxy("delta_disable_checkpoint_protection")
+    delta_disable_column_mapping = _LazyExportProxy("delta_disable_column_mapping")
+    delta_disable_deletion_vectors = _LazyExportProxy("delta_disable_deletion_vectors")
+    delta_disable_generated_columns = _LazyExportProxy("delta_disable_generated_columns")
+    delta_disable_in_commit_timestamps = _LazyExportProxy("delta_disable_in_commit_timestamps")
+    delta_disable_invariants = _LazyExportProxy("delta_disable_invariants")
+    delta_disable_row_tracking = _LazyExportProxy("delta_disable_row_tracking")
+    delta_disable_v2_checkpoints = _LazyExportProxy("delta_disable_v2_checkpoints")
+    delta_disable_vacuum_protocol_check = _LazyExportProxy("delta_disable_vacuum_protocol_check")
+    delta_drop_constraints = _LazyExportProxy("delta_drop_constraints")
+    delta_enable_change_data_feed = _LazyExportProxy("delta_enable_change_data_feed")
+    delta_enable_check_constraints = _LazyExportProxy("delta_enable_check_constraints")
+    delta_enable_checkpoint_protection = _LazyExportProxy("delta_enable_checkpoint_protection")
+    delta_enable_column_mapping = _LazyExportProxy("delta_enable_column_mapping")
+    delta_enable_deletion_vectors = _LazyExportProxy("delta_enable_deletion_vectors")
+    delta_enable_generated_columns = _LazyExportProxy("delta_enable_generated_columns")
+    delta_enable_in_commit_timestamps = _LazyExportProxy("delta_enable_in_commit_timestamps")
+    delta_enable_invariants = _LazyExportProxy("delta_enable_invariants")
+    delta_enable_row_tracking = _LazyExportProxy("delta_enable_row_tracking")
+    delta_enable_v2_checkpoints = _LazyExportProxy("delta_enable_v2_checkpoints")
+    delta_enable_vacuum_protocol_check = _LazyExportProxy("delta_enable_vacuum_protocol_check")
+    delta_merge = _LazyExportProxy("delta_merge")
+    delta_optimize_compact = _LazyExportProxy("delta_optimize_compact")
+    delta_provider_from_session = _LazyExportProxy("delta_provider_from_session")
+    delta_provider_with_files = _LazyExportProxy("delta_provider_with_files")
+    delta_restore = _LazyExportProxy("delta_restore")
+    delta_set_properties = _LazyExportProxy("delta_set_properties")
+    delta_snapshot_info = _LazyExportProxy("delta_snapshot_info")
+    delta_update = _LazyExportProxy("delta_update")
+    delta_vacuum = _LazyExportProxy("delta_vacuum")
+    delta_write_ipc = _LazyExportProxy("delta_write_ipc")
+
+
+def __getattr__(name: str) -> object:
+    return _resolve_lazy_export(name)
 
 
 __all__ = [

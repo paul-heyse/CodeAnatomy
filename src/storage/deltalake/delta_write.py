@@ -110,31 +110,41 @@ def delta_delete_where(
     """Delete rows from a Delta table via the Rust control plane.
 
     Returns:
-        Mapping[str, object]: Delete mutation report payload.
-    """
-    import time
+    -------
+    Mapping[str, object]
+        Delete mutation report payload.
 
+    Raises:
+        ValueError: If the delete predicate is empty or whitespace-only.
+    """
     from obs.otel import SCOPE_STORAGE, stage_span
     from storage.deltalake.delta_runtime_ops import (
         MutationArtifactRequest,
         constraint_status,
         delta_commit_options,
-        delta_retry_classification,
-        delta_retry_delay,
         enforce_append_only_policy,
         enforce_locking_provider,
         record_mutation_artifact,
+        retry_with_policy,
         resolve_delta_mutation_policy,
         storage_span_attributes,
     )
     from utils.storage_options import merged_storage_options
     from utils.value_coercion import coerce_int
 
+    cleaned_predicate = request.predicate.strip()
+    if not cleaned_predicate:
+        msg = (
+            "delta_delete_where requires a non-empty predicate. "
+            "Use an explicit full-table delete operation instead."
+        )
+        raise ValueError(msg)
+
     attrs = storage_span_attributes(
         operation="delete",
         table_path=request.path,
         dataset_name=request.dataset_name,
-        extra={"codeanatomy.has_filters": bool(request.predicate)},
+        extra={"codeanatomy.has_filters": True},
     )
     with stage_span(
         "storage.delete",
@@ -162,33 +172,23 @@ def delta_delete_where(
         )
         from datafusion_engine.delta.control_plane_core import DeltaDeleteRequest, delta_delete
 
-        attempts = 0
         retry_policy = mutation_policy.retry_policy
-        while True:
-            try:
-                report = delta_delete(
-                    ctx,
-                    request=DeltaDeleteRequest(
-                        table_uri=request.path,
-                        storage_options=storage or None,
-                        version=None,
-                        timestamp=None,
-                        predicate=request.predicate,
-                        extra_constraints=request.extra_constraints,
-                        commit_options=commit_options,
-                    ),
-                )
-                break
-            except Exception as exc:  # pragma: no cover - retry paths depend on delta-rs
-                classification = delta_retry_classification(exc, policy=retry_policy)
-                if classification != "retryable":
-                    raise
-                attempts += 1
-                if attempts >= retry_policy.max_attempts:
-                    raise
-                delay = delta_retry_delay(attempts - 1, policy=retry_policy)
-                span.set_attribute("codeanatomy.retry_attempt", attempts)
-                time.sleep(delay)
+        report, attempts = retry_with_policy(
+            lambda: delta_delete(
+                ctx,
+                request=DeltaDeleteRequest(
+                    table_uri=request.path,
+                    storage_options=storage or None,
+                    version=None,
+                    timestamp=None,
+                    predicate=cleaned_predicate,
+                    extra_constraints=request.extra_constraints,
+                    commit_options=commit_options,
+                ),
+            ),
+            policy=retry_policy,
+            span=span,
+        )
         metrics = report.get("metrics") if isinstance(report, Mapping) else None
         if isinstance(metrics, Mapping):
             for key in ("rows_deleted", "deleted_rows", "num_deleted"):

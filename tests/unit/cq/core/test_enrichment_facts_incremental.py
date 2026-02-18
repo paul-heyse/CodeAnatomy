@@ -29,6 +29,8 @@ def test_incremental_fact_cluster_included() -> None:
     }
     language, lang_payload = resolve_primary_language_payload(payload)
     context = resolve_fact_context(language=language, language_payload=lang_payload)
-    clusters = resolve_fact_clusters(context=context, language_payload=lang_payload)
+    clusters = resolve_fact_clusters(
+        context=context, language_payload=lang_payload, include_verbose=True
+    )
     titles = [cluster.title for cluster in clusters]
     assert "Incremental Enrichment" in titles

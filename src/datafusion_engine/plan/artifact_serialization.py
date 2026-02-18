@@ -339,7 +339,7 @@ def udf_compatibility(
     Returns:
         tuple[bool, Mapping[str, object]]: Compatibility status and diagnostic detail.
     """
-    from datafusion_engine.udf.extension_core import (
+    from datafusion_engine.udf.extension_runtime import (
         rust_udf_snapshot,
         rust_udf_snapshot_hash,
         udf_names_from_snapshot,

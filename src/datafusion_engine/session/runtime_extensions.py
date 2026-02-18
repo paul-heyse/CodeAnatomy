@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import time
+import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, cast
 
@@ -18,12 +19,17 @@ from cache.diskcache_factory import (
     diskcache_stats_snapshot,
 )
 from datafusion_engine.compile.options import DataFusionSqlPolicy, resolve_sql_policy
-from datafusion_engine.expr.planner import expr_planner_payloads, install_expr_planners
+from datafusion_engine.expr.planner import (
+    expr_planner_extension_available,
+    expr_planner_payloads,
+    install_expr_planners,
+)
 from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from datafusion_engine.session._session_constants import (
     DATAFUSION_SQL_ERROR,
     create_schema_introspector,
 )
+from datafusion_engine.session.protocols import PlannerExtensionPort
 from datafusion_engine.session.runtime_dataset_io import (
     _cache_config_payload,
     _cache_snapshot_rows,
@@ -44,6 +50,7 @@ from datafusion_engine.session.runtime_udf import (
 from datafusion_engine.sql.options import sql_options_for_profile
 from datafusion_engine.udf.extension_validation import extension_capabilities_report
 from datafusion_engine.udf.factory import (
+    function_factory_extension_available,
     function_factory_payloads,
     install_function_factory,
 )
@@ -60,6 +67,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _DDL_CATALOG_WARNING_STATE: dict[str, bool] = {"emitted": False}
+_PLANNER_RULES_INSTALLED: weakref.WeakKeyDictionary[object, bool] = weakref.WeakKeyDictionary()
+_CACHE_TABLES_INSTALLED: weakref.WeakKeyDictionary[object, bool] = weakref.WeakKeyDictionary()
 
 
 def _deferred_import(module_path: str, attr_name: str) -> object:
@@ -176,7 +185,7 @@ def _install_udf_platform(profile: DataFusionRuntimeProfile, ctx: SessionContext
         and platform.function_factory is not None
         and platform.function_factory.installed
     ):
-        from datafusion_engine.udf.extension_core import register_udfs_via_ddl
+        from datafusion_engine.udf.extension_runtime import register_udfs_via_ddl
 
         try:
             register_udfs_via_ddl(
@@ -207,6 +216,9 @@ def _install_planner_rules(profile: DataFusionRuntimeProfile, ctx: SessionContex
     Raises:
         RuntimeError: If the operation cannot be completed.
     """
+    if _PLANNER_RULES_INSTALLED.get(ctx):
+        return
+
     # Resolve SQL policy from profile configuration
     sql_policy = profile.policies.sql_policy
     if sql_policy is None and profile.policies.sql_policy_name is not None:
@@ -237,6 +249,7 @@ def _install_planner_rules(profile: DataFusionRuntimeProfile, ctx: SessionContex
             "(scripts/build_datafusion_wheels.sh + uv sync)."
         )
         raise RuntimeError(msg) from exc
+    _PLANNER_RULES_INSTALLED[ctx] = True
     return
 
 
@@ -299,7 +312,7 @@ def _validate_udf_specs(
     Raises:
         ValueError: If the tracing hook is unavailable.
     """
-    from datafusion_engine.udf.extension_core import (
+    from datafusion_engine.udf.extension_runtime import (
         rust_udf_snapshot,
         udf_names_from_snapshot,
     )
@@ -577,7 +590,7 @@ def _validate_udf_info_schema_parity(
             "routines_available": False,
             "error": "native_udf_platform unavailable",
         }
-    from datafusion_engine.udf.extension_core import rust_runtime_install_payload
+    from datafusion_engine.udf.extension_runtime import rust_runtime_install_payload
     from datafusion_engine.udf.parity import udf_info_schema_parity_report
 
     report = udf_info_schema_parity_report(ctx)
@@ -826,6 +839,8 @@ def _install_cache_tables(profile: DataFusionRuntimeProfile, ctx: SessionContext
         or profile.policies.metadata_cache_snapshot_enabled
     ):
         return
+    if _CACHE_TABLES_INSTALLED.get(ctx):
+        return
     try:
         _register_cache_introspection_functions(ctx)
     except ImportError as exc:
@@ -834,6 +849,7 @@ def _install_cache_tables(profile: DataFusionRuntimeProfile, ctx: SessionContext
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Cache table function registration failed: {exc}"
         raise RuntimeError(msg) from exc
+    _CACHE_TABLES_INSTALLED[ctx] = True
 
 
 def _install_tracing(profile: DataFusionRuntimeProfile, ctx: SessionContext) -> None:
@@ -908,19 +924,23 @@ def _install_function_factory(profile: DataFusionRuntimeProfile, ctx: SessionCon
     installed = False
     error: str | None = None
     cause: Exception | None = None
-    try:
-        if profile.policies.function_factory_hook is None:
-            install_function_factory(ctx)
-        else:
-            profile.policies.function_factory_hook(ctx)
-        installed = True
-    except ImportError as exc:
+    if (
+        profile.policies.function_factory_hook is None
+        and not function_factory_extension_available()
+    ):
         available = False
-        error = str(exc)
-        cause = exc
-    except (RuntimeError, TypeError) as exc:
-        error = str(exc)
-        cause = exc
+        error = "DataFusion extension FunctionFactory entrypoint is unavailable."
+        cause = RuntimeError(error)
+    else:
+        try:
+            if profile.policies.function_factory_hook is None:
+                install_function_factory(ctx)
+            else:
+                profile.policies.function_factory_hook(ctx)
+            installed = True
+        except (RuntimeError, TypeError, ValueError, ImportError) as exc:
+            error = str(exc)
+            cause = exc
     _record_function_factory(
         profile,
         available=available,
@@ -948,19 +968,23 @@ def _install_expr_planners(profile: DataFusionRuntimeProfile, ctx: SessionContex
     installed = False
     error: str | None = None
     cause: Exception | None = None
-    try:
-        if profile.policies.expr_planner_hook is None:
-            install_expr_planners(ctx, planner_names=profile.policies.expr_planner_names)
-        else:
-            profile.policies.expr_planner_hook(ctx)
-        installed = True
-    except ImportError as exc:
+    planner_hook = profile.policies.expr_planner_hook
+    if planner_hook is None and not expr_planner_extension_available():
         available = False
-        error = str(exc)
-        cause = exc
-    except (RuntimeError, TypeError, ValueError) as exc:
-        error = str(exc)
-        cause = exc
+        error = "DataFusion extension ExprPlanner entrypoint is unavailable."
+    else:
+        try:
+            if isinstance(planner_hook, PlannerExtensionPort):
+                planner_hook.install_expr_planners(ctx)
+                planner_hook.install_relation_planner(ctx)
+            elif planner_hook is None:
+                install_expr_planners(ctx, planner_names=profile.policies.expr_planner_names)
+            else:
+                planner_hook(ctx)
+            installed = True
+        except (RuntimeError, TypeError, ValueError, ImportError) as exc:
+            error = str(exc)
+            cause = exc
     _record_expr_planners(
         profile,
         available=available,

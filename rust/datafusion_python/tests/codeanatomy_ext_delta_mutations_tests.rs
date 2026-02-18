@@ -10,9 +10,9 @@ fn delta_mutation_request_surface_registers() {
             .expect("init internal module");
         let expected = [
             "delta_write_ipc_request",
-            "delta_delete_request_payload",
-            "delta_update_request_payload",
-            "delta_merge_request_payload",
+            "delta_delete_request",
+            "delta_update_request",
+            "delta_merge_request",
         ];
         for name in expected {
             assert!(module.hasattr(name).expect("hasattr"), "missing {name}");

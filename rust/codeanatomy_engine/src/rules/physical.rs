@@ -15,13 +15,10 @@ use datafusion_common::{DataFusionError, Result};
 /// CpgPhysicalRule extends base CodeAnatomyPhysicalRule with CPG-specific optimizations.
 ///
 /// Applies physical-level optimizations tailored to CPG query patterns:
-/// - Coalescing small batches after selective filters
 /// - Hash join memory hints for large graph structures
 /// - Schema validation after rewrites
 #[derive(Debug)]
 pub struct CpgPhysicalRule {
-    /// Whether to coalesce partitions after filter operations
-    pub coalesce_after_filter: bool,
     /// Optional memory hint for hash join operations (in bytes)
     pub hash_join_memory_hint: Option<usize>,
 }
@@ -29,7 +26,6 @@ pub struct CpgPhysicalRule {
 impl Default for CpgPhysicalRule {
     fn default() -> Self {
         Self {
-            coalesce_after_filter: true,
             hash_join_memory_hint: None,
         }
     }
@@ -46,10 +42,6 @@ impl PhysicalOptimizerRule for CpgPhysicalRule {
         let mut optimized = base_rule.optimize(plan, config)?;
 
         // Apply CPG-specific optimizations
-        if self.coalesce_after_filter {
-            optimized = apply_post_filter_coalescing(optimized)?;
-        }
-
         if let Some(memory_hint) = self.hash_join_memory_hint {
             optimized = apply_hash_join_hints(optimized, memory_hint)?;
         }
@@ -115,27 +107,6 @@ impl PhysicalOptimizerRule for CostShapeRule {
     fn schema_check(&self) -> bool {
         // Enable schema validation
         true
-    }
-}
-
-/// Applies coalescing after filter operations to reduce small batch overhead.
-///
-/// Identifies filter operations that may produce many small batches and
-/// inserts CoalesceBatches operators to improve downstream performance.
-///
-/// # Arguments
-///
-/// * `plan` - Physical execution plan to optimize
-///
-/// # Returns
-///
-/// Optimized plan with coalescing operators inserted
-fn apply_post_filter_coalescing(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    let partitions = plan.output_partitioning().partition_count();
-    if partitions > 1 {
-        Ok(Arc::new(CoalescePartitionsExec::new(plan)))
-    } else {
-        Ok(plan)
     }
 }
 
@@ -243,11 +214,9 @@ mod tests {
     #[test]
     fn test_cpg_physical_rule_with_custom_config() {
         let rule = CpgPhysicalRule {
-            coalesce_after_filter: false,
             hash_join_memory_hint: Some(1048576),
         };
 
-        assert!(!rule.coalesce_after_filter);
         assert_eq!(rule.hash_join_memory_hint, Some(1048576));
     }
 }

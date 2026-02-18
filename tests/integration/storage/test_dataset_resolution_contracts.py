@@ -18,7 +18,6 @@ from datafusion_engine.dataset.resolution import (
     resolve_dataset_provider,
 )
 from datafusion_engine.io.write_core import WriteFormat, WriteMode, WritePipeline, WriteRequest
-from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from tests.harness.profiles import clone_profile_with_delta_service, conformance_profile
 from tests.test_helpers.arrow_seed import register_arrow_table
@@ -134,9 +133,8 @@ def test_provider_artifacts_include_scan_metadata(tmp_path: Path) -> None:
     Resolution should record artifacts via the diagnostics sink containing
     scan metadata including the delta_scan_identity_hash field.
     """
-    sink = InMemoryDiagnosticsSink()
     base_profile = conformance_profile()
-    profile = clone_profile_with_delta_service(base_profile, diagnostics=sink)
+    profile = clone_profile_with_delta_service(base_profile)
 
     delta_path = tmp_path / "test_scan_metadata"
 

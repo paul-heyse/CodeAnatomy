@@ -15,6 +15,7 @@ from semantics.quality import (
     SelectExpr,
     SignalsSpec,
 )
+from semantics.table_registry import TableRegistry
 
 
 def test_compile_relationship_with_quality_computes_scores() -> None:
@@ -83,7 +84,10 @@ def test_compile_relationship_with_quality_computes_scores() -> None:
         ],
     )
 
-    df = SemanticCompiler(ctx).compile_relationship_with_quality(
+    df = SemanticCompiler(
+        ctx,
+        table_registry=TableRegistry(),
+    ).compile_relationship_with_quality(
         spec,
         file_quality_df=ctx.table("file_quality_v1"),
     )

@@ -4,8 +4,11 @@ use std::collections::HashMap;
 
 use crate::delta_mutations::{
     delta_delete_request as delta_delete_native, delta_merge_request as delta_merge_native,
-    delta_update_request as delta_update_native, delta_write_ipc_request as delta_write_ipc_native,
-    DeltaDeleteRequest, DeltaMergeRequest, DeltaUpdateRequest, DeltaWriteIpcRequest,
+    delta_update_request as delta_update_native, DeltaDeleteRequest, DeltaMergeRequest,
+    DeltaUpdateRequest,
+};
+use codeanatomy_engine::executor::delta_writer::{
+    execute_delta_write_ipc as execute_delta_write_native, DeltaWritePayload,
 };
 use datafusion_ext::{DeltaCommitOptions, DeltaFeatureGate};
 use deltalake::protocol::SaveMode;
@@ -104,27 +107,29 @@ pub(crate) fn delta_write_ipc_request(
     let table_version = table_version_from_options(request.version, request.timestamp)?;
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_write_ipc_native(DeltaWriteIpcRequest {
-            session_ctx: &extract_session_ctx(ctx)?,
-            table_uri: &request.table_uri,
-            storage_options: request.storage_options,
-            table_version,
-            data_ipc: request.data_ipc.as_slice(),
-            save_mode,
-            schema_mode_label: request.schema_mode,
-            partition_columns: request.partition_columns,
-            target_file_size: request.target_file_size,
-            gate: request.gate,
-            commit_options: request.commit_options,
-            extra_constraints: request.extra_constraints,
-        }))
+        .block_on(execute_delta_write_native(
+            &extract_session_ctx(ctx)?,
+            DeltaWritePayload {
+                table_uri: request.table_uri,
+                storage_options: request.storage_options,
+                table_version,
+                save_mode,
+                schema_mode_label: request.schema_mode,
+                partition_columns: request.partition_columns,
+                target_file_size: request.target_file_size,
+                gate: request.gate,
+                commit_options: request.commit_options,
+                extra_constraints: request.extra_constraints,
+            },
+            request.data_ipc.as_slice(),
+        ))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta write failed: {err}")))?;
     mutation_report_to_pydict(py, &report)
 }
 
 #[pyfunction]
 #[instrument(skip(py, ctx, request_msgpack))]
-pub(crate) fn delta_delete_request_payload(
+pub(crate) fn delta_delete_request(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
     request_msgpack: Vec<u8>,
@@ -150,7 +155,7 @@ pub(crate) fn delta_delete_request_payload(
 
 #[pyfunction]
 #[instrument(skip(py, ctx, request_msgpack))]
-pub(crate) fn delta_update_request_payload(
+pub(crate) fn delta_update_request(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
     request_msgpack: Vec<u8>,
@@ -182,7 +187,7 @@ pub(crate) fn delta_update_request_payload(
 
 #[pyfunction]
 #[instrument(skip(py, ctx, request_msgpack))]
-pub(crate) fn delta_merge_request_payload(
+pub(crate) fn delta_merge_request(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
     request_msgpack: Vec<u8>,
@@ -225,8 +230,8 @@ pub(crate) fn delta_merge_request_payload(
 
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(delta_write_ipc_request, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_delete_request_payload, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_update_request_payload, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_merge_request_payload, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_delete_request, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_update_request, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_merge_request, module)?)?;
     Ok(())
 }

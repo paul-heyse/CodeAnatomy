@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from datafusion_engine.dataset.registration_core import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.expr.spec import ExprSpec
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from schema_spec.dataset_spec import DatasetSpec
 from schema_spec.specs import TableSchemaSpec
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
@@ -24,6 +26,9 @@ require_datafusion_udfs()
 require_deltalake()
 require_delta_extension()
 
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+
 EXPECTED_ROW_COUNT = 2
 
 
@@ -32,7 +37,7 @@ def _seed_delta_table_or_skip(
     *,
     table: pa.Table,
     options: DeltaSeedOptions,
-) -> tuple[object, object, Path]:
+) -> tuple[DataFusionRuntimeProfile, SessionContext, Path]:
     try:
         return write_delta_table(tmp_path, table=table, options=options)
     except RuntimeError as exc:

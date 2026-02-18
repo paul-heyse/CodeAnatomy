@@ -646,7 +646,7 @@ def write_delta_bootstrap(
     from storage.deltalake.delta_runtime_ops import commit_metadata_from_properties
     from utils.storage_options import merged_storage_options
 
-    table = result.df.to_arrow_table()
+    reader = result.to_arrow_stream()
     storage = merged_storage_options(spec.storage_options, spec.log_storage_options)
     partition_by = list(spec.partition_by) if spec.partition_by else None
     storage_options = dict(storage) if storage else None
@@ -656,7 +656,7 @@ def write_delta_bootstrap(
     )
     request = build_delta_write_request(
         table_uri=spec.table_uri,
-        table=table,
+        reader=reader,
         options=DeltaWriteRequestOptions(
             mode=spec.mode,
             schema_mode=spec.schema_mode,
@@ -669,7 +669,6 @@ def write_delta_bootstrap(
     )
     report = write_transaction(pipeline.ctx, request=request)
     if pipeline.runtime_profile is not None:
-        row_count = int(table.num_rows)
         record_artifact(
             pipeline.runtime_profile,
             DELTA_WRITE_BOOTSTRAP_SPEC,
@@ -677,7 +676,7 @@ def write_delta_bootstrap(
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table_uri": spec.table_uri,
                 "mode": spec.mode,
-                "row_count": row_count,
+                "row_count": 0,
             },
         )
     return DeltaWriteResult(

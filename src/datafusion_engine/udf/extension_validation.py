@@ -11,11 +11,12 @@ from datafusion_engine.udf.constants import (
     ABI_VERSION_MISMATCH_MSG,
     REBUILD_WHEELS_HINT,
 )
-from datafusion_engine.udf.extension_core import (
+from datafusion_engine.udf.extension_runtime import (
     expected_plugin_abi,
     extension_module_with_capabilities,
     invoke_runtime_entrypoint,
 )
+from datafusion_engine.udf.runtime_snapshot_types import coerce_rust_udf_snapshot
 from utils.validation import validate_required_items
 
 _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
@@ -315,7 +316,7 @@ def extension_capabilities_snapshot() -> Mapping[str, object]:
     Raises:
         TypeError: If the extension capability snapshot is not a mapping payload.
     """
-    from datafusion_engine.udf.extension_core import (
+    from datafusion_engine.udf.extension_runtime import (
         EXTENSION_MODULE_LABEL,
     )
 
@@ -371,28 +372,36 @@ def validate_rust_udf_snapshot(snapshot: Mapping[str, object]) -> None:
         ValueError: If snapshot contents violate required metadata rules.
     """
     try:
-        _validate_required_snapshot_keys(snapshot)
-        param_names, volatility, signature_inputs, return_types, names = _require_snapshot_metadata(
-            snapshot,
-        )
-        for list_name in ("scalar", "aggregate", "window"):
-            _validate_udf_entries(
-                snapshot,
-                list_name=list_name,
-                param_names=param_names,
-                volatility=volatility,
-            )
-        _validate_signature_metadata(
-            names=names,
-            signature_inputs=signature_inputs,
-            return_types=return_types,
-        )
-    except TypeError as exc:
+        typed = coerce_rust_udf_snapshot(snapshot)
+    except Exception as exc:
         msg = f"Invalid Rust UDF snapshot types: {exc}"
         raise TypeError(msg) from exc
-    except ValueError as exc:
-        msg = f"Invalid Rust UDF snapshot values: {exc}"
-        raise ValueError(msg) from exc
+
+    names = frozenset((*typed.scalar, *typed.aggregate, *typed.window, *typed.table))
+    param_names = typed.parameter_names
+    volatility = typed.volatility
+    signature_inputs = typed.signature_inputs
+    return_types = typed.return_types
+
+    for list_name, entries in (
+        ("scalar", typed.scalar),
+        ("aggregate", typed.aggregate),
+        ("window", typed.window),
+    ):
+        for name in entries:
+            if name not in param_names:
+                msg = f"Rust UDF snapshot missing parameter names for {name!r} in {list_name}."
+                raise ValueError(msg)
+            if name not in volatility:
+                msg = f"Rust UDF snapshot missing volatility for {name!r} in {list_name}."
+                raise ValueError(msg)
+
+    if names and not signature_inputs:
+        msg = "Rust UDF snapshot missing signature_inputs entries."
+        raise ValueError(msg)
+    if names and not return_types:
+        msg = "Rust UDF snapshot missing return_types entries."
+        raise ValueError(msg)
 
 
 def validate_required_udfs(

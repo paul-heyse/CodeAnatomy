@@ -14,7 +14,8 @@ use datafusion_ext::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 use df_plugin_host::{DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict, PyList};
+use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyList};
+use rmp_serde::to_vec_named;
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 
 use crate::{registry_snapshot, udf_docs};
@@ -40,6 +41,11 @@ fn registry_snapshot_hash(snapshot: &registry_snapshot::RegistrySnapshot) -> PyR
         PyRuntimeError::new_err(format!("Failed to finalize registry hash: {err}"))
     })?;
     Ok(hex::encode(out))
+}
+
+fn registry_snapshot_msgpack(snapshot: &registry_snapshot::RegistrySnapshot) -> PyResult<Vec<u8>> {
+    to_vec_named(snapshot)
+        .map_err(|err| PyRuntimeError::new_err(format!("Failed to serialize registry snapshot: {err}")))
 }
 
 #[pyfunction]
@@ -253,6 +259,16 @@ pub(crate) fn registry_snapshot_py(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> Py
     Ok(payload.into())
 }
 
+#[pyfunction(name = "registry_snapshot_msgpack")]
+pub(crate) fn registry_snapshot_msgpack_py(
+    py: Python<'_>,
+    ctx: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let snapshot = registry_snapshot::registry_snapshot(&extract_session_ctx(ctx)?.state());
+    let payload = registry_snapshot_msgpack(&snapshot)?;
+    Ok(PyBytes::new(py, &payload).into())
+}
+
 #[pyfunction]
 #[pyo3(signature = (
     ctx,
@@ -302,6 +318,7 @@ pub(crate) fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
                 "install_function_factory",
                 "install_expr_planners",
                 "registry_snapshot",
+                "registry_snapshot_msgpack",
             ],
         },
         "function_factory": {
@@ -321,7 +338,9 @@ pub(crate) fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
                 "delta_table_provider_with_files",
                 "delta_scan_config_from_session",
                 "delta_write_ipc_request",
-                "delta_merge_request_payload",
+                "delta_delete_request",
+                "delta_update_request",
+                "delta_merge_request",
                 "delta_vacuum_request_payload",
             ],
         },
@@ -330,6 +349,7 @@ pub(crate) fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
             "entrypoints": [
                 "replay_substrait_plan",
                 "lineage_from_substrait",
+                "extract_lineage_json",
             ],
         },
         "extraction_session": {
@@ -398,22 +418,29 @@ pub(crate) fn install_codeanatomy_runtime(
             "Failed to serialize runtime snapshot payload: {err}"
         ))
     })?;
-    let payload = json!({
-        "contract_version": 3,
-        "runtime_install_mode": "unified",
-        "snapshot": snapshot_json,
-        "udf_installed": true,
-        "function_factory_installed": true,
-        "expr_planners_installed": true,
-        "expr_planner_names": planner_names,
-        "cache_registrar_available": true,
-        "async": {
-            "enabled": enable_async_udfs,
-            "timeout_ms": async_udf_timeout_ms,
-            "batch_size": async_udf_batch_size,
-        },
-    });
-    json_to_py(py, &payload)
+    let snapshot_msgpack = registry_snapshot_msgpack(&snapshot)?;
+    let payload = PyDict::new(py);
+    payload.set_item("contract_version", 3)?;
+    payload.set_item("runtime_install_mode", "unified")?;
+    payload.set_item("snapshot", json_to_py(py, &snapshot_json)?)?;
+    payload.set_item("snapshot_msgpack", PyBytes::new(py, &snapshot_msgpack))?;
+    payload.set_item("udf_installed", true)?;
+    payload.set_item("function_factory_installed", true)?;
+    payload.set_item("expr_planners_installed", true)?;
+    payload.set_item("expr_planner_names", planner_names)?;
+    payload.set_item("cache_registrar_available", true)?;
+    payload.set_item(
+        "async",
+        json_to_py(
+            py,
+            &json!({
+                "enabled": enable_async_udfs,
+                "timeout_ms": async_udf_timeout_ms,
+                "batch_size": async_udf_batch_size,
+            }),
+        )?,
+    )?;
+    Ok(payload.into())
 }
 
 #[pyfunction]
@@ -528,6 +555,7 @@ pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(install_codeanatomy_udf_config, module)?)?;
     module.add_function(wrap_pyfunction!(register_codeanatomy_udfs, module)?)?;
     module.add_function(wrap_pyfunction!(registry_snapshot_py, module)?)?;
+    module.add_function(wrap_pyfunction!(registry_snapshot_msgpack_py, module)?)?;
     module.add_function(wrap_pyfunction!(udf_docs_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(capabilities_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(install_codeanatomy_runtime, module)?)?;

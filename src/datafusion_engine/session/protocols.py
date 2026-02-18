@@ -37,7 +37,21 @@ class RuntimeArtifactRecorder(Protocol):
         ...
 
 
+@runtime_checkable
+class PlannerExtensionPort(Protocol):
+    """Protocol for custom planner extension installers."""
+
+    def install_expr_planners(self, ctx: object) -> None:
+        """Install expression planners into ``ctx``."""
+        ...
+
+    def install_relation_planner(self, ctx: object) -> None:
+        """Install relation planner into ``ctx``."""
+        ...
+
+
 __all__ = [
+    "PlannerExtensionPort",
     "RuntimeArtifactRecorder",
     "RuntimeSettingsProvider",
     "RuntimeTelemetryProvider",

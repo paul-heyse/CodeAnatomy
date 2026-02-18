@@ -25,7 +25,7 @@ use datafusion::catalog::{
 };
 use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
-use datafusion_ffi::schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider};
+use datafusion_ffi::schema_provider::FFI_SchemaProvider;
 use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
@@ -34,7 +34,8 @@ use pyo3::IntoPyObjectExt;
 use crate::dataset::Dataset;
 use crate::errors::{py_datafusion_err, to_datafusion_err, PyDataFusionError, PyDataFusionResult};
 use crate::table::PyTable;
-use crate::utils::{validate_pycapsule, wait_for_future};
+use crate::utils::{get_global_ctx, validate_pycapsule, wait_for_future};
+use crate::context::PySessionContext;
 
 fn extract_string_vec(names: Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     if let Ok(values) = names.extract::<Vec<String>>() {
@@ -114,15 +115,19 @@ impl PyCatalog {
 
     fn register_schema(&self, name: &str, schema_provider: Bound<'_, PyAny>) -> PyResult<()> {
         let provider = if schema_provider.hasattr("__datafusion_schema_provider__")? {
+            let session = Py::new(
+                schema_provider.py(),
+                PySessionContext::from(get_global_ctx().clone()),
+            )?;
             let capsule = schema_provider
                 .getattr("__datafusion_schema_provider__")?
-                .call0()?;
+                .call1((session,))?;
             let capsule = capsule.downcast::<PyCapsule>().map_err(py_datafusion_err)?;
             validate_pycapsule(capsule, "datafusion_schema_provider")?;
 
             let provider = unsafe { capsule.reference::<FFI_SchemaProvider>() };
-            let provider: ForeignSchemaProvider = provider.into();
-            Arc::new(provider) as Arc<dyn SchemaProvider>
+            let provider: Arc<dyn SchemaProvider + Send> = provider.into();
+            provider as Arc<dyn SchemaProvider>
         } else {
             match schema_provider.extract::<PySchema>() {
                 Ok(py_schema) => py_schema.schema,
@@ -361,16 +366,19 @@ impl RustWrappedPyCatalogProvider {
             }
 
             if py_schema.hasattr("__datafusion_schema_provider__")? {
-                let capsule = provider
+                let session = Py::new(
+                    py,
+                    PySessionContext::from(get_global_ctx().clone()),
+                )?;
+                let capsule = py_schema
                     .getattr("__datafusion_schema_provider__")?
-                    .call0()?;
+                    .call1((session,))?;
                 let capsule = capsule.downcast::<PyCapsule>().map_err(py_datafusion_err)?;
                 validate_pycapsule(capsule, "datafusion_schema_provider")?;
 
                 let provider = unsafe { capsule.reference::<FFI_SchemaProvider>() };
-                let provider: ForeignSchemaProvider = provider.into();
-
-                Ok(Some(Arc::new(provider) as Arc<dyn SchemaProvider>))
+                let provider: Arc<dyn SchemaProvider + Send> = provider.into();
+                Ok(Some(provider as Arc<dyn SchemaProvider>))
             } else {
                 if let Ok(inner_schema) = py_schema.getattr("schema") {
                     if let Ok(inner_schema) = inner_schema.extract::<PySchema>() {

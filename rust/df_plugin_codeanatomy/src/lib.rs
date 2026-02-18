@@ -1,113 +1,23 @@
-use std::collections::HashMap;
+mod options;
+mod providers;
+mod task_context;
+mod udf_bundle;
+
 use std::mem::size_of;
-use std::sync::Arc;
 
 use abi_stable::export_root_module;
 use abi_stable::prefix_type::PrefixTypeTrait;
-use abi_stable::std_types::{ROption, RResult, RStr, RString, RVec};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
 use datafusion::arrow;
-use datafusion::config::ConfigOptions;
-use datafusion_ffi::table_provider::FFI_TableProvider;
-use datafusion_ffi::udaf::FFI_AggregateUDF;
-use datafusion_ffi::udf::FFI_ScalarUDF;
-use datafusion_ffi::udtf::FFI_TableFunction;
-use datafusion_ffi::udwf::FFI_WindowUDF;
-use deltalake::delta_datafusion::{
-    DeltaCdfTableProvider, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider,
-};
-use deltalake::errors::DeltaTableError;
-use deltalake::kernel::EagerSnapshot;
 use df_plugin_api::{
     caps, DfPluginExportsV1, DfPluginManifestV1, DfPluginMod, DfPluginMod_Ref, DfResult,
-    DfTableFunctionV1, DfUdfBundleV1, DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR,
+    DfUdfBundleV1, DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR,
 };
-use df_plugin_common::{parse_major, schema_from_ipc, DELTA_SCAN_CONFIG_VERSION};
-use serde::de::{self, DeserializeOwned, Deserializer};
-use serde::Deserialize;
-use tokio::runtime::Runtime;
+use df_plugin_common::parse_major;
 
-use datafusion::execution::context::SessionContext;
-#[cfg(feature = "async-udf")]
-use datafusion_ext::async_udf_config::CodeAnatomyAsyncUdfConfig;
-use datafusion_ext::delta_control_plane::{
-    add_actions_for_paths, delta_cdf_provider, load_delta_table, DeltaCdfProviderRequest,
-    DeltaCdfScanOptions,
-};
-use datafusion_ext::delta_protocol::{gate_from_parts, protocol_gate, TableVersion};
-use datafusion_ext::udf_config::CodeAnatomyUdfConfig;
-use datafusion_ext::udf_registry;
-use datafusion_ext::udtf_sources;
-
-#[derive(Debug, Deserialize)]
-struct DeltaProviderOptions {
-    table_uri: String,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    scan_config: DeltaScanConfigPayload,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-    files: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeltaScanConfigPayload {
-    scan_config_version: u32,
-    file_column_name: Option<String>,
-    enable_parquet_pushdown: bool,
-    schema_force_view_types: bool,
-    wrap_partition_values: bool,
-    #[serde(default, deserialize_with = "deserialize_schema_ipc")]
-    schema_ipc: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeltaCdfProviderOptions {
-    table_uri: String,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    starting_version: Option<i64>,
-    ending_version: Option<i64>,
-    starting_timestamp: Option<String>,
-    ending_timestamp: Option<String>,
-    allow_out_of_range: Option<bool>,
-    min_reader_version: Option<i32>,
-    min_writer_version: Option<i32>,
-    required_reader_features: Option<Vec<String>>,
-    required_writer_features: Option<Vec<String>>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct PluginUdfConfig {
-    utf8_normalize_form: Option<String>,
-    utf8_normalize_casefold: Option<bool>,
-    utf8_normalize_collapse_ws: Option<bool>,
-    span_default_line_base: Option<i32>,
-    span_default_col_unit: Option<String>,
-    span_default_end_exclusive: Option<bool>,
-    map_normalize_key_case: Option<String>,
-    map_normalize_sort_keys: Option<bool>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct PluginUdfOptions {
-    enable_async: Option<bool>,
-    async_udf_timeout_ms: Option<u64>,
-    async_udf_batch_size: Option<usize>,
-    udf_config: Option<PluginUdfConfig>,
-}
-
-fn async_runtime() -> Result<&'static Runtime, String> {
-    datafusion_ext::async_runtime::shared_runtime()
-        .map_err(|err| format!("Failed to acquire shared runtime: {err}"))
-}
+use crate::options::parse_udf_options;
+use crate::providers::create_table_provider;
+use crate::udf_bundle::{build_udf_bundle_with_options, exports};
 
 fn manifest() -> DfPluginManifestV1 {
     DfPluginManifestV1 {
@@ -124,359 +34,9 @@ fn manifest() -> DfPluginManifestV1 {
             | caps::SCALAR_UDF
             | caps::AGG_UDF
             | caps::WINDOW_UDF
-            | caps::TABLE_FUNCTION,
+            | caps::TABLE_FUNCTION
+            | caps::RELATION_PLANNER,
         features: RVec::new(),
-    }
-}
-
-fn parse_udf_options(options: ROption<RString>) -> Result<PluginUdfOptions, String> {
-    match options {
-        ROption::RSome(value) => serde_json::from_str(value.as_str())
-            .map_err(|err| format!("Invalid UDF options JSON: {err}")),
-        ROption::RNone => Ok(PluginUdfOptions::default()),
-    }
-}
-
-fn deserialize_schema_ipc<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    match value {
-        serde_json::Value::Null => Ok(None),
-        serde_json::Value::String(text) => {
-            STANDARD.decode(text).map(Some).map_err(de::Error::custom)
-        }
-        serde_json::Value::Array(items) => {
-            let mut bytes = Vec::with_capacity(items.len());
-            for item in items {
-                let Some(num) = item.as_u64() else {
-                    return Err(de::Error::custom(
-                        "schema_ipc array values must be unsigned integers",
-                    ));
-                };
-                if num > u8::MAX as u64 {
-                    return Err(de::Error::custom(
-                        "schema_ipc array values must fit in a byte",
-                    ));
-                }
-                bytes.push(num as u8);
-            }
-            Ok(Some(bytes))
-        }
-        _ => Err(de::Error::custom(
-            "schema_ipc must be a base64 string or array of bytes",
-        )),
-    }
-}
-
-fn resolve_udf_policy(
-    options: &PluginUdfOptions,
-) -> Result<(bool, Option<u64>, Option<usize>), String> {
-    let enable_async = options.enable_async.unwrap_or(false);
-    if enable_async {
-        let timeout_ms = options.async_udf_timeout_ms.ok_or_else(|| {
-            "async_udf_timeout_ms must be set when async UDFs are enabled.".to_string()
-        })?;
-        if timeout_ms == 0 {
-            return Err("async_udf_timeout_ms must be a positive integer.".to_string());
-        }
-        let batch_size = options.async_udf_batch_size.ok_or_else(|| {
-            "async_udf_batch_size must be set when async UDFs are enabled.".to_string()
-        })?;
-        if batch_size == 0 {
-            return Err("async_udf_batch_size must be a positive integer.".to_string());
-        }
-        return Ok((true, Some(timeout_ms), Some(batch_size)));
-    }
-    if options.async_udf_timeout_ms.is_some() || options.async_udf_batch_size.is_some() {
-        return Err(
-            "Async UDF settings require enable_async=true in plugin UDF options.".to_string(),
-        );
-    }
-    Ok((false, None, None))
-}
-
-fn config_options_from_udf_options(
-    options: &PluginUdfOptions,
-    timeout_ms: Option<u64>,
-    batch_size: Option<usize>,
-) -> ConfigOptions {
-    #[cfg(not(feature = "async-udf"))]
-    let _ = (timeout_ms, batch_size);
-    let mut config = ConfigOptions::default();
-    let mut policy = CodeAnatomyUdfConfig::default();
-    if let Some(overrides) = options.udf_config.as_ref() {
-        if let Some(value) = overrides.utf8_normalize_form.as_ref() {
-            policy.utf8_normalize_form = value.clone();
-        }
-        if let Some(value) = overrides.utf8_normalize_casefold {
-            policy.utf8_normalize_casefold = value;
-        }
-        if let Some(value) = overrides.utf8_normalize_collapse_ws {
-            policy.utf8_normalize_collapse_ws = value;
-        }
-        if let Some(value) = overrides.span_default_line_base {
-            policy.span_default_line_base = value;
-        }
-        if let Some(value) = overrides.span_default_col_unit.as_ref() {
-            policy.span_default_col_unit = value.clone();
-        }
-        if let Some(value) = overrides.span_default_end_exclusive {
-            policy.span_default_end_exclusive = value;
-        }
-        if let Some(value) = overrides.map_normalize_key_case.as_ref() {
-            policy.map_normalize_key_case = value.clone();
-        }
-        if let Some(value) = overrides.map_normalize_sort_keys {
-            policy.map_normalize_sort_keys = value;
-        }
-    }
-    config.extensions.insert(policy);
-    #[cfg(feature = "async-udf")]
-    if timeout_ms.is_some() || batch_size.is_some() {
-        config.extensions.insert(CodeAnatomyAsyncUdfConfig {
-            ideal_batch_size: batch_size,
-            timeout_ms,
-        });
-    }
-    config
-}
-
-fn build_udf_bundle_from_specs(
-    specs: Vec<udf_registry::ScalarUdfSpec>,
-    config: &ConfigOptions,
-) -> DfUdfBundleV1 {
-    let mut scalar = Vec::new();
-    for spec in specs {
-        let mut udf = (spec.builder)();
-        if let Some(updated) = udf.inner().with_updated_config(config) {
-            udf = updated;
-        }
-        if !spec.aliases.is_empty() {
-            udf = udf.with_aliases(spec.aliases.iter().copied());
-        }
-        scalar.push(FFI_ScalarUDF::from(Arc::new(udf)));
-    }
-    let aggregate = udf_registry::builtin_udafs()
-        .into_iter()
-        .map(|udaf| FFI_AggregateUDF::from(Arc::new(udaf)))
-        .collect::<Vec<_>>();
-    let window = udf_registry::builtin_udwfs()
-        .into_iter()
-        .map(|udwf| FFI_WindowUDF::from(Arc::new(udwf)))
-        .collect::<Vec<_>>();
-    DfUdfBundleV1 {
-        scalar: RVec::from(scalar),
-        aggregate: RVec::from(aggregate),
-        window: RVec::from(window),
-    }
-}
-
-fn build_udf_bundle_with_options(options: PluginUdfOptions) -> Result<DfUdfBundleV1, String> {
-    let (enable_async, timeout_ms, batch_size) = resolve_udf_policy(&options)?;
-    #[cfg(not(feature = "async-udf"))]
-    if enable_async {
-        return Err("Async UDFs require the async-udf feature.".to_string());
-    }
-    #[cfg(not(feature = "async-udf"))]
-    let _ = (timeout_ms, batch_size);
-    let specs = udf_registry::scalar_udf_specs_with_async(enable_async)
-        .map_err(|err| format!("Failed to build UDF bundle: {err}"))?;
-    let config = config_options_from_udf_options(&options, timeout_ms, batch_size);
-    Ok(build_udf_bundle_from_specs(specs, &config))
-}
-
-fn build_udf_bundle() -> DfUdfBundleV1 {
-    match build_udf_bundle_with_options(PluginUdfOptions::default()) {
-        Ok(bundle) => bundle,
-        Err(err) => {
-            eprintln!("Failed to build UDF bundle: {err}");
-            DfUdfBundleV1 {
-                scalar: RVec::new(),
-                aggregate: RVec::new(),
-                window: RVec::new(),
-            }
-        }
-    }
-}
-
-fn build_table_functions() -> Vec<DfTableFunctionV1> {
-    let mut functions = Vec::new();
-    let ctx = SessionContext::new();
-    let specs = udf_registry::table_udf_specs()
-        .into_iter()
-        .chain(udtf_sources::external_udtf_specs());
-    for spec in specs {
-        let table_fn = match (spec.builder)(&ctx) {
-            Ok(table_fn) => table_fn,
-            Err(err) => {
-                eprintln!("Failed to build table UDF {}: {err}", spec.name);
-                continue;
-            }
-        };
-        let ffi_fn = FFI_TableFunction::from(Arc::clone(&table_fn));
-        functions.push(DfTableFunctionV1 {
-            name: RString::from(spec.name),
-            function: ffi_fn.clone(),
-        });
-        for alias in spec.aliases {
-            functions.push(DfTableFunctionV1 {
-                name: RString::from(*alias),
-                function: ffi_fn.clone(),
-            });
-        }
-    }
-    functions
-}
-
-fn exports() -> DfPluginExportsV1 {
-    let table_provider_names = RVec::from(vec![RString::from("delta"), RString::from("delta_cdf")]);
-    DfPluginExportsV1 {
-        table_provider_names,
-        udf_bundle: build_udf_bundle(),
-        table_functions: RVec::from(build_table_functions()),
-    }
-}
-
-fn parse_options<T: DeserializeOwned>(options: ROption<RString>) -> Result<T, String> {
-    let options = match options {
-        ROption::RSome(value) => value,
-        ROption::RNone => return Err("Missing options JSON".to_string()),
-    };
-    serde_json::from_str(options.as_str()).map_err(|err| format!("Invalid options JSON: {err}"))
-}
-
-fn apply_file_column_builder(
-    scan_config: DeltaScanConfig,
-    snapshot: &EagerSnapshot,
-) -> Result<DeltaScanConfig, DeltaTableError> {
-    let Some(file_column_name) = scan_config.file_column_name.clone() else {
-        return Ok(scan_config);
-    };
-    let mut builder = DeltaScanConfigBuilder::new().with_file_column_name(&file_column_name);
-    builder = builder.wrap_partition_values(scan_config.wrap_partition_values);
-    builder = builder.with_parquet_pushdown(scan_config.enable_parquet_pushdown);
-    if let Some(schema) = scan_config.schema.clone() {
-        builder = builder.with_schema(schema);
-    }
-    let built = builder.build(snapshot)?;
-    Ok(DeltaScanConfig {
-        file_column_name: built.file_column_name,
-        wrap_partition_values: built.wrap_partition_values,
-        enable_parquet_pushdown: built.enable_parquet_pushdown,
-        schema: built.schema,
-        schema_force_view_types: scan_config.schema_force_view_types,
-    })
-}
-
-fn delta_scan_config_from_options(
-    options: &DeltaProviderOptions,
-    snapshot: &EagerSnapshot,
-) -> Result<DeltaScanConfig, DeltaTableError> {
-    let mut config = DeltaScanConfig::new();
-    let payload = &options.scan_config;
-    if payload.scan_config_version != DELTA_SCAN_CONFIG_VERSION {
-        return Err(DeltaTableError::Generic(format!(
-            "Unsupported scan_config_version {} (expected {})",
-            payload.scan_config_version, DELTA_SCAN_CONFIG_VERSION
-        )));
-    }
-    config.file_column_name = payload.file_column_name.clone();
-    config.enable_parquet_pushdown = payload.enable_parquet_pushdown;
-    config.schema_force_view_types = payload.schema_force_view_types;
-    config.wrap_partition_values = payload.wrap_partition_values;
-    if let Some(schema_ipc) = payload.schema_ipc.as_ref() {
-        config.schema = Some(schema_from_ipc(schema_ipc).map_err(DeltaTableError::from)?);
-    }
-    apply_file_column_builder(config, snapshot)
-}
-
-fn build_delta_provider(options: DeltaProviderOptions) -> Result<FFI_TableProvider, String> {
-    let runtime = async_runtime()?;
-    let gate = gate_from_parts(
-        options.min_reader_version,
-        options.min_writer_version,
-        options.required_reader_features.clone(),
-        options.required_writer_features.clone(),
-    );
-    let result: Result<DeltaTableProvider, DeltaTableError> = runtime.block_on(async {
-        let table_version = TableVersion::from_options(options.version, options.timestamp.clone())?;
-        let table = load_delta_table(
-            &options.table_uri,
-            options.storage_options.clone(),
-            table_version,
-            None,
-        )
-        .await?;
-        let snapshot =
-            datafusion_ext::delta_protocol::delta_snapshot_info(&options.table_uri, &table).await?;
-        protocol_gate(&snapshot, &gate)?;
-        let eager_snapshot = table.snapshot()?.snapshot().clone();
-        let log_store = table.log_store();
-        let scan_config = delta_scan_config_from_options(&options, &eager_snapshot)?;
-        let mut provider = DeltaTableProvider::try_new(eager_snapshot, log_store, scan_config)?;
-        if let Some(files) = options.files.as_ref() {
-            if !files.is_empty() {
-                let add_actions = add_actions_for_paths(&table, files)?;
-                provider = provider.with_files(add_actions);
-            }
-        }
-        Ok(provider)
-    });
-    let provider = result.map_err(|err| format!("Delta provider failed: {err}"))?;
-    Ok(FFI_TableProvider::new(Arc::new(provider), true, None))
-}
-
-fn build_delta_cdf_provider(options: DeltaCdfProviderOptions) -> Result<FFI_TableProvider, String> {
-    let runtime = async_runtime()?;
-    let gate = gate_from_parts(
-        options.min_reader_version,
-        options.min_writer_version,
-        options.required_reader_features,
-        options.required_writer_features,
-    );
-    let cdf_options = DeltaCdfScanOptions {
-        starting_version: options.starting_version,
-        ending_version: options.ending_version,
-        starting_timestamp: options.starting_timestamp,
-        ending_timestamp: options.ending_timestamp,
-        allow_out_of_range: options.allow_out_of_range.unwrap_or(false),
-    };
-    let result: Result<DeltaCdfTableProvider, DeltaTableError> = runtime.block_on(async {
-        let table_version = TableVersion::from_options(options.version, options.timestamp.clone())?;
-        let (provider, _) = delta_cdf_provider(DeltaCdfProviderRequest {
-            table_uri: &options.table_uri,
-            storage_options: options.storage_options.clone(),
-            table_version,
-            options: cdf_options,
-            gate: Some(gate),
-        })
-        .await?;
-        Ok(provider)
-    });
-    let provider = result.map_err(|err| format!("Delta CDF provider failed: {err}"))?;
-    Ok(FFI_TableProvider::new(Arc::new(provider), true, None))
-}
-
-extern "C" fn create_table_provider(
-    name: RStr<'_>,
-    options_json: ROption<RString>,
-) -> DfResult<FFI_TableProvider> {
-    let result = match name.to_string().as_str() {
-        "delta" => {
-            parse_options::<DeltaProviderOptions>(options_json).and_then(build_delta_provider)
-        }
-        "delta_cdf" => parse_options::<DeltaCdfProviderOptions>(options_json)
-            .and_then(build_delta_cdf_provider),
-        other => Err(format!("Unknown table provider {other}")),
-    };
-    match result {
-        Ok(value) => RResult::ROk(value),
-        Err(err) => RResult::RErr(RString::from(err)),
     }
 }
 
@@ -509,11 +69,6 @@ pub fn get_library() -> DfPluginMod_Ref {
 
 #[cfg(test)]
 mod tests {
-    use super::build_table_functions;
-    use super::build_udf_bundle_with_options;
-    use super::delta_scan_config_from_options;
-    use super::PluginUdfOptions;
-    use super::{DeltaProviderOptions, DeltaScanConfigPayload, DELTA_SCAN_CONFIG_VERSION};
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{
@@ -521,19 +76,23 @@ mod tests {
     };
     use datafusion::arrow::ipc::writer::StreamWriter;
     use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::catalog::TableFunctionImpl;
     use datafusion::error::{DataFusionError, Result};
-    use datafusion::logical_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+    use datafusion::logical_expr::{
+        AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
+    };
     use datafusion::prelude::SessionContext;
-    use datafusion_ffi::udaf::ForeignAggregateUDF;
-    use datafusion_ffi::udf::ForeignScalarUDF;
-    use datafusion_ffi::udtf::ForeignTableFunction;
-    use datafusion_ffi::udwf::ForeignWindowUDF;
     use deltalake::kernel::{DataType as DeltaDataType, PrimitiveType};
     use deltalake::DeltaTable;
+    use df_plugin_common::DELTA_SCAN_CONFIG_VERSION;
     use tokio::runtime::Runtime;
 
     use datafusion_ext::delta_control_plane::{scan_config_from_session, DeltaScanOverrides};
     use datafusion_ext::{registry_snapshot, udf_registry, udtf_builtin};
+
+    use crate::options::{DeltaProviderOptions, DeltaScanConfigPayload, PluginUdfOptions};
+    use crate::providers::delta_scan_config_from_options;
+    use crate::udf_bundle::{build_table_functions, build_udf_bundle_with_options};
 
     fn schema_to_ipc(schema: &ArrowSchema) -> Vec<u8> {
         let mut buffer = Vec::new();
@@ -626,23 +185,22 @@ mod tests {
         let bundle = build_udf_bundle_with_options(PluginUdfOptions::default())
             .map_err(|err| DataFusionError::Plan(err.to_string()))?;
         for udf in bundle.scalar.iter() {
-            let foreign = ForeignScalarUDF::try_from(udf)?;
-            ctx.register_udf(ScalarUDF::new_from_shared_impl(Arc::new(foreign)));
+            let foreign_impl: Arc<dyn ScalarUDFImpl> = udf.into();
+            ctx.register_udf(ScalarUDF::new_from_shared_impl(foreign_impl));
         }
         for udaf in bundle.aggregate.iter() {
-            let foreign = ForeignAggregateUDF::try_from(udaf)?;
-            ctx.register_udaf(AggregateUDF::new_from_shared_impl(Arc::new(foreign)));
+            let foreign_impl: Arc<dyn AggregateUDFImpl> = udaf.into();
+            ctx.register_udaf(AggregateUDF::new_from_shared_impl(foreign_impl));
         }
         for udwf in bundle.window.iter() {
-            let foreign = ForeignWindowUDF::try_from(udwf)?;
-            ctx.register_udwf(WindowUDF::new_from_shared_impl(Arc::new(foreign)));
+            let foreign_impl: Arc<dyn WindowUDFImpl> = udwf.into();
+            ctx.register_udwf(WindowUDF::new_from_shared_impl(foreign_impl));
         }
         for table_fn in build_table_functions() {
             let name = table_fn.name.to_string();
-            let foreign = ForeignTableFunction::from(table_fn.function.clone());
-            ctx.register_udtf(name.as_str(), Arc::new(foreign));
+            let foreign_fn: Arc<dyn TableFunctionImpl> = table_fn.function.clone().into();
+            ctx.register_udtf(name.as_str(), foreign_fn);
         }
-        // Keep test snapshot parity with native registration for built-in UDTFs.
         udtf_builtin::register_builtin_udtfs(ctx)?;
         Ok(())
     }
@@ -671,8 +229,6 @@ mod tests {
         let plugin_coerce_keys: Vec<String> = plugin.coerce_types.keys().cloned().collect();
         assert_eq!(native_coerce_keys, plugin_coerce_keys);
 
-        // FFI registry wrappers currently degrade some rich signature metadata
-        // (parameter names/types/defaults). Verify key coverage instead.
         let native_parameter_keys: Vec<String> = native.parameter_names.keys().cloned().collect();
         let plugin_parameter_keys: Vec<String> = plugin.parameter_names.keys().cloned().collect();
         assert_eq!(native_parameter_keys, plugin_parameter_keys);

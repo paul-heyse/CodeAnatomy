@@ -441,6 +441,16 @@ class CacheConfigSnapshot:
     meta_fetch_concurrency: str | None = None
 
 
+_CACHE_CONFIG_DEFAULTS: dict[str, str] = {
+    "datafusion.runtime.list_files_cache_ttl": "2m",
+    "datafusion.runtime.list_files_cache_limit": str(128 * 1024 * 1024),
+    "datafusion.runtime.metadata_cache_limit": str(256 * 1024 * 1024),
+    "datafusion.execution.parquet.max_predicate_cache_size": str(64 * 1024 * 1024),
+    "datafusion.execution.collect_statistics": "true",
+    "datafusion.execution.meta_fetch_concurrency": "8",
+}
+
+
 @dataclass(frozen=True)
 class CacheStateSnapshot:
     """Runtime state snapshot for a DataFusion cache."""
@@ -474,35 +484,37 @@ class CacheStateSnapshot:
         }
 
 
-def _extract_cache_config(settings: list[dict[str, object]]) -> CacheConfigSnapshot:
+def _extract_cache_config(
+    settings: list[dict[str, object]],
+    *,
+    defaults: dict[str, str] | None = None,
+) -> CacheConfigSnapshot:
     settings_map = {str(row.get("name")): str(row.get("value")) for row in settings}
-    from datafusion_engine.session.runtime_config_policies import DEFAULT_DF_POLICY
-
-    defaults = DEFAULT_DF_POLICY.settings
+    resolved_defaults = defaults or _CACHE_CONFIG_DEFAULTS
     return CacheConfigSnapshot(
         list_files_cache_ttl=(
             settings_map.get("datafusion.runtime.list_files_cache_ttl")
-            or defaults.get("datafusion.runtime.list_files_cache_ttl")
+            or resolved_defaults.get("datafusion.runtime.list_files_cache_ttl")
         ),
         list_files_cache_limit=(
             settings_map.get("datafusion.runtime.list_files_cache_limit")
-            or defaults.get("datafusion.runtime.list_files_cache_limit")
+            or resolved_defaults.get("datafusion.runtime.list_files_cache_limit")
         ),
         metadata_cache_limit=(
             settings_map.get("datafusion.runtime.metadata_cache_limit")
-            or defaults.get("datafusion.runtime.metadata_cache_limit")
+            or resolved_defaults.get("datafusion.runtime.metadata_cache_limit")
         ),
         predicate_cache_size=(
             settings_map.get("datafusion.execution.parquet.max_predicate_cache_size")
-            or defaults.get("datafusion.execution.parquet.max_predicate_cache_size")
+            or resolved_defaults.get("datafusion.execution.parquet.max_predicate_cache_size")
         ),
         collect_statistics=(
             settings_map.get("datafusion.execution.collect_statistics")
-            or defaults.get("datafusion.execution.collect_statistics")
+            or resolved_defaults.get("datafusion.execution.collect_statistics")
         ),
         meta_fetch_concurrency=(
             settings_map.get("datafusion.execution.meta_fetch_concurrency")
-            or defaults.get("datafusion.execution.meta_fetch_concurrency")
+            or resolved_defaults.get("datafusion.execution.meta_fetch_concurrency")
         ),
     )
 
@@ -543,6 +555,32 @@ def _settings_snapshot(ctx: SessionContext) -> list[dict[str, object]]:
     return [dict(row) for row in snapshot.settings.to_pylist()]
 
 
+def _cache_contract_probe(ctx: SessionContext) -> Mapping[str, object]:
+    """Return native runtime cache metrics from the DF52 contract probe."""
+    try:
+        payload = datafusion_ext.session_context_contract_probe(ctx)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    return {str(key): value for key, value in payload.items()}
+
+
+def _coerce_int_metric(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def metadata_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     """Capture metadata cache state snapshot.
 
@@ -551,21 +589,20 @@ def metadata_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     CacheStateSnapshot
         Cache snapshot for metadata cache.
     """
-    snapshot = _cache_snapshot_from_table(ctx, table_name="metadata_cache")
-    if snapshot is not None:
-        return snapshot
     settings = _settings_snapshot(ctx)
     config = _extract_cache_config(settings)
+    metrics = _cache_contract_probe(ctx)
+    metadata_limit = _coerce_int_metric(metrics.get("metadata_cache_limit_bytes"))
     now = _now_ms()
     return CacheStateSnapshot(
         cache_name="metadata",
         event_time_unix_ms=now,
-        entry_count=None,
-        hit_count=None,
+        entry_count=_coerce_int_metric(metrics.get("metadata_cache_entries")),
+        hit_count=_coerce_int_metric(metrics.get("metadata_cache_hits")),
         miss_count=None,
         eviction_count=None,
         config_ttl=None,
-        config_limit=config.metadata_cache_limit,
+        config_limit=str(metadata_limit) if metadata_limit is not None else config.metadata_cache_limit,
     )
 
 
@@ -577,16 +614,14 @@ def list_files_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     CacheStateSnapshot
         Cache snapshot for list_files cache.
     """
-    snapshot = _cache_snapshot_from_table(ctx, table_name="list_files_cache")
-    if snapshot is not None:
-        return snapshot
     settings = _settings_snapshot(ctx)
     config = _extract_cache_config(settings)
+    metrics = _cache_contract_probe(ctx)
     now = _now_ms()
     return CacheStateSnapshot(
         cache_name="list_files",
         event_time_unix_ms=now,
-        entry_count=None,
+        entry_count=_coerce_int_metric(metrics.get("list_files_cache_entries")),
         hit_count=None,
         miss_count=None,
         eviction_count=None,
@@ -603,16 +638,14 @@ def statistics_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     CacheStateSnapshot
         Cache snapshot for statistics cache.
     """
-    snapshot = _cache_snapshot_from_table(ctx, table_name="statistics_cache")
-    if snapshot is not None:
-        return snapshot
     settings = _settings_snapshot(ctx)
     config = _extract_cache_config(settings)
+    metrics = _cache_contract_probe(ctx)
     now = _now_ms()
     return CacheStateSnapshot(
         cache_name="statistics",
         event_time_unix_ms=now,
-        entry_count=None,
+        entry_count=_coerce_int_metric(metrics.get("statistics_cache_entries")),
         hit_count=None,
         miss_count=None,
         eviction_count=None,

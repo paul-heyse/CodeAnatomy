@@ -20,6 +20,17 @@ from datafusion_engine.errors import ErrorKind
 from utils.validation import ensure_mapping
 
 
+def _require_non_empty_delete_predicate(predicate: object, *, operation: str) -> str:
+    cleaned = predicate.strip() if isinstance(predicate, str) else ""
+    if cleaned:
+        return cleaned
+    msg = (
+        f"{operation} requires a non-empty predicate. "
+        "To delete all rows use an explicit full-table delete operation."
+    )
+    raise ValueError(msg)
+
+
 def delta_write_ipc(
     ctx: SessionContext,
     *,
@@ -50,9 +61,13 @@ def delta_delete(
     Mapping[str, object]
         Engine response payload converted to a mapping.
     """
-    delete_fn = _require_internal_entrypoint("delta_delete_request_payload")
+    _require_non_empty_delete_predicate(
+        request.predicate,
+        operation="delta_delete",
+    )
+    delete_fn = _require_internal_entrypoint("delta_delete_request")
     payload = msgspec.msgpack.encode(request)
-    response = delete_fn(_internal_ctx(ctx, entrypoint="delta_delete_request_payload"), payload)
+    response = delete_fn(_internal_ctx(ctx, entrypoint="delta_delete_request"), payload)
     return ensure_mapping(response, label="delta_delete")
 
 
@@ -71,9 +86,9 @@ def delta_update(
     if not request.updates:
         msg = "Delta update requires at least one column assignment."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
-    update_fn = _require_internal_entrypoint("delta_update_request_payload")
+    update_fn = _require_internal_entrypoint("delta_update_request")
     payload = msgspec.msgpack.encode(request)
-    response = update_fn(_internal_ctx(ctx, entrypoint="delta_update_request_payload"), payload)
+    response = update_fn(_internal_ctx(ctx, entrypoint="delta_update_request"), payload)
     return ensure_mapping(response, label="delta_update")
 
 
@@ -89,9 +104,9 @@ def delta_merge(
     Mapping[str, object]
         Engine response payload converted to a mapping.
     """
-    merge_fn = _require_internal_entrypoint("delta_merge_request_payload")
+    merge_fn = _require_internal_entrypoint("delta_merge_request")
     payload = msgspec.msgpack.encode(request)
-    response = merge_fn(_internal_ctx(ctx, entrypoint="delta_merge_request_payload"), payload)
+    response = merge_fn(_internal_ctx(ctx, entrypoint="delta_merge_request"), payload)
     return ensure_mapping(response, label="delta_merge")
 
 

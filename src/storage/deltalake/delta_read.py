@@ -275,7 +275,7 @@ class DeltaDeleteWhereRequest:
     """Inputs required to delete rows from a Delta table."""
 
     path: str
-    predicate: str | None
+    predicate: str
     storage_options: StorageOptions | None = None
     log_storage_options: StorageOptions | None = None
     commit_properties: CommitProperties | None = None

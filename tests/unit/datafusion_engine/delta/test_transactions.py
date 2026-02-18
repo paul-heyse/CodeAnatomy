@@ -40,7 +40,7 @@ def test_transactions_delegate_to_control_plane(monkeypatch: pytest.MonkeyPatch)
         storage_options=None,
         version=None,
         timestamp=None,
-        predicate=None,
+        predicate="id > 0",
         extra_constraints=None,
     )
     update_request = DeltaUpdateRequest(

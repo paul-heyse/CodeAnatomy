@@ -18,7 +18,7 @@ pub use hash::{
     stable_hash_any_udf, stable_id_parts_udf, stable_id_udf,
 };
 pub use metadata::{arrow_metadata_udf, cpg_score_udf};
-pub use position::{col_to_byte_udf, position_encoding_udf};
+pub use position::{canonicalize_byte_span_udf, col_to_byte_udf, position_encoding_udf};
 pub use primitives::install_function_factory_native;
 pub use span::{
     interval_align_score_udf, span_contains_udf, span_id_udf, span_len_udf, span_make_udf,
@@ -61,7 +61,7 @@ pub(crate) fn function_metadata(name: &str) -> Option<FunctionMetadata> {
         "stable_hash64" | "stable_hash128" | "prefixed_hash64" | "stable_id"
         | "stable_hash_any" | "sha256" => &["hash"],
         "stable_id_parts" | "prefixed_hash_parts64" => &["id", "hash"],
-        "col_to_byte" => &["position_encoding"],
+        "col_to_byte" | "canonicalize_byte_span" => &["position_encoding", "span"],
         "span_make" => &["span", "position_encoding"],
         "span_len" | "span_overlaps" | "span_contains" => &["span"],
         "span_id" => &["span", "id", "hash"],

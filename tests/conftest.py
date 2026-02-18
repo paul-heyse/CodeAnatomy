@@ -239,7 +239,7 @@ def diagnostic_profile() -> tuple[object, object]:
 
 
 def _validate_native_runtime_contract(ctx: SessionContext) -> None:
-    from datafusion_engine.udf.extension_core import (
+    from datafusion_engine.udf.extension_runtime import (
         rust_runtime_install_payload,
         validate_required_udfs,
     )

@@ -105,13 +105,6 @@ pub fn compile_intent_to_physical(
     match intent.class {
         RuleClass::SemanticIntegrity => {
             if intent.name == "cpg_physical" {
-                // Extract optional parameters from intent.params
-                let coalesce_after_filter = intent
-                    .params
-                    .get("coalesce_after_filter")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
-
                 let hash_join_memory_hint = intent
                     .params
                     .get("hash_join_memory_hint")
@@ -119,7 +112,6 @@ pub fn compile_intent_to_physical(
                     .map(|v| v as usize);
 
                 Some(Arc::new(CpgPhysicalRule {
-                    coalesce_after_filter,
                     hash_join_memory_hint,
                 }))
             } else {

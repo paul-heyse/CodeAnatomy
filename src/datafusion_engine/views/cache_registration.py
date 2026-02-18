@@ -112,6 +112,8 @@ def register_view_with_cache(
     )
     if node.cache_policy == "delta_staging":
         return _register_delta_staging_cache(registration)
+    if node.cache_policy == "memory":
+        return _register_memory_cache(registration)
     if node.cache_policy == "delta_output":
         return _register_delta_output_cache(
             registration,
@@ -611,6 +613,24 @@ def _register_uncached_view(registration: CacheRegistrationContext) -> DataFrame
         temporary=registration.cache.options.temporary,
     )
     return registration.df
+
+
+def _register_memory_cache(registration: CacheRegistrationContext) -> DataFrame:
+    cached = registration.df.cache()
+    registration.adapter.register_view(
+        registration.node.name,
+        cached,
+        overwrite=registration.cache.options.overwrite,
+        temporary=registration.cache.options.temporary,
+    )
+    _record_cache_artifact(
+        registration.cache,
+        node=registration.node,
+        cache_path=None,
+        status="cached",
+        hit=False,
+    )
+    return cached
 
 
 def _require_runtime_profile(

@@ -85,7 +85,8 @@ def _projection_exprs_for_schema(
     actual_columns: Sequence[str],
     expected_schema: pa.Schema,
 ) -> tuple[str, ...]:
-    from datafusion_engine.dataset.registration_core import expected_column_defaults, sql_type_name
+    from datafusion_engine.dataset.ddl_types import ddl_type_name
+    from datafusion_engine.dataset.registration_validation import expected_column_defaults
 
     actual = set(actual_columns)
     defaults = expected_column_defaults(expected_schema)
@@ -93,7 +94,7 @@ def _projection_exprs_for_schema(
     for schema_field in expected_schema:
         if schema_field.name in actual:
             if _supports_projection_cast(schema_field.type):
-                dtype_name = sql_type_name(schema_field.type)
+                dtype_name = ddl_type_name(schema_field.type)
                 cast_expr = f"cast({schema_field.name} as {dtype_name})"
                 default_value = defaults.get(schema_field.name)
                 if default_value is not None:
@@ -104,7 +105,7 @@ def _projection_exprs_for_schema(
             else:
                 projection_exprs.append(schema_field.name)
         elif _supports_projection_cast(schema_field.type):
-            dtype_name = sql_type_name(schema_field.type)
+            dtype_name = ddl_type_name(schema_field.type)
             projection_exprs.append(f"cast(NULL as {dtype_name}) as {schema_field.name}")
         else:
             projection_exprs.append(f"NULL as {schema_field.name}")

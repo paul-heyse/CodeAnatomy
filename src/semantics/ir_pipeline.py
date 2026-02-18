@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from semantics.registry import SemanticNormalizationSpec
 
 _MIN_JOIN_GROUP_SIZE = 2
+_LOGGER = logging.getLogger(__name__)
 
 
 def _expr_repr(expr_spec: ExprSpec) -> str:
@@ -1297,7 +1299,12 @@ def infer_semantics(ir: SemanticIR, model: SemanticModel) -> SemanticIR:
                 schema_index=schema_index,
                 relationship_specs=relationship_specs,
             )
-        except (AttributeError, KeyError, TypeError, ValueError):
+        except KeyError:
+            _LOGGER.warning(
+                "join inference skipped for %s due to missing semantic state key",
+                view.name,
+                exc_info=True,
+            )
             props = None
         enriched.append(
             SemanticIRView(

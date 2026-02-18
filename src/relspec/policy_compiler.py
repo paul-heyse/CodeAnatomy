@@ -32,10 +32,6 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Fan-out threshold above which an intermediate node is promoted to
-# ``delta_staging`` regardless of other signals.
-_HIGH_FANOUT_THRESHOLD = 2
-
 
 def _to_json_scalar(value: object) -> str | int | float | bool | None:
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -210,65 +206,99 @@ def _derive_cache_policies(
     cache_overrides: Mapping[str, str] | None = None,
     workload_class: str | None = None,
 ) -> dict[str, str]:
-    """Derive cache policies from TaskGraph topology.
+    """Derive cache policies from the Rust scheduling bridge.
 
-    Parameters
-    ----------
-    task_graph
-        Rustworkx task graph with node indices and connectivity.
-    output_locations
-        Known output dataset locations (terminal sinks).
+    Design-phase hard cutover: Python graph traversal fallback is removed.
 
     Returns:
     -------
     dict[str, str]
-        Mapping of task names to cache policy literals.
+        Cache-policy mapping keyed by task/view name.
+
+    Raises:
+    ------
+    RuntimeError:
+        If the bridge payload is unavailable or invalid.
     """
-    policies: dict[str, str] = {}
-    normalized_workload = _normalize_workload_class(workload_class)
-    for task_name, node_idx in task_graph.task_idx.items():
-        out_degree = task_graph.graph.out_degree(node_idx)
-        is_output = task_name in output_locations
-
-        # Terminal node that maps to a declared output location.
-        if is_output:
-            policy_value = "delta_output"
-        elif out_degree > _HIGH_FANOUT_THRESHOLD:
-            # High fan-out intermediate: staging avoids recomputation.
-            policy_value = "delta_staging"
-        elif out_degree == 0:
-            # Leaf node with no declared output: no caching needed.
-            policy_value = "none"
-        else:
-            # Default for intermediate nodes with low fan-out.
-            policy_value = "delta_staging" if out_degree > 0 else "none"
-        policy_value = _workload_adjusted_cache_policy(
-            base_policy=policy_value,
-            out_degree=out_degree,
-            is_output=is_output,
-            workload_class=normalized_workload,
-        )
-        if cache_overrides is not None:
-            override = _normalize_cache_policy_value(cache_overrides.get(task_name))
-            if override is not None:
-                policy_value = override
-        policies[task_name] = policy_value
-
-    _LOGGER.debug(
-        "Derived cache policies for compiled execution policy.",
-        extra={
-            "codeanatomy.task_count": len(task_graph.task_idx),
-            "codeanatomy.output_count": len(output_locations),
-            "codeanatomy.override_count": len(cache_overrides or ()),
-            "codeanatomy.workload_class": normalized_workload,
-            "codeanatomy.cache_policy_counts": {
-                "none": sum(1 for value in policies.values() if value == "none"),
-                "delta_staging": sum(1 for value in policies.values() if value == "delta_staging"),
-                "delta_output": sum(1 for value in policies.values() if value == "delta_output"),
-            },
-        },
+    bridged = _derive_cache_policies_rust(
+        task_graph=task_graph,
+        output_locations=output_locations,
+        cache_overrides=cache_overrides,
+        workload_class=workload_class,
     )
-    return policies
+    if bridged is None:
+        msg = (
+            "derive_cache_policies bridge returned no policy payload. "
+            "Rust scheduling bridge entrypoint is required."
+        )
+        raise RuntimeError(msg)
+    return bridged
+
+
+def derive_cache_policies_from_graph(
+    task_graph: TaskGraphLike,
+    output_locations: Mapping[str, DatasetLocation],
+    *,
+    cache_overrides: Mapping[str, str] | None = None,
+    workload_class: str | None = None,
+) -> dict[str, str]:
+    """Public bridge facade for cache-policy derivation.
+
+    Returns:
+    -------
+    dict[str, str]
+        Cache-policy mapping keyed by task/view name.
+    """
+    return _derive_cache_policies(
+        task_graph,
+        output_locations,
+        cache_overrides=cache_overrides,
+        workload_class=workload_class,
+    )
+
+
+def _derive_cache_policies_rust(
+    *,
+    task_graph: TaskGraphLike,
+    output_locations: Mapping[str, DatasetLocation],
+    cache_overrides: Mapping[str, str] | None,
+    workload_class: str | None,
+) -> dict[str, str] | None:
+    from datafusion_engine.extensions import datafusion_ext
+
+    derive = getattr(datafusion_ext, "derive_cache_policies", None)
+    if not callable(derive):
+        return None
+    graph_payload = {
+        "task_names": sorted(str(name) for name in task_graph.task_idx),
+        "out_degree": {
+            str(task_name): int(task_graph.graph.out_degree(node_idx))
+            for task_name, node_idx in task_graph.task_idx.items()
+        },
+    }
+    request_payload = {
+        "graph": graph_payload,
+        "outputs": sorted(str(name) for name in output_locations),
+        "cache_overrides": {str(key): str(value) for key, value in (cache_overrides or {}).items()},
+        "workload_class": workload_class,
+    }
+    try:
+        payload = derive(request_payload)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if isinstance(payload, Mapping):
+        return {str(key): str(value) for key, value in payload.items()}
+    if not isinstance(payload, Sequence) or isinstance(payload, (str, bytes, bytearray)):
+        return None
+    policies: dict[str, str] = {}
+    for item in payload:
+        if not isinstance(item, Mapping):
+            continue
+        view_name = str(item.get("view_name") or "").strip()
+        policy = _normalize_cache_policy_value(item.get("policy"))
+        if view_name and policy is not None:
+            policies[view_name] = policy
+    return policies or None
 
 
 def _cache_overrides_from_view_nodes(
@@ -345,24 +375,6 @@ def _normalize_cache_policy_value(value: object) -> str | None:
     if value not in {"none", "delta_staging", "delta_output"}:
         return None
     return str(value)
-
-
-def _workload_adjusted_cache_policy(
-    *,
-    base_policy: str,
-    out_degree: int,
-    is_output: bool,
-    workload_class: str | None,
-) -> str:
-    if is_output or workload_class is None:
-        return base_policy
-    # Interactive and replay workloads avoid staging for low fan-out
-    # intermediates to reduce write amplification.
-    if workload_class == "interactive_query" and base_policy == "delta_staging" and out_degree <= 1:
-        return "none"
-    if workload_class == "compile_replay" and base_policy == "delta_staging":
-        return "none"
-    return base_policy
 
 
 def _scan_overrides_to_mapping(
@@ -591,4 +603,5 @@ def _compute_policy_fingerprint(policy: CompiledExecutionPolicy) -> str:
 
 __all__ = [
     "compile_execution_policy",
+    "derive_cache_policies_from_graph",
 ]

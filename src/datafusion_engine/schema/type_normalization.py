@@ -78,9 +78,27 @@ def normalize_contract_type(text: str) -> str:
     return text
 
 
+def normalize_type_string(value: str) -> str:
+    """Normalize a contract or catalog type string for equality checks.
+
+    Returns:
+    -------
+    str
+        Canonical normalized type string.
+    """
+    normalized = value.lower().replace(" ", "")
+    normalized = normalized.replace("largeutf8", "string")
+    normalized = normalized.replace("utf8", "string")
+    normalized = normalized.replace("non-null", "")
+    normalized = normalized.replace("nonnull", "")
+    normalized = normalized.replace("'", "").replace('"', "")
+    return normalize_contract_type(normalized)
+
+
 __all__ = [
     "extract_inner_type",
     "normalize_contract_type",
+    "normalize_type_string",
     "split_top_level_types",
     "strip_type_prefix",
 ]

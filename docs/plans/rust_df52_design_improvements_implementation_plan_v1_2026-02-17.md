@@ -2915,84 +2915,104 @@ def test_delta_conflict_retry_contract(...) -> None:
 
 ### Phase 0: Pre-DF52 Safety and Quick Wins
 
-- [ ] S1: Add None-predicate guard in `delta_delete` / `delta_delete_where`
-- [ ] S2: Narrow exception catch in `infer_semantics()` to `KeyError`
-- [ ] S3: Add `WeakKeyDictionary` idempotency guards to session extension installation
-- [ ] S4: Delete `plan_introspection.py`; migrate two unique functions to `bundle_environment.py`
-- [ ] S5: Remove `CoalesceBatches` import and rule from `physical_rules.rs` and
+- [x] S1: Add None-predicate guard in `delta_delete` / `delta_delete_where`
+- [x] S2: Narrow exception catch in `infer_semantics()` to `KeyError`
+- [x] S3: Add `WeakKeyDictionary` idempotency guards to session extension installation
+- [x] S4: Delete `plan_introspection.py`; migrate two unique functions to `bundle_environment.py`
+- [x] S5: Remove `CoalesceBatches` import and rule from `physical_rules.rs` and
       `rules/physical.rs`
-- [ ] S6: Replace `eprintln!` with `tracing::error!`; add spans to `analyze` and `optimize`
-- [ ] S7: Consolidate coercion modules; `value_coercion.py` is canonical and `coercion.py` is removed
-- [ ] S8: Land remaining quick wins batch (including QW-35 retry extraction and QW-43 SCIP config extraction)
+- [x] S6: Replace `eprintln!` with `tracing::error!`; add spans to `analyze` and `optimize`
+- [x] S7: Consolidate coercion modules; `value_coercion.py` is canonical and `coercion.py` is removed
+- [x] S8: Land remaining quick wins batch (including QW-35 retry extraction and QW-43 SCIP config extraction)
 
 ### Phase 1: DF52 Blocking Migration
 
-- [ ] S9: Update all `__datafusion_*_provider__` call sites to pass `session`; bump
+- [x] S9: Update all `__datafusion_*_provider__` call sites to pass `session`; bump
       Rust crates to `datafusion = "52"`
-- [ ] S10: Upgrade `datafusion_ext` to DF52; update `FFI_TableProvider::new()` call sites
-- [ ] S11: Upgrade `codeanatomy_engine` to DF52; remove `apply_post_filter_coalescing`;
+- [x] S10: Upgrade `datafusion_ext` to DF52; update `FFI_TableProvider::new()` call sites
+- [x] S11: Upgrade `codeanatomy_engine` to DF52; remove `apply_post_filter_coalescing`;
       update scan config for `with_projection_indices -> Result<Self>`
-- [ ] S12: Update Python `_normalize_args` for DF52 `(py, session)` PyCapsule signatures
+- [x] S12: Update Python `_normalize_args` for DF52 `(py, session)` PyCapsule signatures
       with no version branching
-- [ ] S13: Align workspace crates to `deltalake = "0.31.0"`
+- [x] S13: Align workspace crates to `deltalake = "0.31.0"`
 
 ### Phase 2: DF52 Planning and Optimizer Surfaces
 
-- [ ] S14: Replace SQL cache queries with `ctx.statistics_cache()` / `ctx.list_files_cache()`
-- [ ] S15: Add `CachePolicy.MEMORY` variant backed by `df.cache()`
-- [ ] S16: Define `RelationPlannerPort`; register RelationPlanner through canonical extension path
-- [ ] S17: Cut over to DF52 DML hooks; remove parallel `delta_delete_request_payload` flow
-- [ ] S18: Remove explicit pre-sort in `interval_align_kernel` if S26 not yet done
-- [ ] S19: Replace ImportError probing with `isinstance(plugin, PlannerExtensionPort)`
-- [ ] S35: Add typed DF52 planner knobs (dynamic filters, sort pushdown, symmetric join pruning)
-- [ ] S36: Enforce `supports_filters_pushdown` truth-table conformance + artifact capture
-- [ ] S37: Persist optimizer observer traces as deterministic plan artifacts
-- [ ] S38: Route session building through `planning_surface.rs` ordering contract
+- [x] S14: Replace SQL cache queries with `ctx.statistics_cache()` / `ctx.list_files_cache()`
+- [x] S15: Add `CachePolicy.MEMORY` variant backed by `df.cache()`
+- [x] S16: Define `RelationPlannerPort`; register RelationPlanner through canonical extension path
+- [x] S17: Cut over to DF52 DML hooks; remove parallel `delta_delete_request_payload` flow
+- [x] S18: Remove explicit pre-sort in `interval_align_kernel` if S26 not yet done
+- [x] S19: Replace ImportError probing with `isinstance(plugin, PlannerExtensionPort)`
+- [x] S35: Add typed DF52 planner knobs (dynamic filters, sort pushdown, symmetric join pruning)
+- [x] S36: Enforce `supports_filters_pushdown` truth-table conformance + artifact capture
+- [x] S37: Persist optimizer observer traces as deterministic plan artifacts
+- [x] S38: Route session building through `planning_surface.rs` ordering contract
 
 ### Phase 3: Rust Pivot and Streaming Boundaries
 
-- [ ] S20: Add `extract_lineage_json` to Rust; retire `plan/walk.py` and visitor in
+- [x] S20: Add `extract_lineage_json` to Rust; retire `plan/walk.py` and visitor in
       `lineage/reporting.py`
-- [ ] S21: Emit `RustUdfSnapshot` msgpack from Rust; replace Python validation chain
-- [ ] S22: Create shared `ExtractionRuntime` loop; reduce all four `builders_runtime.py`
+- [x] S21: Emit `RustUdfSnapshot` msgpack from Rust; replace Python validation chain
+- [x] S22: Create shared `ExtractionRuntime` loop; reduce all four `builders_runtime.py`
       to adapters
 - [ ] S23: Migrate tree-sitter extraction to Rust; emit Arrow `RecordBatch` directly
 - [ ] S24: Connect Python `write_delta.py` to Rust `delta_writer.rs` via IPC payload
-- [ ] S25: Implement `canonicalize_byte_span` Rust `ScalarUDF`
+- [x] S25: Implement `canonicalize_byte_span` Rust `ScalarUDF`
 - [ ] S26: Implement `IntervalAlignProvider` as Rust `TableProvider`
-- [ ] S27: Migrate cache-policy graph traversal to Rust `scheduling.rs`
-- [ ] S39: Make streaming (`RecordBatchReader.from_stream`) the default read/write boundary
+- [x] S27: Migrate cache-policy graph traversal to Rust `scheduling.rs`
+- [x] S39: Make streaming (`RecordBatchReader.from_stream`) the default read/write boundary
 
 ### Phase 4: Design Principle Cleanup
 
-- [ ] S28: Route `session_context()` through `_ephemeral_context_phases`; remove global
+- [x] S28: Route `session_context()` through `_ephemeral_context_phases`; remove global
       mutable caches
-- [ ] S29: Merge to `extension_runtime.py`; delete legacy UDF entry modules
-- [ ] S30: Remove 31-alias block from
+- [x] S29: Merge to `extension_runtime.py`; delete legacy UDF entry modules
+- [x] S30: Remove 31-alias block from
       `src/datafusion_engine/dataset/registration_core.py:616-647`
-- [ ] S31: Split `df_plugin_codeanatomy/src/lib.rs` into `options.rs`, `udf_bundle.rs`,
+- [x] S31: Split `df_plugin_codeanatomy/src/lib.rs` into `options.rs`, `udf_bundle.rs`,
       `providers.rs`, thin `lib.rs`
-- [ ] S32: Extract `TableRegistry` from `SemanticCompiler`; make compiler stateless
-- [ ] S33: Merge `builders_runtime.py` into `builders.py` for all 4 extractors
-- [ ] S34: Add facade query methods to `DataFusionRuntimeProfile`
-- [ ] S40: Enforce pooled-session immutability and remove process-global runtime caches
+- [x] S32: Extract `TableRegistry` from `SemanticCompiler`; make compiler stateless
+- [x] S33: Merge `builders_runtime.py` into `builders.py` for all 4 extractors
+- [x] S34: Add facade query methods to `DataFusionRuntimeProfile`
+- [x] S40: Enforce pooled-session immutability and remove process-global runtime caches
 
 ### Phase 5: Conformance and Deployment Gate
 
-- [ ] S41: Add deterministic plan/pushdown/retry conformance harness across FS/MinIO/LocalStack
+- [x] S41: Add deterministic plan/pushdown/retry conformance harness across FS/MinIO/LocalStack
 
 ### Cross-Scope Deletion Batches
 
-- [ ] D1: Pre-migration dead code (post S4, S7, S8)
-- [ ] D2: DF51 remnants (post S9, S10, S11, S12, S13)
-- [ ] D3: Bespoke cache infrastructure (post S14)
-- [ ] D4: Lineage walker (post S20)
-- [ ] D5: UDF snapshot Python validation (post S21)
-- [ ] D6: Extraction runtime duplication (post S22, S33)
+- [x] D1: Pre-migration dead code (post S4, S7, S8)
+- [x] D2: DF51 remnants (post S9, S10, S11, S12, S13)
+- [x] D3: Bespoke cache infrastructure (post S14)
+- [x] D4: Lineage walker (post S20)
+- [x] D5: UDF snapshot Python validation (post S21)
+- [x] D6: Extraction runtime duplication (post S22, S33)
 - [ ] D7: Tree-sitter Python accumulation (post S23)
 - [ ] D8: Delta write Python orchestration (post S24)
-- [ ] D9: Session global state (post S28, S40)
-- [ ] D10: UDF and registration import legacy (post S29, S30)
-- [ ] D11: Planner control-plane fallback cleanup (post S35, S38)
-- [ ] D12: Pushdown metadata legacy cleanup (post S36)
-- [ ] D13: Non-deterministic planning diagnostics cleanup (post S37, S41)
+- [x] D9: Session global state (post S28, S40)
+- [x] D10: UDF and registration import legacy (post S29, S30)
+- [x] D11: Planner control-plane fallback cleanup (post S35, S38)
+- [x] D12: Pushdown metadata legacy cleanup (post S36)
+- [x] D13: Non-deterministic planning diagnostics cleanup (post S37, S41)
+
+### Audit Delta (2026-02-18)
+
+- `S23` remains partial: Rust tree-sitter bridge wiring is present, but
+  `src/extract/extractors/tree_sitter/builders.py` still retains the large Python
+  accumulation/query implementation (~1,500 LOC) rather than a thin shim.
+- `S24` remains partial: Rust write execution entrypoints are present, but Python still owns
+  substantial Delta write orchestration in `src/datafusion_engine/io/write_delta.py` and
+  `src/datafusion_engine/io/delta_write_handler.py`.
+- `S26` remains partial: Rust provider module exists, but the plan’s target shape
+  (provider-first sort-merge execution + removal of Python interval-align implementation)
+  is not complete; `src/datafusion_engine/kernels.py` still carries the full DataFusion
+  interval-align path (`interval_align_kernel_datafusion` plus helper graph).
+- `S27` closed: scheduling traversal is executed in Rust and exposed via
+  `derive_cache_policies` in the production extension surface.
+- `D7` remains open: Python tree-sitter accumulation/query helpers remain in
+  `src/extract/extractors/tree_sitter/builders.py` despite bridge hard-cutover.
+- `D8` remains open: Python Delta write orchestration remains materially present in
+  `src/datafusion_engine/io/write_delta.py` and
+  `src/datafusion_engine/io/delta_write_handler.py`.

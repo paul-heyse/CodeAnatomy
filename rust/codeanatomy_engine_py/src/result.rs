@@ -6,6 +6,7 @@ use serde_json::Value;
 #[derive(Clone)]
 pub struct PyRunResult {
     inner_json: String,
+    inner_value: Value,
 }
 
 #[pymethods]
@@ -17,9 +18,7 @@ impl PyRunResult {
 
     /// Convert to typed Python payload.
     fn to_payload(&self, py: Python<'_>) -> PyResult<Py<pyo3::types::PyAny>> {
-        let value: Value = serde_json::from_str(&self.inner_json)
-            .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
-        json_value_to_py(py, &value)
+        json_value_to_py(py, &self.inner_value)
     }
 
     /// Convert to Python dict.
@@ -29,9 +28,7 @@ impl PyRunResult {
 
     /// Return the optional task schedule payload as a Python dict.
     fn task_schedule(&self, py: Python<'_>) -> PyResult<Option<Py<pyo3::types::PyAny>>> {
-        let value: Value = serde_json::from_str(&self.inner_json)
-            .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
-        let Some(schedule) = value.get("task_schedule") else {
+        let Some(schedule) = self.inner_value.get("task_schedule") else {
             return Ok(None);
         };
         if schedule.is_null() {
@@ -46,9 +43,7 @@ impl PyRunResult {
 
     /// Return the serialized plan bundles as Python dict objects.
     fn plan_bundles(&self, py: Python<'_>) -> PyResult<Vec<Py<pyo3::types::PyAny>>> {
-        let value: Value = serde_json::from_str(&self.inner_json)
-            .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
-        let Some(plan_bundles) = value.get("plan_bundles") else {
+        let Some(plan_bundles) = self.inner_value.get("plan_bundles") else {
             return Ok(Vec::new());
         };
         let Some(items) = plan_bundles.as_array() else {
@@ -67,9 +62,8 @@ impl PyRunResult {
 
     /// Return the count of serialized plan bundles.
     fn plan_bundle_count(&self) -> PyResult<usize> {
-        let value: Value = serde_json::from_str(&self.inner_json)
-            .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
-        let count = value
+        let count = self
+            .inner_value
             .get("plan_bundles")
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
@@ -78,9 +72,7 @@ impl PyRunResult {
 
     /// Return the task schedule critical path if present.
     fn critical_path(&self, py: Python<'_>) -> PyResult<Vec<String>> {
-        let value: Value = serde_json::from_str(&self.inner_json)
-            .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
-        let Some(schedule) = value.get("task_schedule") else {
+        let Some(schedule) = self.inner_value.get("task_schedule") else {
             return Ok(Vec::new());
         };
         let Some(path) = schedule.get("critical_path") else {
@@ -115,8 +107,11 @@ pub(crate) fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<pyo
 
 impl PyRunResult {
     pub fn from_run_result(result: &codeanatomy_engine::executor::result::RunResult) -> Self {
+        let inner_json = result.to_json().unwrap_or_else(|_| "{}".to_string());
+        let inner_value = serde_json::from_str(&inner_json).unwrap_or(Value::Null);
         Self {
-            inner_json: result.to_json().unwrap_or_else(|_| "{}".to_string()),
+            inner_json,
+            inner_value,
         }
     }
 

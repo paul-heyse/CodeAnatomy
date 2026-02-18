@@ -83,7 +83,7 @@ def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanArtifac
     Raises:
         RuntimeError: If the operation cannot be completed.
     """
-    from datafusion_engine.udf.extension_core import (
+    from datafusion_engine.udf.extension_runtime import (
         rust_udf_snapshot,
         rust_udf_snapshot_hash,
         validate_required_udfs,

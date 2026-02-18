@@ -35,7 +35,7 @@ def _normalize_cache_policy(policy: str) -> CachePolicy:
     Raises:
         ValueError: If ``policy`` is not a supported cache policy.
     """
-    valid = {"none", "delta_staging", "delta_output"}
+    valid = {"none", "memory", "delta_staging", "delta_output"}
     if policy in valid:
         return cast("CachePolicy", policy)
     msg = f"Unsupported cache policy: {policy!r}."

@@ -18,7 +18,7 @@ from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import SchemaContract, ValidationViolation, ViolationType
 from datafusion_engine.schema.introspection_core import SchemaIntrospector
-from datafusion_engine.udf.extension_core import (
+from datafusion_engine.udf.extension_runtime import (
     udf_names_from_snapshot,
     validate_required_udfs,
     validate_rust_udf_snapshot,
@@ -65,8 +65,7 @@ class ViewNode:
     plan_bundle : DataFusionPlanArtifact | None
         DataFusion plan bundle (preferred source of truth for lineage).
     cache_policy : CachePolicy
-        Cache policy for view materialization. Legacy "memory" is treated
-        as "delta_staging" to avoid in-memory caching.
+        Cache policy for view materialization.
     """
 
     name: str
@@ -523,7 +522,7 @@ def _record_udf_audit(context: ViewGraphContext) -> None:
     profile = context.runtime.runtime_profile
     if profile is None:
         return
-    from datafusion_engine.udf.extension_core import udf_audit_payload
+    from datafusion_engine.udf.extension_runtime import udf_audit_payload
     from serde_artifact_specs import UDF_AUDIT_SPEC
 
     payload = udf_audit_payload(context.snapshot)
@@ -620,9 +619,7 @@ def _materialize_nodes(
 
 
 def _normalize_cache_policy(policy: str) -> CachePolicy:
-    if policy == "memory":
-        return "delta_staging"
-    if policy in {"none", "delta_staging", "delta_output"}:
+    if policy in {"none", "memory", "delta_staging", "delta_output"}:
         return cast("CachePolicy", policy)
     return "none"
 
@@ -763,7 +760,7 @@ def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -
         if isinstance(name, str):
             available.add(name.lower())
     try:
-        from datafusion_engine.udf.extension_core import (
+        from datafusion_engine.udf.extension_runtime import (
             rust_udf_snapshot,
             udf_names_from_snapshot,
         )

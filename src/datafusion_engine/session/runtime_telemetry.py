@@ -26,7 +26,6 @@ from datafusion_engine.session.runtime_compile import (
 )
 from datafusion_engine.session.runtime_config_policies import (
     DATAFUSION_MAJOR_VERSION,
-    DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
     _ansi_mode,
     _effective_catalog_autoload_for_profile,
 )
@@ -370,7 +369,7 @@ def _delta_protocol_support_payload(
 def _supports_explain_analyze_level() -> bool:
     if DATAFUSION_MAJOR_VERSION is None:
         return False
-    return DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
+    return DATAFUSION_MAJOR_VERSION >= 51
 
 
 def _sql_policy_payload(profile: DataFusionRuntimeProfile) -> dict[str, bool] | None:

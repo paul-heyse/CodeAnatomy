@@ -80,37 +80,37 @@ def test_no_private_cross_module_imports() -> None:
         # Query/run decomposition - intra-subsystem call delegation helpers
         "tools/cq/query/symbol_resolver.py:11:from tools.cq.query.finding_builders import extract_call_target as _extract_call_target",
         "tools/cq/run/runner.py:21:from tools.cq.run.helpers import error_result as _error_result",
-            "tools/cq/run/runner.py:30:from tools.cq.run.scope import apply_run_scope as _apply_run_scope",
-            "tools/cq/run/step_executors.py:23:from tools.cq.run.helpers import error_result as _error_result",
-            "tools/cq/run/step_executors.py:24:from tools.cq.run.helpers import merge_in_dir as _merge_in_dir",
-            # Query/macros runtime decomposition wrappers
-            "tools/cq/query/executor_runtime_entity.py:63:from tools.cq.query.scan import build_entity_candidates as _build_entity_candidates",
-            "tools/cq/query/executor_runtime_entity.py:64:from tools.cq.query.scan import build_scan_context as _build_scan_context",
-            "tools/cq/query/executor_runtime.py:633:    from tools.cq.query.executor_runtime_entity import _execute_entity_query_impl as impl",
-            "tools/cq/query/executor_runtime.py:657:    from tools.cq.query.executor_runtime_pattern import _execute_pattern_query_impl as impl",
-            "tools/cq/macros/calls/entry_runtime.py:26:from tools.cq.macros.calls.analysis_scan import analyze_sites as _analyze_sites",
-            "tools/cq/macros/calls/entry_runtime.py:27:from tools.cq.macros.calls.entry_dispatch import scan_call_sites as _scan_call_sites_impl",
-            "tools/cq/macros/calls/entry_dispatch.py:14:from tools.cq.macros.calls.insight import _find_function_signature",
-            "tools/cq/macros/calls/entry_dispatch.py:15:from tools.cq.macros.calls.scanning import _group_candidates, _rg_find_candidates",
-            "tools/cq/macros/calls/analysis_enrichment.py:19:    from tools.cq.macros.calls.analysis import _detect_hazards as detect_hazards_impl",
-            "tools/cq/macros/calls/entry_output.py:16:from tools.cq.macros.calls.semantic import CallsSemanticRequest, _apply_calls_semantic",
-            "tools/cq/macros/calls/analysis_scan.py:13:from tools.cq.macros.calls.context_snippet import _extract_context_snippet",
-            "tools/cq/macros/calls/analysis_scan.py:15:from tools.cq.macros.calls.neighborhood import _compute_context_window",
-            # Smart-search module split wrappers
-            "tools/cq/search/pipeline/smart_search.py:328:    from tools.cq.search.pipeline.smart_search_sections import build_finding as _build_finding",
-            "tools/cq/search/pipeline/smart_search.py:338:    from tools.cq.search.pipeline.smart_search_followups import build_followups as _build_followups",
-            "tools/cq/search/pipeline/smart_search.py:358:    from tools.cq.search.pipeline.smart_search_sections import build_sections as _build_sections",
+        "tools/cq/run/runner.py:30:from tools.cq.run.scope import apply_run_scope as _apply_run_scope",
+        "tools/cq/run/step_executors.py:23:from tools.cq.run.helpers import error_result as _error_result",
+        "tools/cq/run/step_executors.py:24:from tools.cq.run.helpers import merge_in_dir as _merge_in_dir",
+        # Query/macros runtime decomposition wrappers
+        "tools/cq/query/executor_runtime_entity.py:63:from tools.cq.query.scan import build_entity_candidates as _build_entity_candidates",
+        "tools/cq/query/executor_runtime_entity.py:64:from tools.cq.query.scan import build_scan_context as _build_scan_context",
+        "tools/cq/query/executor_runtime.py:633:    from tools.cq.query.executor_runtime_entity import _execute_entity_query_impl as impl",
+        "tools/cq/query/executor_runtime.py:657:    from tools.cq.query.executor_runtime_pattern import _execute_pattern_query_impl as impl",
+        "tools/cq/macros/calls/entry_runtime.py:26:from tools.cq.macros.calls.analysis_scan import analyze_sites as _analyze_sites",
+        "tools/cq/macros/calls/entry_runtime.py:27:from tools.cq.macros.calls.entry_dispatch import scan_call_sites as _scan_call_sites_impl",
+        "tools/cq/macros/calls/entry_dispatch.py:14:from tools.cq.macros.calls.insight import _find_function_signature",
+        "tools/cq/macros/calls/entry_dispatch.py:15:from tools.cq.macros.calls.scanning import _group_candidates, _rg_find_candidates",
+        "tools/cq/macros/calls/analysis_enrichment.py:19:    from tools.cq.macros.calls.analysis import _detect_hazards as detect_hazards_impl",
+        "tools/cq/macros/calls/entry_output.py:16:from tools.cq.macros.calls.semantic import CallsSemanticRequest, _apply_calls_semantic",
+        "tools/cq/macros/calls/analysis_scan.py:13:from tools.cq.macros.calls.context_snippet import _extract_context_snippet",
+        "tools/cq/macros/calls/analysis_scan.py:15:from tools.cq.macros.calls.neighborhood import _compute_context_window",
+        # Smart-search module split wrappers
+        "tools/cq/search/pipeline/smart_search.py:328:    from tools.cq.search.pipeline.smart_search_sections import build_finding as _build_finding",
+        "tools/cq/search/pipeline/smart_search.py:338:    from tools.cq.search.pipeline.smart_search_followups import build_followups as _build_followups",
+        "tools/cq/search/pipeline/smart_search.py:358:    from tools.cq.search.pipeline.smart_search_sections import build_sections as _build_sections",
         # Cache backend lifecycle loader
         "tools/cq/core/cache/backend_lifecycle.py:42:    from tools.cq.core.cache.backend_core import _build_diskcache_backend",
-            # Shared/enrichment adapters
-            "tools/cq/search/rust/extensions.py:11:from tools.cq.search.enrichment.core import string_or_none as _string",
-            "tools/cq/search/semantic/models.py:17:from tools.cq.search.enrichment.core import string_or_none as _string",
-            "tools/cq/search/python/extractors_stage_runtime.py:18:    from tools.cq.search.python.extractors_entrypoints import _PythonEnrichmentState",
-            # Rust lane decomposition helpers
-            "tools/cq/search/tree_sitter/rust_lane/runtime_payload_builders.py:31:from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _rust_language",
-            "tools/cq/search/tree_sitter/rust_lane/runtime_query_execution.py:31:from tools.cq.search.tree_sitter.rust_lane.query_cache import _pack_sources",
-            "tools/cq/search/tree_sitter/rust_lane/runtime_pipeline_stages.py:18:from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _parse_with_session",
-        }
+        # Shared/enrichment adapters
+        "tools/cq/search/rust/extensions.py:11:from tools.cq.search.enrichment.core import string_or_none as _string",
+        "tools/cq/search/semantic/models.py:17:from tools.cq.search.enrichment.core import string_or_none as _string",
+        "tools/cq/search/python/extractors_stage_runtime.py:18:    from tools.cq.search.python.extractors_entrypoints import _PythonEnrichmentState",
+        # Rust lane decomposition helpers
+        "tools/cq/search/tree_sitter/rust_lane/runtime_payload_builders.py:31:from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _rust_language",
+        "tools/cq/search/tree_sitter/rust_lane/runtime_query_execution.py:31:from tools.cq.search.tree_sitter.rust_lane.query_cache import _pack_sources",
+        "tools/cq/search/tree_sitter/rust_lane/runtime_pipeline_stages.py:18:from tools.cq.search.tree_sitter.rust_lane.runtime_cache import _parse_with_session",
+    }
 
     def _strip_line_number(entry: str) -> str:
         parts = entry.split(":", 2)

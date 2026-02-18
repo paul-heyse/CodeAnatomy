@@ -612,7 +612,7 @@ def _validate_bundle_required_udfs(
 ) -> None:
     if not options.validate_udfs or not required.required_udfs:
         return
-    from datafusion_engine.udf.extension_core import validate_required_udfs
+    from datafusion_engine.udf.extension_runtime import validate_required_udfs
 
     validate_required_udfs(snapshot, required=required.required_udfs)
 

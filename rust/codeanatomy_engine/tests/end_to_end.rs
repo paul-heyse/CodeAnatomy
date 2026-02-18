@@ -285,6 +285,14 @@ fn test_commit_properties_include_hashes() {
     );
 }
 
+#[test]
+fn test_plan_bundle_replay_flags_default_to_deterministic_optimizer() {
+    use codeanatomy_engine::compiler::plan_bundle::ReplayCompatibilityFlags;
+
+    let flags = ReplayCompatibilityFlags::default();
+    assert!(flags.deterministic_optimizer);
+}
+
 #[tokio::test]
 async fn test_delta_history_contains_lineage_metadata() {
     let ctx = SessionContext::new();

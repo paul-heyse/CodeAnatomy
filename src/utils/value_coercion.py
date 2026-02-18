@@ -18,15 +18,26 @@ class CoercionError(ValueError):
         super().__init__(message)
 
 
-def coerce_int(value: object) -> int | None:
+def coerce_int(value: object, *, label: str | None = None) -> int | None:
     """Coerce value to int, returning None for unconvertible values.
 
     Returns:
     -------
     int | None
         Coerced integer or None if conversion fails.
+
+    Raises:
+        TypeError: If ``label`` is provided and ``value`` cannot be coerced to ``int``.
     """
-    if value is None or isinstance(value, bool):
+    strict = label is not None
+    if value is None:
+        if strict:
+            msg = f"{label}: cannot coerce {type(value).__name__} to int"
+            raise TypeError(msg)
+        return None
+    if isinstance(value, bool):
+        if strict:
+            return int(value)
         return None
     if isinstance(value, int):
         return value
@@ -37,8 +48,14 @@ def coerce_int(value: object) -> int | None:
         if stripped:
             try:
                 return int(stripped)
-            except ValueError:
+            except ValueError as exc:
+                if strict:
+                    msg = f"{label}: cannot coerce {type(value).__name__} to int"
+                    raise TypeError(msg) from exc
                 return None
+    if strict:
+        msg = f"{label}: cannot coerce {type(value).__name__} to int"
+        raise TypeError(msg)
     return None
 
 
@@ -64,26 +81,37 @@ def coerce_float(value: object) -> float | None:
     return None
 
 
-def coerce_bool(value: object) -> bool | None:
+def coerce_bool(
+    value: object,
+    *,
+    default: bool | None = None,
+    label: str = "value",
+) -> bool | None:
     """Coerce value to bool, returning None for unconvertible values.
 
     Returns:
     -------
     bool | None
         Coerced bool or None if conversion fails.
+
+    Raises:
+        TypeError: If a non-coercible value is provided while ``default`` is set.
     """
     if value is None:
-        return None
+        return default
     if isinstance(value, bool):
         return value
     if isinstance(value, int):
         return bool(value)
     if isinstance(value, str):
         lower = value.strip().lower()
-        if lower in {"true", "1", "yes", "on"}:
+        if lower in {"true", "1", "yes", "on", "y"}:
             return True
-        if lower in {"false", "0", "no", "off"}:
+        if lower in {"false", "0", "no", "off", "n", ""}:
             return False
+    if default is not None:
+        msg = f"{label}: cannot coerce {type(value).__name__} to bool"
+        raise TypeError(msg)
     return None
 
 
@@ -124,6 +152,40 @@ def coerce_str_tuple(value: object) -> tuple[str, ...]:
         Tuple of non-empty strings.
     """
     return tuple(coerce_str_list(value))
+
+
+def coerce_opt_int(value: object, *, label: str = "value") -> int | None:
+    """Coerce to int when value is non-None, else return None.
+
+    Returns:
+    -------
+    int | None
+        Coerced integer or ``None`` when ``value`` is ``None``.
+    """
+    if value is None:
+        return None
+    return coerce_int(value, label=label)
+
+
+def coerce_int_or_none(value: object) -> int | None:
+    """Best-effort integer coercion that returns ``None`` when invalid.
+
+    Returns:
+    -------
+    int | None
+        Coerced integer when valid, otherwise ``None``.
+    """
+    try:
+        return coerce_opt_int(value)
+    except TypeError:
+        return None
+
+
+def coerce_opt_str(value: object) -> str | None:
+    """Return non-empty string values, or None."""
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 def coerce_mapping_list(value: object) -> Sequence[Mapping[str, object]] | None:
@@ -221,7 +283,10 @@ __all__ = [
     "coerce_bool",
     "coerce_float",
     "coerce_int",
+    "coerce_int_or_none",
     "coerce_mapping_list",
+    "coerce_opt_int",
+    "coerce_opt_str",
     "coerce_str",
     "coerce_str_list",
     "coerce_str_tuple",

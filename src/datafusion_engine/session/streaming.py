@@ -23,6 +23,11 @@ from datafusion import SQLOptions
 from datafusion_engine.sql.options import sql_options_for_profile
 
 
+def as_record_batch_reader(df: DataFrame) -> pa.RecordBatchReader:
+    """Return a streaming Arrow reader for a DataFusion DataFrame."""
+    return pa.RecordBatchReader.from_stream(df)
+
+
 @dataclass(frozen=True)
 class PipeToDatasetOptions:
     """Options for streaming partitioned datasets to disk."""
@@ -110,7 +115,7 @@ class StreamingExecutionResult:
         partition_count = self._execution_partition_count()
         if partition_count == 0:
             return pa.RecordBatchReader.from_batches(self.schema, [])
-        return pa.RecordBatchReader.from_stream(self.df)
+        return as_record_batch_reader(self.df)
 
     def to_batches(self) -> Iterator[pa.RecordBatch]:
         """Iterate over record batches.

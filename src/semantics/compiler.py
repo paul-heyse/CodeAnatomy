@@ -17,7 +17,7 @@ The compiler encodes the 10 semantic rules:
 
 Usage
 -----
->>> compiler = SemanticCompiler(ctx)
+>>> compiler = SemanticCompiler(ctx, table_registry=TableRegistry())
 >>> ctx.register_view("refs_norm", compiler.normalize("cst_refs", prefix="ref"))
 >>> ctx.register_view(
 ...     "rel_name_symbol",
@@ -47,6 +47,7 @@ from semantics.join_helpers import join_by_span_contains, join_by_span_overlap
 from semantics.joins import JoinStrategy, JoinStrategyType
 from semantics.ports import SessionContextProviderPort
 from semantics.schema import SemanticSchema, SemanticSchemaError
+from semantics.table_registry import TableRegistry
 from semantics.types.core import (
     CompatibilityGroup,
     columns_are_joinable,
@@ -207,7 +208,11 @@ class SemanticCompiler:
     """
 
     def __init__(
-        self, ctx: SessionContext | SessionPort, *, config: SemanticConfig | None = None
+        self,
+        ctx: SessionContext | SessionPort,
+        *,
+        config: SemanticConfig | None = None,
+        table_registry: TableRegistry,
     ) -> None:
         """Initialize the compiler.
 
@@ -217,24 +222,24 @@ class SemanticCompiler:
             DataFusion session context with registered tables.
         config
             Optional semantic configuration overrides.
+        table_registry
+            Registry used for table-analysis lookups. Injected explicitly so
+            semantic compilation does not own mutable registry state.
         """
         self._ctx = ctx
         self.ctx = _resolve_session_context(ctx)
-        self._tables: dict[str, TableInfo] = {}
-        self._udf_snapshot: dict[str, object] | None = None
+        self._registry = table_registry
         self._config = config or SemanticConfig()
 
     def _require_udfs(self, required: tuple[str, ...]) -> None:
-        from datafusion_engine.udf.extension_core import (
+        from datafusion_engine.udf.extension_runtime import (
             rust_udf_snapshot,
             validate_required_udfs,
         )
 
         if not required:
             return
-        if self._udf_snapshot is None:
-            self._udf_snapshot = dict(rust_udf_snapshot(self.ctx))
-        validate_required_udfs(self._udf_snapshot, required=required)
+        validate_required_udfs(dict(rust_udf_snapshot(self.ctx)), required=required)
 
     @staticmethod
     def _stable_id_expr(prefix: str, *parts: Expr) -> Expr:
@@ -602,10 +607,10 @@ class SemanticCompiler:
         TableInfo
             Analyzed table information.
         """
-        df = self.ctx.table(name)
-        info = TableInfo.analyze(name, df, config=self._config)
-        self._tables[name] = info
-        return info
+        return self._registry.resolve(
+            name,
+            lambda: TableInfo.analyze(name, self.ctx.table(name), config=self._config),
+        )
 
     def get_or_register(self, name: str) -> TableInfo:
         """Get or register a table.
@@ -620,9 +625,10 @@ class SemanticCompiler:
         TableInfo
             Table information.
         """
-        if name not in self._tables:
-            return self.register(name)
-        return self._tables[name]
+        return self._registry.resolve(
+            name,
+            lambda: TableInfo.analyze(name, self.ctx.table(name), config=self._config),
+        )
 
     # -------------------------------------------------------------------------
     # Rule 1 + 2: Normalization

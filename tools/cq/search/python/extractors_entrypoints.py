@@ -88,6 +88,7 @@ def extract_python_byte_range(
     payload = enrich_python_context_by_byte_range(request)
     return python_enrichment_payload(wrap_python_enrichment(payload))
 
+
 # Stage-runtime ownership surface
 build_agreement_section = core.build_agreement_section
 build_stage_fact_patch = core.build_stage_fact_patch

@@ -15,14 +15,15 @@
 ## Scope Summary
 
 This plan addresses the top-priority findings from five design reviews covering the
-DataFusion Python layer, Python infrastructure, and the Python side of the cross-language
-boundary. The work spans `src/datafusion_engine/`, `src/storage/`, `src/obs/`, and
-`src/utils/`. It is deliberately scoped to exclude `src/semantics/`, `src/relspec/`,
-`src/extract/`, and `rust/`.
+DataFusion Python layer, Python infrastructure, and cross-language planning/runtime
+contracts. The work spans `src/datafusion_engine/`, `src/storage/`, `src/obs/`,
+`src/utils/`, `src/semantics/`, `src/extract/`, `rust/codeanatomy_engine/src/session/`,
+`rust/codeanatomy_engine/src/compiler/`, `rust/datafusion_python/src/`, and
+`rust/datafusion_python/python/datafusion/`.
 
-All 20 scope items (S1-S20) are sequenced to minimise blast radius and allow the
-implementation checklist to be executed by independent parallel streams after the first
-two high-risk items (S1, S11) are resolved.
+All 30 scope items (S1-S30) are sequenced in waves: Wave 0 (contract/scope reset),
+Wave 1 (canonical planning/runtime contracts), Wave 2 (artifact/identity unification),
+and Wave 3 (targeted cleanup backlog execution).
 
 ---
 
@@ -35,7 +36,8 @@ two high-risk items (S1, S11) are resolved.
 4. Code snippets are derived from the actual source files read during plan preparation.
 5. Changes that touch `frozen=True` msgspec structs use `object.__setattr__` only inside
    `__post_init__`; callers never see the mutation.
-6. `uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright && uv run pytest -q` is the single quality gate run after all edits.
+6. `uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright` is the canonical quality gate run after all edits.
+7. Pytest selection is task-scoped validation and is tracked separately from the canonical gate.
 
 ---
 
@@ -58,9 +60,18 @@ two high-risk items (S1, S11) are resolved.
 | `src/datafusion_engine/plan/artifact_store_constants.py` | 25 | `Path.cwd()` fallback captured at import time |
 | `src/datafusion_engine/cache/inventory.py` | ~80 | `Path.cwd()` fallback captured at import time |
 | `src/datafusion_engine/delta/obs_table_manager.py` | ~120 | `Path.cwd()` fallback captured at import time |
-| `src/storage/deltalake/file_pruning.py` | ~450 | `_coerce_bool_value` is case-sensitive; diverges from canonical `coerce_bool` |
+| `src/storage/deltalake/file_pruning.py` | ~450 | `_coerce_bool_value` duplicates canonical `coerce_bool`; semantics drift risk for unknown strings |
 | `src/storage/deltalake/delta_read.py` | ~330 | Owns `_DeltaMergeExecutionState`, `_DeltaMergeExecutionResult`, `_normalize_commit_metadata` — imported as privates by `delta_write.py` |
 | `src/datafusion_ext.pyi` | 118 | Missing 7 Rust function stubs |
+| `src/datafusion_engine/session/delta_session_builder.py` | ~620 | Runtime policy settings are split across bridge + Python parsers; duplicate policy parsing surface |
+| `src/datafusion_engine/plan/profiler.py` | ~170 | EXPLAIN capture still relies on redirected stdout text parsing |
+| `src/datafusion_engine/plan/planning_env.py` | ~170 | Planning manifest payload is derived in Python; Rust manifest should be canonical parity source |
+| `src/semantics/plans/fingerprints.py` | ~380 | Recomputes plan/schema/substrait hashes that overlap with plan artifact identity payload |
+| `src/extract/infrastructure/worklists.py` | ~450 | Plan bundle consumers depend on current artifact identity shape without explicit parity contract tests |
+| `rust/codeanatomy_engine/src/session/planning_surface.rs` | ~180 | Canonical typed planning-surface policy contract already exists but is not the sole cross-layer source |
+| `rust/codeanatomy_engine/src/session/planning_manifest.rs` | ~700 | Manifest includes provider identities and policy hash surfaces not fully enforced in Python parity checks |
+| `rust/datafusion_python/src/utils.rs` | ~200 | Capsule provider path invokes provider hooks with session argument |
+| `rust/datafusion_python/python/datafusion/context.py` | ~600 | Provider Protocol signatures still advertise zero-argument capsule hooks |
 
 ---
 
@@ -132,15 +143,15 @@ None — `_require_non_empty_delete_predicate` in `control_plane_mutation.py` is
 
 **Principles:** P7 (DRY)
 **Review source:** Agent 5, P7 finding; Agent 9, P7 finding
-**Priority:** HIGH — `_coerce_bool_value` in `file_pruning.py` treats `"True"` as `False` (case-sensitive bug)
+**Priority:** HIGH — duplicate coercion logic drifts from canonical behavior and obscures unknown-value handling semantics
 
 ### Goal
 
 Delete `_coerce_bool_value` from `file_pruning.py` and replace all call sites with
-`utils.value_coercion.coerce_bool`. The `coerce_bool` canonical function handles
-`"True"`, `"true"`, `"TRUE"` identically and returns `None` on parse failure —
-matching `_coerce_bool_value`'s `None`-on-failure contract while fixing the
-case-sensitivity bug.
+`utils.value_coercion.coerce_bool`. The key issue is duplicate parsing policy and drift:
+`_coerce_bool_value` reduces unknown strings to `False`, while canonical `coerce_bool`
+returns `None` on parse failure. This change removes duplicate logic and restores
+consistent unknown-value semantics.
 
 ### Representative Code Snippets
 
@@ -149,17 +160,15 @@ Current state in `src/storage/deltalake/file_pruning.py:422-427`:
 ```python
 def _coerce_bool_value(value: object) -> bool | None:
     if isinstance(value, str):
-        return value.lower() == "true"   # case-sensitive on raw, lowers first
+        return value.lower() == "true"
     if isinstance(value, (bool, int, float)):
         return bool(value)
     return None
 ```
 
-Note: `value.lower() == "true"` is actually case-insensitive because `.lower()` is
-applied. The review identified that `isinstance(value, str)` branch uses `value == "true"`
-without `.lower()` in a different variant. The implementation above does lower-case but
-the broader issue is that `_coerce_bool_value` is a private duplicate of `coerce_bool`.
-Deleting it removes the maintenance burden regardless.
+`_coerce_bool_value("foo")` returns `False`, but `coerce_bool("foo")` returns `None`.
+The plan standardizes on `coerce_bool` so "invalid/unknown" remains distinguishable from
+explicit `False`.
 
 Replacement at each call site:
 
@@ -183,8 +192,8 @@ resolved = coerce_bool(value)
 None. The existing `tests/unit/utils/test_value_coercion.py` and
 `tests/unit/utils/test_coercion.py` already cover `coerce_bool`. Add one
 regression test to `tests/unit/storage/deltalake/test_delta_read.py` (or a new
-`test_file_pruning_coercion.py`) confirming the `"True"` / `"False"` round-trip
-now returns `True` / `False`.
+`test_file_pruning_coercion.py`) confirming unknown strings (for example `"foo"`)
+return `None` instead of being silently coerced to `False`.
 
 ### Legacy Decommission / Delete Scope
 
@@ -267,20 +276,19 @@ None.
 
 ---
 
-## S4 — Remove Redundant Facade Mixins from DataFusionRuntimeProfile
+## S4 — Stage Facade Mixin Migration for DataFusionRuntimeProfile
 
-**Principles:** P13 (composition over inheritance), P4 (high cohesion)
+**Principles:** P13 (composition over inheritance), P4 (high cohesion), P22 (public contracts)
 **Review source:** Agent 5, P13 finding
-**Priority:** MEDIUM — reduces MRO from 6 levels to 3; removes `_as_runtime_profile` cast need
+**Priority:** MEDIUM/HIGH — MRO simplification is valuable, but removal must be compatibility-safe
 
 ### Goal
 
-Remove `_RuntimeProfileIOFacadeMixin`, `_RuntimeProfileCatalogFacadeMixin`, and
-`_RuntimeProfileDeltaFacadeMixin` from the `DataFusionRuntimeProfile` MRO. The
-delegation dataclasses (`RuntimeProfileIO`, `RuntimeProfileCatalog`,
-`RuntimeProfileDeltaOps`) are already available as `profile.io_ops`, `profile.catalog_ops`,
-and `profile.delta_ops` properties. Each mixin method is a one-line delegation to these
-properties; callers can use the properties directly.
+Convert `_RuntimeProfileIOFacadeMixin`, `_RuntimeProfileCatalogFacadeMixin`, and
+`_RuntimeProfileDeltaFacadeMixin` to explicit compatibility wrappers in the first pass:
+keep method names available, emit deprecation warnings, and migrate call sites to
+`profile.io_ops`, `profile.catalog_ops`, and `profile.delta_ops`. Remove mixins only
+after call-site migration and compatibility-window completion.
 
 ### Representative Code Snippets
 
@@ -290,9 +298,9 @@ Current MRO in `src/datafusion_engine/session/runtime.py:212-217`:
 class DataFusionRuntimeProfile(
     _RuntimeProfileIdentityMixin,
     _RuntimeProfileQueryMixin,
-    _RuntimeProfileIOFacadeMixin,       # to remove
-    _RuntimeProfileCatalogFacadeMixin,  # to remove
-    _RuntimeProfileDeltaFacadeMixin,    # to remove
+    _RuntimeProfileIOFacadeMixin,
+    _RuntimeProfileCatalogFacadeMixin,
+    _RuntimeProfileDeltaFacadeMixin,
     _RuntimeDiagnosticsMixin,
     _RuntimeContextMixin,
     StructBaseStrict,
@@ -300,27 +308,27 @@ class DataFusionRuntimeProfile(
 ):
 ```
 
-Target MRO:
+First-pass target in `src/datafusion_engine/session/runtime_ops.py`:
 
 ```python
-class DataFusionRuntimeProfile(
-    _RuntimeProfileIdentityMixin,
-    _RuntimeProfileQueryMixin,
-    _RuntimeDiagnosticsMixin,
-    _RuntimeContextMixin,
-    StructBaseStrict,
-    frozen=True,
-):
+def cache_root(self) -> Path | None:
+    warnings.warn(
+        "DataFusionRuntimeProfile.cache_root() is deprecated; use profile.io_ops.cache_root().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return self.io_ops.cache_root()
 ```
 
-Callers of `profile.cache_root()` become `profile.io_ops.cache_root()`. Use
-`/cq calls cache_root` before making the change to enumerate all call sites.
+Second-pass target (separate removal batch):
+- remove the three facade mixins from `DataFusionRuntimeProfile` MRO,
+- delete wrapper methods after `/cq calls` confirms no remaining call sites.
 
 ### Files to Edit
 
-- `src/datafusion_engine/session/runtime.py` — remove three mixin classes from the MRO; remove their `class` definitions (or relocate them to `runtime_ops.py` as standalone functions if any non-profile code uses them)
-- `src/datafusion_engine/session/runtime_ops.py` — remove `_RuntimeProfileIOFacadeMixin`, `_RuntimeProfileCatalogFacadeMixin`, `_RuntimeProfileDeltaFacadeMixin` class bodies; keep the underlying delegation dataclasses unchanged
-- All call sites of the three removed mixin methods — update to use the `profile.io_ops.X()`, `profile.catalog_ops.X()`, `profile.delta_ops.X()` form
+- `src/datafusion_engine/session/runtime_ops.py` — add deprecation warnings on facade methods; keep delegation logic intact in first pass
+- `src/datafusion_engine/session/runtime.py` — keep current MRO in first pass; remove mixins only in deferred deletion batch
+- All call sites of facade methods — migrate to `profile.io_ops.X()`, `profile.catalog_ops.X()`, `profile.delta_ops.X()`
 
 ### New Files to Create
 
@@ -329,9 +337,9 @@ None.
 ### Legacy Decommission / Delete Scope
 
 **D2:**
-- Delete `_RuntimeProfileIOFacadeMixin` class body from `src/datafusion_engine/session/runtime_ops.py`
-- Delete `_RuntimeProfileCatalogFacadeMixin` class body from `src/datafusion_engine/session/runtime_ops.py`
-- Delete `_RuntimeProfileDeltaFacadeMixin` class body from `src/datafusion_engine/session/runtime_ops.py`
+- Delete `_RuntimeProfileIOFacadeMixin` class body from `src/datafusion_engine/session/runtime_ops.py` only after call-site migration + deprecation window
+- Delete `_RuntimeProfileCatalogFacadeMixin` class body from `src/datafusion_engine/session/runtime_ops.py` only after call-site migration + deprecation window
+- Delete `_RuntimeProfileDeltaFacadeMixin` class body from `src/datafusion_engine/session/runtime_ops.py` only after call-site migration + deprecation window
 
 ---
 
@@ -571,15 +579,14 @@ None — rename only.
 
 **Principles:** P16 (functional core), P23 (testability)
 **Review source:** Agent 5, P16/P23 findings
-**Priority:** HIGH — module-level mutable state persists across tests; cannot be reset without module dict manipulation
+**Priority:** HIGH — warning state must follow session/runtime lifecycle, not process-global module state
 
 ### Goal
 
-Replace the `_DDL_CATALOG_WARNING_STATE = {"emitted": False}` module-level dict in
-`runtime_extensions.py` with a `contextvars.ContextVar[bool]` named
-`_DDL_CATALOG_WARNING_EMITTED`. `contextvars.ContextVar` scopes the flag to the
-current execution context and is reset automatically when the context changes, which
-is the correct semantics for test isolation.
+Replace `_DDL_CATALOG_WARNING_STATE = {"emitted": False}` with explicit session-scoped
+warning state keyed by context object. Use `weakref.WeakKeyDictionary[SessionContext, bool]`
+to avoid process-global stickiness while preserving one-warning-per-session behavior.
+Add a dedicated test reset helper for deterministic test isolation.
 
 ### Representative Code Snippets
 
@@ -600,24 +607,29 @@ if not _DDL_CATALOG_WARNING_STATE["emitted"]:
 Target state:
 
 ```python
-import contextvars
-
-_DDL_CATALOG_WARNING_EMITTED: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "_DDL_CATALOG_WARNING_EMITTED", default=False
+_DDL_CATALOG_WARNING_EMITTED_BY_CTX: weakref.WeakKeyDictionary[SessionContext, bool] = (
+    weakref.WeakKeyDictionary()
 )
+
+
+def _should_emit_ddl_catalog_warning(ctx: SessionContext) -> bool:
+    if bool(_DDL_CATALOG_WARNING_EMITTED_BY_CTX.get(ctx)):
+        return False
+    _DDL_CATALOG_WARNING_EMITTED_BY_CTX[ctx] = True
+    return True
 ```
 
 Usage:
 
 ```python
-if not _DDL_CATALOG_WARNING_EMITTED.get():
+if _should_emit_ddl_catalog_warning(ctx):
     logger.warning("DDL catalog registration ...")
-    _DDL_CATALOG_WARNING_EMITTED.set(True)
 ```
 
 ### Files to Edit
 
-- `src/datafusion_engine/session/runtime_extensions.py` — replace `_DDL_CATALOG_WARNING_STATE` dict with `_DDL_CATALOG_WARNING_EMITTED` ContextVar; update read/write sites
+- `src/datafusion_engine/session/runtime_extensions.py` — replace `_DDL_CATALOG_WARNING_STATE` dict with `_DDL_CATALOG_WARNING_EMITTED_BY_CTX`; add `_should_emit_ddl_catalog_warning(ctx)` helper and `_reset_ddl_catalog_warning_state_for_tests()` helper
+- `tests/unit/datafusion_engine/session/` warning-state tests — assert one warning per session and deterministic reset behavior
 
 ### New Files to Create
 
@@ -626,7 +638,7 @@ None.
 ### Legacy Decommission / Delete Scope
 
 **D4:**
-- Delete `_DDL_CATALOG_WARNING_STATE: dict[str, bool]` from `src/datafusion_engine/session/runtime_extensions.py`
+- Delete `_DDL_CATALOG_WARNING_STATE: dict[str, bool]` from `src/datafusion_engine/session/runtime_extensions.py` after weak-map helper is wired at all call sites
 
 ---
 
@@ -693,11 +705,10 @@ None — in-place edit.
 ### Goal
 
 `create_strict_catalog` and `create_default_catalog` in
-`src/datafusion_engine/udf/metadata.py:869-903` are byte-for-byte identical. The chosen
-resolution is: **delete `create_strict_catalog`** and redirect its callers to
-`create_default_catalog`. This is the YAGNI-correct choice because no actual strict
-enforcement logic exists anywhere. If true tier enforcement is needed in the future, it
-can be added to `UdfCatalog` with a `strict: bool` field.
+`src/datafusion_engine/udf/metadata.py:869-903` are byte-for-byte identical. First-pass
+resolution is compatibility-safe: keep `create_strict_catalog` as a public symbol and
+implement strict semantics (preferred) or ship a deprecation shim with explicit warning
+until strict semantics land. Do not hard-delete the symbol in this pass.
 
 Find callers via `/cq calls create_strict_catalog` before editing.
 
@@ -716,17 +727,16 @@ def create_strict_catalog(
 ```
 
 Target state:
-- Delete `create_strict_catalog` entirely.
-- Update every caller found by `/cq calls create_strict_catalog` to call
-  `create_default_catalog` instead.
-- If `get_strict_udf_catalog` in `runtime_extensions.py` (line 60) delegates to
-  `create_strict_catalog`, update it accordingly.
+- Keep `create_strict_catalog` symbol.
+- Implement strict semantics in `UdfCatalog` (for example `strict: bool`) and enforce in
+  strict catalog call paths; or keep the symbol as a deprecating shim with warning.
+- Preserve `get_strict_udf_catalog` public behavior in `runtime_extensions.py`.
 
 ### Files to Edit
 
-- `src/datafusion_engine/udf/metadata.py` — delete `create_strict_catalog`
-- `src/datafusion_engine/session/runtime_extensions.py` — update `get_strict_udf_catalog` import/call if it referenced `create_strict_catalog`
-- All other callers discovered by `/cq calls create_strict_catalog`
+- `src/datafusion_engine/udf/metadata.py` — implement strict semantics in `create_strict_catalog` path or add a deprecation shim while retaining symbol
+- `src/datafusion_engine/session/runtime_extensions.py` — keep `get_strict_udf_catalog` behavior stable while strict semantics are wired
+- All callers discovered by `/cq calls create_strict_catalog` — validate no behavior regression under strict mode
 
 ### New Files to Create
 
@@ -735,7 +745,7 @@ None.
 ### Legacy Decommission / Delete Scope
 
 **D5:**
-- Delete `create_strict_catalog` from `src/datafusion_engine/udf/metadata.py` (lines 887-902)
+- Optional deferred deletion only after explicit deprecation window and replacement strict contract adoption
 
 ---
 
@@ -872,10 +882,10 @@ None — in-place replacement.
 
 ### Goal
 
-Separate the `snapshot` property (pure getter) from the recapture logic (command).
-Add an explicit `refresh()` method that triggers recapture and resets the
-`_invalidated` flag. The `snapshot` property becomes a pure getter; callers that need
-a fresh snapshot must call `refresh()` before reading.
+Add an explicit `refresh()` command API while keeping current lazy `snapshot` getter
+behavior for compatibility in first pass. The getter continues to recapture when
+`_snapshot is None` or `_invalidated` is true; new strict paths can opt into
+raise-on-missing behavior only after call-site migration is complete.
 
 ### Representative Code Snippets
 
@@ -897,10 +907,7 @@ Target state:
 
 ```python
 def refresh(self) -> None:
-    """Recapture the introspection snapshot and clear the invalidation flag.
-
-    Call this explicitly before reading ``snapshot`` when the cache may be stale.
-    """
+    """Recapture the introspection snapshot and clear the invalidation flag."""
     self._snapshot = IntrospectionSnapshot.capture(
         self._ctx,
         sql_options=self._sql_options,
@@ -909,40 +916,29 @@ def refresh(self) -> None:
 
 @property
 def snapshot(self) -> IntrospectionSnapshot:
-    """Return the current introspection snapshot.
-
-    Raises:
-    ------
-    RuntimeError
-        If no snapshot has been captured yet. Call ``refresh()`` first.
-    """
-    if self._snapshot is None:
-        msg = (
-            "IntrospectionCache has no snapshot yet. "
-            "Call refresh() before reading snapshot."
-        )
-        raise RuntimeError(msg)
+    """Backward-compatible lazy getter; refreshes when invalidated."""
+    if self._snapshot is None or self._invalidated:
+        self.refresh()
     return self._snapshot
 ```
 
-Update all callers of `cache.snapshot` that relied on lazy initialisation to first call
-`cache.refresh()` when the snapshot may be absent or invalidated. Find callers via
-`/cq calls IntrospectionCache.snapshot` before editing.
+Optional strict mode (deferred): add `snapshot_or_raise()` or feature-flagged strict
+getter behavior after `/cq calls IntrospectionCache.snapshot` migration audit.
 
 ### Files to Edit
 
-- `src/datafusion_engine/catalog/introspection.py` — add `refresh()` method; make `snapshot` a pure getter that raises on None
-- All call sites of `cache.snapshot` — prefix with `cache.refresh()` where needed; existing `cache.invalidate()` callers remain unchanged
+- `src/datafusion_engine/catalog/introspection.py` — add `refresh()` method while preserving lazy `snapshot` semantics
+- Call sites that require explicit recapture boundaries — migrate to call `refresh()` directly; no forced mass call-site rewrite in first pass
 
 ### New Files to Create
 
 None. Add a test to `tests/unit/datafusion_engine/catalog/test_introspection_caches.py`
-that verifies `snapshot` raises `RuntimeError` before `refresh()` is called, and that
-the `_invalidated` flag is only cleared by `refresh()` not by reading `snapshot`.
+that verifies lazy getter behavior is preserved and that `refresh()` is available as
+explicit command API.
 
 ### Legacy Decommission / Delete Scope
 
-None — the combined getter/recapture logic is replaced in-place.
+None — strict-mode enforcement is deferred to a compatibility-window follow-up scope.
 
 ---
 
@@ -950,7 +946,7 @@ None — the combined getter/recapture logic is replaced in-place.
 
 **Principles:** P1 (information hiding), P3 (SRP)
 **Review source:** Agent 9, P1 and P3 findings
-**Priority:** MEDIUM — `delta_write.py` imports private symbols from `delta_read.py`; cross-file private coupling
+**Priority:** HIGH — `delta_write.py` imports private symbols from `delta_read.py`; boundary coupling risk
 
 ### Goal
 
@@ -1435,151 +1431,666 @@ None.
 
 ---
 
+## S21 — Make Rust Planning Manifest the Canonical Cross-Layer Source
+
+**Principles:** P1 (information hiding), P7 (DRY), P12 (dependency inversion), P22 (versioned contracts)
+**Review source:** Alignment DX1
+**Priority:** CRITICAL — planning identity drift is possible while Python derives manifest payloads independently
+
+### Goal
+
+Use Rust planning-surface manifest capture as the canonical source and have Python consume
+that payload directly. Keep Python local derivation only as compatibility fallback while
+parity tests are introduced.
+
+### Representative Code Snippets
+
+Current state in `src/datafusion_engine/plan/planning_env.py:87-95`:
+
+```python
+from datafusion_engine.session.runtime_extensions import planning_surface_manifest_v2_payload
+...
+manifest_payload = planning_surface_manifest_v2_payload(profile)
+```
+
+Current bridge state in `rust/datafusion_python/src/codeanatomy_ext/plan_bundle_bridge.rs:77`:
+
+```rust
+planning_surface_hash: [0_u8; 32], // placeholder; not canonical session hash
+```
+
+Target state:
+
+```python
+# src/datafusion_engine/plan/planning_env.py
+manifest_bridge = getattr(datafusion_ext, "session_planning_manifest_v2", None)
+if callable(manifest_bridge):
+    manifest_payload = manifest_bridge(session_runtime.ctx)
+else:
+    manifest_payload = planning_surface_manifest_v2_payload(profile)
+```
+
+```rust
+// rust/datafusion_python/src/codeanatomy_ext/session_utils.rs
+#[pyfunction]
+pub(crate) fn session_planning_manifest_v2(...) -> PyResult<Py<PyAny>> { ... }
+```
+
+### Files to Edit
+
+- `src/datafusion_engine/plan/planning_env.py` — prefer Rust-provided manifest payload; keep fallback path
+- `src/datafusion_engine/session/runtime_extensions.py` — treat local `planning_surface_manifest_v2_payload` as fallback/compatibility helper
+- `rust/datafusion_python/src/codeanatomy_ext/session_utils.rs` — add `session_planning_manifest_v2` bridge entrypoint
+- `rust/datafusion_python/src/codeanatomy_ext/mod.rs` — register any new bridge entrypoint
+- `rust/datafusion_python/src/codeanatomy_ext/plan_bundle_bridge.rs` — replace `[0_u8; 32]` planning-surface hash placeholder with canonical hash payload
+- `src/datafusion_ext.pyi` — add typing stub for the new manifest bridge entrypoint
+
+### New Files to Create
+
+- `rust/datafusion_python/tests/session_planning_manifest_bridge_tests.rs` — verify entrypoint registration + payload shape
+- `tests/unit/datafusion_engine/plan/test_planning_env_manifest_parity.py` — assert Python snapshot matches Rust manifest payload and hash
+
+### Legacy Decommission / Delete Scope
+
+- Decommission Python-first manifest derivation as primary path in `src/datafusion_engine/plan/planning_env.py` once Rust parity tests are stable
+- Delete zero-hash placeholder usage in `rust/datafusion_python/src/codeanatomy_ext/plan_bundle_bridge.rs`
+
+---
+
+## S22 — Unify Runtime Policy Parsing with Typed Runtime Contracts
+
+**Principles:** P7 (DRY), P9 (parse, don't validate), P18 (determinism)
+**Review source:** Alignment DX2
+**Priority:** HIGH — runtime policy parsing is split between typed bridge options and ad-hoc Python string parsing
+
+### Goal
+
+Centralize runtime policy parsing into one typed contract surface and generate
+`DeltaSessionRuntimePolicyOptions` from that contract. Remove duplicated manual parsing
+branches in `delta_session_builder.py` after migration.
+
+### Representative Code Snippets
+
+Current duplicated parsing path in `src/datafusion_engine/session/delta_session_builder.py:328-430`:
+
+```python
+def _parse_suffixed_runtime_size(value: str) -> int | None: ...
+def _parse_suffixed_runtime_duration_seconds(value: str) -> int | None: ...
+def _apply_standard_runtime_policy_settings(...): ...
+```
+
+Target state:
+
+```python
+# src/datafusion_engine/session/delta_session_builder.py
+contract = runtime_policy_contract_from_settings(runtime_settings)
+options = contract.to_delta_session_runtime_policy_options(module=resolution.module_owner)
+```
+
+```python
+# src/datafusion_engine/session/runtime_policy_contract.py
+@dataclass(frozen=True)
+class RuntimePolicyContract:
+    memory_limit_bytes: int | None
+    metadata_cache_limit_bytes: int | None
+    list_files_cache_limit_bytes: int | None
+    list_files_cache_ttl_seconds: int | None
+    temp_directory: str | None
+    max_temp_directory_size_bytes: int | None
+```
+
+### Files to Edit
+
+- `src/datafusion_engine/session/delta_session_builder.py` — replace ad-hoc parsing branches with contract conversion
+- `src/datafusion_engine/session/cache_manager_contract.py` — reuse/extend existing cache policy parsing primitives
+- `rust/datafusion_python/src/codeanatomy_ext/delta_session_bridge.rs` — keep typed options as canonical runtime bridge input
+
+### New Files to Create
+
+- `src/datafusion_engine/session/runtime_policy_contract.py` — typed runtime policy parsing contract
+- `tests/unit/datafusion_engine/session/test_runtime_policy_contract.py` — parser + conversion tests
+- `tests/unit/datafusion_engine/session/test_delta_session_builder_runtime_policy.py` — bridge parity tests (consumed/unsupported key payloads)
+
+### Legacy Decommission / Delete Scope
+
+- Delete `_parse_suffixed_runtime_size` from `src/datafusion_engine/session/delta_session_builder.py` after contract migration
+- Delete `_parse_suffixed_runtime_duration_seconds` from `src/datafusion_engine/session/delta_session_builder.py` after contract migration
+- Delete `_apply_standard_runtime_policy_settings` from `src/datafusion_engine/session/delta_session_builder.py` after contract migration
+
+---
+
+## S23 — Align Provider Capsule Protocol Signatures with Session-Aware FFI
+
+**Principles:** P6 (ports and adapters), P22 (versioned contracts)
+**Review source:** Alignment DX3
+**Priority:** HIGH — Rust bridge calls provider hooks with `session`, but Python Protocols still document no-arg hooks
+
+### Goal
+
+Update Python provider Protocol contracts to include a `session` argument and ship
+compatibility handling for legacy no-argument provider implementations during migration.
+
+### Representative Code Snippets
+
+Current Python contract in `rust/datafusion_python/python/datafusion/context.py:93-105`:
+
+```python
+def __datafusion_table_provider__(self) -> object: ...
+def __datafusion_catalog_provider__(self) -> object: ...
+```
+
+Current Rust invocation in `rust/datafusion_python/src/utils.rs:171-176`:
+
+```rust
+let capsule = obj
+    .getattr("__datafusion_table_provider__")?
+    .call1((session,))?;
+```
+
+Target Python contract:
+
+```python
+def __datafusion_table_provider__(self, session: SessionContext) -> object: ...
+def __datafusion_catalog_provider__(self, session: SessionContext) -> object: ...
+def __datafusion_schema_provider__(self, session: SessionContext) -> object: ...
+```
+
+### Files to Edit
+
+- `rust/datafusion_python/python/datafusion/context.py` — update `TableProviderExportable` and `CatalogProviderExportable` signatures/docs
+- `rust/datafusion_python/python/datafusion/catalog.py` — update `SchemaProviderExportable` signature/docs
+- `rust/datafusion_python/src/utils.rs` — add compatibility fallback handling for legacy no-arg hooks (time-boxed)
+- `rust/datafusion_python/src/catalog.rs` and `rust/datafusion_python/src/context.rs` — keep session-aware invocation consistent for catalog/schema paths
+
+### New Files to Create
+
+- `tests/unit/datafusion_engine/extensions/test_provider_capsule_signature_compat.py` — Python contract tests for session-arg and legacy-arg forms
+- `rust/datafusion_python/tests/provider_capsule_signature_contract_tests.rs` — Rust-side invocation compatibility tests
+
+### Legacy Decommission / Delete Scope
+
+- Delete temporary no-arg fallback invocation path in `rust/datafusion_python/src/utils.rs` after compatibility window
+
+---
+
+## S24 — Replace Stdout Explain Scraping with DataFrame Explain Rows
+
+**Principles:** P11 (CQS), P18 (determinism)
+**Review source:** Alignment DX4
+**Priority:** HIGH — stdout scraping is brittle and diverges from structured Rust explain capture
+
+### Goal
+
+Capture explain artifacts from DataFrame result rows (`plan_type`, `plan`) instead of
+redirected stdout text. Keep text fallback only for explicit compatibility path.
+
+### Representative Code Snippets
+
+Current state in `src/datafusion_engine/plan/profiler.py:102-121`:
+
+```python
+buffer = io.StringIO()
+with contextlib.redirect_stdout(buffer):
+    explain_method(verbose=verbose, analyze=analyze)
+text = buffer.getvalue()
+```
+
+Target state:
+
+```python
+explain_df = df.explain(verbose=verbose, analyze=analyze)
+batches = explain_df.collect()
+rows = explain_rows_from_batches(batches)
+```
+
+Rust reference path in `rust/codeanatomy_engine/src/compiler/plan_bundle.rs:738-756`
+already parses explain record batches into typed entries.
+
+### Files to Edit
+
+- `src/datafusion_engine/plan/profiler.py` — replace stdout capture as primary path
+- `src/datafusion_engine/plan/plan_utils.py` — add/extend helpers for explain row extraction from batches
+- `src/datafusion_engine/plan/bundle_assembly.py` — ensure artifact builder consumes structured explain rows
+
+### New Files to Create
+
+- `tests/unit/datafusion_engine/plan/test_explain_row_capture.py` — row-based explain capture tests
+- `tests/unit/datafusion_engine/plan/test_explain_text_fallback.py` — explicit fallback behavior tests
+
+### Legacy Decommission / Delete Scope
+
+- Delete `_run_explain_text` from `src/datafusion_engine/plan/profiler.py` once row-based path is stable
+- Decommission `explain_rows_from_text` in `src/datafusion_engine/plan/plan_utils.py` as primary parser (keep optional fallback only)
+
+---
+
+## S25 — Expand Planning-Env Identity to Object Store and Provider Surfaces
+
+**Principles:** P18 (determinism), P22 (versioned contracts), P24 (observability)
+**Review source:** Alignment DX5
+**Priority:** HIGH — object-store/catalog/schema provider identity is not fully reflected in Python planning parity payloads
+
+### Goal
+
+Include object store registration identities and provider identity snapshots in
+`planning_env_snapshot` so Python parity payloads cover the same environment identity
+surface as Rust planning manifests.
+
+### Representative Code Snippets
+
+Current object store registration tracking in `src/datafusion_engine/io/adapter.py:169-176`:
+
+```python
+registry = registries.by_context.setdefault(self.ctx, set())
+key = (scheme, host)
+...
+registry.add(key)
+```
+
+Target planning-env payload enrichment:
+
+```python
+snapshot["object_store_identities"] = tuple(sorted(...))
+snapshot["catalog_provider_identities"] = tuple(sorted(...))
+snapshot["schema_provider_identities"] = tuple(sorted(...))
+```
+
+Rust manifest reference in `rust/codeanatomy_engine/src/session/planning_manifest.rs:295-296`:
+`catalog_provider_identities` and `schema_provider_identities` are part of canonical manifest capture.
+
+### Files to Edit
+
+- `src/datafusion_engine/plan/planning_env.py` — include object-store/catalog/schema identity fields in snapshot payload
+- `src/datafusion_engine/io/adapter.py` — expose deterministic registry snapshot helper for planning-env capture
+- `src/datafusion_engine/plan/plan_identity.py` — include new identity fields in deterministic identity payload
+
+### New Files to Create
+
+- `tests/unit/datafusion_engine/plan/test_planning_env_provider_identities.py` — parity tests for object store and provider identity payloads
+
+### Legacy Decommission / Delete Scope
+
+- Decommission ad-hoc provider identity derivation paths once planning-env payload is canonical for these fields
+
+---
+
+## S26 — Promote Schema Pushdown and Physical Expr Adapter to Contract Tests
+
+**Principles:** P8 (contract), P23 (testability)
+**Review source:** Alignment DX6
+**Priority:** HIGH — pushdown and adapter registration behavior should be contract-enforced, not opportunistic
+
+### Goal
+
+Define explicit conformance tests for physical expression adapter registration and schema
+evolution pushdown behavior, including required fallback/error behavior when registration
+surfaces are missing.
+
+### Representative Code Snippets
+
+Current adapter install path in `src/datafusion_engine/session/runtime_extensions.py:1038-1069`:
+
+```python
+register = getattr(ctx, "register_physical_expr_adapter_factory", None)
+if not callable(register):
+    ...
+    raise TypeError(msg)
+register(factory)
+```
+
+Existing Rust contract test anchor in
+`rust/datafusion_python/tests/codeanatomy_ext_schema_pushdown_contract_tests.rs`.
+
+Target expansion:
+
+```python
+# add integration assertions that predicate/projection pushdown behavior is preserved
+# when schema evolution adapter is installed and when it is unavailable.
+```
+
+### Files to Edit
+
+- `src/datafusion_engine/session/runtime_extensions.py` — clarify diagnostics payloads for adapter install success/failure
+- `src/datafusion_engine/dataset/registration_delta_helpers.py` — enforce deterministic fallback behavior when adapter registration is unavailable
+- `rust/datafusion_python/tests/codeanatomy_ext_schema_pushdown_contract_tests.rs` — extend contract coverage
+
+### New Files to Create
+
+- `tests/unit/datafusion_engine/dataset/test_schema_pushdown_contract.py` — Python-side contract tests
+
+### Legacy Decommission / Delete Scope
+
+None.
+
+---
+
+## S27 — Unify Semantics Fingerprints with Canonical Plan Identity Artifacts
+
+**Principles:** P7 (DRY), P18 (determinism), P22 (versioned contracts)
+**Review source:** Alignment DX7
+**Priority:** HIGH — semantics still recomputes hashes that overlap with canonical plan artifact identity
+
+### Goal
+
+Make semantics fingerprinting consume canonical `plan_identity_hash`/`plan_fingerprint`
+from plan bundle artifacts by default. Retain bespoke hash derivation only as fallback
+when bundle artifacts are unavailable.
+
+### Representative Code Snippets
+
+Current bespoke hash path in `src/semantics/plans/fingerprints.py:184-299`:
+
+```python
+logical_hash = _compute_logical_plan_hash(df, view_name=view_name)
+schema_hash = _compute_schema_hash(df)
+substrait_hash = _compute_substrait_hash(ctx, df)
+```
+
+Target path:
+
+```python
+identity = runtime_plan_identity(bundle)
+return PlanFingerprint(plan_fingerprint=identity, ...)
+```
+
+### Files to Edit
+
+- `src/semantics/plans/fingerprints.py` — prefer bundle-provided identity and reduce bespoke hashing to fallback
+- `src/semantics/pipeline_builders.py` — keep semantic cache payload anchored to canonical runtime identity
+- `src/semantics/pipeline_diagnostics.py` — ensure diagnostics show canonical plan identity fields
+
+### New Files to Create
+
+- `tests/unit/semantics/plans/test_fingerprint_identity_alignment.py` — verifies semantics output matches plan bundle identity
+
+### Legacy Decommission / Delete Scope
+
+- Decommission unconditional use of `_compute_logical_plan_hash`/`_compute_schema_hash` in `src/semantics/plans/fingerprints.py` as primary path
+
+---
+
+## S28 — Enforce Listing Partition-Inference Key in Identity Contracts
+
+**Principles:** P8 (contract), P18 (determinism)
+**Review source:** Alignment DX8
+**Priority:** MEDIUM/HIGH — missing planning-affecting keys can silently weaken plan-identity determinism
+
+### Goal
+
+Require `datafusion.execution.listing_table_factory_infer_partitions` to be present in
+policy settings and plan identity assembly. Fail identity assembly when missing.
+
+### Representative Code Snippets
+
+Current tolerant path in `src/datafusion_engine/plan/plan_identity.py:110-114`:
+
+```python
+listing_partition_inference = str(
+    inputs.artifacts.df_settings.get(
+        "datafusion.execution.listing_table_factory_infer_partitions",
+        "",
+    )
+)
+```
+
+Target enforcement:
+
+```python
+required_key = "datafusion.execution.listing_table_factory_infer_partitions"
+if required_key not in inputs.artifacts.df_settings:
+    raise ValueError(f"Missing required planning-affecting DataFusion setting: {required_key}")
+```
+
+### Files to Edit
+
+- `src/datafusion_engine/session/runtime_config_policies.py` — ensure required key exists in all relevant presets
+- `src/datafusion_engine/plan/plan_identity.py` — enforce required key presence
+- `src/datafusion_engine/plan/bundle_assembly.py` — fail early when required planning keys are missing
+
+### New Files to Create
+
+- `tests/unit/datafusion_engine/plan/test_plan_identity_required_settings.py` — required-key enforcement tests
+
+### Legacy Decommission / Delete Scope
+
+None.
+
+---
+
+## S29 — Align Delta DML Flow with Provider-Native Semantics Where Feasible
+
+**Principles:** P3 (SRP), P6 (ports and adapters), P19 (KISS)
+**Review source:** Alignment DX9
+**Priority:** MEDIUM/HIGH — control-plane wrappers are broad; provider-native hooks can reduce bespoke mutation orchestration
+
+### Goal
+
+Audit delete/update/merge flows and move operations that are representable via provider-native
+DataFusion/Delta surfaces to those hooks, retaining wrapper logic only for policy/audit
+requirements not represented by provider-native contracts.
+
+### Representative Code Snippets
+
+Current wrapper-heavy mapping in `src/datafusion_engine/delta/control_plane_core.py:393-396`:
+
+```python
+from datafusion_engine.delta.control_plane_mutation import (
+    delta_delete,
+    delta_merge,
+    delta_update,
+)
+```
+
+Target stance:
+
+```python
+# Keep control-plane wrapper only for policy/audit boundaries.
+# Delegate core mutation execution to provider-native surfaces when available.
+```
+
+### Files to Edit
+
+- `src/datafusion_engine/delta/capabilities.py` — classify operations that can use provider-native semantics
+- `src/datafusion_engine/delta/control_plane_mutation.py` — narrow wrapper scope to policy/audit boundaries
+- `src/datafusion_engine/delta/service.py` — route compatible operations through provider-native mutation path
+- `rust/datafusion_python/src/codeanatomy_ext/delta_mutations.rs` — align extension surface for provider-native DML routing
+
+### New Files to Create
+
+- `tests/unit/datafusion_engine/delta/test_provider_native_dml_alignment.py` — behavior parity tests between wrapper and provider-native paths
+
+### Legacy Decommission / Delete Scope
+
+- Decommission wrapper-only mutation branches in `src/datafusion_engine/delta/control_plane_mutation.py` once provider-native routing and policy/audit equivalence are validated
+
+---
+
+## S30 — Co-Migrate Extract/Semantics Plan Consumers with Contract Changes
+
+**Principles:** P12 (dependency inversion), P18 (determinism), P22 (versioned contracts)
+**Review source:** Alignment DX10
+**Priority:** HIGH — producer/consumer split risks plan-identity and explain-contract drift
+
+### Goal
+
+Update `src/extract` and `src/semantics` plan consumers in the same plan wave as
+planning manifest, identity, and explain artifact changes to prevent split-brain behavior.
+
+### Representative Code Snippets
+
+Current extract consumer in `src/extract/infrastructure/worklists.py:270-279`:
+
+```python
+bundle = facade.compile_to_bundle(builder)
+execution = execute_plan_artifact_helper(..., bundle, ...)
+```
+
+Current semantics consumer in `src/semantics/pipeline_builders.py:83-93`:
+
+```python
+base_identity = runtime_plan_identity(bundle)
+...
+return replace(bundle, plan_identity_hash=semantic_cache_hash)
+```
+
+Target stance:
+
+```python
+# Consumers must validate new planning-env fields and explain-row contracts
+# when reading plan bundles / diagnostics payloads.
+```
+
+### Files to Edit
+
+- `src/extract/infrastructure/worklists.py` — validate required bundle identity fields and planning-env contract version
+- `src/semantics/pipeline_builders.py` — align semantic cache key construction with canonical plan identity contract version
+- `src/semantics/pipeline_diagnostics.py` — include canonical identity + explain row fields in diagnostics output
+
+### New Files to Create
+
+- `tests/unit/extract/infrastructure/test_worklist_plan_contract_alignment.py` — extract consumer contract tests
+- `tests/unit/semantics/test_pipeline_plan_contract_alignment.py` — semantics consumer contract tests
+
+### Legacy Decommission / Delete Scope
+
+None.
+
+---
+
 ## Cross-Scope Legacy Decommission and Deletion Plan
 
-| Batch | Symbols to Delete | File | Prerequisite |
-|-------|-------------------|------|-------------|
-| D1 | `_coerce_bool_value` | `src/storage/deltalake/file_pruning.py` | S2 complete |
-| D2 | `_RuntimeProfileIOFacadeMixin`, `_RuntimeProfileCatalogFacadeMixin`, `_RuntimeProfileDeltaFacadeMixin` | `src/datafusion_engine/session/runtime_ops.py` | S4 complete, all call sites updated |
-| D3 | `_RETRYABLE_DELTA_STREAM_ERROR_MARKERS`, `_is_retryable_delta_stream_error`, `_is_delta_observability_operation` | `src/datafusion_engine/io/write_pipeline.py` | S5 complete |
-| D4 | `_DDL_CATALOG_WARNING_STATE` | `src/datafusion_engine/session/runtime_extensions.py` | S8 complete |
-| D5 | `create_strict_catalog` | `src/datafusion_engine/udf/metadata.py` | S10 complete, all callers updated |
-| D6 | Second `register_rust_udfs` definition (lines 502-531); late import line 499 | `src/datafusion_engine/udf/extension_runtime.py` | S11 complete |
-| D7 | `_DeltaMergeExecutionState`, `_DeltaMergeExecutionResult`, `_normalize_commit_metadata`, `_normalize_commit_metadata_key` | `src/storage/deltalake/delta_read.py` | S14 complete, new module created |
-| D8 | `_normalize_ctx` | `src/datafusion_engine/extensions/datafusion_ext.py` | S19 complete, all callers updated |
+### Batch D1 (after S2)
+- Delete `_coerce_bool_value` from `src/storage/deltalake/file_pruning.py` because canonical `coerce_bool` fully replaces it.
+
+### Batch D2 (after S4 migration window + S30 consumer migration)
+- Delete `_RuntimeProfileIOFacadeMixin`, `_RuntimeProfileCatalogFacadeMixin`, and `_RuntimeProfileDeltaFacadeMixin` from `src/datafusion_engine/session/runtime_ops.py` after zero remaining facade-method call sites.
+
+### Batch D3 (after S5)
+- Delete `_RETRYABLE_DELTA_STREAM_ERROR_MARKERS`, `_is_retryable_delta_stream_error`, and `_is_delta_observability_operation` duplicates from `src/datafusion_engine/io/write_pipeline.py`.
+
+### Batch D4 (after S8)
+- Delete `_DDL_CATALOG_WARNING_STATE` from `src/datafusion_engine/session/runtime_extensions.py` after weak-map/session-scoped replacement is active.
+
+### Batch D5 (after S10 deprecation window)
+- Delete `create_strict_catalog` only after strict semantics replacement is established and compatibility window is complete.
+
+### Batch D6 (after S11)
+- Delete second `register_rust_udfs` definition and late module import from `src/datafusion_engine/udf/extension_runtime.py`.
+
+### Batch D7 (after S14)
+- Delete `_DeltaMergeExecutionState`, `_DeltaMergeExecutionResult`, `_normalize_commit_metadata`, and `_normalize_commit_metadata_key` from `src/storage/deltalake/delta_read.py`.
+
+### Batch D8 (after S19)
+- Delete `_normalize_ctx` from `src/datafusion_engine/extensions/datafusion_ext.py` after all sites use `adapt_session_context`.
+
+### Batch D9 (after S21 + S25 parity tests)
+- Decommission Python-first manifest derivation as primary path in `src/datafusion_engine/plan/planning_env.py`.
+
+### Batch D10 (after S22)
+- Delete legacy runtime policy parsing helpers from `src/datafusion_engine/session/delta_session_builder.py`.
+
+### Batch D11 (after S23 migration window)
+- Delete temporary no-arg provider hook compatibility fallback from `rust/datafusion_python/src/utils.rs`.
+
+### Batch D12 (after S24 adoption)
+- Delete stdout explain capture path from `src/datafusion_engine/plan/profiler.py` and retire text parser as primary logic in `src/datafusion_engine/plan/plan_utils.py`.
+
+### Batch D13 (after S27 + S30)
+- Decommission bespoke semantics hash-first identity path in `src/semantics/plans/fingerprints.py` once bundle identity is mandatory.
 
 ---
 
 ## Implementation Sequence
 
-The items are grouped into four parallel streams ordered by dependency and blast radius.
+### Wave 0 — Contract and Scope Reset (must complete first)
 
-### Stream A — Correctness Fixes (no callee coordination needed)
+1. **S21** — establish Rust-first canonical planning-manifest source and eliminate zero-hash placeholders.
+2. **S23** — align provider Protocol signatures with session-aware FFI surface.
+3. **S22** — unify runtime policy parsing into typed contract.
+4. **S30** — align `src/extract` and `src/semantics` consumers to forthcoming contract changes.
+5. Apply compatibility-safe strategy updates for **S4**, **S8**, **S10**, and **S13** before implementation coding begins.
 
-Execute in this order; each is independent of the others within the stream.
+### Wave 1 — Canonical Planning/Runtime Contracts
 
-1. **S1** — `DeltaDeleteRequest.__post_init__` guard (CRITICAL; zero callee impact)
-2. **S11** — Remove duplicate `register_rust_udfs` (CRITICAL; isolated to one file)
-3. **S3** — Narrow `BaseException` + add UDF snapshot warning (small edits, two files)
-4. **S9** — Remove bare `Exception` from `_CACHE_SNAPSHOT_ERRORS`
-5. **S7** — Rename `RegistrationPhase.validate` to `action`
-6. **S17** — Change `env_bool` `log_invalid` default
+1. **S24** — switch to row-based explain capture.
+2. **S25** — include object-store/catalog/schema provider identities in planning-env payloads.
+3. **S26** — promote pushdown/adapter behavior to explicit conformance tests.
+4. **S28** — enforce required listing partition inference key in identity contracts.
+5. **S29** — move eligible DML flow to provider-native semantics with policy/audit preservation.
+6. **S14** — land high-priority delta read/write boundary fix.
 
-### Stream B — DRY Consolidation (safe removals after callee audit)
+### Wave 2 — Cleanup Backlog with Compatibility Guards
 
-Execute S5 before D3; execute S2 before D1.
+1. Execute correctness-critical fixes: **S1**, **S3**, **S9**, **S11**.
+2. Execute mechanical dedup/refactors: **S2**, **S5**, **S6**, **S7**, **S12**, **S15**, **S16**, **S17**, **S18**, **S19**, **S20**.
+3. Execute compatibility-safe API cleanups: **S4**, **S8**, **S10**, **S13** (stage-first, delete-later).
 
-1. **S5** — Consolidate write-path duplicates + D3
-2. **S2** — Replace `_coerce_bool_value` with `coerce_bool` + D1
-3. **S6** — Extract `table_ref_from_request` (in-place refactor, no callee impact)
-4. **S10** — Delete `create_strict_catalog` after `/cq calls` audit + D5
+### Wave 3 — Identity Unification and Deferred Deletions
 
-### Stream C — Structural Cleanups (require callee coordination)
-
-Execute S19 before D8; execute S4 after S19 to reduce MRO changes.
-
-1. **S19** — Create `adapt_session_context`; redirect 11 call sites + D8
-2. **S4** — Remove facade mixins from MRO + D2
-3. **S18** — Decompose `SessionFactory.build_config()` (pure refactor, no interface change)
-4. **S8** — Replace `_DDL_CATALOG_WARNING_STATE` with `ContextVar` + D4
-5. **S13** — Fix `IntrospectionCache.snapshot` CQS violation
-
-### Stream D — New Modules and Contracts
-
-These can proceed independently once Stream A is stable.
-
-1. **S14** — Create `delta_merge_types.py`; update imports + D7
-2. **S12** — Replace `Path.cwd()` fallbacks with `None`
-3. **S15** — Add `session_id` parameter to diagnostics bridge helpers
-4. **S16** — Decouple `fragment_telemetry` from OTel emission
-5. **S20** — Extend `datafusion_ext.pyi` stubs
+1. Execute identity unification in **S27** after Waves 0-2 are stable.
+2. Run decommission batches **D1**, **D3**, **D4**, **D6**, **D7**, **D8** immediately after prerequisites.
+3. Run deferred batches **D2**, **D5**, **D9**, **D10**, **D11**, **D12**, **D13** only after compatibility windows and parity tests.
 
 ---
 
 ## Implementation Checklist
 
 ### Pre-Work
-- [ ] Run `/cq calls create_strict_catalog` to enumerate callers before S10
-- [ ] Run `/cq calls cache_root` to enumerate facade mixin callers before S4
-- [ ] Run `/cq calls fragment_telemetry` to enumerate callers before S16
-- [ ] Run `/cq calls env_bool` to enumerate callers before S17 (audit `log_invalid` intent)
-- [ ] Run `/cq calls IntrospectionCache.snapshot` to enumerate callers before S13
-- [ ] Run `grep -n '_normalize_ctx\|getattr.*"ctx"' src/datafusion_engine` to confirm 11 Python call sites for S19
+- [ ] Run `/cq calls create_strict_catalog` before S10 implementation.
+- [ ] Run `/cq calls cache_root` before S4 migration.
+- [ ] Run `/cq calls IntrospectionCache.snapshot` before S13 compatibility migration.
+- [ ] Run `/cq calls fragment_telemetry` before S16 call-site updates.
+- [ ] Run `/cq calls env_bool` before S17 default change.
+- [ ] Run `/cq search planning_surface_manifest --in src/datafusion_engine --format summary` before S21.
+- [ ] Run `/cq search "__datafusion_table_provider__" --in rust/datafusion_python/python --format summary` before S23.
 
-### Stream A — Correctness Fixes
-- [ ] S1: Add `__post_init__` to `DeltaDeleteRequest` in `control_plane_types.py`
-- [ ] S1: Add test cases to `tests/unit/datafusion_engine/delta/test_control_plane_types.py`
-- [ ] S11: Remove module-level late import at line 499 of `extension_runtime.py`
-- [ ] S11: Convert `_register_udf_aliases` / `_register_udf_specs` usages to function-local imports
-- [ ] S11: Delete second `register_rust_udfs` definition (lines 502-531) — D6
-- [ ] S3: Change `BaseException` to `Exception` in `context_pool.py:_set_config_if_supported`
-- [ ] S3: Add `logger.warning` in `runtime_session.py:_build_session_runtime_from_context`
-- [ ] S9: Remove `Exception` from `_CACHE_SNAPSHOT_ERRORS` in `introspection.py`
-- [ ] S7: Rename `validate` to `action` in `RegistrationPhase` in `registry_facade.py`
-- [ ] S7: Update `RegistrationPhaseOrchestrator.run` to use `phase.action`
-- [ ] S7: Update all 6 `RegistrationPhase(validate=...)` call sites in `views/registration.py`
-- [ ] S17: Change `env_bool` `log_invalid` default from `False` to `True` in `env_utils.py`
-- [ ] S17: Update overloaded signatures for `env_bool` in `env_utils.py`
+### Scope Items
+- [ ] S1 — Fix DeltaDeleteRequest predicate empty-string guard.
+- [ ] S2 — Consolidate bool coercion via canonical `coerce_bool`.
+- [ ] S3 — Narrow `BaseException` and add UDF snapshot warning.
+- [ ] S4 — Stage facade mixin migration with compatibility wrappers.
+- [ ] S5 — Consolidate write-path duplicates.
+- [ ] S6 — Extract `table_ref` boilerplate helper.
+- [ ] S7 — Rename `RegistrationPhase.validate` to `action`.
+- [ ] S8 — Replace process-global warning state with lifecycle-owned state.
+- [ ] S9 — Remove bare `Exception` from `_CACHE_SNAPSHOT_ERRORS`.
+- [ ] S10 — Implement/deprecate strict catalog path without immediate symbol deletion.
+- [ ] S11 — Remove duplicate `register_rust_udfs` definition.
+- [ ] S12 — Replace `Path.cwd()` fallbacks with injectable defaults.
+- [ ] S13 — Add `refresh()` while keeping backward-compatible lazy snapshot behavior.
+- [ ] S14 — Relocate merge execution types to shared public module.
+- [ ] S15 — Add `session_id` parameter to diagnostics bridge helpers.
+- [ ] S16 — Decouple `fragment_telemetry` from OTel emission.
+- [ ] S17 — Change `env_bool` `log_invalid` default.
+- [ ] S18 — Decompose `SessionFactory.build_config()`.
+- [ ] S19 — Introduce `adapt_session_context()` and redirect call sites.
+- [ ] S20 — Extend `datafusion_ext.pyi` stubs.
+- [ ] S21 — Make Rust manifest canonical and wire parity path in Python.
+- [ ] S22 — Unify runtime policy parsing under typed contract.
+- [ ] S23 — Align provider Protocol signatures with session-aware FFI.
+- [ ] S24 — Replace explain stdout scraping with row-based capture.
+- [ ] S25 — Expand planning-env identity to object store/provider surfaces.
+- [ ] S26 — Add schema pushdown / adapter conformance tests.
+- [ ] S27 — Unify semantics fingerprints with canonical plan identity artifacts.
+- [ ] S28 — Enforce required listing-partition-inference key in identity contracts.
+- [ ] S29 — Align DML flow to provider-native semantics where feasible.
+- [ ] S30 — Co-migrate extract/semantics plan consumers.
 
-### Stream B — DRY Consolidation
-- [ ] S5: Delete `_RETRYABLE_DELTA_STREAM_ERROR_MARKERS` from `write_pipeline.py` — D3 partial
-- [ ] S5: Delete `_is_retryable_delta_stream_error` from `write_pipeline.py` — D3 partial
-- [ ] S5: Delete `_is_delta_observability_operation` from `write_pipeline.py` — D3 complete
-- [ ] S5: Add import of `is_retryable_delta_stream_error`, `is_delta_observability_operation` from `write_execution` in `write_pipeline.py`
-- [ ] S5: Update `delta_write_handler.py` to import observability helper from `write_execution`
-- [ ] S2: Add `from utils.value_coercion import coerce_bool` to `file_pruning.py`
-- [ ] S2: Replace `_coerce_bool_value(value)` call with `coerce_bool(value)` in `file_pruning.py`
-- [ ] S2: Delete `_coerce_bool_value` from `file_pruning.py` — D1
-- [ ] S6: Add `_HasTableRefFields` Protocol (TYPE_CHECKING) to `control_plane_types.py`
-- [ ] S6: Add `table_ref_from_request` function to `control_plane_types.py`
-- [ ] S6: Update all 16 `table_ref` property bodies to delegate to `table_ref_from_request`
-- [ ] S6: Export `table_ref_from_request` in module `__all__`
-- [ ] S10: Delete `create_strict_catalog` from `metadata.py` — D5
-- [ ] S10: Update all callers to use `create_default_catalog`
+### Decommission Batches
+- [ ] D1 — Remove `_coerce_bool_value`.
+- [ ] D2 — Remove runtime facade mixins after migration window.
+- [ ] D3 — Remove duplicate write-path retry/observability helpers.
+- [ ] D4 — Remove `_DDL_CATALOG_WARNING_STATE`.
+- [ ] D5 — Remove `create_strict_catalog` only after deprecation window (optional).
+- [ ] D6 — Remove second `register_rust_udfs` + late import.
+- [ ] D7 — Remove private merge symbols from `delta_read.py`.
+- [ ] D8 — Remove `_normalize_ctx` legacy helper.
+- [ ] D9 — Decommission Python-first planning-manifest primary path.
+- [ ] D10 — Remove legacy runtime-policy parsing helpers.
+- [ ] D11 — Remove provider no-arg compatibility fallback.
+- [ ] D12 — Remove stdout explain capture primary path.
+- [ ] D13 — Decommission bespoke semantics hash-first primary path.
 
-### Stream C — Structural Cleanups
-- [ ] S19: Create `src/datafusion_engine/session/adapter.py` with `adapt_session_context`
-- [ ] S19: Create `tests/unit/datafusion_engine/session/test_adapter.py`
-- [ ] S19: Redirect all 11 Python `.ctx` access sites to `adapt_session_context`
-- [ ] S19: Delete `_normalize_ctx` from `datafusion_ext.py` — D8
-- [ ] S4: Run `/cq calls cache_root` — enumerate and update all callers to `profile.io_ops.cache_root()`
-- [ ] S4: Remove `_RuntimeProfileIOFacadeMixin` from `runtime.py` MRO and `runtime_ops.py` — D2 partial
-- [ ] S4: Remove `_RuntimeProfileCatalogFacadeMixin` from `runtime.py` MRO and `runtime_ops.py` — D2 partial
-- [ ] S4: Remove `_RuntimeProfileDeltaFacadeMixin` from `runtime.py` MRO and `runtime_ops.py` — D2 complete
-- [ ] S18: Extract `_apply_catalog_config` private function in `context_pool.py`
-- [ ] S18: Extract `_apply_execution_config` private function in `context_pool.py`
-- [ ] S18: Extract `_apply_policy_config` private function in `context_pool.py`
-- [ ] S18: Reduce `SessionFactory.build_config()` to call the three sub-functions
-- [ ] S8: Add `import contextvars` to `runtime_extensions.py`
-- [ ] S8: Replace `_DDL_CATALOG_WARNING_STATE` dict with `_DDL_CATALOG_WARNING_EMITTED: contextvars.ContextVar[bool]` — D4
-- [ ] S8: Update read/write sites to use `.get()` / `.set()`
-- [ ] S13: Add `refresh()` method to `IntrospectionCache` in `introspection.py`
-- [ ] S13: Make `snapshot` property raise `RuntimeError` when `_snapshot is None`
-- [ ] S13: Update all callers identified by `/cq calls IntrospectionCache.snapshot`
-- [ ] S13: Add CQS test to `tests/unit/datafusion_engine/catalog/test_introspection_caches.py`
-
-### Stream D — New Modules and Contracts
-- [ ] S14: Create `src/storage/deltalake/delta_merge_types.py`
-- [ ] S14: Populate with `DeltaMergeExecutionState`, `DeltaMergeExecutionResult`, `normalize_commit_metadata`, `normalize_commit_metadata_key`
-- [ ] S14: Create `tests/unit/storage/deltalake/test_delta_merge_types.py`
-- [ ] S14: Update `delta_write.py` imports to reference `delta_merge_types`
-- [ ] S14: Remove private symbols from `delta_read.py` — D7
-- [ ] S12: Change `_DEFAULT_ARTIFACTS_ROOT` fallback to `None` in `artifact_store_constants.py`
-- [ ] S12: Change `_DEFAULT_CACHE_ROOT` fallback to `None` in `cache/inventory.py`
-- [ ] S12: Change `_DEFAULT_OBSERVABILITY_ROOT` fallback to `None` in `obs_table_manager.py`
-- [ ] S12: Update `observability_root()` to raise `ValueError` when both fallback and profile are `None`
-- [ ] S15: Add `session_id: str | None = None` to all bridge helpers in `diagnostics_bridge.py`
-- [ ] S15: Update internal `ensure_recorder_sink` calls to use `session_id or _OBS_SESSION_ID`
-- [ ] S16: Run `/cq calls fragment_telemetry` to identify callers
-- [ ] S16: Remove `set_scan_telemetry` call from `fragment_telemetry` in `scan_telemetry.py`
-- [ ] S16: Update callers that need OTel emission to call `set_scan_telemetry` explicitly
-- [ ] S16: Create `tests/unit/obs/test_scan_telemetry_pure.py`
-- [ ] S20: Add 7 missing function stubs to `src/datafusion_ext.pyi`
-- [ ] S20: Add smoke test to `tests/unit/datafusion_engine/extensions/test_required_entrypoints.py`
-
-### Quality Gate
-- [ ] `uv run ruff format`
-- [ ] `uv run ruff check --fix`
-- [ ] `uv run pyrefly check`
-- [ ] `uv run pyright`
-- [ ] `uv run pytest -q -m "not e2e"`
+### Validation
+- [ ] Run canonical quality gate: `uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright`.
+- [ ] Run targeted pytest suites for changed scopes (including Rust bridge contract tests where applicable).

@@ -24,6 +24,7 @@ class RunExtractionRequestV1(msgspec.Struct, frozen=True):
     tree_sitter_enabled: bool = True
     max_workers: int = 6
     options: ExtractionRunOptions | Mapping[str, object] | None = None
+    execution_bundle_override: object | None = None
 
 
 # Canonical semantic input -> preferred extraction dataset candidates.

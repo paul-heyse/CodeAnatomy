@@ -629,16 +629,12 @@ impl PySessionContext {
     }
 
     /// Register a table provider under the given table name.
-    #[allow(deprecated)]
-    #[deprecated(
-        note = "Use register_table(name, provider) for session-aware provider registration."
-    )]
     pub fn register_table_provider(
         &self,
         name: &str,
         provider: Bound<'_, PyAny>,
     ) -> PyDataFusionResult<()> {
-        // Deprecated: use `register_table` instead
+        // Backward-compatible alias for Python callers; prefer `register_table`.
         self.register_table(name, provider)
     }
 

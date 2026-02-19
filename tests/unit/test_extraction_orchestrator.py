@@ -29,8 +29,14 @@ def _wire_test_doubles(
         "file_line_index_v1": _sample_table("line_index"),
     }
 
-    def _run_repo_scan(_repo_root: Path, *, options: object) -> dict[str, pa.Table]:
+    def _run_repo_scan(
+        _repo_root: Path,
+        *,
+        options: object,
+        execution_bundle: object | None = None,
+    ) -> dict[str, pa.Table]:
         _ = options
+        _ = execution_bundle
         calls.append("repo_scan")
         return repo_scan_outputs
 
@@ -39,15 +45,33 @@ def _wire_test_doubles(
         assert isinstance(repo_files, pa.Table)
         return stage1_extractors
 
-    def _run_python_imports(_delta_locations: dict[str, str]) -> pa.Table:
+    def _run_python_imports(
+        _delta_locations: dict[str, str],
+        *,
+        execution_bundle: object | None = None,
+    ) -> pa.Table:
+        _ = execution_bundle
         calls.append("python_imports")
         return _sample_table("python_imports")
 
-    def _run_python_external(_delta_locations: dict[str, str], _repo_root: Path) -> pa.Table:
+    def _run_python_external(
+        _delta_locations: dict[str, str],
+        _repo_root: Path,
+        *,
+        execution_bundle: object | None = None,
+    ) -> pa.Table:
+        _ = execution_bundle
         calls.append("python_external")
         return _sample_table("python_external")
 
-    def _write_delta(_table: pa.Table, location: Path, _name: str) -> str:
+    def _write_delta(
+        _table: pa.Table,
+        location: Path,
+        _name: str,
+        *,
+        write_ctx: object | None = None,
+    ) -> str:
+        _ = write_ctx
         return str(location)
 
     def _noop(*_args: object, **_kwargs: object) -> None:
@@ -61,6 +85,7 @@ def _wire_test_doubles(
     monkeypatch.setattr(orchestrator_mod, "_run_python_imports", _run_python_imports)
     monkeypatch.setattr(orchestrator_mod, "_run_python_external", _run_python_external)
     monkeypatch.setattr(orchestrator_mod, "_write_delta", _write_delta)
+    monkeypatch.setattr(orchestrator_mod, "_record_stage_plan_artifact", _noop)
     monkeypatch.setattr(orchestrator_mod, "stage_span", _stage_span)
     monkeypatch.setattr(orchestrator_mod, "record_error", _noop)
     monkeypatch.setattr(orchestrator_mod, "record_stage_duration", _noop)

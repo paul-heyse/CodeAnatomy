@@ -9,9 +9,11 @@ from typing import Literal, cast
 
 from extract.coordination.context import (
     FileContext,
-    SpanSpec,
     attrs_map,
-    span_dict,
+)
+from extract.coordination.entry_point import (
+    run_extract_entry_point,
+    run_extract_plan_entry_point,
 )
 from extract.coordination.line_offsets import LineOffsets
 from extract.extractors.ast.setup import (
@@ -21,6 +23,7 @@ from extract.extractors.ast.visitors import (
     AstLimitError,
 )
 from extract.infrastructure.schema_cache import ast_files_fingerprint
+from extract.row_builder import SpanTemplateSpec, make_span_spec_dict
 
 AST_LINE_BASE = 1
 AST_COL_UNIT = "byte"
@@ -88,7 +91,7 @@ def _span_spec_from_node(
     node: ast.AST,
     *,
     line_offsets: LineOffsets | None = None,
-) -> SpanSpec:
+) -> SpanTemplateSpec:
     lineno = _maybe_int(getattr(node, "lineno", None))
     col_offset = _maybe_int(getattr(node, "col_offset", None))
     end_lineno = _maybe_int(getattr(node, "end_lineno", None))
@@ -103,7 +106,7 @@ def _span_spec_from_node(
         if start_offset is not None and end_offset is not None:
             byte_start = start_offset
             byte_len = max(0, end_offset - start_offset)
-    return SpanSpec(
+    return SpanTemplateSpec(
         start_line0=start_line0,
         start_col=col_offset,
         end_line0=end_line0,
@@ -147,7 +150,7 @@ def _docstring_row(
         "owner_kind": type(node).__name__,
         "owner_name": _node_name(node),
         "docstring": docstring,
-        "span": span_dict(_span_spec_from_node(literal, line_offsets=line_offsets)),
+        "span": make_span_spec_dict(_span_spec_from_node(literal, line_offsets=line_offsets)),
         "source": segment,
         "attrs": attrs_map({}),
     }
@@ -230,7 +233,7 @@ def _def_row(
         "parent_ast_id": parent_ast_id,
         "kind": type(node).__name__,
         "name": _node_name(node),
-        "span": span_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
+        "span": make_span_spec_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
         "attrs": attrs_map(attrs),
     }
 
@@ -255,7 +258,7 @@ def _import_rows(
         names = node.names
     else:
         return rows
-    span = span_dict(_span_spec_from_node(node, line_offsets=line_offsets))
+    span = make_span_spec_dict(_span_spec_from_node(node, line_offsets=line_offsets))
     for idx, alias in enumerate(names):
         rows.append(
             {
@@ -297,7 +300,7 @@ def _call_row(
         "parent_ast_id": parent_ast_id,
         "func_kind": type(func).__name__,
         "func_name": _node_name(func),
-        "span": span_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
+        "span": make_span_spec_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
         "attrs": attrs_map(attrs),
     }
 
@@ -314,8 +317,8 @@ def _syntax_error_row(exc: SyntaxError) -> dict[str, object]:
     return {
         "error_type": "SyntaxError",
         "message": str(exc),
-        "span": span_dict(
-            SpanSpec(
+        "span": make_span_spec_dict(
+            SpanTemplateSpec(
                 start_line0=lineno - AST_LINE_BASE if lineno is not None else None,
                 start_col=offset,
                 end_line0=end_lineno - AST_LINE_BASE if end_lineno is not None else None,
@@ -652,7 +655,7 @@ def _node_row(node: ast.AST, *, ctx: AstNodeContext) -> dict[str, object]:
         "kind": type(node).__name__,
         "name": _node_name(node),
         "value": _node_value_repr(node),
-        "span": span_dict(_span_spec_from_node(node, line_offsets=ctx.line_offsets)),
+        "span": make_span_spec_dict(_span_spec_from_node(node, line_offsets=ctx.line_offsets)),
         "attrs": attrs_map(node_attr_values),
     }
 
@@ -741,7 +744,7 @@ def _append_type_ignore(
         {
             "ast_id": ast_id,
             "tag": tag if isinstance(tag, str) else None,
-            "span": span_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
+            "span": make_span_spec_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
             "attrs": attrs_map({}),
         }
     )
@@ -854,6 +857,34 @@ def _parse_and_walk(
     return walk, error_rows
 
 
+def _run_ast_parse_walk(
+    file_ctx: FileContext,
+    *,
+    options: AstExtractOptions,
+) -> tuple[_AstWalkResult | None, list[dict[str, object]]]:
+    """Run AST parse and walk without caching side effects.
+
+    Returns:
+        tuple[_AstWalkResult | None, list[dict[str, object]]]: Walk result and parse/limit errors.
+    """
+    text = text_from_file_ctx(file_ctx)
+    if text is None:
+        return None, []
+    line_offsets = line_offsets_from_file_ctx(file_ctx)
+    max_nodes, error_rows = _limit_errors(file_ctx, text=text, options=options)
+    walk: _AstWalkResult | None = None
+    if not error_rows:
+        walk, parse_errors = _parse_and_walk(
+            text,
+            filename=str(file_ctx.path),
+            options=options,
+            max_nodes=max_nodes,
+            line_offsets=line_offsets,
+        )
+        error_rows.extend(parse_errors)
+    return walk, error_rows
+
+
 def _extract_ast_for_context(
     file_ctx: FileContext,
     *,
@@ -870,30 +901,15 @@ def _extract_ast_for_context(
         cached = cache_get(cache, key=cache_key_str, default=None)
         if isinstance(cached, _AstWalkResult):
             return _ast_row_from_walk(file_ctx, options=options, walk=cached, errors=[])
-
-    def _build_row() -> dict[str, object] | None:
-        text = text_from_file_ctx(file_ctx)
-        if text is None:
-            return None
-        line_offsets = line_offsets_from_file_ctx(file_ctx)
-        max_nodes, error_rows = _limit_errors(file_ctx, text=text, options=options)
-        walk: _AstWalkResult | None = None
-        if not error_rows:
-            walk, parse_errors = _parse_and_walk(
-                text,
-                filename=str(file_ctx.path),
-                options=options,
-                max_nodes=max_nodes,
-                line_offsets=line_offsets,
-            )
-            error_rows.extend(parse_errors)
-            if (
-                use_cache
-                and cache is not None
-                and cache_key_str is not None
-                and walk is not None
-                and not error_rows
-            ):
+    walk: _AstWalkResult | None = None
+    error_rows: list[dict[str, object]] = []
+    if use_cache and cache_key_str is not None:
+        with cache_lock(cache, key=cache_key_str):
+            cached = cache_get(cache, key=cache_key_str, default=None)
+            if isinstance(cached, _AstWalkResult):
+                return _ast_row_from_walk(file_ctx, options=options, walk=cached, errors=[])
+            walk, error_rows = _run_ast_parse_walk(file_ctx, options=options)
+            if cache is not None and walk is not None and not error_rows:
                 cache_set(
                     cache,
                     key=cache_key_str,
@@ -903,15 +919,11 @@ def _extract_ast_for_context(
                         tag=options.repo_id,
                     ),
                 )
-        return _ast_row_from_walk(file_ctx, options=options, walk=walk, errors=error_rows)
-
-    if use_cache and cache_key_str is not None:
-        with cache_lock(cache, key=cache_key_str):
-            cached = cache_get(cache, key=cache_key_str, default=None)
-            if isinstance(cached, _AstWalkResult):
-                return _ast_row_from_walk(file_ctx, options=options, walk=cached, errors=[])
-            return _build_row()
-    return _build_row()
+    else:
+        walk, error_rows = _run_ast_parse_walk(file_ctx, options=options)
+    if walk is None and not error_rows:
+        return None
+    return _ast_row_from_walk(file_ctx, options=options, walk=walk, errors=error_rows)
 
 
 def _extract_ast_for_row(
@@ -937,31 +949,31 @@ def extract_ast(
         Tables of AST nodes, edges, and errors.
     """
     normalized_options = normalize_options("ast", options, AstExtractOptions)
-    exec_context = context or ExtractExecutionContext()
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    determinism_tier = exec_context.determinism_tier()
-    normalize = ExtractNormalizeOptions(options=normalized_options)
-    plans = extract_ast_plans(
+    return run_extract_entry_point(
+        "ast",
+        "ast_files_v1",
         repo_files,
-        options=normalized_options,
-        context=exec_context,
+        normalized_options,
+        context=context,
+        plan_builder=_build_ast_entry_plan,
     )
-    table = cast(
-        "TableLike",
-        materialize_extract_plan(
-            "ast_files_v1",
-            plans["ast_files"],
-            runtime_profile=runtime_profile,
-            determinism_tier=determinism_tier,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                apply_post_kernels=True,
-            ),
-        ),
+
+
+def _build_ast_entry_plan(
+    repo_files: TableLike,
+    options: AstExtractOptions,
+    exec_context: ExtractExecutionContext,
+    session: ExtractSession,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DataFusionPlanArtifact:
+    plans = _build_ast_plans(
+        repo_files,
+        options,
+        exec_context,
+        session,
+        runtime_profile,
     )
-    return ExtractResult(table=table, extractor_name="ast")
+    return plans["ast_files"]
 
 
 def extract_ast_plans(
@@ -978,19 +990,30 @@ def extract_ast_plans(
         Plan bundle keyed by ``ast_files``.
     """
     normalized_options = normalize_options("ast", options, AstExtractOptions)
-    exec_context = context or ExtractExecutionContext()
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    normalize = ExtractNormalizeOptions(options=normalized_options)
-    batch_size = _resolve_batch_size(normalized_options)
+    return run_extract_plan_entry_point(
+        repo_files,
+        normalized_options,
+        context=context,
+        plan_builder=_build_ast_plans,
+    )
+
+
+def _build_ast_plans(
+    repo_files: TableLike,
+    options: AstExtractOptions,
+    exec_context: ExtractExecutionContext,
+    session: ExtractSession,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> dict[str, DataFusionPlanArtifact]:
+    normalize = ExtractNormalizeOptions(options=options)
+    batch_size = _resolve_batch_size(options)
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
     rows: list[dict[str, object]] | None = None
     request = _AstRowRequest(
         repo_files=repo_files,
         file_contexts=exec_context.file_contexts,
         scope_manifest=exec_context.scope_manifest,
-        options=normalized_options,
+        options=options,
         runtime_profile=runtime_profile,
     )
     if batch_size is None:
@@ -998,7 +1021,7 @@ def extract_ast_plans(
             repo_files,
             file_contexts=exec_context.file_contexts,
             scope_manifest=exec_context.scope_manifest,
-            options=normalized_options,
+            options=options,
             runtime_profile=runtime_profile,
         )
     else:

@@ -10,6 +10,7 @@ fn planning_surface_manifest_carries_typed_policy() {
         expr_planner_names: vec!["codeanatomy_domain".to_string()],
         relation_planner_enabled: true,
         type_planner_enabled: true,
+        table_factory_allowlist: vec!["delta".to_string()],
     };
     let mut spec = PlanningSurfaceSpec::from_policy(policy.clone());
     spec.enable_default_features = true;
@@ -27,6 +28,7 @@ fn planning_surface_manifest_v2_projection_is_stable() {
         ],
         relation_planner_enabled: true,
         type_planner_enabled: true,
+        table_factory_allowlist: vec!["delta".to_string()],
     };
     let spec = PlanningSurfaceSpec::from_policy(policy);
     let v2 = manifest_v2_from_surface(&spec);

@@ -7,6 +7,7 @@ fn planning_surface_spec_from_policy_preserves_flags() {
         expr_planner_names: vec!["codeanatomy_domain".to_string()],
         relation_planner_enabled: true,
         type_planner_enabled: true,
+        table_factory_allowlist: vec!["delta".to_string()],
     };
     let spec = PlanningSurfaceSpec::from_policy(policy.clone());
     let typed = spec.typed_policy.expect("typed policy");

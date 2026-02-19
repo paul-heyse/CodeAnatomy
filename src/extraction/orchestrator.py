@@ -8,15 +8,14 @@ which are written to Delta storage.
 from __future__ import annotations
 
 import importlib
-import inspect
 import logging
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import msgspec
 
@@ -44,6 +43,7 @@ class ExtractionResult(msgspec.Struct, frozen=True):
     semantic_input_locations: dict[str, str]
     errors: list[dict[str, object]]
     timing: dict[str, float]
+    plan_artifacts: dict[str, dict[str, object]] = msgspec.field(default_factory=dict)
 
 
 @dataclass
@@ -52,6 +52,7 @@ class _ExtractionRunState:
     semantic_input_locations: dict[str, str]
     errors: list[dict[str, object]]
     timing: dict[str, float]
+    plan_artifacts: dict[str, dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class _Stage1ExecutionRequest:
     scip_identity_overrides: object | None
     tree_sitter_enabled: bool
     max_workers: int
+    materialization_mode: str
 
 
 @dataclass(frozen=True)
@@ -118,13 +120,14 @@ def run_extraction(request: RunExtractionRequestV1) -> ExtractionResult:
         semantic_input_locations={},
         errors=[],
         timing={},
+        plan_artifacts={},
     )
     resolved_options = normalize_extraction_options(
         request.options,
         default_tree_sitter_enabled=request.tree_sitter_enabled,
         default_max_workers=request.max_workers,
     )
-    execution_bundle = _build_extract_execution_bundle()
+    execution_bundle = _resolve_execution_bundle(request)
     extraction_start = time.monotonic()
     repo_files = _run_repo_scan_with_fallback(
         repo_root=repo_root,
@@ -145,18 +148,21 @@ def run_extraction(request: RunExtractionRequestV1) -> ExtractionResult:
             scip_identity_overrides=request.scip_identity_overrides,
             tree_sitter_enabled=resolved_options.tree_sitter_enabled,
             max_workers=resolved_options.max_workers,
+            materialization_mode=getattr(resolved_options, "materialization_mode", "delta"),
         ),
         state=state,
     )
     _run_python_imports_stage(
         extract_dir=extract_dir,
         execution_bundle=execution_bundle,
+        materialization_mode=getattr(resolved_options, "materialization_mode", "delta"),
         state=state,
     )
     _run_python_external_stage(
         repo_root=repo_root,
         extract_dir=extract_dir,
         execution_bundle=execution_bundle,
+        materialization_mode=getattr(resolved_options, "materialization_mode", "delta"),
         state=state,
     )
     _finalize_extraction_state(state=state, extraction_start=extraction_start)
@@ -169,6 +175,7 @@ def _materialize_extraction_result(state: _ExtractionRunState) -> ExtractionResu
         semantic_input_locations=state.semantic_input_locations,
         errors=state.errors,
         timing=state.timing,
+        plan_artifacts=state.plan_artifacts,
     )
 
 
@@ -190,23 +197,60 @@ def _build_extract_execution_bundle(*, profile: str = "default") -> _ExtractExec
     )
 
 
-@cache
-def _delta_write_ctx() -> SessionContext:
-    """Return a cached native extraction session context for Delta writes."""
+def _resolve_execution_bundle(request: RunExtractionRequestV1) -> _ExtractExecutionBundle:
+    """Resolve runtime/session bundle, allowing explicit tests overrides.
+
+    Returns:
+        _ExtractExecutionBundle: Bundle used by extraction stages.
+
+    Raises:
+        TypeError: Raised when ``execution_bundle_override`` has the wrong type.
+    """
+    override = request.execution_bundle_override
+    if isinstance(override, _ExtractExecutionBundle):
+        return override
+    if override is not None:
+        msg = "execution_bundle_override must be an _ExtractExecutionBundle instance."
+        raise TypeError(msg)
+    return _build_extract_execution_bundle()
+
+
+def _default_delta_write_ctx() -> SessionContext:
+    """Build a native extraction session context for Delta writes.
+
+    Returns:
+        SessionContext: Context used for default Delta materialization writes.
+    """
     from extraction.rust_session_bridge import build_extraction_session, extraction_session_payload
 
     return build_extraction_session(extraction_session_payload())
+
+
+_DELTA_WRITE_CTX: SessionContext | None = None
+
+
+def _get_delta_write_ctx() -> SessionContext:
+    global _DELTA_WRITE_CTX  # noqa: PLW0603 - module-level lazy init by design
+    if _DELTA_WRITE_CTX is None:
+        _DELTA_WRITE_CTX = _default_delta_write_ctx()
+    return _DELTA_WRITE_CTX
 
 
 def _record_repo_scan_outputs(
     *,
     outputs: dict[str, pa.Table],
     extract_dir: Path,
+    materialization_mode: str,
     state: _ExtractionRunState,
 ) -> pa.Table:
     repo_files = _require_repo_scan_table(outputs, "repo_files_v1")
     for name, table in sorted(outputs.items()):
-        state.delta_locations[name] = _write_delta(table, extract_dir / name, name)
+        state.delta_locations[name] = _materialize_stage_output(
+            table=table,
+            location=extract_dir / name,
+            name=name,
+            mode=materialization_mode,
+        )
     return repo_files
 
 
@@ -226,25 +270,30 @@ def _run_repo_scan_with_fallback(
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "repo_scan"},
         ):
-            scan_fn = _run_repo_scan
-            if "execution_bundle" in inspect.signature(scan_fn).parameters:
-                outputs = scan_fn(
-                    repo_root,
-                    options=options,
-                    execution_bundle=execution_bundle,
-                )
-            else:
-                outputs = scan_fn(
-                    repo_root,
-                    options=options,
-                )
+            outputs = _run_repo_scan(
+                repo_root,
+                options=options,
+                execution_bundle=execution_bundle,
+            )
         state.timing["repo_scan"] = time.monotonic() - t0
-        return _record_repo_scan_outputs(outputs=outputs, extract_dir=extract_dir, state=state)
+        repo_files = _record_repo_scan_outputs(
+            outputs=outputs,
+            extract_dir=extract_dir,
+            materialization_mode=getattr(options, "materialization_mode", "delta"),
+            state=state,
+        )
+        _record_stage_plan_artifact(
+            stage_name="repo_scan",
+            execution_bundle=execution_bundle,
+            state=state,
+        )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         state.timing["repo_scan"] = time.monotonic() - t0
         state.errors.append({"extractor": "repo_scan", "error": str(exc)})
         record_error("extraction", type(exc).__name__)
         logger.warning("repo_scan failed: %s", exc)
+    else:
+        return repo_files
     return _run_repo_scan_fallback_stage(
         repo_root=repo_root,
         extract_dir=extract_dir,
@@ -271,7 +320,10 @@ def _run_repo_scan_fallback_stage(
             outputs = _run_repo_scan_fallback(repo_root, options=options)
         state.timing["repo_scan_fallback"] = time.monotonic() - t0
         repo_files = _record_repo_scan_outputs(
-            outputs=outputs, extract_dir=extract_dir, state=state
+            outputs=outputs,
+            extract_dir=extract_dir,
+            materialization_mode=getattr(options, "materialization_mode", "delta"),
+            state=state,
         )
         logger.warning(
             "Using non-git repo scan fallback with %d discovered files",
@@ -299,9 +351,12 @@ def _run_parallel_stage1_extractors(
         scip_index_config=request.scip_index_config,
         tree_sitter_enabled=request.tree_sitter_enabled,
     )
-    stage_start = time.monotonic()
     with ThreadPoolExecutor(max_workers=request.max_workers) as executor:
-        futures = {name: executor.submit(fn) for name, fn in extractors.items()}
+        futures = {}
+        submission_times: dict[str, float] = {}
+        for name, fn in extractors.items():
+            submission_times[name] = time.monotonic()
+            futures[name] = executor.submit(fn)
         for name, future in futures.items():
             try:
                 with stage_span(
@@ -311,14 +366,20 @@ def _run_parallel_stage1_extractors(
                     attributes={"extractor": name},
                 ):
                     result_table = future.result()
-                state.timing[name] = time.monotonic() - stage_start
-                state.delta_locations[name] = _write_delta(
-                    result_table,
-                    request.extract_dir / name,
-                    name,
+                state.timing[name] = time.monotonic() - submission_times[name]
+                state.delta_locations[name] = _materialize_stage_output(
+                    table=result_table,
+                    location=request.extract_dir / name,
+                    name=name,
+                    mode=request.materialization_mode,
+                )
+                _record_stage_plan_artifact(
+                    stage_name=name,
+                    execution_bundle=request.execution_bundle,
+                    state=state,
                 )
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
-                state.timing[name] = time.monotonic() - stage_start
+                state.timing[name] = time.monotonic() - submission_times[name]
                 state.errors.append({"extractor": name, "error": str(exc)})
                 record_error("extraction", type(exc).__name__)
                 logger.warning("Extractor %s failed: %s", name, exc)
@@ -328,6 +389,7 @@ def _run_python_imports_stage(
     *,
     extract_dir: Path,
     execution_bundle: _ExtractExecutionBundle,
+    materialization_mode: str,
     state: _ExtractionRunState,
 ) -> None:
     t0 = time.monotonic()
@@ -338,19 +400,21 @@ def _run_python_imports_stage(
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "python_imports"},
         ):
-            imports_fn = _run_python_imports
-            if "execution_bundle" in inspect.signature(imports_fn).parameters:
-                python_imports = imports_fn(
-                    state.delta_locations,
-                    execution_bundle=execution_bundle,
-                )
-            else:
-                python_imports = imports_fn(state.delta_locations)
+            python_imports = _run_python_imports(
+                state.delta_locations,
+                execution_bundle=execution_bundle,
+            )
         state.timing["python_imports"] = time.monotonic() - t0
-        state.delta_locations["python_imports"] = _write_delta(
-            python_imports,
-            extract_dir / "python_imports",
-            "python_imports",
+        state.delta_locations["python_imports"] = _materialize_stage_output(
+            table=python_imports,
+            location=extract_dir / "python_imports",
+            name="python_imports",
+            mode=materialization_mode,
+        )
+        _record_stage_plan_artifact(
+            stage_name="python_imports",
+            execution_bundle=execution_bundle,
+            state=state,
         )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         state.timing["python_imports"] = time.monotonic() - t0
@@ -364,6 +428,7 @@ def _run_python_external_stage(
     repo_root: Path,
     extract_dir: Path,
     execution_bundle: _ExtractExecutionBundle,
+    materialization_mode: str,
     state: _ExtractionRunState,
 ) -> None:
     t0 = time.monotonic()
@@ -374,20 +439,22 @@ def _run_python_external_stage(
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "python_external"},
         ):
-            external_fn = _run_python_external
-            if "execution_bundle" in inspect.signature(external_fn).parameters:
-                python_external = external_fn(
-                    state.delta_locations,
-                    repo_root,
-                    execution_bundle=execution_bundle,
-                )
-            else:
-                python_external = external_fn(state.delta_locations, repo_root)
+            python_external = _run_python_external(
+                state.delta_locations,
+                repo_root,
+                execution_bundle=execution_bundle,
+            )
         state.timing["python_external"] = time.monotonic() - t0
-        state.delta_locations["python_external_interfaces"] = _write_delta(
-            python_external,
-            extract_dir / "python_external_interfaces",
-            "python_external_interfaces",
+        state.delta_locations["python_external_interfaces"] = _materialize_stage_output(
+            table=python_external,
+            location=extract_dir / "python_external_interfaces",
+            name="python_external_interfaces",
+            mode=materialization_mode,
+        )
+        _record_stage_plan_artifact(
+            stage_name="python_external_interfaces",
+            execution_bundle=execution_bundle,
+            state=state,
         )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         state.timing["python_external"] = time.monotonic() - t0
@@ -404,7 +471,62 @@ def _finalize_extraction_state(*, state: _ExtractionRunState, extraction_start: 
     record_stage_duration("extraction", extraction_elapsed, status=extraction_status)
 
 
-def _write_delta(table: pa.Table, location: Path, name: str) -> str:
+def _record_stage_plan_artifact(
+    *,
+    stage_name: str,
+    execution_bundle: _ExtractExecutionBundle,
+    state: _ExtractionRunState,
+) -> None:
+    from datafusion_engine.plan.bundle_assembly import extraction_plan_artifact_envelope
+
+    try:
+        artifact = extraction_plan_artifact_envelope(
+            execution_bundle.extract_session.df_ctx,
+            session_runtime=execution_bundle.extract_session.session_runtime,
+            stage=stage_name,
+        )
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return
+    if isinstance(artifact, Mapping):
+        state.plan_artifacts[stage_name] = dict(artifact)
+
+
+def _materialize_stage_output(
+    *,
+    table: pa.Table,
+    location: Path,
+    name: str,
+    mode: str,
+    write_ctx: SessionContext | None = None,
+) -> str:
+    """Materialize stage output according to explicit policy.
+
+    Returns:
+        str: Materialized table location URI.
+
+    Raises:
+        ValueError: Raised when ``mode`` is not a supported materialization mode.
+    """
+    from datafusion_engine.io.delta_write_handler import (
+        resolve_extraction_materialization_mode,
+    )
+
+    resolved_mode = resolve_extraction_materialization_mode(mode)
+    if resolved_mode == "delta":
+        return _write_delta(table, location, name, write_ctx=write_ctx)
+    if resolved_mode == "datafusion_copy":
+        return _write_datafusion_copy(table, location, name, write_ctx=write_ctx)
+    msg = f"Unsupported extraction materialization mode: {resolved_mode}"
+    raise ValueError(msg)
+
+
+def _write_delta(
+    table: pa.Table,
+    location: Path,
+    name: str,
+    *,
+    write_ctx: SessionContext | None = None,
+) -> str:
     """Write an Arrow table to a Delta table location.
 
     Parameters
@@ -438,8 +560,62 @@ def _write_delta(table: pa.Table, location: Path, name: str) -> str:
             storage_options=None,
         ),
     )
-    write_transaction(_delta_write_ctx(), request=request)
+    ctx = write_ctx or _get_delta_write_ctx()
+    write_transaction(ctx, request=request)
     logger.info("Wrote %d rows to %s at %s", table.num_rows, name, loc_str)
+    return loc_str
+
+
+def _write_datafusion_copy(
+    table: pa.Table,
+    location: Path,
+    name: str,
+    *,
+    write_ctx: SessionContext | None = None,
+) -> str:
+    """Write an Arrow table through DataFusion `COPY ... TO` parquet.
+
+    Returns:
+        str: Materialized parquet directory path.
+
+    Raises:
+        ValueError: Raised when COPY execution does not return a DataFrame.
+        TypeError: Raised when COPY result does not expose callable ``collect``.
+    """
+    from contextlib import suppress
+
+    from datafusion import SQLOptions
+
+    from datafusion_engine.io.ingest import datafusion_from_arrow
+    from datafusion_engine.session.helpers import deregister_table
+
+    location.mkdir(parents=True, exist_ok=True)
+    loc_str = str(location)
+    ctx = write_ctx or _get_delta_write_ctx()
+    temp_view = f"__extract_copy_{name}_{uuid4().hex}"
+    datafusion_from_arrow(ctx, name=temp_view, value=table)
+    try:
+        escaped_location = loc_str.replace("'", "''")
+        sql = f"COPY (SELECT * FROM {temp_view}) TO '{escaped_location}' STORED AS PARQUET"
+        sql_with_options = getattr(ctx, "sql_with_options", None)
+        if callable(sql_with_options):
+            allow_statements = True
+            options = SQLOptions().with_allow_statements(allow_statements)
+            result = sql_with_options(sql, options)
+        else:
+            result = ctx.sql(sql)
+        if result is None:
+            msg = "COPY materialization did not return a DataFusion DataFrame."
+            raise ValueError(msg)
+        collect = getattr(result, "collect", None)
+        if not callable(collect):
+            msg = "COPY materialization did not return a collect-capable DataFusion DataFrame."
+            raise TypeError(msg)
+        collect()
+    finally:
+        with suppress(KeyError, RuntimeError, TypeError, ValueError):
+            deregister_table(ctx, temp_view)
+    logger.info("Wrote %d rows to parquet via COPY for %s at %s", table.num_rows, name, loc_str)
     return loc_str
 
 
@@ -932,9 +1108,14 @@ def _load_delta_table(location: str | None) -> pa.Table | None:
         return None
 
     import deltalake
+    import pyarrow.dataset as ds
 
-    delta_table = deltalake.DeltaTable(location)
-    return delta_table.to_pyarrow_table()
+    location_path = Path(location)
+    if (location_path / "_delta_log").exists():
+        delta_table = deltalake.DeltaTable(location)
+        return delta_table.to_pyarrow_table()
+    # `datafusion_copy` materialization stores parquet directly at the stage location.
+    return ds.dataset(location, format="parquet").to_table()
 
 
 def _coerce_to_table(value: object) -> pa.Table:

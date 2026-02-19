@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from serde_artifacts import DeltaInputPin, PlanArtifacts
 
-PLAN_IDENTITY_PAYLOAD_VERSION = 4
+PLAN_IDENTITY_PAYLOAD_VERSION = 5
 
 
 def _delta_inputs_payload(
@@ -106,6 +106,13 @@ def plan_identity_payload(inputs: PlanIdentityInputs) -> Mapping[str, object]:
     df_settings_entries = tuple(
         sorted((str(key), str(value)) for key, value in inputs.artifacts.df_settings.items())
     )
+    planning_env_snapshot = inputs.artifacts.planning_env_snapshot
+    listing_partition_inference = str(
+        inputs.artifacts.df_settings.get(
+            "datafusion.execution.listing_table_factory_infer_partitions",
+            "",
+        )
+    )
     return {
         "version": PLAN_IDENTITY_PAYLOAD_VERSION,
         "plan_fingerprint": inputs.plan_fingerprint,
@@ -115,7 +122,12 @@ def plan_identity_payload(inputs: PlanIdentityInputs) -> Mapping[str, object]:
         "required_rewrite_tags": tuple(sorted(inputs.required_rewrite_tags)),
         "domain_planner_names": tuple(sorted(inputs.artifacts.domain_planner_names)),
         "df_settings_entries": df_settings_entries,
+        "listing_partition_inference": listing_partition_inference,
         "planning_env_hash": inputs.artifacts.planning_env_hash,
+        "planning_surface_policy_version": planning_env_snapshot.get(
+            "planning_surface_policy_version"
+        ),
+        "planning_surface_policy_hash": planning_env_snapshot.get("planning_surface_policy_hash"),
         "rulepack_hash": inputs.artifacts.rulepack_hash,
         "information_schema_hash": inputs.artifacts.information_schema_hash,
         "delta_inputs": tuple(_delta_inputs_payload(inputs.delta_inputs)),

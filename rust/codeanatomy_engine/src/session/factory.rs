@@ -9,7 +9,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
+use datafusion::execution::cache::cache_manager::CacheManagerConfig;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::FairSpillPool;
@@ -17,10 +19,11 @@ use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::Result;
+use datafusion_ext::physical_rules::CodeAnatomyPhysicalConfig;
 
 use crate::compiler::plan_codec;
 use crate::executor::tracing as engine_tracing;
-use crate::executor::warnings::RunWarning;
+use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use crate::rules::registry::CpgRuleSet;
 use crate::session::capture::{planning_config_snapshot, GovernancePolicy};
 use crate::spec::runtime::TracingConfig;
@@ -65,8 +68,71 @@ pub struct SessionBuildParams {
 pub struct SessionBuildOverrides {
     pub enable_function_factory: bool,
     pub enable_domain_planner: bool,
+    pub enable_relation_planner: bool,
     pub enable_delta_codec: bool,
     pub extension_governance_policy: GovernancePolicy,
+}
+
+fn parse_cache_ttl_seconds(value: &str) -> Option<u64> {
+    let trimmed = value.trim().to_ascii_lowercase();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        return trimmed.parse::<u64>().ok();
+    }
+    let (number, multiplier) = if let Some(v) = trimmed.strip_suffix('s') {
+        (v, 1_u64)
+    } else if let Some(v) = trimmed.strip_suffix('m') {
+        (v, 60_u64)
+    } else if let Some(v) = trimmed.strip_suffix('h') {
+        (v, 60_u64 * 60_u64)
+    } else if let Some(v) = trimmed.strip_suffix('d') {
+        (v, 24_u64 * 60_u64 * 60_u64)
+    } else {
+        return None;
+    };
+    number.parse::<u64>().ok().map(|seconds| seconds * multiplier)
+}
+
+fn has_custom_physical_rule(ruleset: &CpgRuleSet) -> bool {
+    ruleset
+        .physical_rules()
+        .iter()
+        .any(|rule| matches!(rule.name(), "cpg_physical_rule" | "codeanatomy_physical_rule"))
+}
+
+fn apply_physical_rule_governance(
+    config: &mut SessionConfig,
+    install_custom_rule: bool,
+    warnings: &mut Vec<RunWarning>,
+) {
+    if !install_custom_rule {
+        return;
+    }
+    let options = config.options_mut();
+    let dynamic_filter_enabled = options.optimizer.enable_dynamic_filter_pushdown;
+    let sort_pushdown_enabled = options.optimizer.enable_sort_pushdown;
+    let coalesce_partitions = !(dynamic_filter_enabled || sort_pushdown_enabled);
+    options.extensions.insert(CodeAnatomyPhysicalConfig {
+        enabled: true,
+        coalesce_partitions,
+    });
+    if !coalesce_partitions {
+        warnings.push(
+            RunWarning::new(
+                WarningCode::SemanticValidationWarning,
+                WarningStage::Preflight,
+                "Disabled CodeAnatomy coalesce-partitions rewrite due to dynamic-filter/sort-pushdown safety policy.",
+            )
+            .with_context("rule", "codeanatomy_physical_rule")
+            .with_context(
+                "enable_dynamic_filter_pushdown",
+                dynamic_filter_enabled.to_string(),
+            )
+            .with_context("enable_sort_pushdown", sort_pushdown_enabled.to_string()),
+        );
+    }
 }
 
 impl SessionFactory {
@@ -131,6 +197,10 @@ impl SessionFactory {
             .with_repartition_aggregations(true)
             .with_repartition_windows(true)
             .with_parquet_pruning(true);
+        config = config.set_str(
+            "datafusion.execution.listing_table_factory_infer_partitions",
+            "false",
+        );
         let config_opts = config.options_mut();
         config_opts.execution.coalesce_batches = true;
         config_opts.execution.collect_statistics = true;
@@ -187,6 +257,7 @@ impl SessionFactory {
             SessionBuildOverrides {
                 enable_function_factory,
                 enable_domain_planner,
+                enable_relation_planner: enable_domain_planner,
                 ..SessionBuildOverrides::default()
             },
         )
@@ -202,13 +273,25 @@ impl SessionFactory {
         tracing_config: Option<&TracingConfig>,
         overrides: SessionBuildOverrides,
     ) -> Result<SessionBuildState> {
-        let runtime = RuntimeEnvBuilder::default()
+        let mut runtime_builder = RuntimeEnvBuilder::default()
             .with_memory_pool(Arc::new(FairSpillPool::new(profile.memory_pool_bytes)))
             .with_disk_manager_builder(
                 DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
             )
-            .with_max_temp_directory_size(profile.max_temp_directory_bytes as u64)
-            .build_arc()?;
+            .with_max_temp_directory_size(profile.max_temp_directory_bytes as u64);
+        let mut cache_manager = CacheManagerConfig::default()
+            .with_metadata_cache_limit(profile.metadata_cache_limit)
+            .with_list_files_cache_limit(profile.list_files_cache_limit);
+        if let Some(ttl_seconds) = profile
+            .list_files_cache_ttl
+            .as_deref()
+            .and_then(parse_cache_ttl_seconds)
+        {
+            cache_manager =
+                cache_manager.with_list_files_cache_ttl(Some(Duration::from_secs(ttl_seconds)));
+        }
+        runtime_builder = runtime_builder.with_cache_manager(cache_manager);
+        let runtime = runtime_builder.build_arc()?;
 
         let mut config = SessionConfig::new()
             .with_default_catalog_and_schema("codeanatomy", "public")
@@ -222,6 +305,10 @@ impl SessionFactory {
             .with_repartition_file_scans(profile.repartition_file_scans)
             .with_repartition_file_min_size(profile.repartition_file_min_size)
             .with_parquet_pruning(profile.parquet_pruning);
+        config = config.set_str(
+            "datafusion.execution.listing_table_factory_infer_partitions",
+            "false",
+        );
 
         let opts = config.options_mut();
         opts.execution.coalesce_batches = true;
@@ -231,6 +318,7 @@ impl SessionFactory {
         opts.execution.parquet.metadata_size_hint = Some(profile.metadata_size_hint);
         opts.execution.enable_recursive_ctes = profile.enable_recursive_ctes;
         opts.execution.planning_concurrency = profile.planning_concurrency;
+        opts.execution.meta_fetch_concurrency = profile.meta_fetch_concurrency;
         opts.optimizer.max_passes = profile.optimizer_max_passes;
         opts.optimizer.skip_failed_rules = profile.skip_failed_rules;
         opts.optimizer.filter_null_join_keys = profile.filter_null_join_keys;
@@ -268,7 +356,7 @@ impl SessionFactory {
         &self,
         params: SessionBuildParams,
         memory_pool_bytes: u64,
-        config: SessionConfig,
+        mut config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
         ruleset: &CpgRuleSet,
         overrides: SessionBuildOverrides,
@@ -277,6 +365,11 @@ impl SessionFactory {
         let spec_hash = params.spec_hash;
         let mut build_warnings = params.build_warnings;
         let tracing_config = params.tracing_config.unwrap_or_default();
+        apply_physical_rule_governance(
+            &mut config,
+            has_custom_physical_rule(ruleset),
+            &mut build_warnings,
+        );
         engine_tracing::init_otel_tracing(&tracing_config)?;
         let trace_ctx = engine_tracing::TraceRuleContext::from_hashes(
             &spec_hash,
@@ -313,6 +406,25 @@ impl SessionFactory {
         enforce_extension_governance(&planning_surface, &mut build_warnings)?;
         let planning_surface_manifest =
             manifest_from_surface_with_context(&planning_surface, &ctx).await?;
+        if let Some(policy) = planning_surface.typed_policy.as_ref() {
+            let expected_hash = super::planning_manifest::planning_surface_policy_hash(policy);
+            if planning_surface_manifest.typed_policy_hash != Some(expected_hash) {
+                build_warnings.push(
+                    RunWarning::new(
+                        WarningCode::SemanticValidationWarning,
+                        WarningStage::Preflight,
+                        "Planning-surface policy hash mismatch between builder state and captured manifest.",
+                    )
+                    .with_context(
+                        "policy_version",
+                        planning_surface_manifest
+                            .typed_policy_version
+                            .clone()
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    ),
+                );
+            }
+        }
         let planning_surface_hash = planning_surface_manifest.hash();
         Ok(SessionBuildState {
             ctx,
@@ -362,9 +474,11 @@ impl SessionFactory {
         }
         if overrides.enable_domain_planner {
             planning_surface.expr_planners = datafusion_ext::domain_expr_planners();
-            planning_surface.relation_planners = vec![Arc::new(
-                datafusion_ext::relation_planner::CodeAnatomyRelationPlanner,
-            )];
+            if overrides.enable_relation_planner {
+                planning_surface.relation_planners = vec![Arc::new(
+                    datafusion_ext::relation_planner::CodeAnatomyRelationPlanner,
+                )];
+            }
             planning_surface.type_planner = Some(Arc::new(
                 datafusion_ext::type_planner::CodeAnatomyTypePlanner,
             ));
@@ -380,6 +494,11 @@ impl SessionFactory {
             },
             relation_planner_enabled: !planning_surface.relation_planners.is_empty(),
             type_planner_enabled: planning_surface.type_planner.is_some(),
+            table_factory_allowlist: planning_surface
+                .table_factories
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect(),
         });
 
         planning_surface.table_factory_allowlist = planning_surface
@@ -543,5 +662,51 @@ mod tests {
 
         // Verify different envelope hashes (due to different configs)
         assert_ne!(small_envelope.envelope_hash, large_envelope.envelope_hash);
+    }
+
+    #[test]
+    fn physical_rule_governance_keeps_coalesce_when_pushdown_is_disabled() {
+        let mut config = SessionConfig::new();
+        {
+            let opts = config.options_mut();
+            opts.optimizer.enable_dynamic_filter_pushdown = false;
+            opts.optimizer.enable_sort_pushdown = false;
+        }
+        let mut warnings = Vec::new();
+
+        apply_physical_rule_governance(&mut config, true, &mut warnings);
+
+        let policy = config
+            .options()
+            .extensions
+            .get::<CodeAnatomyPhysicalConfig>()
+            .expect("codeanatomy physical config installed");
+        assert!(policy.coalesce_partitions);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn physical_rule_governance_disables_coalesce_when_pushdown_is_enabled() {
+        let mut config = SessionConfig::new();
+        {
+            let opts = config.options_mut();
+            opts.optimizer.enable_dynamic_filter_pushdown = true;
+            opts.optimizer.enable_sort_pushdown = false;
+        }
+        let mut warnings = Vec::new();
+
+        apply_physical_rule_governance(&mut config, true, &mut warnings);
+
+        let policy = config
+            .options()
+            .extensions
+            .get::<CodeAnatomyPhysicalConfig>()
+            .expect("codeanatomy physical config installed");
+        assert!(!policy.coalesce_partitions);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            warnings[0].context.get("rule"),
+            Some(&"codeanatomy_physical_rule".to_string())
+        );
     }
 }

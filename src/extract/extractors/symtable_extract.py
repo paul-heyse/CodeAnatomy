@@ -7,7 +7,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
+from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, overload
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
@@ -16,11 +16,13 @@ from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.context import (
     ExtractExecutionContext,
     FileContext,
-    SpanSpec,
     attrs_map,
     file_identity_row,
-    span_dict,
     text_from_file_ctx,
+)
+from extract.coordination.entry_point import (
+    run_extract_entry_point,
+    run_extract_plan_entry_point,
 )
 from extract.coordination.line_offsets import LineOffsets, line_offsets_from_file_ctx
 from extract.coordination.materialization import (
@@ -48,6 +50,7 @@ from extract.infrastructure.worklists import (
     iter_worklist_contexts,
     worklist_queue_name,
 )
+from extract.row_builder import SpanTemplateSpec, make_span_spec_dict
 from obs.otel import SCOPE_EXTRACT, stage_span
 
 if TYPE_CHECKING:
@@ -669,8 +672,8 @@ def _span_hint_from_line(
     byte_start = None
     if line_offsets is not None:
         byte_start = line_offsets.byte_offset(line0, 0)
-    return span_dict(
-        SpanSpec(
+    return make_span_spec_dict(
+        SpanTemplateSpec(
             start_line0=line0,
             start_col=0,
             end_line0=None,
@@ -770,40 +773,31 @@ def extract_symtable(
         Nested symtable file table.
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
-    exec_context = context or ExtractExecutionContext()
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    determinism_tier = exec_context.determinism_tier()
-    normalize = ExtractNormalizeOptions(options=normalized_options)
-
-    rows = _collect_symtable_file_rows(
+    return run_extract_entry_point(
+        "symtable",
+        "symtable_files_v1",
         repo_files,
-        exec_context.file_contexts,
-        scope_manifest=exec_context.scope_manifest,
-        options=normalized_options,
-        runtime_profile=runtime_profile,
+        normalized_options,
+        context=context,
+        plan_builder=_build_symtable_entry_plan,
     )
-    plan = _build_symtable_file_plan(
-        rows,
-        normalize=normalize,
-        evidence_plan=exec_context.evidence_plan,
-        session=session,
+
+
+def _build_symtable_entry_plan(
+    repo_files: TableLike,
+    options: SymtableExtractOptions,
+    exec_context: ExtractExecutionContext,
+    session: ExtractSession,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DataFusionPlanArtifact:
+    plans = _build_symtable_plans(
+        repo_files,
+        options,
+        exec_context,
+        session,
+        runtime_profile,
     )
-    table = cast(
-        "TableLike",
-        materialize_extract_plan(
-            "symtable_files_v1",
-            plan,
-            runtime_profile=runtime_profile,
-            determinism_tier=determinism_tier,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                apply_post_kernels=True,
-            ),
-        ),
-    )
-    return ExtractResult(table=table, extractor_name="symtable")
+    return plans["symtable_files"]
 
 
 def extract_symtable_plans(
@@ -820,17 +814,28 @@ def extract_symtable_plans(
         Plan bundle keyed by symtable outputs.
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
-    exec_context = context or ExtractExecutionContext()
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    normalize = ExtractNormalizeOptions(options=normalized_options)
+    return run_extract_plan_entry_point(
+        repo_files,
+        normalized_options,
+        context=context,
+        plan_builder=_build_symtable_plans,
+    )
+
+
+def _build_symtable_plans(
+    repo_files: TableLike,
+    options: SymtableExtractOptions,
+    exec_context: ExtractExecutionContext,
+    session: ExtractSession,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> dict[str, DataFusionPlanArtifact]:
+    normalize = ExtractNormalizeOptions(options=options)
     evidence_plan = exec_context.evidence_plan
     rows = _collect_symtable_file_rows(
         repo_files,
         exec_context.file_contexts,
         scope_manifest=exec_context.scope_manifest,
-        options=normalized_options,
+        options=options,
         runtime_profile=runtime_profile,
     )
     return {

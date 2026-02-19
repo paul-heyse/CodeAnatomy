@@ -43,7 +43,11 @@ from datafusion_engine.plan.plan_fingerprint import (
     PlanFingerprintInputs,
     compute_plan_fingerprint,
 )
-from datafusion_engine.plan.plan_identity import PlanIdentityInputs, plan_identity_payload
+from datafusion_engine.plan.plan_identity import (
+    PLAN_IDENTITY_PAYLOAD_VERSION,
+    PlanIdentityInputs,
+    plan_identity_payload,
+)
 from datafusion_engine.plan.plan_proto import plan_proto_payload, proto_serialization_enabled
 from datafusion_engine.plan.plan_utils import (
     explain_rows_from_text,
@@ -764,4 +768,34 @@ def _capture_cache_diagnostics(ctx: SessionContext) -> Mapping[str, object] | No
     return diagnostics
 
 
-__all__: list[str] = []
+def extraction_plan_artifact_envelope(
+    ctx: SessionContext,
+    *,
+    session_runtime: SessionRuntime | None = None,
+    stage: str | None = None,
+) -> Mapping[str, object]:
+    """Capture extraction-stage planning envelope using canonical bundle primitives.
+
+    Returns:
+        Mapping[str, object]: Stable identity envelope for extraction-stage diagnostics.
+    """
+    df_settings = _df_settings_snapshot(ctx, session_runtime=session_runtime)
+    info_snapshot = _information_schema_snapshot(ctx, session_runtime=session_runtime)
+    info_hash = _information_schema_hash(info_snapshot)
+    planning_snapshot = planning_env_snapshot(session_runtime)
+    envelope: dict[str, object] = {
+        "stage": stage,
+        "df_settings": dict(df_settings),
+        "information_schema_hash": info_hash,
+        "planning_env_hash": planning_env_hash(planning_snapshot),
+        "planning_surface_policy_version": planning_snapshot.get("planning_surface_policy_version"),
+        "planning_surface_policy_hash": planning_snapshot.get("planning_surface_policy_hash"),
+        "plan_identity_payload_version": PLAN_IDENTITY_PAYLOAD_VERSION,
+    }
+    identity_hash = hash_json_default(envelope, str_keys=True)
+    envelope["identity_hash"] = identity_hash
+    envelope["plan_identity_hash"] = identity_hash
+    return envelope
+
+
+__all__ = ["extraction_plan_artifact_envelope"]

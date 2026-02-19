@@ -65,8 +65,8 @@ pub fn evaluate_profile_coverage() -> Vec<RuntimeProfileCoverage> {
         },
         RuntimeProfileCoverage {
             field: "meta_fetch_concurrency".into(),
-            state: CoverageState::Reserved,
-            note: "No stable DataFusion 52.1 surface in current engine path".into(),
+            state: CoverageState::Applied,
+            note: "opts.execution.meta_fetch_concurrency".into(),
         },
         // --- Memory & Spill ---
         RuntimeProfileCoverage {
@@ -139,18 +139,18 @@ pub fn evaluate_profile_coverage() -> Vec<RuntimeProfileCoverage> {
         // --- Cache ---
         RuntimeProfileCoverage {
             field: "list_files_cache_limit".into(),
-            state: CoverageState::Reserved,
-            note: "ObjectStore cache layer; not wired to DF session".into(),
+            state: CoverageState::Applied,
+            note: "RuntimeEnvBuilder cache manager config".into(),
         },
         RuntimeProfileCoverage {
             field: "list_files_cache_ttl".into(),
-            state: CoverageState::Reserved,
-            note: "ObjectStore cache layer; not wired to DF session".into(),
+            state: CoverageState::Applied,
+            note: "RuntimeEnvBuilder cache manager TTL".into(),
         },
         RuntimeProfileCoverage {
             field: "metadata_cache_limit".into(),
-            state: CoverageState::Reserved,
-            note: "ObjectStore cache layer; not wired to DF session".into(),
+            state: CoverageState::Applied,
+            note: "RuntimeEnvBuilder cache manager config".into(),
         },
         // --- Statistics ---
         RuntimeProfileCoverage {
@@ -244,28 +244,8 @@ pub fn reserved_profile_warnings(profile: &RuntimeProfileSpec) -> Vec<RunWarning
 
     push(
         &mut warnings,
-        "meta_fetch_concurrency",
-        profile.meta_fetch_concurrency.to_string(),
-    );
-    push(
-        &mut warnings,
         "max_predicate_cache_size",
         format!("{:?}", profile.max_predicate_cache_size),
-    );
-    push(
-        &mut warnings,
-        "list_files_cache_limit",
-        profile.list_files_cache_limit.to_string(),
-    );
-    push(
-        &mut warnings,
-        "list_files_cache_ttl",
-        format!("{:?}", profile.list_files_cache_ttl),
-    );
-    push(
-        &mut warnings,
-        "metadata_cache_limit",
-        profile.metadata_cache_limit.to_string(),
     );
     warnings
 }
@@ -358,11 +338,11 @@ mod tests {
             .collect();
 
         // Fields known to lack DF52.1 session wiring
-        assert!(reserved.contains(&"meta_fetch_concurrency"));
         assert!(reserved.contains(&"max_predicate_cache_size"));
-        assert!(reserved.contains(&"list_files_cache_limit"));
-        assert!(reserved.contains(&"list_files_cache_ttl"));
-        assert!(reserved.contains(&"metadata_cache_limit"));
+        assert!(!reserved.contains(&"meta_fetch_concurrency"));
+        assert!(!reserved.contains(&"list_files_cache_limit"));
+        assert!(!reserved.contains(&"list_files_cache_ttl"));
+        assert!(!reserved.contains(&"metadata_cache_limit"));
     }
 
     #[test]
@@ -383,21 +363,9 @@ mod tests {
         let profile = RuntimeProfileSpec::small();
         let warnings = reserved_profile_warnings(&profile);
 
-        assert_eq!(warnings.len(), 5);
-        assert!(warnings
-            .iter()
-            .any(|w| { w.context.get("field") == Some(&"meta_fetch_concurrency".to_string()) }));
+        assert_eq!(warnings.len(), 1);
         assert!(warnings
             .iter()
             .any(|w| { w.context.get("field") == Some(&"max_predicate_cache_size".to_string()) }));
-        assert!(warnings
-            .iter()
-            .any(|w| { w.context.get("field") == Some(&"list_files_cache_limit".to_string()) }));
-        assert!(warnings
-            .iter()
-            .any(|w| { w.context.get("field") == Some(&"list_files_cache_ttl".to_string()) }));
-        assert!(warnings
-            .iter()
-            .any(|w| { w.context.get("field") == Some(&"metadata_cache_limit".to_string()) }));
     }
 }

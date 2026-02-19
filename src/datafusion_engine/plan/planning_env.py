@@ -79,6 +79,11 @@ def planning_env_snapshot(
         return {}
     profile = session_runtime.profile
     from datafusion_engine.plan.contracts import PlanningSurfaceManifestV2
+    from datafusion_engine.session.planning_surface_contract import (
+        PLANNING_SURFACE_POLICY_CONTRACT_VERSION,
+        planning_surface_policy_contract_from_bundle,
+        planning_surface_policy_hash,
+    )
     from datafusion_engine.session.runtime_extensions import (
         planning_surface_manifest_v2_payload,
     )
@@ -107,6 +112,9 @@ def planning_env_snapshot(
         )
     else:
         manifest = PlanningSurfaceManifestV2()
+    policy_contract = planning_surface_policy_contract_from_bundle(profile.policies)
+    policy_payload = policy_contract.payload()
+    policy_hash = planning_surface_policy_hash(policy_contract)
     return {
         "datafusion_version": getattr(profile, "datafusion_version", None),
         "session_config": session_config,
@@ -147,6 +155,9 @@ def planning_env_snapshot(
             "explain_format": schema_hardening.explain_format if schema_hardening else None,
             "enable_view_types": schema_hardening.enable_view_types if schema_hardening else None,
         },
+        "planning_surface_policy_version": PLANNING_SURFACE_POLICY_CONTRACT_VERSION,
+        "planning_surface_policy_hash": policy_hash,
+        "planning_surface_policy": policy_payload,
         "planning_surface_manifest_v2": msgspec.to_builtins(manifest),
     }
 

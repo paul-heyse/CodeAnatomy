@@ -33,10 +33,10 @@ from datafusion_engine.session._session_constants import (
     DATAFUSION_SQL_ERROR,
     create_schema_introspector,
 )
-from datafusion_engine.session.planning_surface_policy import (
-    planning_surface_policy_from_bundle,
-)
 from datafusion_engine.session.protocols import PlannerExtensionPort
+from datafusion_engine.session.runtime_config_policies import (
+    planning_surface_policy_for_profile,
+)
 from datafusion_engine.session.runtime_dataset_io import (
     _cache_config_payload,
     _cache_snapshot_rows,
@@ -48,7 +48,6 @@ from datafusion_engine.session.runtime_session import (
     function_catalog_snapshot_for_profile,
 )
 from datafusion_engine.session.runtime_udf import (
-    _install_schema_evolution_adapter_factory,
     _load_schema_evolution_adapter_factory,
     _resolve_planner_rule_installers,
     _rulepack_function_errors,
@@ -84,8 +83,8 @@ def planning_surface_manifest_v2_payload(
     """Return canonical planning-surface manifest payload (v2)."""
     from datafusion_engine.plan.contracts import PlanningSurfaceManifestV2
 
-    policy = planning_surface_policy_from_bundle(profile.policies)
-    table_factories = ("delta",)
+    policy = planning_surface_policy_for_profile(profile)
+    table_factories = tuple(policy.table_factory_allowlist) or ("delta",)
     planning_keys = {
         key: str(value)
         for key, value in profile.settings_payload().items()
@@ -1060,10 +1059,12 @@ def _install_physical_expr_adapter_factory(
         return
     register = getattr(ctx, "register_physical_expr_adapter_factory", None)
     if not callable(register):
-        if uses_default_adapter:
-            _install_schema_evolution_adapter_factory(ctx)
-            return
         msg = "SessionContext does not expose physical expr adapter registration."
+        if uses_default_adapter:
+            msg = (
+                "Schema evolution adapter is enabled, but SessionContext does not expose "
+                "physical expr adapter registration."
+            )
         raise TypeError(msg)
     register(factory)
 

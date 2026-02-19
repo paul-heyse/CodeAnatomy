@@ -205,6 +205,10 @@ fn saturating_i64_from_usize(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+fn saturating_i64_from_u64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 pub(crate) fn runtime_execution_metrics_payload(ctx: &SessionContext) -> serde_json::Value {
     let runtime_env = Arc::clone(ctx.state().runtime_env());
     let metadata_entries = runtime_env
@@ -225,6 +229,12 @@ pub(crate) fn runtime_execution_metrics_payload(ctx: &SessionContext) -> serde_j
         .map(|cache| saturating_i64_from_usize(cache.len()));
     let metadata_cache_limit =
         saturating_i64_from_usize(runtime_env.cache_manager.get_metadata_cache_limit());
+    let list_files_cache_limit =
+        saturating_i64_from_usize(runtime_env.cache_manager.get_list_files_cache_limit());
+    let list_files_cache_ttl_seconds = runtime_env
+        .cache_manager
+        .get_list_files_cache_ttl()
+        .map(|ttl| saturating_i64_from_u64(ttl.as_secs()));
     let metadata_cache_entries = saturating_i64_from_usize(metadata_entries.len());
     let memory_reserved = saturating_i64_from_usize(runtime_env.memory_pool.reserved());
     let (memory_limit_kind, memory_limit_bytes) = match runtime_env.memory_pool.memory_limit() {
@@ -264,6 +274,13 @@ pub(crate) fn runtime_execution_metrics_payload(ctx: &SessionContext) -> serde_j
             "unit": "count",
             "value": metadata_cache_hits,
         }),
+        serde_json::json!({
+            "scope": "runtime",
+            "metric_name": "list_files_cache_limit_bytes",
+            "metric_type": "gauge",
+            "unit": "bytes",
+            "value": list_files_cache_limit,
+        }),
     ];
     if let Some(value) = list_files_cache_entries {
         rows.push(serde_json::json!({
@@ -283,6 +300,15 @@ pub(crate) fn runtime_execution_metrics_payload(ctx: &SessionContext) -> serde_j
             "value": value,
         }));
     }
+    if let Some(value) = list_files_cache_ttl_seconds {
+        rows.push(serde_json::json!({
+            "scope": "runtime",
+            "metric_name": "list_files_cache_ttl_seconds",
+            "metric_type": "gauge",
+            "unit": "seconds",
+            "value": value,
+        }));
+    }
 
     serde_json::json!({
         "schema_version": 1,
@@ -292,6 +318,8 @@ pub(crate) fn runtime_execution_metrics_payload(ctx: &SessionContext) -> serde_j
             "memory_limit_kind": memory_limit_kind,
             "memory_limit_bytes": memory_limit_bytes,
             "metadata_cache_limit_bytes": metadata_cache_limit,
+            "list_files_cache_limit_bytes": list_files_cache_limit,
+            "list_files_cache_ttl_seconds": list_files_cache_ttl_seconds,
             "metadata_cache_entries": metadata_cache_entries,
             "metadata_cache_hits": metadata_cache_hits,
             "list_files_cache_entries": list_files_cache_entries,

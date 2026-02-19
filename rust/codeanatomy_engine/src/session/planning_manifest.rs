@@ -22,6 +22,13 @@ use crate::session::planning_surface::{
     PlanningSurfacePolicyV1, PlanningSurfaceSpec, TableFactoryEntry,
 };
 
+pub const PLANNING_SURFACE_POLICY_VERSION: &str = "v1";
+
+pub fn planning_surface_policy_hash(policy: &PlanningSurfacePolicyV1) -> [u8; 32] {
+    let payload = serde_json::to_vec(policy).expect("planning surface policy serializable");
+    *blake3::hash(&payload).as_bytes()
+}
+
 /// Deterministic manifest of the planning surface configuration.
 ///
 /// Captures the identity of all planning-time registrations so that
@@ -71,6 +78,10 @@ pub struct PlanningSurfaceManifest {
     pub table_options_digest: [u8; 32],
     /// Typed planning policy payload used for cross-layer parity checks.
     pub typed_policy: Option<PlanningSurfacePolicyV1>,
+    /// Version tag for typed planning policy payload.
+    pub typed_policy_version: Option<String>,
+    /// Stable hash for the typed planning policy payload.
+    pub typed_policy_hash: Option<[u8; 32]>,
 }
 
 /// Canonical planning-surface manifest (v2) shared with Python surfaces.
@@ -249,6 +260,14 @@ pub fn manifest_from_surface(spec: &PlanningSurfaceSpec) -> PlanningSurfaceManif
         delta_codec_enabled: spec.delta_codec_enabled,
         table_options_digest: hash_table_options(spec.table_options.as_ref()),
         typed_policy: spec.typed_policy.clone(),
+        typed_policy_version: spec
+            .typed_policy
+            .as_ref()
+            .map(|_| PLANNING_SURFACE_POLICY_VERSION.to_string()),
+        typed_policy_hash: spec
+            .typed_policy
+            .as_ref()
+            .map(planning_surface_policy_hash),
     }
 }
 
@@ -506,7 +525,10 @@ mod tests {
                 expr_planner_names: vec!["codeanatomy_domain".to_string()],
                 relation_planner_enabled: true,
                 type_planner_enabled: true,
+                table_factory_allowlist: vec!["delta".to_string()],
             }),
+            typed_policy_version: Some(PLANNING_SURFACE_POLICY_VERSION.to_string()),
+            typed_policy_hash: None,
         }
     }
 
@@ -663,6 +685,8 @@ mod tests {
             delta_codec_enabled: false,
             table_options_digest: [0u8; 32],
             typed_policy: None,
+            typed_policy_version: None,
+            typed_policy_hash: None,
         };
         let hash = manifest.hash();
         // Even an empty manifest should produce a non-zero hash

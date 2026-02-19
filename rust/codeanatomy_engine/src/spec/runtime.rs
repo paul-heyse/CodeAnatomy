@@ -186,7 +186,7 @@ impl TracingPreset {
 /// New fields added by Wave 3 integration: `capture_substrait`,
 /// `capture_optimizer_lab`, `capture_delta_codec`, `enable_tracing`,
 /// `enable_rule_tracing`, `enable_plan_preview`, `enable_function_factory`,
-/// `enable_domain_planner`.
+/// `enable_domain_planner`, `enable_relation_planner`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
@@ -233,6 +233,9 @@ pub struct RuntimeConfig {
     /// Enable the domain-specific query planner.
     #[serde(default)]
     pub enable_domain_planner: bool,
+    /// Enable relation-planner installation for domain SQL table factors.
+    #[serde(default)]
+    pub enable_relation_planner: bool,
 
     /// Additional deterministic lineage metadata to include in Delta commits.
     #[serde(default)]

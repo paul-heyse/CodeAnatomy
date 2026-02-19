@@ -15,9 +15,7 @@ from core_types import RowRich as Row
 from core_types import RowValueRich as RowValue
 from extract.coordination.context import (
     FileContext,
-    SpanSpec,
     attrs_map,
-    span_dict,
 )
 from extract.coordination.line_offsets import LineOffsets
 from extract.extractors.bytecode.setup import (
@@ -29,6 +27,7 @@ from extract.extractors.bytecode.visitors import (
 )
 from extract.infrastructure.parallel import resolve_max_workers
 from extract.infrastructure.schema_cache import bytecode_files_fingerprint
+from extract.row_builder import SpanTemplateSpec, make_span_spec_dict
 
 type BytecodeCacheKey = tuple[str, str, str, int, bool, bool, bool, tuple[str, ...]]
 
@@ -186,8 +185,8 @@ def _instruction_entry(
         "is_jump_target": row.get("is_jump_target"),
         "jump_target": row.get("jump_target"),
         "cache_info": row.get("cache_info") or [],
-        "span": span_dict(
-            SpanSpec(
+        "span": make_span_spec_dict(
+            SpanTemplateSpec(
                 start_line0=start_line0,
                 start_col=int(start_col) if isinstance(start_col, int) else None,
                 end_line0=end_line0,
@@ -486,6 +485,10 @@ from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.context import (
     ExtractExecutionContext,
     text_from_file_ctx,
+)
+from extract.coordination.entry_point import (
+    run_extract_entry_point,
+    run_extract_plan_entry_point,
 )
 from extract.coordination.extraction_runtime_loop import (
     ExtractionRuntimeWorklist,
@@ -1574,37 +1577,31 @@ def extract_bytecode(
         Nested bytecode file table.
     """
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
-    exec_context = context or ExtractExecutionContext()
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    determinism_tier = exec_context.determinism_tier()
-    normalize = ExtractNormalizeOptions(options=normalized_options)
-    rows = _collect_bytecode_file_rows(
-        repo_files,
-        exec_context.file_contexts,
-        scope_manifest=exec_context.scope_manifest,
-        options=normalized_options,
-        runtime_profile=runtime_profile,
-    )
-    plan = _build_bytecode_file_plan(
-        rows,
-        normalize=normalize,
-        evidence_plan=exec_context.evidence_plan,
-        session=session,
-    )
-    materialize_options = ExtractMaterializeOptions(
-        normalize=normalize,
-        apply_post_kernels=True,
-    )
-    table = materialize_extract_plan(
+    return run_extract_entry_point(
+        "bytecode",
         "bytecode_files_v1",
-        plan,
-        runtime_profile=runtime_profile,
-        determinism_tier=determinism_tier,
-        options=materialize_options,
+        repo_files,
+        normalized_options,
+        context=context,
+        plan_builder=_build_bytecode_entry_plan,
     )
-    return ExtractResult(table=table, extractor_name="bytecode")
+
+
+def _build_bytecode_entry_plan(
+    repo_files: TableLike,
+    options: BytecodeExtractOptions,
+    exec_context: ExtractExecutionContext,
+    session: ExtractSession,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DataFusionPlanArtifact:
+    plans = _build_bytecode_plans(
+        repo_files,
+        options,
+        exec_context,
+        session,
+        runtime_profile,
+    )
+    return plans["bytecode_files"]
 
 
 def extract_bytecode_plans(
@@ -1621,17 +1618,28 @@ def extract_bytecode_plans(
         Plan bundle keyed by bytecode output name.
     """
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
-    exec_context = context or ExtractExecutionContext()
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    normalize = ExtractNormalizeOptions(options=normalized_options)
+    return run_extract_plan_entry_point(
+        repo_files,
+        normalized_options,
+        context=context,
+        plan_builder=_build_bytecode_plans,
+    )
+
+
+def _build_bytecode_plans(
+    repo_files: TableLike,
+    options: BytecodeExtractOptions,
+    exec_context: ExtractExecutionContext,
+    session: ExtractSession,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> dict[str, DataFusionPlanArtifact]:
+    normalize = ExtractNormalizeOptions(options=options)
     evidence_plan = exec_context.evidence_plan
     rows = _collect_bytecode_file_rows(
         repo_files,
         exec_context.file_contexts,
         scope_manifest=exec_context.scope_manifest,
-        options=normalized_options,
+        options=options,
         runtime_profile=runtime_profile,
     )
     return {

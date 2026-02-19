@@ -279,6 +279,8 @@ def session_context_contract_probe(ctx: SessionContext) -> dict[str, object]:
         "ok": True,
         "plugin_abi": {"major": 1, "minor": 2},
         "metadata_cache_limit_bytes": 0,
+        "list_files_cache_limit_bytes": 0,
+        "list_files_cache_ttl_seconds": None,
         "metadata_cache_entries": 0,
         "metadata_cache_hits": 0,
         "list_files_cache_entries": 0,
@@ -680,7 +682,7 @@ def _tree_sitter_node_row(
     node_uid: int,
     file_id: str,
 ) -> dict[str, object]:
-    from extract.coordination.context import SpanSpec, span_dict
+    from extract.row_builder import SpanTemplateSpec, make_span_spec_dict
 
     bstart = int(getattr(node, "start_byte", 0))
     bend = int(getattr(node, "end_byte", bstart))
@@ -694,8 +696,8 @@ def _tree_sitter_node_row(
         "kind_id": 0,
         "grammar_id": 0,
         "grammar_name": "python",
-        "span": span_dict(
-            SpanSpec(
+        "span": make_span_spec_dict(
+            SpanTemplateSpec(
                 start_line0=None,
                 start_col=None,
                 end_line0=None,

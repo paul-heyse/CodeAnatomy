@@ -113,11 +113,16 @@ impl PhysicalOptimizerRule for CodeAnatomyPhysicalRule {
         if !policy.enabled {
             return Ok(plan);
         }
-        let mut optimized = plan;
-        if policy.coalesce_partitions {
-            optimized = Arc::new(CoalescePartitionsExec::new(optimized));
+        if policy.coalesce_partitions
+            && (config.optimizer.enable_dynamic_filter_pushdown
+                || config.optimizer.enable_sort_pushdown)
+        {
+            return Ok(plan);
         }
-        Ok(optimized)
+        if policy.coalesce_partitions {
+            return Ok(Arc::new(CoalescePartitionsExec::new(plan)));
+        }
+        Ok(plan)
     }
 
     fn name(&self) -> &str {

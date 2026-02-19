@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, cast
 
 from datafusion import RuntimeEnvBuilder, SessionContext
 
-from datafusion_engine.session.planning_surface_policy import (
-    planning_surface_policy_from_bundle,
+from datafusion_engine.session.runtime_config_policies import (
+    planning_surface_policy_identity_for_profile,
 )
 
 if TYPE_CHECKING:
@@ -65,12 +65,6 @@ class DeltaSessionBuildResult:
     error: str | None
     cause: Exception | None
     runtime_policy_bridge: Mapping[str, object] | None = None
-
-
-@dataclass(frozen=True)
-class _RuntimePolicySettingRule:
-    attr: str
-    parser: Callable[[str], object | None]
 
 
 def split_runtime_settings(
@@ -242,7 +236,7 @@ def build_delta_session_context(
             cause=resolution.cause,
         )
     bridge = DeltaRuntimePolicyBridgeResult(options=None, payload=None)
-    planning_surface_policy = planning_surface_policy_from_bundle(profile.policies).payload()
+    planning_surface_policy_identity = planning_surface_policy_identity_for_profile(profile)
     try:
         settings = profile.settings_payload()
         bridge = _bridge_payload_for_runtime_policy(resolution, settings)
@@ -253,7 +247,7 @@ def build_delta_session_context(
         runtime_policy_bridge: dict[str, object] = (
             dict(bridge.payload) if bridge.payload is not None else {"enabled": False}
         )
-        runtime_policy_bridge["planning_surface_policy"] = dict(planning_surface_policy)
+        runtime_policy_bridge.update(planning_surface_policy_identity)
         if resolution.module_name != "datafusion_engine.extensions.datafusion_ext":
             ctx = resolution.builder(
                 list(settings.items()),
@@ -277,7 +271,7 @@ def build_delta_session_context(
                 runtime_policy_bridge = {
                     "enabled": False,
                     "reason": "legacy_builder_signature",
-                    "planning_surface_policy": dict(planning_surface_policy),
+                    **planning_surface_policy_identity,
                 }
     except (RuntimeError, TypeError, ValueError) as exc:
         return DeltaSessionBuildResult(
@@ -428,11 +422,24 @@ def _apply_standard_runtime_policy_settings(
     for key, raw_value in runtime_settings.items():
         if key in handled_keys:
             continue
-        parsed = _parse_runtime_policy_value(key, raw_value)
-        if parsed is None:
+        parsed: object | None = None
+        attr_name: str | None = None
+        if key == "datafusion.runtime.memory_limit":
+            attr_name = "memory_limit"
+            parsed = parse_runtime_size(raw_value)
+        elif key == "datafusion.runtime.max_temp_directory_size":
+            attr_name = "max_temp_directory_size"
+            parsed = parse_runtime_size(raw_value)
+        elif key == "datafusion.runtime.temp_directory":
+            attr_name = "temp_directory"
+            parsed = _non_empty_string(raw_value)
+        if attr_name is None or parsed is None:
             unsupported[key] = raw_value
             continue
-        setattr(options, _runtime_policy_rules()[key].attr, parsed)
+        if not hasattr(options, attr_name):
+            unsupported[key] = raw_value
+            continue
+        setattr(options, attr_name, parsed)
         consumed[key] = parsed
 
 
@@ -461,30 +468,6 @@ def _runtime_policy_bridge_result(
             "unsupported_runtime_settings": unsupported,
         },
     )
-
-
-def _runtime_policy_rules() -> Mapping[str, _RuntimePolicySettingRule]:
-    return {
-        "datafusion.runtime.memory_limit": _RuntimePolicySettingRule(
-            attr="memory_limit",
-            parser=parse_runtime_size,
-        ),
-        "datafusion.runtime.max_temp_directory_size": _RuntimePolicySettingRule(
-            attr="max_temp_directory_size",
-            parser=parse_runtime_size,
-        ),
-        "datafusion.runtime.temp_directory": _RuntimePolicySettingRule(
-            attr="temp_directory",
-            parser=_non_empty_string,
-        ),
-    }
-
-
-def _parse_runtime_policy_value(key: str, raw_value: str) -> object | None:
-    rule = _runtime_policy_rules().get(key)
-    if rule is None:
-        return None
-    return rule.parser(raw_value)
 
 
 def _non_empty_string(value: str) -> str | None:

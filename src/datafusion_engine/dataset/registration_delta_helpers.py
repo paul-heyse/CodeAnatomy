@@ -61,14 +61,6 @@ _BYTECODE_EXTERNAL_TABLE_NAME = BYTECODE_EXTERNAL_TABLE_NAME
 logger = logging.getLogger(__name__)
 
 
-def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
-    from datafusion_engine.extensions.schema_evolution import (
-        install_schema_evolution_adapter_factory,
-    )
-
-    install_schema_evolution_adapter_factory(ctx)
-
-
 def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec | None:
     resolved = location.resolved
     if resolved.dataset_spec is not None:
@@ -529,8 +521,11 @@ def _ensure_expr_adapter_factory(
             raise ValueError(msg) from exc
         return
     if evolution_required:
-        _install_schema_evolution_adapter_factory(ctx)
-        return
+        msg = (
+            "Schema evolution adapter is required but SessionContext does not support "
+            "physical expr adapter registration."
+        )
+        raise TypeError(msg)
     msg = "SessionContext does not support physical expr adapter registration."
     raise TypeError(msg)
 

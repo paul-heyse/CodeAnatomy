@@ -100,6 +100,21 @@ class DeltaWriteHandler:
         return self._pipeline.write_delta_bootstrap(result, spec=spec)
 
 
+EXTRACTION_MATERIALIZATION_MODES: frozenset[str] = frozenset({"delta", "datafusion_copy"})
+
+
+def resolve_extraction_materialization_mode(mode: str) -> str:
+    """Return validated extraction materialization mode.
+
+    Raises:
+        ValueError: If the provided mode is unsupported.
+    """
+    if mode in EXTRACTION_MATERIALIZATION_MODES:
+        return mode
+    msg = "materialization_mode must be either 'delta' or 'datafusion_copy'."
+    raise ValueError(msg)
+
+
 def prepare_commit_metadata(
     pipeline: WritePipeline,
     *,
@@ -815,6 +830,7 @@ def register_delta_insert_target(
 
 
 __all__ = [
+    "EXTRACTION_MATERIALIZATION_MODES",
     "DeltaCommitFinalizeContext",
     "DeltaWriteHandler",
     "delta_insert_table_name",
@@ -825,6 +841,7 @@ __all__ = [
     "record_delta_mutation",
     "register_delta_insert_target",
     "reserve_runtime_commit",
+    "resolve_extraction_materialization_mode",
     "run_post_write_maintenance",
     "write_delta",
     "write_delta_bootstrap",

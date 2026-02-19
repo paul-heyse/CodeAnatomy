@@ -32,6 +32,7 @@ class ExtractionRunOptions(msgspec.Struct, frozen=True):
     diff_base_ref: str | None = None
     diff_head_ref: str | None = None
     changed_only: bool = False
+    materialization_mode: str = "delta"
 
     @property
     def repo_scan_diff(self) -> RepoScanDiffOptions:
@@ -63,6 +64,7 @@ def normalize_extraction_options(
         TypeError: If ``options`` is not ``None``, ``ExtractionRunOptions``, or a mapping.
     """
     if isinstance(options, ExtractionRunOptions):
+        _validate_materialization_mode(options.materialization_mode)
         _validate_diff_options(
             changed_only=options.changed_only,
             diff_base_ref=options.diff_base_ref,
@@ -110,12 +112,17 @@ def normalize_extraction_options(
         or incremental_diff.diff_head_ref
     )
     changed_only = _resolve_changed_only(options, incremental_default=incremental_diff.changed_only)
+    materialization_mode = _coerce_materialization_mode(
+        options.get("materialization_mode"),
+        default="delta",
+    )
 
     _validate_diff_options(
         changed_only=changed_only,
         diff_base_ref=diff_base_ref,
         diff_head_ref=diff_head_ref,
     )
+    _validate_materialization_mode(materialization_mode)
 
     return ExtractionRunOptions(
         include_globs=include_globs,
@@ -145,6 +152,7 @@ def normalize_extraction_options(
         diff_base_ref=diff_base_ref,
         diff_head_ref=diff_head_ref,
         changed_only=changed_only,
+        materialization_mode=materialization_mode,
     )
 
 
@@ -195,6 +203,14 @@ def _validate_diff_options(
         raise ValueError(msg)
 
 
+def _validate_materialization_mode(mode: str) -> None:
+    from datafusion_engine.io.delta_write_handler import (
+        resolve_extraction_materialization_mode,
+    )
+
+    _ = resolve_extraction_materialization_mode(mode)
+
+
 def _coerce_globs(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -228,6 +244,14 @@ def _coerce_positive_int(value: object, *, default: int) -> int:
                 return default
             if parsed > 0:
                 return parsed
+    return default
+
+
+def _coerce_materialization_mode(value: object, *, default: str) -> str:
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned:
+            return cleaned
     return default
 
 

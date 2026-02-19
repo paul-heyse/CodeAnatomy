@@ -1214,31 +1214,73 @@ Rationale: S1-S8 complete corrected extraction cleanup first. S9-S18 then expand
 
 ---
 
+## Audit Update (2026-02-19)
+
+Direct code-audit note:
+- Status below is based on direct source/test verification (not checklist state), including Python/Rust implementation paths and newly-added contract tests for cache-policy, planning-surface parity, schema-pushdown, extraction artifacts, materialization boundaries, and physical-rule governance.
+
+Status legend:
+- `Complete` = implemented in codebase.
+- `Partial` = materially implemented but with remaining acceptance scope from this plan.
+- `Pending` = not yet materially implemented.
+
+Scope status:
+- `S1` `Complete` — span-type hard cutover landed (`SpanSpec`/`span_dict` removed from coordination/extractor usage).
+- `S2` `Complete` — `inspect.signature` compatibility branches removed from extraction orchestration path.
+- `S3` `Complete` — `_write_delta(..., write_ctx=...)` injection seam plus lazy default context landed.
+- `S4` `Complete` — request-envelope execution bundle override seam landed.
+- `S5` `Complete` — `_run_ast_parse_walk` pure core extracted and wired through cache shell.
+- `S6` `Complete` — shared entrypoint helpers landed and all four extractor families delegate through them.
+- `S7` `Complete` — spec helpers now use `@lru_cache(maxsize=None)` with `clear_spec_caches()` and cache-reset tests.
+- `S8` `Complete` — stage-1 extractor timing now records per-extractor submission elapsed.
+- `S9` `Complete` — runtime cache-policy bridge is canonicalized across Python/Rust paths with deeper Rust contract probe verification for memory/cache/TTL fields.
+- `S10` `Complete` — reserved cache/meta fields reclassified to applied, with profile coverage + warning logic updated.
+- `S11` `Complete` — planning-surface contract is now the cross-language source of truth with version/hash identity surfaced in runtime and manifest pathways.
+- `S12` `Complete` — schema-forward pushdown contract is enforced with loud-failure registration semantics and cross-language contract tests.
+- `S13` `Complete` — listing partition inference pinned and folded into plan identity payload.
+- `S14` `Complete` — extraction artifact envelope is standardized on canonical bundle surfaces including explicit plan-identity version/hash fields.
+- `S15` `Complete` — extraction materialization boundaries now route through explicit Delta vs DataFusion COPY policy with parquet fallback loading support.
+- `S16` `Complete` — physical optimizer safety gates and explicit session-factory governance policy are both in place with ordering/safety test coverage.
+- `S17` `Complete` — relation planner now provides concrete gating behavior and install is override-gated.
+- `S18` `Complete` — cross-language policy version/hash surfaces and parity checks landed.
+
+Decommission batch status:
+- `D1` `Complete`
+- `D2` `Complete`
+- `D3` `Complete`
+- `D4` `Complete`
+- `D5` `Complete`
+- `D6` `Complete`
+- `D7` `Complete`
+- `D8` `Complete`
+
+---
+
 ## Implementation Checklist
 
-- [ ] S1. Unify `SpanSpec` / `SpanTemplateSpec` into single canonical type
-- [ ] S2. Remove `inspect.signature` reflection from `orchestrator.py`
-- [ ] S3. Add injection seam for `_delta_write_ctx` singleton
-- [ ] S4. Add request-envelope-compatible injection seam for `_build_extract_execution_bundle`
-- [ ] S5. Extract pure `_run_ast_parse_walk` from cache shell
-- [ ] S6. Introduce shared entry-point helpers for `extract_*` and `extract_*_plans`
-- [ ] S7. Expose `cache_clear()` on spec helper caches
-- [ ] S8. Fix parallel timing in orchestrator
-- [ ] S9. Unify runtime cache policy on DF52-native cache surfaces
-- [ ] S10. Reclassify runtime profile cache/meta fields from reserved to applied
-- [ ] S11. Make planning-surface contract the cross-language source of truth
-- [ ] S12. Enforce DF52 schema-forward pushdown contracts in custom scan paths
-- [ ] S13. Pin listing partition-inference policy and fold it into identity payloads
-- [ ] S14. Standardize extraction planning artifacts on canonical bundle surfaces
-- [ ] S15. Rationalize materialization boundaries with DataFusion DML/COPY policy
-- [ ] S16. Add physical optimizer rule governance and ordering safety gates
-- [ ] S17. Require concrete value from relation planner extension
-- [ ] S18. Version and enforce cross-language policy parity hashes
-- [ ] D1. Delete `SpanSpec`, `span_dict`, and related exports
-- [ ] D2. Remove `import inspect` and conditional blocks
-- [ ] D3. Delete `@cache _delta_write_ctx()`
-- [ ] D4. Delete inline runtime dispatch blocks from all extractor entrypoints (materializing + plans)
-- [ ] D5. Delete duplicated runtime-policy parser paths and stale reserved warnings
-- [ ] D6. Delete ad-hoc policy/parity logic superseded by contract hash/version
-- [ ] D7. Delete implicit listing-inference defaults and silent adapter fallback paths
-- [ ] D8. Delete unconditional no-op extension installs and unsafe post-filter rewrites
+- [x] S1. Unify `SpanSpec` / `SpanTemplateSpec` into single canonical type
+- [x] S2. Remove `inspect.signature` reflection from `orchestrator.py`
+- [x] S3. Add injection seam for `_delta_write_ctx` singleton
+- [x] S4. Add request-envelope-compatible injection seam for `_build_extract_execution_bundle`
+- [x] S5. Extract pure `_run_ast_parse_walk` from cache shell
+- [x] S6. Introduce shared entry-point helpers for `extract_*` and `extract_*_plans`
+- [x] S7. Expose `cache_clear()` on spec helper caches
+- [x] S8. Fix parallel timing in orchestrator
+- [x] S9. Unify runtime cache policy on DF52-native cache surfaces
+- [x] S10. Reclassify runtime profile cache/meta fields from reserved to applied
+- [x] S11. Make planning-surface contract the cross-language source of truth
+- [x] S12. Enforce DF52 schema-forward pushdown contracts in custom scan paths
+- [x] S13. Pin listing partition-inference policy and fold it into identity payloads
+- [x] S14. Standardize extraction planning artifacts on canonical bundle surfaces
+- [x] S15. Rationalize materialization boundaries with DataFusion DML/COPY policy
+- [x] S16. Add physical optimizer rule governance and ordering safety gates
+- [x] S17. Require concrete value from relation planner extension
+- [x] S18. Version and enforce cross-language policy parity hashes
+- [x] D1. Delete `SpanSpec`, `span_dict`, and related exports
+- [x] D2. Remove `import inspect` and conditional blocks
+- [x] D3. Delete `@cache _delta_write_ctx()`
+- [x] D4. Delete inline runtime dispatch blocks from all extractor entrypoints (materializing + plans)
+- [x] D5. Delete duplicated runtime-policy parser paths and stale reserved warnings
+- [x] D6. Delete ad-hoc policy/parity logic superseded by contract hash/version
+- [x] D7. Delete implicit listing-inference defaults and silent adapter fallback paths
+- [x] D8. Delete unconditional no-op extension installs and unsafe post-filter rewrites

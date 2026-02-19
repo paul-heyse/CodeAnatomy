@@ -42,6 +42,7 @@ pub async fn prepare_execution_context(
     let overrides = SessionBuildOverrides {
         enable_function_factory: spec.runtime.enable_function_factory,
         enable_domain_planner: spec.runtime.enable_domain_planner,
+        enable_relation_planner: spec.runtime.enable_relation_planner,
         enable_delta_codec: spec.runtime.capture_delta_codec,
         extension_governance_policy: spec.runtime.extension_governance_mode,
     };

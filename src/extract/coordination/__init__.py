@@ -1,7 +1,7 @@
 """Coordination layer for extract execution context and materialization.
 
 This subpackage provides:
-- context.py: FileContext, RepoFileRow, SpanSpec and file context utilities
+- context.py: FileContext, RepoFileRow, and file context utilities
 - materialization.py: Extract plan building and materialization functions
 - evidence_plan.py: Evidence requirement planning
 - spec_helpers.py: Extractor option handling
@@ -14,9 +14,7 @@ from extract.coordination.context import (
     ExtractExecutionContext,
     FileContext,
     RepoFileRow,
-    SpanSpec,
     attrs_map,
-    span_dict,
 )
 from extract.coordination.evidence_plan import (
     EvidencePlan,
@@ -44,35 +42,34 @@ from extract.coordination.schema_ops import (
 )
 from extract.coordination.spec_helpers import (
     ExtractExecutionOptions,
+    clear_spec_caches,
     extractor_option_values,
     plan_feature_flags,
     plan_requires_row,
     rule_execution_options,
 )
+from extract.row_builder import SpanTemplateSpec, make_span_spec_dict
 
 __all__ = [
-    # evidence_plan
     "EvidencePlan",
     "EvidenceRequirement",
-    # context
     "ExtractExecutionContext",
-    # spec_helpers
     "ExtractExecutionOptions",
-    # materialization
     "ExtractMaterializeOptions",
     "ExtractNormalizeOptions",
     "ExtractPlanOptions",
     "FileContext",
     "RepoFileRow",
-    "SpanSpec",
-    # schema_ops
+    "SpanTemplateSpec",
     "apply_pipeline_kernels",
     "attrs_map",
+    "clear_spec_caches",
     "compile_evidence_plan",
     "extract_plan_from_row_batches",
     "extract_plan_from_rows",
     "extractor_option_values",
     "finalize_context_for_dataset",
+    "make_span_spec_dict",
     "materialize_extract_plan",
     "materialize_extract_plan_reader",
     "materialize_extract_plan_table",
@@ -83,6 +80,5 @@ __all__ = [
     "plan_requires_row",
     "rule_execution_options",
     "schema_policy_for_dataset",
-    "span_dict",
     "validate_extract_output",
 ]

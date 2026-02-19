@@ -192,8 +192,15 @@ def _bool_overrides(overrides: Mapping[str, object]) -> dict[str, bool]:
     return {key: value for key, value in overrides.items() if isinstance(value, bool)}
 
 
+def clear_spec_caches() -> None:
+    """Clear memoized spec-helper state for test isolation."""
+    _feature_flag_rows.cache_clear()
+    _metadata_defaults.cache_clear()
+
+
 __all__ = [
     "ExtractExecutionOptions",
+    "clear_spec_caches",
     "extractor_option_values",
     "plan_feature_flags",
     "plan_requires_row",

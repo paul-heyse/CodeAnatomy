@@ -31,6 +31,7 @@ pub struct PlanningSurfacePolicyV1 {
     pub expr_planner_names: Vec<String>,
     pub relation_planner_enabled: bool,
     pub type_planner_enabled: bool,
+    pub table_factory_allowlist: Vec<String>,
 }
 
 /// Typed specification of everything that configures the planning surface

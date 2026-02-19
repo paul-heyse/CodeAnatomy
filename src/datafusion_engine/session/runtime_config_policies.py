@@ -22,7 +22,9 @@ from serde_msgspec import StructBaseStrict
 from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
-    from datafusion_engine.session.planning_surface_policy import PlanningSurfacePolicyV1
+    from datafusion_engine.session.planning_surface_contract import (
+        PlanningSurfacePolicyContractV1,
+    )
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 __all__ = [
@@ -49,6 +51,7 @@ __all__ = [
     "feature_gate_parity_hash",
     "feature_gate_parity_settings",
     "planning_surface_policy_for_profile",
+    "planning_surface_policy_identity_for_profile",
     "resolved_config_policy",
     "resolved_schema_hardening",
 ]
@@ -61,8 +64,6 @@ _LOG = logging.getLogger(__name__)
 
 
 def _set_config_if_supported(config: SessionConfig, *, key: str, value: str) -> SessionConfig:
-    if key.startswith("datafusion.runtime."):
-        return config
     try:
         return config.set(key, value)
     except BaseException as exc:
@@ -147,17 +148,34 @@ def effective_datafusion_engine_major_version(
 
 def planning_surface_policy_for_profile(
     profile: DataFusionRuntimeProfile,
-) -> PlanningSurfacePolicyV1:
+) -> PlanningSurfacePolicyContractV1:
     """Compile typed planning policy payload from runtime profile policies.
 
     Returns:
-        PlanningSurfacePolicyV1: Typed planning policy payload.
+        PlanningSurfacePolicyContractV1: Typed planning policy payload.
     """
-    from datafusion_engine.session.planning_surface_policy import (
-        planning_surface_policy_from_bundle,
+    from datafusion_engine.session.planning_surface_contract import (
+        planning_surface_policy_contract_from_bundle,
     )
 
-    return planning_surface_policy_from_bundle(profile.policies)
+    return planning_surface_policy_contract_from_bundle(profile.policies)
+
+
+def planning_surface_policy_identity_for_profile(
+    profile: DataFusionRuntimeProfile,
+) -> Mapping[str, object]:
+    """Return typed policy payload plus deterministic contract identity fields."""
+    from datafusion_engine.session.planning_surface_contract import (
+        PLANNING_SURFACE_POLICY_CONTRACT_VERSION,
+        planning_surface_policy_hash,
+    )
+
+    policy = planning_surface_policy_for_profile(profile)
+    return {
+        "planning_surface_policy": policy.payload(),
+        "planning_surface_policy_version": PLANNING_SURFACE_POLICY_CONTRACT_VERSION,
+        "planning_surface_policy_hash": planning_surface_policy_hash(policy),
+    }
 
 
 def cache_manager_contract_for_profile(

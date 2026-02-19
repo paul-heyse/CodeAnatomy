@@ -1,7 +1,7 @@
-"""File context and span specification for extractor coordination.
+"""File context and execution context for extractor coordination.
 
-This module provides FileContext, RepoFileRow, SpanSpec and related utilities
-that form the core identity and payload context for all extractors.
+This module provides FileContext, RepoFileRow, and related utilities that form
+the core identity and payload context for all extractors.
 
 The row building utilities delegate to the canonical implementations in
 ``extract.row_builder`` for consistency across the extraction layer.
@@ -170,20 +170,6 @@ class ExtractExecutionContext:
         return self.ensure_session().session_runtime.ctx
 
 
-@dataclass(frozen=True)
-class SpanSpec:
-    """Span specification for nested span structs."""
-
-    start_line0: int | None
-    start_col: int | None
-    end_line0: int | None
-    end_col: int | None
-    end_exclusive: bool | None
-    col_unit: str | None
-    byte_start: int | None = None
-    byte_len: int | None = None
-
-
 def file_identity_row(file_ctx: FileContext) -> dict[str, str | None]:
     """Return the standard file identity columns for extractor rows.
 
@@ -215,33 +201,6 @@ def attrs_map(values: Mapping[str, object] | None) -> list[tuple[str, str]]:
     from extract.row_builder import make_attrs_list as _make_attrs_list
 
     return _make_attrs_list(values)
-
-
-def span_dict(spec: SpanSpec) -> dict[str, object] | None:
-    """Return a span dict for nested span structs.
-
-    Delegates to :func:`make_span_spec_dict` for canonical implementation.
-
-    Returns:
-    -------
-    dict[str, object] | None
-        Span mapping or ``None`` when empty.
-    """
-    # Lazy import to avoid circular dependency
-    from extract.row_builder import SpanTemplateSpec as _SpanTemplateSpec
-    from extract.row_builder import make_span_spec_dict as _make_span_spec_dict
-
-    template_spec = _SpanTemplateSpec(
-        start_line0=spec.start_line0,
-        start_col=spec.start_col,
-        end_line0=spec.end_line0,
-        end_col=spec.end_col,
-        end_exclusive=spec.end_exclusive,
-        col_unit=spec.col_unit,
-        byte_start=spec.byte_start,
-        byte_len=spec.byte_len,
-    )
-    return _make_span_spec_dict(template_spec)
 
 
 def text_from_file_ctx(file_ctx: FileContext) -> str | None:
@@ -286,10 +245,8 @@ __all__ = [
     "ExtractExecutionContext",
     "FileContext",
     "RepoFileRow",
-    "SpanSpec",
     "attrs_map",
     "bytes_from_file_ctx",
     "file_identity_row",
-    "span_dict",
     "text_from_file_ctx",
 ]

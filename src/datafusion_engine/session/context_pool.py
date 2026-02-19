@@ -18,15 +18,6 @@ from datafusion_engine.session.cache_policy import cache_policy_settings
 from datafusion_engine.session.delta_session_builder import (
     build_delta_session_context as _build_delta_session_context_impl,
 )
-from datafusion_engine.session.delta_session_builder import (
-    build_runtime_policy_options as _build_runtime_policy_options_impl,
-)
-from datafusion_engine.session.delta_session_builder import (
-    parse_runtime_size as _parse_runtime_size_impl,
-)
-from datafusion_engine.session.delta_session_builder import (
-    split_runtime_settings as _split_runtime_settings_impl,
-)
 from datafusion_engine.session.helpers import deregister_table
 
 
@@ -47,8 +38,6 @@ def _set_config_if_supported(
     Returns:
         SessionConfig: Updated config when the key is supported, else unchanged config.
     """
-    if key.startswith("datafusion.runtime."):
-        return config
     try:
         return config.set(key, value)
     except BaseException as exc:
@@ -198,24 +187,6 @@ def _apply_profile_execution_settings(
             value=_setting_text(value, lowercase=lowercase),
         )
     return config
-
-
-def _split_runtime_settings(
-    settings: Mapping[str, str],
-) -> tuple[dict[str, str], dict[str, str]]:
-    return _split_runtime_settings_impl(settings)
-
-
-def _parse_runtime_size(value: object) -> int | None:
-    return _parse_runtime_size_impl(value)
-
-
-def _build_delta_runtime_policy_options(
-    module: object | None,
-    runtime_settings: Mapping[str, str],
-) -> tuple[object | None, dict[str, object] | None]:
-    bridge = _build_runtime_policy_options_impl(module, runtime_settings)
-    return bridge.options, bridge.payload
 
 
 @dataclass(frozen=True)

@@ -31,10 +31,8 @@ from core_types import RowPermissive as Row
 from datafusion_engine.schema import default_attrs_value
 from extract.coordination.context import (
     FileContext,
-    SpanSpec,
     attrs_map,
     file_identity_row,
-    span_dict,
 )
 from extract.extractors.cst.setup import CstExtractOptions
 from extract.extractors.cst.visitors import (
@@ -42,6 +40,7 @@ from extract.extractors.cst.visitors import (
     CSTFileContext,
 )
 from extract.infrastructure.schema_cache import libcst_files_fingerprint
+from extract.row_builder import SpanTemplateSpec, make_span_spec_dict
 
 type QualifiedNameSet = Collection[QualifiedName] | Callable[[], Collection[QualifiedName]]
 CST_LINE_BASE = 1
@@ -362,8 +361,8 @@ def _span_from_positions(
     if byte_span is not None:
         byte_start = int(getattr(byte_span, "start", 0))
         byte_len = int(getattr(byte_span, "length", 0))
-    return span_dict(
-        SpanSpec(
+    return make_span_spec_dict(
+        SpanTemplateSpec(
             start_line0=start_line0,
             start_col=start_col,
             end_line0=end_line0,
@@ -511,6 +510,10 @@ from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.context import (
     ExtractExecutionContext,
     bytes_from_file_ctx,
+)
+from extract.coordination.entry_point import (
+    run_extract_entry_point,
+    run_extract_plan_entry_point,
 )
 from extract.coordination.extraction_runtime_loop import (
     ExtractionRuntimeWorklist,
@@ -1528,59 +1531,32 @@ def extract_cst(
         Tables derived from LibCST parsing and metadata providers.
     """
     normalized_options = normalize_options("cst", options, CstExtractOptions)
-    exec_context = context or ExtractExecutionContext()
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    determinism_tier = exec_context.determinism_tier()
-    normalize = ExtractNormalizeOptions(
-        options=normalized_options,
-        repo_id=normalized_options.repo_id,
-    )
-    rows: list[dict[str, object]] | None = None
-    row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
-    batch_size = _resolve_batch_size(normalized_options)
-    if batch_size is None:
-        rows = _collect_cst_file_rows(
-            _CstRowRequest(
-                repo_files=repo_files,
-                file_contexts=exec_context.file_contexts,
-                scope_manifest=exec_context.scope_manifest,
-                options=normalized_options,
-                evidence_plan=exec_context.evidence_plan,
-                runtime_profile=runtime_profile,
-            )
-        )
-    else:
-        row_batches = _iter_cst_row_batches(
-            _CstBatchContext(
-                repo_files=repo_files,
-                file_contexts=exec_context.file_contexts,
-                scope_manifest=exec_context.scope_manifest,
-                options=normalized_options,
-                evidence_plan=exec_context.evidence_plan,
-                runtime_profile=runtime_profile,
-                batch_size=batch_size,
-            )
-        )
-    plan = _build_cst_file_plan(
-        rows,
-        row_batches=row_batches,
-        normalize=normalize,
-        evidence_plan=exec_context.evidence_plan,
-        session=session,
-    )
-    table = materialize_extract_plan(
+    return run_extract_entry_point(
+        "cst",
         "libcst_files_v1",
-        plan,
-        runtime_profile=runtime_profile,
-        determinism_tier=determinism_tier,
-        options=ExtractMaterializeOptions(
-            normalize=normalize,
-            apply_post_kernels=True,
-        ),
+        repo_files,
+        normalized_options,
+        context=context,
+        plan_builder=_build_cst_entry_plan,
+        normalize_kwargs={"repo_id": normalized_options.repo_id},
     )
-    return ExtractResult(table=table, extractor_name="cst")
+
+
+def _build_cst_entry_plan(
+    repo_files: TableLike,
+    options: CstExtractOptions,
+    exec_context: ExtractExecutionContext,
+    session: ExtractSession,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DataFusionPlanArtifact:
+    plans = _build_cst_plans(
+        repo_files,
+        options,
+        exec_context,
+        session,
+        runtime_profile,
+    )
+    return plans["libcst_files"]
 
 
 def extract_cst_plans(
@@ -1597,24 +1573,35 @@ def extract_cst_plans(
         Plan bundle keyed by ``libcst_files``.
     """
     normalized_options = normalize_options("cst", options, CstExtractOptions)
-    exec_context = context or ExtractExecutionContext()
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
+    return run_extract_plan_entry_point(
+        repo_files,
+        normalized_options,
+        context=context,
+        plan_builder=_build_cst_plans,
+    )
+
+
+def _build_cst_plans(
+    repo_files: TableLike,
+    options: CstExtractOptions,
+    exec_context: ExtractExecutionContext,
+    session: ExtractSession,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> dict[str, DataFusionPlanArtifact]:
     normalize = ExtractNormalizeOptions(
-        options=normalized_options,
-        repo_id=normalized_options.repo_id,
+        options=options,
+        repo_id=options.repo_id,
     )
     rows: list[dict[str, object]] | None = None
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
-    batch_size = _resolve_batch_size(normalized_options)
+    batch_size = _resolve_batch_size(options)
     if batch_size is None:
         rows = _collect_cst_file_rows(
             _CstRowRequest(
                 repo_files=repo_files,
                 file_contexts=exec_context.file_contexts,
                 scope_manifest=exec_context.scope_manifest,
-                options=normalized_options,
+                options=options,
                 evidence_plan=exec_context.evidence_plan,
                 runtime_profile=runtime_profile,
             )
@@ -1625,7 +1612,7 @@ def extract_cst_plans(
                 repo_files=repo_files,
                 file_contexts=exec_context.file_contexts,
                 scope_manifest=exec_context.scope_manifest,
-                options=normalized_options,
+                options=options,
                 evidence_plan=exec_context.evidence_plan,
                 runtime_profile=runtime_profile,
                 batch_size=batch_size,

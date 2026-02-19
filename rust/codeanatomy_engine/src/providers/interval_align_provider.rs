@@ -87,7 +87,8 @@ impl IntervalAlignProvider {
         right_batches: Vec<RecordBatch>,
         config: IntervalAlignProviderConfig,
     ) -> Result<Self> {
-        let output_schema = build_output_schema(&config, left_schema.as_ref(), right_schema.as_ref())?;
+        let output_schema =
+            build_output_schema(&config, left_schema.as_ref(), right_schema.as_ref())?;
         Ok(Self {
             left_schema,
             left_batches,
@@ -105,8 +106,10 @@ impl IntervalAlignProvider {
             self.right_schema.as_ref(),
         )?;
         let ctx = SessionContext::new();
-        let left_mem = MemTable::try_new(self.left_schema.clone(), vec![self.left_batches.clone()])?;
-        let right_mem = MemTable::try_new(self.right_schema.clone(), vec![self.right_batches.clone()])?;
+        let left_mem =
+            MemTable::try_new(self.left_schema.clone(), vec![self.left_batches.clone()])?;
+        let right_mem =
+            MemTable::try_new(self.right_schema.clone(), vec![self.right_batches.clone()])?;
         ctx.register_table("__ca_left", Arc::new(left_mem))?;
         ctx.register_table("__ca_right", Arc::new(right_mem))?;
         ctx.sql(sql.as_str()).await
@@ -307,7 +310,11 @@ fn build_output_schema(
             "interval_align_table requires non-empty left and right schemas".to_string(),
         ));
     }
-    validate_required_columns(config, left_available.as_slice(), right_available.as_slice())?;
+    validate_required_columns(
+        config,
+        left_available.as_slice(),
+        right_available.as_slice(),
+    )?;
 
     let left_keep = select_columns(config.select_left.as_slice(), left_available.as_slice());
     let right_keep = select_columns(config.select_right.as_slice(), right_available.as_slice());
@@ -370,7 +377,11 @@ fn build_interval_align_sql(
             "interval_align_table requires non-empty left and right schemas".to_string(),
         ));
     }
-    validate_required_columns(config, left_available.as_slice(), right_available.as_slice())?;
+    validate_required_columns(
+        config,
+        left_available.as_slice(),
+        right_available.as_slice(),
+    )?;
 
     let left_keep = select_columns(config.select_left.as_slice(), left_available.as_slice());
     let right_keep = select_columns(config.select_right.as_slice(), right_available.as_slice());
@@ -428,8 +439,14 @@ fn build_interval_align_sql(
             order_exprs.push(format!("l.{} {order}", quote_ident(column)));
         }
     }
-    order_exprs.push(format!("r.{} ASC", quote_ident(config.right_start_col.as_str())));
-    order_exprs.push(format!("r.{} ASC", quote_ident(config.right_end_col.as_str())));
+    order_exprs.push(format!(
+        "r.{} ASC",
+        quote_ident(config.right_start_col.as_str())
+    ));
+    order_exprs.push(format!(
+        "r.{} ASC",
+        quote_ident(config.right_end_col.as_str())
+    ));
 
     let mut matched_select_parts: Vec<String> = vec!["l.__left_row AS __left_row".to_string()];
     for (original, alias) in right_aliases.as_slice() {
@@ -468,7 +485,10 @@ fn build_interval_align_sql(
                 quote_ident(config.match_kind_col.as_str())
             )
         } else {
-            format!("{mode_lit} AS {}", quote_ident(config.match_kind_col.as_str()))
+            format!(
+                "{mode_lit} AS {}",
+                quote_ident(config.match_kind_col.as_str())
+            )
         };
         output_parts.push(kind_expr);
         let score_expr = if join_mode == "left" {
@@ -477,7 +497,10 @@ fn build_interval_align_sql(
                 quote_ident(config.match_score_col.as_str())
             )
         } else {
-            format!("b.__score AS {}", quote_ident(config.match_score_col.as_str()))
+            format!(
+                "b.__score AS {}",
+                quote_ident(config.match_score_col.as_str())
+            )
         };
         output_parts.push(score_expr);
     }

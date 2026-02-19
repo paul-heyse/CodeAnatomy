@@ -215,36 +215,38 @@ mod tests {
         register_plugin_bundle(&plugin_ctx)?;
         let plugin = registry_snapshot::registry_snapshot(&plugin_ctx.state());
 
-        assert_eq!(native.scalar, plugin.scalar);
-        assert_eq!(native.aggregate, plugin.aggregate);
-        assert_eq!(native.window, plugin.window);
-        assert_eq!(native.table, plugin.table);
-        assert_eq!(native.aliases, plugin.aliases);
-        assert_eq!(native.volatility, plugin.volatility);
-        assert_eq!(native.rewrite_tags, plugin.rewrite_tags);
-        assert_eq!(native.simplify, plugin.simplify);
-        assert_eq!(native.short_circuits, plugin.short_circuits);
+        assert_eq!(native.scalar(), plugin.scalar());
+        assert_eq!(native.aggregate(), plugin.aggregate());
+        assert_eq!(native.window(), plugin.window());
+        assert_eq!(native.table(), plugin.table());
+        assert_eq!(native.aliases(), plugin.aliases());
+        assert_eq!(native.volatility(), plugin.volatility());
+        assert_eq!(native.rewrite_tags(), plugin.rewrite_tags());
+        assert_eq!(native.simplify(), plugin.simplify());
+        assert_eq!(native.short_circuits(), plugin.short_circuits());
 
-        let native_coerce_keys: Vec<String> = native.coerce_types.keys().cloned().collect();
-        let plugin_coerce_keys: Vec<String> = plugin.coerce_types.keys().cloned().collect();
+        let native_coerce_keys: Vec<String> = native.coerce_types().keys().cloned().collect();
+        let plugin_coerce_keys: Vec<String> = plugin.coerce_types().keys().cloned().collect();
         assert_eq!(native_coerce_keys, plugin_coerce_keys);
 
-        let native_parameter_keys: Vec<String> = native.parameter_names.keys().cloned().collect();
-        let plugin_parameter_keys: Vec<String> = plugin.parameter_names.keys().cloned().collect();
+        let native_parameter_keys: Vec<String> = native.parameter_names().keys().cloned().collect();
+        let plugin_parameter_keys: Vec<String> = plugin.parameter_names().keys().cloned().collect();
         assert_eq!(native_parameter_keys, plugin_parameter_keys);
 
-        let native_signature_keys: Vec<String> = native.signature_inputs.keys().cloned().collect();
-        let plugin_signature_keys: Vec<String> = plugin.signature_inputs.keys().cloned().collect();
+        let native_signature_keys: Vec<String> =
+            native.signature_inputs().keys().cloned().collect();
+        let plugin_signature_keys: Vec<String> =
+            plugin.signature_inputs().keys().cloned().collect();
         assert_eq!(native_signature_keys, plugin_signature_keys);
 
-        let native_return_keys: Vec<String> = native.return_types.keys().cloned().collect();
-        let plugin_return_keys: Vec<String> = plugin.return_types.keys().cloned().collect();
+        let native_return_keys: Vec<String> = native.return_types().keys().cloned().collect();
+        let plugin_return_keys: Vec<String> = plugin.return_types().keys().cloned().collect();
         assert_eq!(native_return_keys, plugin_return_keys);
 
-        for (name, defaults) in &plugin.config_defaults {
-            assert_eq!(native.config_defaults.get(name), Some(defaults));
+        for (name, defaults) in plugin.config_defaults() {
+            assert_eq!(native.config_defaults().get(name), Some(defaults));
         }
-        assert_eq!(native.custom_udfs, plugin.custom_udfs);
+        assert_eq!(native.custom_udfs(), plugin.custom_udfs());
         Ok(())
     }
 }

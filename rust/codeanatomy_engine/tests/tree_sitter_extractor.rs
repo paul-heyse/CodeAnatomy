@@ -4,10 +4,7 @@ use codeanatomy_engine::python::tree_sitter_extractor::{
 use serde_json::Value;
 
 fn array_len(value: &Value, key: &str) -> usize {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len)
+    value.get(key).and_then(Value::as_array).map_or(0, Vec::len)
 }
 
 #[test]

@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
-from core_types import IdentifierStr
+from core_types import IdentifierStr, NonEmptyStr
 from semantics.column_types import ColumnType
-from serde_msgspec import StructBaseStrict, to_builtins
+from serde_msgspec import StructBaseStrict, to_builtins, validation_error_payload
 
 if TYPE_CHECKING:
     from semantics.specs import SemanticTableSpec
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 class SemanticTypePatternSpec(StructBaseStrict, frozen=True):
     """Serializable pattern entry for semantic inference."""
 
-    pattern: str
+    pattern: NonEmptyStr
     column_type: ColumnType
 
 
@@ -57,7 +57,7 @@ class SemanticConfigSpec(StructBaseStrict, frozen=True):
     table_overrides: dict[IdentifierStr, dict[ColumnType, str]] = msgspec.field(
         default_factory=dict
     )
-    disallow_entity_id_patterns: tuple[str, ...] = _DEFAULT_DISALLOW_ENTITY_ID_PATTERNS
+    disallow_entity_id_patterns: tuple[NonEmptyStr, ...] = _DEFAULT_DISALLOW_ENTITY_ID_PATTERNS
 
 
 @dataclass(frozen=True)
@@ -108,11 +108,17 @@ def semantic_config_from_spec(
     -------
     SemanticConfig
         Runtime semantic configuration with compiled patterns.
-    """
-    from runtime_models.adapters import SEMANTIC_CONFIG_ADAPTER
 
+    Raises:
+        ValueError: If msgspec parsing fails for the provided semantic config.
+    """
     payload = to_builtins(spec, str_keys=True)
-    resolved = SEMANTIC_CONFIG_ADAPTER.validate_python(payload)
+    try:
+        resolved = msgspec.convert(payload, type=SemanticConfigSpec, strict=True)
+    except msgspec.ValidationError as exc:
+        details = validation_error_payload(exc)
+        msg = f"Semantic config validation failed: {details}"
+        raise ValueError(msg) from exc
     type_patterns = tuple(
         (re.compile(entry.pattern), entry.column_type) for entry in resolved.type_patterns
     )

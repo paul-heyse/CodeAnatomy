@@ -249,8 +249,7 @@ fn listing_table_plan(
 
 #[pyfunction]
 pub(crate) fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    let factory: Arc<dyn PhysicalExprAdapterFactory> =
-        Arc::new(DefaultPhysicalExprAdapterFactory);
+    let factory: Arc<dyn PhysicalExprAdapterFactory> = Arc::new(DefaultPhysicalExprAdapterFactory);
     let name = CString::new("datafusion_ext.SchemaEvolutionAdapterFactory")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, factory, Some(name))?;
@@ -364,13 +363,8 @@ pub(crate) fn parquet_listing_table_provider(
         constraints,
     );
     let task_ctx_provider = global_task_ctx_provider();
-    let ffi_provider = FFI_TableProvider::new(
-        Arc::new(wrapped),
-        true,
-        None,
-        &task_ctx_provider,
-        None,
-    );
+    let ffi_provider =
+        FFI_TableProvider::new(Arc::new(wrapped), true, None, &task_ctx_provider, None);
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;

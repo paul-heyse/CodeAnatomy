@@ -37,7 +37,11 @@ class ConformanceBackendConfig:
     root_prefix: str = "codeanatomy/conformance"
 
     def table_uri(self, *, table_name: str, root_dir: Path) -> str:
-        """Build backend-specific Delta URI for a test table name."""
+        """Build backend-specific Delta URI for a test table name.
+
+        Returns:
+            str: Backend-specific Delta table URI.
+        """
         if self.kind == "fs":
             return str(root_dir / table_name)
         bucket = self.bucket or "codeanatomy-conformance"
@@ -62,7 +66,11 @@ class ConformanceBackendConfig:
 def resolve_conformance_backend_config(
     backend: ConformanceBackendKind,
 ) -> ConformanceBackendConfig:
-    """Resolve backend-specific URI/storage contracts for conformance tests."""
+    """Resolve backend-specific URI/storage contracts for conformance tests.
+
+    Returns:
+        ConformanceBackendConfig: Resolved backend configuration contract.
+    """
     if backend == "fs":
         return ConformanceBackendConfig(kind="fs", storage_options={}, log_storage_options={})
 

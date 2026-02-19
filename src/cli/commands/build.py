@@ -19,7 +19,7 @@ from cli.groups import (
     scip_group,
 )
 from cli.path_utils import resolve_path
-from extract.extractors.scip.config import ScipIdentityOverrides, ScipIndexConfig
+from extract.extractors.scip.config import ScipCliOverrides, ScipIdentityOverrides, ScipIndexConfig
 from planning_engine.config import EngineProfile, RulepackProfile, TracingPreset
 from semantics.incremental import SemanticIncrementalConfig
 
@@ -527,16 +527,18 @@ def build_command(
     scip_config = ScipIndexConfig.from_cli_overrides(
         config_contents,
         repo_root=resolved_repo_root,
-        disable_scip=scip_overrides.disable_scip,
-        scip_output_dir=scip_overrides.scip_output_dir,
-        scip_index_path_override=scip_overrides.scip_index_path_override,
-        scip_env_json=scip_overrides.scip_env_json,
-        scip_python_bin=scip_overrides.scip_python_bin,
-        default_scip_python=_DEFAULT_SCIP_PYTHON,
-        scip_target_only=scip_overrides.scip_target_only,
-        scip_timeout_s=scip_overrides.scip_timeout_s,
-        node_max_old_space_mb=scip_overrides.node_max_old_space_mb,
-        scip_extra_args=scip_overrides.scip_extra_args,
+        overrides=ScipCliOverrides(
+            disable_scip=scip_overrides.disable_scip,
+            scip_output_dir=scip_overrides.scip_output_dir,
+            scip_index_path_override=scip_overrides.scip_index_path_override,
+            scip_env_json=scip_overrides.scip_env_json,
+            scip_python_bin=scip_overrides.scip_python_bin,
+            default_scip_python=_DEFAULT_SCIP_PYTHON,
+            scip_target_only=scip_overrides.scip_target_only,
+            scip_timeout_s=scip_overrides.scip_timeout_s,
+            node_max_old_space_mb=scip_overrides.node_max_old_space_mb,
+            scip_extra_args=scip_overrides.scip_extra_args,
+        ),
     )
 
     scip_identity = None

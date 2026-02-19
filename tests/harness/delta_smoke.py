@@ -59,6 +59,7 @@ def run_delta_smoke_round_trip(
 
     Args:
         scenario: Description.
+        backend_config: Optional backend contract override for table/storage resolution.
 
     Returns:
         DeltaSmokeResult: Result.
@@ -104,7 +105,6 @@ def run_delta_smoke_round_trip(
         plan_manifest=plan_manifest,
         plan_details=plan_details,
     )
-    sql = f"SELECT id, label FROM {scenario.query_table_name} ORDER BY id"
     rows = _rows_from_reader(
         delta_query(
             DeltaQueryRequest(
@@ -116,7 +116,7 @@ def run_delta_smoke_round_trip(
                 builder=lambda ctx, table_name: ctx.sql(
                     f"SELECT id, label FROM {table_name} ORDER BY id"
                 ),
-                query_label=sql,
+                query_label=f"SELECT id, label FROM {scenario.query_table_name} ORDER BY id",
             )
         )
     )

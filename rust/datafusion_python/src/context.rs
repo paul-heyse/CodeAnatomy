@@ -605,10 +605,7 @@ impl PySessionContext {
         provider: Bound<'_, PyAny>,
     ) -> PyDataFusionResult<()> {
         let provider = if provider.hasattr("__datafusion_catalog_provider__")? {
-            let session = Py::new(
-                provider.py(),
-                PySessionContext::from(self.ctx.clone()),
-            )?;
+            let session = Py::new(provider.py(), PySessionContext::from(self.ctx.clone()))?;
             let capsule = provider
                 .getattr("__datafusion_catalog_provider__")?
                 .call1((session,))?;

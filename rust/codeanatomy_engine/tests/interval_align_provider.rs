@@ -9,12 +9,7 @@ use codeanatomy_engine::providers::{
 use datafusion::logical_expr::{col, TableProviderFilterPushDown};
 use datafusion::prelude::{lit, SessionContext};
 
-fn interval_inputs() -> (
-    Arc<Schema>,
-    Vec<RecordBatch>,
-    Arc<Schema>,
-    Vec<RecordBatch>,
-) {
+fn interval_inputs() -> (Arc<Schema>, Vec<RecordBatch>, Arc<Schema>, Vec<RecordBatch>) {
     let left_schema = Arc::new(Schema::new(vec![
         Field::new("path", DataType::Utf8, false),
         Field::new("bstart", DataType::Int64, false),
@@ -47,7 +42,12 @@ fn interval_inputs() -> (
         ],
     )
     .expect("right batch");
-    (left_schema, vec![left_batch], right_schema, vec![right_batch])
+    (
+        left_schema,
+        vec![left_batch],
+        right_schema,
+        vec![right_batch],
+    )
 }
 
 #[tokio::test]
@@ -84,7 +84,8 @@ async fn interval_align_provider_supports_projection_filter_and_limit() {
     .await
     .expect("provider");
     let ctx = SessionContext::new();
-    ctx.register_table("intervals", provider).expect("register table");
+    ctx.register_table("intervals", provider)
+        .expect("register table");
     let df = ctx
         .sql("SELECT path, match_kind FROM intervals WHERE path = 'a.py' LIMIT 1")
         .await

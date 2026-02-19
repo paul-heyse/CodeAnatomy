@@ -15,8 +15,8 @@ use datafusion_ext::{DeltaCommitOptions, DeltaFeatureGate};
 use deltalake::protocol::SaveMode;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use serde_json::json;
 use serde::Deserialize;
+use serde_json::json;
 use tracing::instrument;
 
 use super::helpers::{
@@ -143,9 +143,11 @@ pub(crate) fn delta_write_ipc_request(
         "skipped"
     };
     let metadata_required = request.commit_metadata_required.unwrap_or_default();
-    let metadata_present = metadata_required
-        .iter()
-        .all(|(key, expected)| mutation_report.get(key).is_some_and(|value| value == expected));
+    let metadata_present = metadata_required.iter().all(|(key, expected)| {
+        mutation_report
+            .get(key)
+            .is_some_and(|value| value == expected)
+    });
     let enabled_features = request.table_properties.unwrap_or_default();
     let response = json!({
         "operation": "write",

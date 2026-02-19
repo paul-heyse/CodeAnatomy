@@ -13,13 +13,13 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_ext::delta_control_plane::{
     delta_provider_from_session_request, DeltaProviderFromSessionRequest, DeltaScanOverrides,
 };
-use datafusion_ext::delta_protocol::TableVersion;
 use datafusion_ext::delta_mutations::{
     delta_write_batches_request, DeltaMutationReport, DeltaWriteBatchesRequest,
 };
+use datafusion_ext::delta_protocol::TableVersion;
 use datafusion_ext::DeltaFeatureGate;
-use deltalake::errors::DeltaTableError;
 use deltalake::delta_datafusion::DeltaScanConfig;
+use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
     ArrayType as DeltaArrayType, DataType as DeltaDataType, MapType as DeltaMapType, PrimitiveType,
     StructField as DeltaStructField, StructType as DeltaStructType,
@@ -239,7 +239,9 @@ pub fn extract_row_count(batches: &[RecordBatch]) -> u64 {
     batches.iter().map(|b| b.num_rows() as u64).sum()
 }
 
-fn decode_batches_from_ipc(data_ipc: &[u8]) -> std::result::Result<Vec<RecordBatch>, DeltaTableError> {
+fn decode_batches_from_ipc(
+    data_ipc: &[u8],
+) -> std::result::Result<Vec<RecordBatch>, DeltaTableError> {
     let reader = StreamReader::try_new(Cursor::new(data_ipc.to_vec()), None).map_err(|err| {
         DeltaTableError::Generic(format!("Failed to decode Arrow IPC stream: {err}"))
     })?;

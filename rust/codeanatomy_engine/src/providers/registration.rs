@@ -208,6 +208,7 @@ pub async fn probe_provider_pushdown(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::pushdown_contract::FilterPushdownStatus;
 
     #[test]
     fn test_registration_record_serialization() {
@@ -217,9 +218,9 @@ mod tests {
             schema_hash: [0u8; 32],
             provider_identity: [1u8; 32],
             capabilities: crate::providers::scan_config::ProviderCapabilities {
-                predicate_pushdown: true,
-                projection_pushdown: true,
-                partition_pruning: true,
+                predicate_pushdown: Some(FilterPushdownStatus::Inexact),
+                projection_pushdown: Some(FilterPushdownStatus::Exact),
+                partition_pruning: Some(FilterPushdownStatus::Inexact),
             },
             compatibility: DeltaCompatibilityFacts {
                 min_reader_version: 1,
@@ -238,7 +239,10 @@ mod tests {
         assert_eq!(record.delta_version, deserialized.delta_version);
         assert_eq!(record.schema_hash, deserialized.schema_hash);
         assert_eq!(record.provider_identity, deserialized.provider_identity);
-        assert!(deserialized.capabilities.predicate_pushdown);
+        assert_eq!(
+            deserialized.capabilities.predicate_pushdown,
+            Some(FilterPushdownStatus::Inexact)
+        );
         assert_eq!(deserialized.compatibility.min_reader_version, 1);
     }
 

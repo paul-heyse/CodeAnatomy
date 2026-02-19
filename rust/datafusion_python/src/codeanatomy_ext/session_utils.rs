@@ -384,22 +384,24 @@ pub(crate) fn build_plan_bundle_artifact_with_warnings(
             .map_err(|err| {
                 PyRuntimeError::new_err(format!("Plan bundle runtime capture failed: {err}"))
             })?;
-        plan_bundle::build_plan_bundle_artifact_with_warnings(plan_bundle::PlanBundleArtifactBuildRequest {
-            ctx: &session_ctx,
-            runtime: &runtime_bundle,
-            rulepack_fingerprint: [0_u8; 32],
-            provider_identities: Vec::new(),
-            optimizer_traces: Vec::new(),
-            pushdown_report: None,
-            deterministic_inputs: parsed.deterministic_inputs.unwrap_or(true),
-            no_volatile_udfs: parsed.no_volatile_udfs.unwrap_or(true),
-            deterministic_optimizer: parsed.deterministic_optimizer.unwrap_or(true),
-            stats_quality: parsed.stats_quality.clone(),
-            capture_substrait: parsed.capture_substrait.unwrap_or(true),
-            capture_sql: parsed.capture_sql.unwrap_or(false),
-            capture_delta_codec: parsed.capture_delta_codec.unwrap_or(false),
-            planning_surface_hash: [0_u8; 32],
-        })
+        plan_bundle::build_plan_bundle_artifact_with_warnings(
+            plan_bundle::PlanBundleArtifactBuildRequest {
+                ctx: &session_ctx,
+                runtime: &runtime_bundle,
+                rulepack_fingerprint: [0_u8; 32],
+                provider_identities: Vec::new(),
+                optimizer_traces: Vec::new(),
+                pushdown_report: None,
+                deterministic_inputs: parsed.deterministic_inputs.unwrap_or(true),
+                no_volatile_udfs: parsed.no_volatile_udfs.unwrap_or(true),
+                deterministic_optimizer: parsed.deterministic_optimizer.unwrap_or(true),
+                stats_quality: parsed.stats_quality.clone(),
+                capture_substrait: parsed.capture_substrait.unwrap_or(true),
+                capture_sql: parsed.capture_sql.unwrap_or(false),
+                capture_delta_codec: parsed.capture_delta_codec.unwrap_or(false),
+                planning_surface_hash: [0_u8; 32],
+            },
+        )
         .await
         .map_err(|err| PyRuntimeError::new_err(format!("Plan bundle artifact build failed: {err}")))
     })?;

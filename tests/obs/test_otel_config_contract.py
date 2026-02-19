@@ -71,3 +71,19 @@ def test_bootstrap_option_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
         options=reloaded.OtelBootstrapOptions(enable_traces=True, test_mode=True),
     )
     assert providers.tracer_provider is not None
+
+
+def test_sampler_arg_requires_sampler() -> None:
+    """sampler_arg without sampler should fail config validation."""
+    with pytest.raises(ValueError, match="sampler_arg requires sampler to be set"):
+        otel_config.resolve_otel_config(
+            spec=otel_config.OtelConfigSpec(sampler_arg=0.5),
+        )
+
+
+def test_sampler_arg_bounds_validation() -> None:
+    """sampler_arg must be within [0.0, 1.0]."""
+    with pytest.raises(ValueError, match=r"sampler_arg must be within \[0.0, 1.0\]"):
+        otel_config.resolve_otel_config(
+            spec=otel_config.OtelConfigSpec(sampler="traceidratio", sampler_arg=1.1),
+        )

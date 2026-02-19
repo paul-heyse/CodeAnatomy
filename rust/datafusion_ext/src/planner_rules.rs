@@ -107,19 +107,28 @@ pub fn install_policy_rules(ctx: &SessionContext) -> Result<()> {
 fn validate_plan_policy(plan: &LogicalPlan, policy: &CodeAnatomyPolicyConfig) -> Result<()> {
     match plan {
         LogicalPlan::Ddl(_) if !policy.allow_ddl => {
-            tracing::info!(statement_type = "ddl", "CodeAnatomyPolicyRule blocked statement");
+            tracing::info!(
+                statement_type = "ddl",
+                "CodeAnatomyPolicyRule blocked statement"
+            );
             return Err(DataFusionError::Plan(
                 "DDL statements are disabled by policy.".to_string(),
             ));
         }
         LogicalPlan::Dml(_) if !policy.allow_dml => {
-            tracing::info!(statement_type = "dml", "CodeAnatomyPolicyRule blocked statement");
+            tracing::info!(
+                statement_type = "dml",
+                "CodeAnatomyPolicyRule blocked statement"
+            );
             return Err(DataFusionError::Plan(
                 "DML statements are disabled by policy.".to_string(),
             ));
         }
         LogicalPlan::Copy(_) if !policy.allow_dml => {
-            tracing::info!(statement_type = "copy", "CodeAnatomyPolicyRule blocked statement");
+            tracing::info!(
+                statement_type = "copy",
+                "CodeAnatomyPolicyRule blocked statement"
+            );
             return Err(DataFusionError::Plan(
                 "COPY operations are disabled by policy.".to_string(),
             ));

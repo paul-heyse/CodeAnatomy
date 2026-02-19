@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 import msgspec
 import pyarrow as pa
@@ -11,6 +12,12 @@ from datafusion import Expr, SessionContext, lit
 
 IS_STUB: bool = True
 _CACHE_FANOUT_THRESHOLD = 2
+_CACHE_POLICY_NONE = "none"
+_CACHE_POLICY_STAGING = "delta_staging"
+_CACHE_POLICY_OUTPUT = "delta_output"
+_ALLOWED_CACHE_POLICIES = frozenset(
+    {_CACHE_POLICY_NONE, _CACHE_POLICY_STAGING, _CACHE_POLICY_OUTPUT}
+)
 
 
 def plugin_library_path() -> str:
@@ -263,6 +270,52 @@ def session_context_contract_probe(ctx: SessionContext) -> dict[str, object]:
     }
 
 
+def _output_names(payload: Mapping[str, object]) -> set[str]:
+    outputs_payload = payload.get("outputs")
+    if isinstance(outputs_payload, (list, tuple)):
+        return {str(item) for item in outputs_payload}
+    return set()
+
+
+def _cache_overrides(payload: Mapping[str, object]) -> dict[str, str]:
+    overrides_payload = payload.get("cache_overrides")
+    if not isinstance(overrides_payload, Mapping):
+        return {}
+    return {str(key): str(value) for key, value in overrides_payload.items()}
+
+
+def _normalized_workload(payload: Mapping[str, object]) -> str | None:
+    workload_raw = payload.get("workload_class")
+    if workload_raw is None:
+        return None
+    workload = str(workload_raw).strip().lower()
+    return workload or None
+
+
+def _default_cache_policy(*, out_degree: int, is_output: bool) -> str:
+    if is_output:
+        return _CACHE_POLICY_OUTPUT
+    if out_degree == 0:
+        return _CACHE_POLICY_NONE
+    return _CACHE_POLICY_STAGING if out_degree >= 0 else _CACHE_POLICY_NONE
+
+
+def _apply_workload_policy(
+    *,
+    workload: str | None,
+    policy_value: str,
+    out_degree: int,
+    is_output: bool,
+) -> str:
+    if policy_value != _CACHE_POLICY_STAGING or is_output:
+        return policy_value
+    if workload == "interactive_query" and out_degree <= 1:
+        return _CACHE_POLICY_NONE
+    if workload == "compile_replay":
+        return _CACHE_POLICY_NONE
+    return policy_value
+
+
 def derive_cache_policies(payload: Mapping[str, object]) -> dict[str, str]:
     """Return deterministic cache-policy decisions from a graph payload."""
     graph = payload.get("graph")
@@ -271,22 +324,9 @@ def derive_cache_policies(payload: Mapping[str, object]) -> dict[str, str]:
     out_degree_payload = graph.get("out_degree")
     if not isinstance(out_degree_payload, Mapping):
         return {}
-    outputs_payload = payload.get("outputs")
-    output_names = (
-        {str(item) for item in outputs_payload}
-        if isinstance(outputs_payload, (list, tuple))
-        else set()
-    )
-    overrides_payload = payload.get("cache_overrides")
-    overrides: dict[str, str] = (
-        {str(key): str(value) for key, value in overrides_payload.items()}
-        if isinstance(overrides_payload, Mapping)
-        else {}
-    )
-    workload_raw = payload.get("workload_class")
-    workload = str(workload_raw).strip().lower() if workload_raw is not None else None
-    if not workload:
-        workload = None
+    output_names = _output_names(payload)
+    overrides = _cache_overrides(payload)
+    workload = _normalized_workload(payload)
     policies: dict[str, str] = {}
     for task_name, raw_out_degree in out_degree_payload.items():
         name = str(task_name)
@@ -295,28 +335,240 @@ def derive_cache_policies(payload: Mapping[str, object]) -> dict[str, str]:
         except (TypeError, ValueError):
             out_degree = 0
         is_output = name in output_names
-        if is_output:
-            policy_value = "delta_output"
-        elif out_degree > _CACHE_FANOUT_THRESHOLD:
-            policy_value = "delta_staging"
-        elif out_degree == 0:
-            policy_value = "none"
-        else:
-            policy_value = "delta_staging"
-        if (
-            workload == "interactive_query"
-            and policy_value == "delta_staging"
-            and out_degree <= 1
-            and not is_output
-        ):
-            policy_value = "none"
-        if workload == "compile_replay" and policy_value == "delta_staging" and not is_output:
-            policy_value = "none"
+        policy_value = _default_cache_policy(out_degree=out_degree, is_output=is_output)
+        if out_degree > _CACHE_FANOUT_THRESHOLD and not is_output:
+            policy_value = _CACHE_POLICY_STAGING
+        policy_value = _apply_workload_policy(
+            workload=workload,
+            policy_value=policy_value,
+            out_degree=out_degree,
+            is_output=is_output,
+        )
         override = overrides.get(name)
-        if override in {"none", "delta_staging", "delta_output"}:
-            policy_value = override
+        if override in _ALLOWED_CACHE_POLICIES:
+            policy_value = str(override)
         policies[name] = policy_value
     return policies
+
+
+def _int_value(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text and text.lstrip("-").isdigit():
+            return int(text)
+    return None
+
+
+def _string_sequence(value: object) -> tuple[str, ...]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(str(item) for item in value)
+    return ()
+
+
+@dataclass(frozen=True)
+class _IntervalAlignConfig:
+    mode: str
+    how: str
+    left_path_col: str
+    left_start_col: str
+    left_end_col: str
+    right_path_col: str
+    right_start_col: str
+    right_end_col: str
+    select_left: tuple[str, ...]
+    select_right: tuple[str, ...]
+    emit_match_meta: bool
+    match_kind_col: str
+    match_score_col: str
+    right_suffix: str
+    tie_breakers: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True)
+class _IntervalMatchContext:
+    best: Mapping[str, object] | None
+    left_start: int | None
+    left_end: int | None
+    left_path: object
+
+
+def _interval_align_config(payload: Mapping[str, object] | None) -> _IntervalAlignConfig:
+    payload_map = dict(payload or {})
+    tie_breakers_raw = payload_map.get("tie_breakers")
+    tie_breakers: tuple[Mapping[str, object], ...] = ()
+    if isinstance(tie_breakers_raw, Sequence) and not isinstance(
+        tie_breakers_raw, (str, bytes, bytearray)
+    ):
+        tie_breakers = tuple(entry for entry in tie_breakers_raw if isinstance(entry, Mapping))
+    return _IntervalAlignConfig(
+        mode=str(payload_map.get("mode") or "CONTAINED_BEST").upper(),
+        how=str(payload_map.get("how") or "inner").lower(),
+        left_path_col=str(payload_map.get("left_path_col") or "path"),
+        left_start_col=str(payload_map.get("left_start_col") or "bstart"),
+        left_end_col=str(payload_map.get("left_end_col") or "bend"),
+        right_path_col=str(payload_map.get("right_path_col") or "path"),
+        right_start_col=str(payload_map.get("right_start_col") or "bstart"),
+        right_end_col=str(payload_map.get("right_end_col") or "bend"),
+        select_left=_string_sequence(payload_map.get("select_left")),
+        select_right=_string_sequence(payload_map.get("select_right")),
+        emit_match_meta=bool(payload_map.get("emit_match_meta", True)),
+        match_kind_col=str(payload_map.get("match_kind_col") or "match_kind"),
+        match_score_col=str(payload_map.get("match_score_col") or "match_score"),
+        right_suffix=str(payload_map.get("right_suffix") or "__r"),
+        tie_breakers=tie_breakers,
+    )
+
+
+def _right_aliases(
+    *,
+    left_keep: Sequence[str],
+    right_keep: Sequence[str],
+    cfg: _IntervalAlignConfig,
+) -> list[tuple[str, str]]:
+    reserved = {cfg.match_kind_col, cfg.match_score_col} if cfg.emit_match_meta else set()
+    used = set(left_keep) | reserved
+    aliases: list[tuple[str, str]] = []
+    for name in right_keep:
+        alias = f"{name}{cfg.right_suffix}" if name in used else name
+        while alias in used:
+            alias = f"{alias}_r"
+        used.add(alias)
+        aliases.append((name, alias))
+    return aliases
+
+
+def _interval_matches(
+    *,
+    mode: str,
+    left_start: int,
+    left_end: int,
+    right_start: int,
+    right_end: int,
+) -> bool:
+    if mode == "EXACT":
+        return right_start == left_start and right_end == left_end
+    if mode == "OVERLAP_BEST":
+        return right_start < left_end and right_end > left_start
+    return right_start <= left_start and right_end >= left_end
+
+
+def _match_score(
+    *,
+    left_row: Mapping[str, object],
+    right_row: Mapping[str, object],
+    left_span: tuple[int, int],
+    right_span: tuple[int, int],
+    cfg: _IntervalAlignConfig,
+) -> float:
+    left_start, left_end = left_span
+    right_start, right_end = right_span
+    overlap = max(0, min(left_end, right_end) - max(left_start, right_start))
+    score = float(overlap)
+    for tie_index, tie in enumerate(cfg.tie_breakers):
+        col_name = str(tie.get("column") or "")
+        order = str(tie.get("order") or "ascending").lower()
+        tie_value = right_row.get(col_name, left_row.get(col_name))
+        if not isinstance(tie_value, (int, float)):
+            continue
+        delta = float(tie_value) / (10 ** (tie_index + 6))
+        score = score + delta if order == "descending" else score - delta
+    return score
+
+
+def _best_interval_match(
+    *,
+    left_row: Mapping[str, object],
+    right_rows: Sequence[Mapping[str, object]],
+    cfg: _IntervalAlignConfig,
+) -> _IntervalMatchContext:
+    left_path = left_row.get(cfg.left_path_col)
+    left_start = _int_value(left_row.get(cfg.left_start_col))
+    left_end = _int_value(left_row.get(cfg.left_end_col))
+    if left_start is None or left_end is None:
+        return _IntervalMatchContext(
+            best=None,
+            left_start=left_start,
+            left_end=left_end,
+            left_path=left_path,
+        )
+    candidates: list[tuple[float, Mapping[str, object]]] = []
+    for right_row in right_rows:
+        if right_row.get(cfg.right_path_col) != left_path:
+            continue
+        right_start = _int_value(right_row.get(cfg.right_start_col))
+        right_end = _int_value(right_row.get(cfg.right_end_col))
+        if right_start is None or right_end is None:
+            continue
+        if not _interval_matches(
+            mode=cfg.mode,
+            left_start=left_start,
+            left_end=left_end,
+            right_start=right_start,
+            right_end=right_end,
+        ):
+            continue
+        score = _match_score(
+            left_row=left_row,
+            right_row=right_row,
+            left_span=(left_start, left_end),
+            right_span=(right_start, right_end),
+            cfg=cfg,
+        )
+        candidates.append((score, right_row))
+    best = max(candidates, key=lambda item: item[0])[1] if candidates else None
+    return _IntervalMatchContext(
+        best=best,
+        left_start=left_start,
+        left_end=left_end,
+        left_path=left_path,
+    )
+
+
+def _interval_output_row(
+    *,
+    left_row: Mapping[str, object],
+    context: _IntervalMatchContext,
+    left_keep: Sequence[str],
+    right_aliases: Sequence[tuple[str, str]],
+    cfg: _IntervalAlignConfig,
+) -> dict[str, object]:
+    best = context.best
+    row: dict[str, object] = {name: left_row.get(name) for name in left_keep}
+    for source, alias in right_aliases:
+        row[alias] = None if best is None else best.get(source)
+    if not cfg.emit_match_meta:
+        return row
+    if best is None:
+        row[cfg.match_kind_col] = (
+            "NO_PATH_OR_SPAN"
+            if context.left_path is None or context.left_start is None or context.left_end is None
+            else "NO_MATCH"
+        )
+        row[cfg.match_score_col] = None
+        return row
+    row[cfg.match_kind_col] = cfg.mode
+    row[cfg.match_score_col] = max(
+        0.0,
+        float(
+            min(_int_value(best.get(cfg.right_end_col)) or 0, context.left_end or 0)
+            - max(_int_value(best.get(cfg.right_start_col)) or 0, context.left_start or 0)
+        ),
+    )
+    return row
+
+
+def _empty_interval_align_table(
+    *,
+    left_keep: Sequence[str],
+    right_aliases: Sequence[tuple[str, str]],
+    cfg: _IntervalAlignConfig,
+) -> pa.Table:
+    names = [*left_keep, *(alias for _, alias in right_aliases)]
+    if cfg.emit_match_meta:
+        names.extend((cfg.match_kind_col, cfg.match_score_col))
+    return pa.table({name: pa.array([], type=pa.null()) for name in names})
 
 
 def interval_align_table(
@@ -333,138 +585,308 @@ def interval_align_table(
     """
     from datafusion_engine.arrow.coercion import to_arrow_table
 
-    def _int_value(value: object) -> int | None:
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            text = value.strip()
-            if text and text.lstrip("-").isdigit():
-                return int(text)
-        return None
-
-    payload_map = dict(payload or {})
-    mode = str(payload_map.get("mode") or "CONTAINED_BEST").upper()
-    how = str(payload_map.get("how") or "inner").lower()
-    left_path_col = str(payload_map.get("left_path_col") or "path")
-    left_start_col = str(payload_map.get("left_start_col") or "bstart")
-    left_end_col = str(payload_map.get("left_end_col") or "bend")
-    right_path_col = str(payload_map.get("right_path_col") or "path")
-    right_start_col = str(payload_map.get("right_start_col") or "bstart")
-    right_end_col = str(payload_map.get("right_end_col") or "bend")
-    select_left_raw = payload_map.get("select_left")
-    select_left = (
-        tuple(str(value) for value in select_left_raw)
-        if isinstance(select_left_raw, Sequence)
-        and not isinstance(select_left_raw, (str, bytes, bytearray))
-        else ()
-    )
-    select_right_raw = payload_map.get("select_right")
-    select_right = (
-        tuple(str(value) for value in select_right_raw)
-        if isinstance(select_right_raw, Sequence)
-        and not isinstance(select_right_raw, (str, bytes, bytearray))
-        else ()
-    )
-    emit_match_meta = bool(payload_map.get("emit_match_meta", True))
-    match_kind_col = str(payload_map.get("match_kind_col") or "match_kind")
-    match_score_col = str(payload_map.get("match_score_col") or "match_score")
-    right_suffix = str(payload_map.get("right_suffix") or "__r")
-    tie_breakers_raw = payload_map.get("tie_breakers")
-    tie_breakers = (
-        list(tie_breakers_raw)
-        if isinstance(tie_breakers_raw, Sequence)
-        and not isinstance(tie_breakers_raw, (str, bytes, bytearray))
-        else []
-    )
-
+    cfg = _interval_align_config(payload)
     left_table = to_arrow_table(left)
     right_table = to_arrow_table(right)
     left_rows = left_table.to_pylist()
-    right_rows = right_table.to_pylist()
-    left_cols = list(left_table.column_names)
-    right_cols = list(right_table.column_names)
-    left_keep = list(select_left) if select_left else left_cols
-    right_keep = list(select_right) if select_right else right_cols
-
-    used = set(left_keep) | ({match_kind_col, match_score_col} if emit_match_meta else set())
-    right_aliases: list[tuple[str, str]] = []
-    for name in right_keep:
-        alias = f"{name}{right_suffix}" if name in used else name
-        while alias in used:
-            alias = f"{alias}_r"
-        used.add(alias)
-        right_aliases.append((name, alias))
-
+    right_rows = tuple(right_table.to_pylist())
+    left_keep = list(cfg.select_left) if cfg.select_left else list(left_table.column_names)
+    right_keep = list(cfg.select_right) if cfg.select_right else list(right_table.column_names)
+    aliases = _right_aliases(left_keep=left_keep, right_keep=right_keep, cfg=cfg)
     output_rows: list[dict[str, object]] = []
     for left_row in left_rows:
-        left_path = left_row.get(left_path_col)
-        left_start = _int_value(left_row.get(left_start_col))
-        left_end = _int_value(left_row.get(left_end_col))
-
-        candidates: list[tuple[float, dict[str, object]]] = []
-        for right_row in right_rows:
-            if right_row.get(right_path_col) != left_path:
-                continue
-            right_start = _int_value(right_row.get(right_start_col))
-            right_end = _int_value(right_row.get(right_end_col))
-            if left_start is None or left_end is None or right_start is None or right_end is None:
-                continue
-            if mode == "EXACT":
-                matched = right_start == left_start and right_end == left_end
-            elif mode == "OVERLAP_BEST":
-                matched = right_start < left_end and right_end > left_start
-            else:
-                matched = right_start <= left_start and right_end >= left_end
-            if not matched:
-                continue
-            overlap = max(0, min(left_end, right_end) - max(left_start, right_start))
-            score = float(overlap)
-            for tie_index, tie in enumerate(tie_breakers):
-                if not isinstance(tie, Mapping):
-                    continue
-                col_name = str(tie.get("column") or "")
-                order = str(tie.get("order") or "ascending").lower()
-                tie_value = right_row.get(col_name, left_row.get(col_name))
-                if isinstance(tie_value, (int, float)):
-                    if order == "descending":
-                        score += float(tie_value) / (10 ** (tie_index + 6))
-                    else:
-                        score -= float(tie_value) / (10 ** (tie_index + 6))
-            candidates.append((score, right_row))
-
-        best = max(candidates, key=lambda item: item[0])[1] if candidates else None
-        if best is None and how != "left":
+        context = _best_interval_match(
+            left_row=left_row,
+            right_rows=right_rows,
+            cfg=cfg,
+        )
+        if context.best is None and cfg.how != "left":
             continue
-
-        out_row: dict[str, object] = {}
-        for name in left_keep:
-            out_row[name] = left_row.get(name)
-        for source, alias in right_aliases:
-            out_row[alias] = None if best is None else best.get(source)
-        if emit_match_meta:
-            if best is None:
-                if left_path is None or left_start is None or left_end is None:
-                    out_row[match_kind_col] = "NO_PATH_OR_SPAN"
-                else:
-                    out_row[match_kind_col] = "NO_MATCH"
-                out_row[match_score_col] = None
-            else:
-                out_row[match_kind_col] = mode
-                out_row[match_score_col] = max(
-                    0.0,
-                    float(
-                        min(_int_value(best.get(right_end_col)) or 0, left_end or 0)
-                        - max(_int_value(best.get(right_start_col)) or 0, left_start or 0)
-                    ),
-                )
-        output_rows.append(out_row)
-
+        output_rows.append(
+            _interval_output_row(
+                left_row=left_row,
+                context=context,
+                left_keep=left_keep,
+                right_aliases=aliases,
+                cfg=cfg,
+            )
+        )
     if not output_rows:
-        names = [*left_keep, *(alias for _, alias in right_aliases)]
-        if emit_match_meta:
-            names.extend((match_kind_col, match_score_col))
-        return pa.table({name: pa.array([], type=pa.null()) for name in names})
+        return _empty_interval_align_table(left_keep=left_keep, right_aliases=aliases, cfg=cfg)
     return pa.table(output_rows)
+
+
+@dataclass(frozen=True)
+class _TreeSitterStubRows:
+    node_rows: tuple[dict[str, object], ...]
+    def_rows: tuple[dict[str, object], ...]
+    call_rows: tuple[dict[str, object], ...]
+    import_rows: tuple[dict[str, object], ...]
+    capture_rows: tuple[dict[str, object], ...]
+
+
+def _empty_tree_sitter_payload(
+    *,
+    file_path: str,
+    file_id: str,
+    file_sha256: str | None,
+) -> dict[str, object]:
+    return {
+        "repo": "",
+        "path": file_path,
+        "file_id": file_id,
+        "file_sha256": file_sha256,
+        "nodes": list[object](),
+        "edges": list[object](),
+        "errors": list[object](),
+        "missing": list[object](),
+        "captures": list[object](),
+        "defs": list[object](),
+        "calls": list[object](),
+        "imports": list[object](),
+        "docstrings": list[object](),
+        "stats": None,
+        "attrs": list[object](),
+    }
+
+
+def _tree_sitter_node_row(
+    *,
+    node: object,
+    node_uid: int,
+    file_id: str,
+) -> dict[str, object]:
+    from extract.coordination.context import SpanSpec, span_dict
+
+    bstart = int(getattr(node, "start_byte", 0))
+    bend = int(getattr(node, "end_byte", bstart))
+    kind = str(getattr(node, "type", "unknown"))
+    node_id = f"{file_id}:{kind}:{bstart}:{bend}"
+    return {
+        "node_id": node_id,
+        "node_uid": node_uid,
+        "parent_id": None,
+        "kind": kind,
+        "kind_id": 0,
+        "grammar_id": 0,
+        "grammar_name": "python",
+        "span": span_dict(
+            SpanSpec(
+                start_line0=None,
+                start_col=None,
+                end_line0=None,
+                end_col=None,
+                end_exclusive=True,
+                col_unit="byte",
+                byte_start=bstart,
+                byte_len=max(0, bend - bstart),
+            )
+        ),
+        "flags": {
+            "is_named": bool(getattr(node, "is_named", True)),
+            "has_error": bool(getattr(node, "has_error", False)),
+            "is_error": bool(getattr(node, "is_error", False)),
+            "is_missing": bool(getattr(node, "is_missing", False)),
+            "is_extra": bool(getattr(node, "is_extra", False)),
+            "has_changes": False,
+        },
+        "attrs": [],
+    }
+
+
+def _append_def_row(
+    *,
+    rows: list[dict[str, object]],
+    node: object,
+    node_id: str,
+    kind: str,
+    span: object,
+    source_bytes: bytes,
+) -> None:
+    if kind not in {"function_definition", "class_definition"}:
+        return
+    name_node = getattr(node, "child_by_field_name", lambda *_args: None)("name")
+    name: str | None = None
+    if name_node is not None:
+        nstart = int(getattr(name_node, "start_byte", 0))
+        nend = int(getattr(name_node, "end_byte", nstart))
+        name = source_bytes[nstart:nend].decode("utf-8", errors="replace")
+    rows.append(
+        {
+            "node_id": node_id,
+            "parent_id": None,
+            "kind": kind,
+            "name": name,
+            "span": span,
+            "attrs": [],
+        }
+    )
+
+
+def _append_call_row(
+    *,
+    rows: list[dict[str, object]],
+    node: object,
+    node_id: str,
+    file_id: str,
+    span: object,
+    source_bytes: bytes,
+) -> None:
+    if str(getattr(node, "type", "unknown")) != "call":
+        return
+    bstart = int(getattr(node, "start_byte", 0))
+    bend = int(getattr(node, "end_byte", bstart))
+    callee = getattr(node, "child_by_field_name", lambda *_args: None)("function")
+    callee_kind = str(getattr(callee, "type", "unknown")) if callee is not None else "unknown"
+    callee_start = int(getattr(callee, "start_byte", bstart)) if callee is not None else bstart
+    callee_end = int(getattr(callee, "end_byte", callee_start)) if callee is not None else bend
+    callee_text = source_bytes[callee_start:callee_end].decode("utf-8", errors="replace")
+    rows.append(
+        {
+            "node_id": node_id,
+            "parent_id": None,
+            "callee_kind": callee_kind,
+            "callee_text": callee_text,
+            "callee_node_id": f"{file_id}:{callee_kind}:{callee_start}:{callee_end}",
+            "span": span,
+            "attrs": [],
+        }
+    )
+
+
+def _append_import_row(
+    *,
+    rows: list[dict[str, object]],
+    node: object,
+    node_id: str,
+    span: object,
+    source_bytes: bytes,
+) -> None:
+    kind = str(getattr(node, "type", "unknown"))
+    if kind not in {"import_statement", "import_from_statement"}:
+        return
+    bstart = int(getattr(node, "start_byte", 0))
+    bend = int(getattr(node, "end_byte", bstart))
+    snippet = source_bytes[bstart:bend].decode("utf-8", errors="replace").strip()
+    rows.append(
+        {
+            "node_id": node_id,
+            "parent_id": None,
+            "kind": "ImportFrom" if kind == "import_from_statement" else "Import",
+            "module": None,
+            "name": snippet,
+            "asname": None,
+            "alias_index": 0,
+            "level": None,
+            "span": span,
+            "attrs": [],
+        }
+    )
+
+
+def _collect_tree_sitter_rows(
+    *,
+    source_bytes: bytes,
+    root_node: object,
+    file_id: str,
+) -> _TreeSitterStubRows:
+    node_rows: list[dict[str, object]] = []
+    def_rows: list[dict[str, object]] = []
+    call_rows: list[dict[str, object]] = []
+    import_rows: list[dict[str, object]] = []
+    capture_rows: list[dict[str, object]] = []
+    stack: list[object] = [root_node]
+    while stack:
+        node = stack.pop()
+        if node is None:
+            continue
+        node_row = _tree_sitter_node_row(node=node, node_uid=len(node_rows), file_id=file_id)
+        node_rows.append(node_row)
+        node_id = str(node_row["node_id"])
+        kind = str(node_row["kind"])
+        span = node_row["span"]
+        _append_def_row(
+            rows=def_rows,
+            node=node,
+            node_id=node_id,
+            kind=kind,
+            span=span,
+            source_bytes=source_bytes,
+        )
+        _append_call_row(
+            rows=call_rows,
+            node=node,
+            node_id=node_id,
+            file_id=file_id,
+            span=span,
+            source_bytes=source_bytes,
+        )
+        _append_import_row(
+            rows=import_rows,
+            node=node,
+            node_id=node_id,
+            span=span,
+            source_bytes=source_bytes,
+        )
+        if kind in {"function_definition", "class_definition"}:
+            capture_rows.append(
+                {
+                    "capture_id": f"{node_id}:capture:def",
+                    "query_name": "defs",
+                    "capture_name": "def.node",
+                    "pattern_index": 0,
+                    "node_id": node_id,
+                    "node_kind": kind,
+                    "span": span,
+                    "attrs": [],
+                }
+            )
+        children = tuple(getattr(node, "children", ()) or ())
+        stack.extend(reversed(children))
+    return _TreeSitterStubRows(
+        node_rows=tuple(node_rows),
+        def_rows=tuple(def_rows),
+        call_rows=tuple(call_rows),
+        import_rows=tuple(import_rows),
+        capture_rows=tuple(capture_rows),
+    )
+
+
+def _tree_sitter_payload(
+    *,
+    file_path: str,
+    file_id: str,
+    file_sha256: str | None,
+    rows: _TreeSitterStubRows,
+) -> dict[str, object]:
+    return {
+        "repo": "",
+        "path": file_path,
+        "file_id": file_id,
+        "file_sha256": file_sha256,
+        "nodes": list(rows.node_rows),
+        "edges": list[object](),
+        "errors": list[object](),
+        "missing": list[object](),
+        "captures": list(rows.capture_rows),
+        "defs": list(rows.def_rows),
+        "calls": list(rows.call_rows),
+        "imports": list(rows.import_rows),
+        "docstrings": list[object](),
+        "stats": {
+            "node_count": len(rows.node_rows),
+            "named_count": len(rows.node_rows),
+            "error_count": 0,
+            "missing_count": 0,
+            "parse_ms": 0,
+            "parse_timed_out": False,
+            "incremental_used": False,
+            "query_match_count": len(rows.def_rows) + len(rows.call_rows) + len(rows.import_rows),
+            "query_capture_count": len(rows.capture_rows),
+            "match_limit_exceeded": False,
+        },
+        "attrs": [("language_name", "python"), ("language_abi_version", "stub")],
+    }
 
 
 def extract_tree_sitter_batch(
@@ -481,184 +903,29 @@ def extract_tree_sitter_batch(
     """
     from tree_sitter_language_pack import get_parser
 
-    from extract.coordination.context import SpanSpec, span_dict
-
     payload_map = dict(payload or {})
+    file_id = str(payload_map.get("file_id") or file_path)
+    file_sha256 = (
+        str(payload_map["file_sha256"]) if payload_map.get("file_sha256") is not None else None
+    )
     parser = get_parser("python")
     source_bytes = source.encode("utf-8")
     tree = parser.parse(source_bytes)
     if tree is None:
-        return {
-            "repo": "",
-            "path": file_path,
-            "file_id": str(payload_map.get("file_id") or file_path),
-            "file_sha256": (
-                str(payload_map["file_sha256"])
-                if payload_map.get("file_sha256") is not None
-                else None
-            ),
-            "nodes": list[object](),
-            "edges": list[object](),
-            "errors": list[object](),
-            "missing": list[object](),
-            "captures": list[object](),
-            "defs": list[object](),
-            "calls": list[object](),
-            "imports": list[object](),
-            "docstrings": list[object](),
-            "stats": None,
-            "attrs": list[object](),
-        }
-
-    node_rows: list[dict[str, object]] = []
-    def_rows: list[dict[str, object]] = []
-    call_rows: list[dict[str, object]] = []
-    import_rows: list[dict[str, object]] = []
-    capture_rows: list[dict[str, object]] = []
-    stack: list[object] = [tree.root_node]
-    while stack:
-        node = stack.pop()
-        if node is None:
-            continue
-        node_uid = len(node_rows)
-        bstart = int(getattr(node, "start_byte", 0))
-        bend = int(getattr(node, "end_byte", bstart))
-        kind = str(getattr(node, "type", "unknown"))
-        node_id = f"{payload_map.get('file_id') or file_path}:{kind}:{bstart}:{bend}"
-        node_rows.append(
-            {
-                "node_id": node_id,
-                "node_uid": node_uid,
-                "parent_id": None,
-                "kind": kind,
-                "kind_id": 0,
-                "grammar_id": 0,
-                "grammar_name": "python",
-                "span": span_dict(
-                    SpanSpec(
-                        start_line0=None,
-                        start_col=None,
-                        end_line0=None,
-                        end_col=None,
-                        end_exclusive=True,
-                        col_unit="byte",
-                        byte_start=bstart,
-                        byte_len=max(0, bend - bstart),
-                    )
-                ),
-                "flags": {
-                    "is_named": bool(getattr(node, "is_named", True)),
-                    "has_error": bool(getattr(node, "has_error", False)),
-                    "is_error": bool(getattr(node, "is_error", False)),
-                    "is_missing": bool(getattr(node, "is_missing", False)),
-                    "is_extra": bool(getattr(node, "is_extra", False)),
-                    "has_changes": False,
-                },
-                "attrs": [],
-            }
+        return _empty_tree_sitter_payload(
+            file_path=file_path, file_id=file_id, file_sha256=file_sha256
         )
-        if kind in {"function_definition", "class_definition"}:
-            name_node = getattr(node, "child_by_field_name", lambda *_args: None)("name")
-            name: str | None = None
-            if name_node is not None:
-                nstart = int(getattr(name_node, "start_byte", 0))
-                nend = int(getattr(name_node, "end_byte", nstart))
-                name = source_bytes[nstart:nend].decode("utf-8", errors="replace")
-            def_rows.append(
-                {
-                    "node_id": node_id,
-                    "parent_id": None,
-                    "kind": kind,
-                    "name": name,
-                    "span": node_rows[-1]["span"],
-                    "attrs": [],
-                }
-            )
-        if kind == "call":
-            callee = getattr(node, "child_by_field_name", lambda *_args: None)("function")
-            callee_kind = (
-                str(getattr(callee, "type", "unknown")) if callee is not None else "unknown"
-            )
-            callee_start = (
-                int(getattr(callee, "start_byte", bstart)) if callee is not None else bstart
-            )
-            callee_end = (
-                int(getattr(callee, "end_byte", callee_start)) if callee is not None else bend
-            )
-            callee_text = source_bytes[callee_start:callee_end].decode("utf-8", errors="replace")
-            call_rows.append(
-                {
-                    "node_id": node_id,
-                    "parent_id": None,
-                    "callee_kind": callee_kind,
-                    "callee_text": callee_text,
-                    "callee_node_id": f"{payload_map.get('file_id') or file_path}:{callee_kind}:{callee_start}:{callee_end}",
-                    "span": node_rows[-1]["span"],
-                    "attrs": [],
-                }
-            )
-        if kind in {"import_statement", "import_from_statement"}:
-            snippet = source_bytes[bstart:bend].decode("utf-8", errors="replace").strip()
-            import_rows.append(
-                {
-                    "node_id": node_id,
-                    "parent_id": None,
-                    "kind": "ImportFrom" if kind == "import_from_statement" else "Import",
-                    "module": None,
-                    "name": snippet,
-                    "asname": None,
-                    "alias_index": 0,
-                    "level": None,
-                    "span": node_rows[-1]["span"],
-                    "attrs": [],
-                }
-            )
-        if def_rows and kind in {"function_definition", "class_definition"}:
-            capture_rows.append(
-                {
-                    "capture_id": f"{node_id}:capture:def",
-                    "query_name": "defs",
-                    "capture_name": "def.node",
-                    "pattern_index": 0,
-                    "node_id": node_id,
-                    "node_kind": kind,
-                    "span": node_rows[-1]["span"],
-                    "attrs": [],
-                }
-            )
-        children = tuple(getattr(node, "children", ()) or ())
-        stack.extend(reversed(children))
-
-    return {
-        "repo": "",
-        "path": file_path,
-        "file_id": str(payload_map.get("file_id") or file_path),
-        "file_sha256": (
-            str(payload_map["file_sha256"]) if payload_map.get("file_sha256") is not None else None
-        ),
-        "nodes": node_rows,
-        "edges": list[object](),
-        "errors": list[object](),
-        "missing": list[object](),
-        "captures": capture_rows,
-        "defs": def_rows,
-        "calls": call_rows,
-        "imports": import_rows,
-        "docstrings": list[object](),
-        "stats": {
-            "node_count": len(node_rows),
-            "named_count": len(node_rows),
-            "error_count": 0,
-            "missing_count": 0,
-            "parse_ms": 0,
-            "parse_timed_out": False,
-            "incremental_used": False,
-            "query_match_count": len(def_rows) + len(call_rows) + len(import_rows),
-            "query_capture_count": len(capture_rows),
-            "match_limit_exceeded": False,
-        },
-        "attrs": [("language_name", "python"), ("language_abi_version", "stub")],
-    }
+    rows = _collect_tree_sitter_rows(
+        source_bytes=source_bytes,
+        root_node=tree.root_node,
+        file_id=file_id,
+    )
+    return _tree_sitter_payload(
+        file_path=file_path,
+        file_id=file_id,
+        file_sha256=file_sha256,
+        rows=rows,
+    )
 
 
 def install_codeanatomy_runtime(
@@ -1716,25 +1983,9 @@ def col_to_byte(line_text: Expr, col_index: Expr, col_unit: Expr) -> Expr:
     return _stub_expr(line_text, col_index, col_unit)
 
 
-def canonicalize_byte_span(
-    start_line_start_byte: Expr,
-    start_line_text: Expr,
-    start_col: Expr,
-    end_line_start_byte: Expr,
-    end_line_text: Expr,
-    end_col: Expr,
-    col_unit: Expr,
-) -> Expr:
+def canonicalize_byte_span(*args: Expr) -> Expr:
     """Return a stub expression for canonicalize_byte_span."""
-    return _stub_expr(
-        start_line_start_byte,
-        start_line_text,
-        start_col,
-        end_line_start_byte,
-        end_line_text,
-        end_col,
-        col_unit,
-    )
+    return _stub_expr(*args)
 
 
 __all__ = [

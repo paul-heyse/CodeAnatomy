@@ -90,18 +90,14 @@ def _normalize_pushdown_status(value: object) -> str | None:
     text = str(value).strip().lower()
     if text in {"exact", "unsupported", "inexact"}:
         return text
-    if text.endswith(".exact"):
-        return "exact"
-    if text.endswith(".inexact"):
-        return "inexact"
-    if text.endswith(".unsupported"):
-        return "unsupported"
-    if "unsupported" in text:
-        return "unsupported"
-    if "inexact" in text:
-        return "inexact"
-    if "exact" in text:
-        return "exact"
+    ordered_checks = (
+        ("unsupported", text.endswith(".unsupported") or "unsupported" in text),
+        ("inexact", text.endswith(".inexact") or "inexact" in text),
+        ("exact", text.endswith(".exact") or "exact" in text),
+    )
+    for normalized, matched in ordered_checks:
+        if matched:
+            return normalized
     return None
 
 

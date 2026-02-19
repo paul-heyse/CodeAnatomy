@@ -208,6 +208,31 @@ def _coerce_int(value: object, *, default: int) -> int:
     return value if isinstance(value, int) else default
 
 
+def _normalize_attrs_field(row: dict[str, object]) -> None:
+    row.setdefault("attrs", [])
+    if not isinstance(row.get("attrs"), list):
+        row["attrs"] = _normalize_attrs(row.get("attrs"))
+
+
+def _normalize_node_row(node: dict[str, object]) -> None:
+    _normalize_attrs_field(node)
+    if node.get("span") is not None:
+        return
+    start = _coerce_int(node.get("bstart"), default=0)
+    end = _coerce_int(node.get("bend"), default=start)
+    node["span"] = _span_from_offsets(start, end)
+
+
+def _normalize_nested_row_collection(payload: Row, *, key: str) -> None:
+    values = payload.get(key)
+    if not isinstance(values, list):
+        payload[key] = []
+        return
+    for row in values:
+        if isinstance(row, dict):
+            _normalize_attrs_field(row)
+
+
 def _normalize_nested_rows(payload: Row) -> None:
     nodes_value = payload.get("nodes")
     if not isinstance(nodes_value, list):
@@ -216,23 +241,9 @@ def _normalize_nested_rows(payload: Row) -> None:
     for node in nodes_value:
         if not isinstance(node, dict):
             continue
-        node.setdefault("attrs", [])
-        if not isinstance(node.get("attrs"), list):
-            node["attrs"] = _normalize_attrs(node.get("attrs"))
-        if node.get("span") is None:
-            start = _coerce_int(node.get("bstart"), default=0)
-            end = _coerce_int(node.get("bend"), default=start)
-            node["span"] = _span_from_offsets(start, end)
+        _normalize_node_row(node)
     for key in ("edges", "errors", "missing", "captures", "defs", "calls", "imports", "docstrings"):
-        values = payload.get(key)
-        if not isinstance(values, list):
-            payload[key] = []
-            continue
-        for row in values:
-            if isinstance(row, dict):
-                row.setdefault("attrs", [])
-                if not isinstance(row.get("attrs"), list):
-                    row["attrs"] = _normalize_attrs(row.get("attrs"))
+        _normalize_nested_row_collection(payload, key=key)
 
 
 def _normalize_bridge_row(
@@ -261,23 +272,13 @@ def _normalize_bridge_row(
     return payload
 
 
-def _extract_ts_file_row_rust(
-    file_ctx: FileContext,
+def _bridge_request_payload(
     *,
+    file_ctx: FileContext,
     options: TreeSitterExtractOptions,
     query_pack: TreeSitterQueryPack | None,
-) -> Row | None:
-    from datafusion_engine.extensions import datafusion_ext
-
-    bridge = getattr(datafusion_ext, "extract_tree_sitter_batch", None)
-    if not callable(bridge):
-        return None
-    source = file_ctx.text
-    if source is None and file_ctx.data is not None:
-        source = bytes(file_ctx.data).decode(file_ctx.encoding or "utf-8", errors="replace")
-    if source is None or not file_ctx.path:
-        return None
-    request_payload = {
+) -> dict[str, object]:
+    return {
         "file_id": file_ctx.file_id,
         "file_sha256": file_ctx.file_sha256,
         "repo": options.repo_id,
@@ -297,26 +298,39 @@ def _extract_ts_file_row_rust(
             "max_docstring_bytes": options.max_docstring_bytes,
         },
     }
+
+
+def _source_text(file_ctx: FileContext) -> str | None:
+    source = file_ctx.text
+    if source is None and file_ctx.data is not None:
+        source = bytes(file_ctx.data).decode(file_ctx.encoding or "utf-8", errors="replace")
+    return source
+
+
+def _call_tree_sitter_bridge(
+    bridge: object,
+    *,
+    source: str,
+    file_path: str,
+    request_payload: Mapping[str, object],
+) -> object | None:
+    if not callable(bridge):
+        return None
     try:
         try:
-            payload_like = bridge(source, file_ctx.path, request_payload)
+            return bridge(source, file_path, request_payload)
         except TypeError:
-            payload_like = bridge(source, file_ctx.path)
+            return bridge(source, file_path)
     except (RuntimeError, TypeError, ValueError):
         return None
-    if payload_like is None:
-        return None
-    if isinstance(payload_like, Mapping):
-        return _normalize_bridge_row(payload_like, file_ctx=file_ctx, options=options)
 
-    from datafusion_engine.arrow.coercion import to_arrow_table
 
-    table = to_arrow_table(payload_like)
-    rows = table.to_pylist()
-    if rows and isinstance(rows[0], Mapping):
-        return _normalize_bridge_row(rows[0], file_ctx=file_ctx, options=options)
-
-    payload = table.to_pydict()
+def _row_from_arrow_payload_columns(
+    payload: Mapping[str, object],
+    *,
+    file_ctx: FileContext,
+    options: TreeSitterExtractOptions,
+) -> Row | None:
     node_types = payload.get("node_type")
     starts = payload.get("bstart")
     ends = payload.get("bend")
@@ -389,6 +403,62 @@ def _extract_ts_file_row_rust(
         "attrs": list[object](),
     }
     return _normalize_bridge_row(row, file_ctx=file_ctx, options=options)
+
+
+def _normalize_rust_bridge_payload(
+    payload_like: object,
+    *,
+    file_ctx: FileContext,
+    options: TreeSitterExtractOptions,
+) -> Row | None:
+    if isinstance(payload_like, Mapping):
+        return _normalize_bridge_row(payload_like, file_ctx=file_ctx, options=options)
+
+    from datafusion_engine.arrow.coercion import to_arrow_table
+
+    table = to_arrow_table(payload_like)
+    rows = table.to_pylist()
+    if rows and isinstance(rows[0], Mapping):
+        return _normalize_bridge_row(rows[0], file_ctx=file_ctx, options=options)
+    return _row_from_arrow_payload_columns(
+        table.to_pydict(),
+        file_ctx=file_ctx,
+        options=options,
+    )
+
+
+def _extract_ts_file_row_rust(
+    file_ctx: FileContext,
+    *,
+    options: TreeSitterExtractOptions,
+    query_pack: TreeSitterQueryPack | None,
+) -> Row | None:
+    from datafusion_engine.extensions import datafusion_ext
+
+    bridge = getattr(datafusion_ext, "extract_tree_sitter_batch", None)
+    if not callable(bridge):
+        return None
+    source = _source_text(file_ctx)
+    if source is None or not file_ctx.path:
+        return None
+    request_payload = _bridge_request_payload(
+        file_ctx=file_ctx,
+        options=options,
+        query_pack=query_pack,
+    )
+    payload_like = _call_tree_sitter_bridge(
+        bridge,
+        source=source,
+        file_path=file_ctx.path,
+        request_payload=request_payload,
+    )
+    if payload_like is None:
+        return None
+    return _normalize_rust_bridge_payload(
+        payload_like,
+        file_ctx=file_ctx,
+        options=options,
+    )
 
 
 def _extract_ts_file_row(

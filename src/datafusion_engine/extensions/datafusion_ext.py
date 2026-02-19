@@ -86,19 +86,16 @@ def _normalize_ctx(value: Any) -> Any:
     return inner if inner is not None else value
 
 
-def _normalize_args(
-    name: str,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-) -> tuple[tuple[Any, ...], dict[str, Any]]:
-    if not args and "ctx" not in kwargs and "session" not in kwargs:
-        if name in _DF52_PROVIDER_METHODS and "session" not in kwargs:
-            msg = f"{name} requires a session argument for DF52 provider capsule calls."
-            raise ValueError(msg)
-        return args, kwargs
-    normalized_args = list(args)
-    if normalized_args:
-        normalized_args[0] = _normalize_ctx(normalized_args[0])
+def _requires_provider_session(name: str, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> bool:
+    return (
+        name in _DF52_PROVIDER_METHODS
+        and not args
+        and "ctx" not in kwargs
+        and "session" not in kwargs
+    )
+
+
+def _normalize_contextual_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     normalized_kwargs = dict(kwargs)
     if "ctx" in normalized_kwargs:
         normalized_kwargs["ctx"] = _normalize_ctx(normalized_kwargs["ctx"])
@@ -108,16 +105,45 @@ def _normalize_args(
         normalized_df = getattr(normalized_kwargs["df"], "df", None)
         if normalized_df is not None:
             normalized_kwargs["df"] = normalized_df
-    if name in _DF52_PROVIDER_METHODS:
-        has_session_positional = bool(normalized_args) and (
-            normalized_kwargs.get("session") is None
-        )
-        if not has_session_positional:
-            session = normalized_kwargs.pop("session", None)
-            if session is None:
-                msg = f"{name} requires a session argument for DF52 provider capsule calls."
-                raise ValueError(msg)
-            normalized_args = [session, *normalized_args]
+    return normalized_kwargs
+
+
+def _normalize_provider_session_arg(
+    name: str,
+    args: list[Any],
+    kwargs: dict[str, Any],
+) -> tuple[list[Any], dict[str, Any]]:
+    if name not in _DF52_PROVIDER_METHODS:
+        return args, kwargs
+    has_session_positional = bool(args) and kwargs.get("session") is None
+    if has_session_positional:
+        return args, kwargs
+    session = kwargs.pop("session", None)
+    if session is None:
+        msg = f"{name} requires a session argument for DF52 provider capsule calls."
+        raise ValueError(msg)
+    return [session, *args], kwargs
+
+
+def _normalize_args(
+    name: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    if _requires_provider_session(name, args, kwargs):
+        msg = f"{name} requires a session argument for DF52 provider capsule calls."
+        raise ValueError(msg)
+    if not args and "ctx" not in kwargs and "session" not in kwargs:
+        return args, kwargs
+    normalized_args = list(args)
+    if normalized_args:
+        normalized_args[0] = _normalize_ctx(normalized_args[0])
+    normalized_kwargs = _normalize_contextual_kwargs(kwargs)
+    normalized_args, normalized_kwargs = _normalize_provider_session_arg(
+        name,
+        normalized_args,
+        normalized_kwargs,
+    )
     return tuple(normalized_args), normalized_kwargs
 
 

@@ -519,15 +519,15 @@ def write_delta(
     if request.mode == WriteMode.ERROR and (local_path.exists() or existing_version is not None):
         msg = f"Delta destination already exists: {spec.table_uri}"
         raise ValueError(msg)
-    _validate_delta_protocol_support(
-        runtime_profile=pipeline.runtime_profile,
-        delta_service=delta_service,
-        table_uri=spec.table_uri,
-        storage_options=spec.storage_options,
-        log_storage_options=spec.log_storage_options,
-        gate=spec.feature_gate,
-        table_exists=existing_version is not None,
-    )
+    if existing_version is not None:
+        _validate_delta_protocol_support(
+            runtime_profile=pipeline.runtime_profile,
+            delta_service=delta_service,
+            table_uri=spec.table_uri,
+            storage_options=spec.storage_options,
+            log_storage_options=spec.log_storage_options,
+            gate=spec.feature_gate,
+        )
     bridge_result = execute_delta_write_bridge(pipeline, result, spec=spec)
     enabled_features = (
         dict(bridge_result.enabled_features)

@@ -31,11 +31,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
 use pyo3::IntoPyObjectExt;
 
+use crate::context::PySessionContext;
 use crate::dataset::Dataset;
 use crate::errors::{py_datafusion_err, to_datafusion_err, PyDataFusionError, PyDataFusionResult};
 use crate::table::PyTable;
 use crate::utils::{get_global_ctx, validate_pycapsule, wait_for_future};
-use crate::context::PySessionContext;
 
 fn extract_string_vec(names: Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     if let Ok(values) = names.extract::<Vec<String>>() {
@@ -366,10 +366,7 @@ impl RustWrappedPyCatalogProvider {
             }
 
             if py_schema.hasattr("__datafusion_schema_provider__")? {
-                let session = Py::new(
-                    py,
-                    PySessionContext::from(get_global_ctx().clone()),
-                )?;
+                let session = Py::new(py, PySessionContext::from(get_global_ctx().clone()))?;
                 let capsule = py_schema
                     .getattr("__datafusion_schema_provider__")?
                     .call1((session,))?;

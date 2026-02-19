@@ -169,10 +169,7 @@ pub fn table_provider_from_pycapsule(
     obj: &Bound<PyAny>,
 ) -> PyResult<Option<Arc<dyn TableProvider>>> {
     if obj.hasattr("__datafusion_table_provider__")? {
-        let session = Py::new(
-            obj.py(),
-            PySessionContext::from(get_global_ctx().clone()),
-        )?;
+        let session = Py::new(obj.py(), PySessionContext::from(get_global_ctx().clone()))?;
         let capsule = obj
             .getattr("__datafusion_table_provider__")?
             .call1((session,))?;

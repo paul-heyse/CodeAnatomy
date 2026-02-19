@@ -199,11 +199,8 @@ def _validate_delta_protocol_support(
     storage_options: Mapping[str, str] | None,
     log_storage_options: Mapping[str, str] | None,
     gate: DeltaFeatureGate | None,
-    table_exists: bool = True,
 ) -> None:
     if runtime_profile is None or runtime_profile.policies.delta_protocol_support is None:
-        return
-    if not table_exists:
         return
     from datafusion_engine.delta.protocol import (
         delta_protocol_artifact_payload,

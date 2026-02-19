@@ -84,8 +84,8 @@ fn build_delta_provider(options: DeltaProviderOptions) -> Result<FFI_TableProvid
             None,
         )
         .await?;
-        let snapshot = datafusion_ext::delta_protocol::delta_snapshot_info(&options.table_uri, &table)
-            .await?;
+        let snapshot =
+            datafusion_ext::delta_protocol::delta_snapshot_info(&options.table_uri, &table).await?;
         protocol_gate(&snapshot, &gate)?;
         let eager_snapshot = table.snapshot()?.snapshot().clone();
         let log_store = table.log_store();
@@ -153,7 +153,9 @@ pub(crate) extern "C" fn create_table_provider(
     options_json: ROption<RString>,
 ) -> DfResult<FFI_TableProvider> {
     let result = match name.to_string().as_str() {
-        "delta" => parse_options::<DeltaProviderOptions>(options_json).and_then(build_delta_provider),
+        "delta" => {
+            parse_options::<DeltaProviderOptions>(options_json).and_then(build_delta_provider)
+        }
         "delta_cdf" => parse_options::<DeltaCdfProviderOptions>(options_json)
             .and_then(build_delta_cdf_provider),
         other => Err(format!("Unknown table provider {other}")),

@@ -68,16 +68,19 @@ def ddl_type_name_from_arrow(dtype: pa.DataType) -> str | None:
     str | None
         Canonical DDL name when known, otherwise ``None``.
     """
+    resolved: str | None = None
     if patypes.is_dictionary(dtype):
-        return ddl_type_name(dtype.value_type)
-    if patypes.is_decimal(dtype):
-        return f"DECIMAL({dtype.precision},{dtype.scale})"
-    if patypes.is_timestamp(dtype):
-        return "TIMESTAMP"
-    if patypes.is_date(dtype):
-        return "DATE"
-    if patypes.is_time(dtype):
-        return "TIME"
+        resolved = ddl_type_name(dtype.value_type)
+    elif patypes.is_decimal(dtype):
+        resolved = f"DECIMAL({dtype.precision},{dtype.scale})"
+    elif patypes.is_timestamp(dtype):
+        resolved = "TIMESTAMP"
+    elif patypes.is_date(dtype):
+        resolved = "DATE"
+    elif patypes.is_time(dtype):
+        resolved = "TIME"
+    if resolved is not None:
+        return resolved
     varchar_checks = (
         patypes.is_struct,
         patypes.is_list,
@@ -89,9 +92,7 @@ def ddl_type_name_from_arrow(dtype: pa.DataType) -> str | None:
         patypes.is_large_binary,
         patypes.is_fixed_size_binary,
     )
-    if any(check(dtype) for check in varchar_checks):
-        return "VARCHAR"
-    return None
+    return "VARCHAR" if any(check(dtype) for check in varchar_checks) else None
 
 
 def ddl_type_name_from_string(dtype_name: str) -> str:

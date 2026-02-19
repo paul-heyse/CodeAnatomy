@@ -10,13 +10,13 @@ pub mod scan_config;
 pub mod snapshot;
 
 // Re-export key types for convenience
-pub use pushdown_contract::{
-    probe_pushdown, FilterPushdownStatus, PushdownContractAssertion, PushdownContractReport,
-    PushdownContractResult, PushdownProbe,
-};
 pub use interval_align_provider::{
     build_interval_align_provider, execute_interval_align, IntervalAlignProvider,
     IntervalAlignProviderConfig, IntervalTieBreaker,
+};
+pub use pushdown_contract::{
+    probe_pushdown, FilterPushdownStatus, PushdownContractAssertion, PushdownContractReport,
+    PushdownContractResult, PushdownProbe,
 };
 pub use registration::{register_extraction_inputs, TableRegistration};
 pub use scan_config::{

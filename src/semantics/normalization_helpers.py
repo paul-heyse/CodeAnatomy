@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from datafusion import col
@@ -13,6 +13,8 @@ from datafusion_engine.udf.expr import udf_expr
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
     from datafusion.expr import Expr
+
+_BYTE_SPAN_EXPR_ARG_COUNT = 7
 
 
 @dataclass(frozen=True)
@@ -27,25 +29,50 @@ class LineIndexJoinOptions:
     path_col: str = "path"
 
 
-def canonicalize_byte_span_expr(
-    start_line_start_col: str,
-    start_line_text_col: str,
-    start_col_col: str,
-    end_line_start_col: str,
-    end_line_text_col: str,
-    end_col_col: str,
-    unit_expr: Expr,
-) -> Expr:
-    """Return canonicalized byte-span struct expression from line-index columns."""
+def canonicalize_byte_span_expr(*args: str | Expr) -> Expr:
+    """Return canonicalized byte-span struct expression from line-index columns.
+
+    Args:
+        args: Ordered tuple of six line-index column names plus unit expression.
+
+    Raises:
+        ValueError: If called without the required seven positional arguments.
+        TypeError: If the first six positional arguments are not strings.
+    """
+    if len(args) != _BYTE_SPAN_EXPR_ARG_COUNT:
+        msg = "canonicalize_byte_span_expr requires six column names and one unit expression."
+        raise ValueError(msg)
+    (
+        start_line_start_col,
+        start_line_text_col,
+        start_col_col,
+        end_line_start_col,
+        end_line_text_col,
+        end_col_col,
+        unit_expr,
+    ) = args
+    column_names = (
+        start_line_start_col,
+        start_line_text_col,
+        start_col_col,
+        end_line_start_col,
+        end_line_text_col,
+        end_col_col,
+    )
+    if not all(isinstance(value, str) for value in column_names):
+        msg = "canonicalize_byte_span_expr column-name arguments must be strings."
+        raise TypeError(msg)
+    normalized_names = cast("tuple[str, str, str, str, str, str]", column_names)
+    unit = cast("Expr", unit_expr)
     return udf_expr(
         "canonicalize_byte_span",
-        col(start_line_start_col).cast(pa.int64()),
-        col(start_line_text_col),
-        col(start_col_col).cast(pa.int64()),
-        col(end_line_start_col).cast(pa.int64()),
-        col(end_line_text_col),
-        col(end_col_col).cast(pa.int64()),
-        unit_expr,
+        col(normalized_names[0]).cast(pa.int64()),
+        col(normalized_names[1]),
+        col(normalized_names[2]).cast(pa.int64()),
+        col(normalized_names[3]).cast(pa.int64()),
+        col(normalized_names[4]),
+        col(normalized_names[5]).cast(pa.int64()),
+        unit,
     )
 
 

@@ -18,6 +18,23 @@ class CoercionError(ValueError):
         super().__init__(message)
 
 
+def _coerce_int_error_message(value: object, *, label: str | None) -> str:
+    resolved_label = label or "value"
+    return f"{resolved_label}: cannot coerce {type(value).__name__} to int"
+
+
+def _coerce_int_from_str(value: str, *, strict: bool, label: str | None) -> int | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        return int(stripped)
+    except ValueError as exc:
+        if strict:
+            raise TypeError(_coerce_int_error_message(value, label=label)) from exc
+        return None
+
+
 def coerce_int(value: object, *, label: str | None = None) -> int | None:
     """Coerce value to int, returning None for unconvertible values.
 
@@ -30,33 +47,20 @@ def coerce_int(value: object, *, label: str | None = None) -> int | None:
         TypeError: If ``label`` is provided and ``value`` cannot be coerced to ``int``.
     """
     strict = label is not None
+    converted: int | None = None
     if value is None:
-        if strict:
-            msg = f"{label}: cannot coerce {type(value).__name__} to int"
-            raise TypeError(msg)
-        return None
-    if isinstance(value, bool):
-        if strict:
-            return int(value)
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            try:
-                return int(stripped)
-            except ValueError as exc:
-                if strict:
-                    msg = f"{label}: cannot coerce {type(value).__name__} to int"
-                    raise TypeError(msg) from exc
-                return None
-    if strict:
-        msg = f"{label}: cannot coerce {type(value).__name__} to int"
-        raise TypeError(msg)
-    return None
+        converted = None
+    elif isinstance(value, bool):
+        converted = int(value) if strict else None
+    elif isinstance(value, int):
+        converted = value
+    elif isinstance(value, float):
+        converted = int(value)
+    elif isinstance(value, str):
+        converted = _coerce_int_from_str(value, strict=strict, label=label)
+    if converted is not None or not strict:
+        return converted
+    raise TypeError(_coerce_int_error_message(value, label=label))
 
 
 def coerce_float(value: object) -> float | None:

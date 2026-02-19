@@ -246,7 +246,10 @@ mod tests {
             config.enable_parquet_pushdown
         );
         assert_eq!(caps.projection_pushdown, Some(FilterPushdownStatus::Exact));
-        assert_eq!(caps.partition_pruning.is_some(), config.wrap_partition_values);
+        assert_eq!(
+            caps.partition_pruning.is_some(),
+            config.wrap_partition_values
+        );
     }
 
     #[test]
@@ -270,7 +273,10 @@ mod tests {
         let summary = pushdown_status_from_capabilities(&caps);
         assert_eq!(summary.predicate, Some(FilterPushdownStatus::Exact));
         assert_eq!(summary.projection, Some(FilterPushdownStatus::Exact));
-        assert_eq!(summary.partition_pruning, Some(FilterPushdownStatus::Inexact));
+        assert_eq!(
+            summary.partition_pruning,
+            Some(FilterPushdownStatus::Inexact)
+        );
     }
 
     #[test]

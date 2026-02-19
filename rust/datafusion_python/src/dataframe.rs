@@ -196,8 +196,8 @@ impl PyParquetWriterOptions {
         maximum_parallel_row_group_writers: usize,
         maximum_buffered_record_batches_per_stream: usize,
     ) -> Self {
-        let writer_version = DFParquetWriterVersion::from_str(writer_version.as_str())
-            .unwrap_or_default();
+        let writer_version =
+            DFParquetWriterVersion::from_str(writer_version.as_str()).unwrap_or_default();
         Self {
             options: ParquetOptions {
                 data_pagesize_limit,

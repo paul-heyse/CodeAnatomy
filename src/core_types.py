@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NewType
 
 from msgspec import Meta
-from pydantic import StringConstraints
 
 type PathLike = str | Path
 type StrictnessMode = Literal["strict", "tolerant"]
@@ -36,6 +35,7 @@ PositiveInt = Annotated[int, Meta(gt=0)]
 NonNegativeInt = Annotated[int, Meta(ge=0)]
 PositiveFloat = Annotated[float, Meta(gt=0)]
 NonNegativeFloat = Annotated[float, Meta(ge=0)]
+NonEmptyStr = Annotated[str, Meta(min_length=1)]
 
 IdentifierStr = Annotated[
     str,
@@ -44,7 +44,6 @@ IdentifierStr = Annotated[
         title="Identifier",
         description="Normalized identifier string.",
     ),
-    StringConstraints(pattern=IDENTIFIER_PATTERN),
 ]
 RunIdStr = Annotated[
     str,
@@ -53,7 +52,6 @@ RunIdStr = Annotated[
         title="Run ID",
         description="Stable run identifier.",
     ),
-    StringConstraints(pattern=RUN_ID_PATTERN),
 ]
 HashStr = Annotated[
     str,
@@ -63,7 +61,6 @@ HashStr = Annotated[
         description="Deterministic hash value.",
         examples=["sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"],
     ),
-    StringConstraints(pattern=HASH_PATTERN),
 ]
 EventKindStr = Annotated[
     str,
@@ -72,7 +69,6 @@ EventKindStr = Annotated[
         title="Event Kind",
         description="Normalized event kind identifier.",
     ),
-    StringConstraints(pattern=EVENT_KIND_PATTERN),
 ]
 StatusStr = Annotated[
     str,
@@ -81,7 +77,6 @@ StatusStr = Annotated[
         title="Status",
         description="Normalized status identifier.",
     ),
-    StringConstraints(pattern=STATUS_PATTERN),
 ]
 
 
@@ -151,6 +146,7 @@ __all__ = [
     "JsonPrimitive",
     "JsonValue",
     "JsonValueLax",
+    "NonEmptyStr",
     "NonNegativeFloat",
     "NonNegativeInt",
     "PathLike",

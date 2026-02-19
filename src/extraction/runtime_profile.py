@@ -10,14 +10,19 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 import pyarrow as pa
-from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from core_types import DeterminismTier
 from datafusion_engine.arrow.schema import version_field
 from datafusion_engine.session.profiles import create_runtime_profile
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from serde_artifacts import RuntimeProfileSnapshot
-from serde_msgspec import StructBaseStrict, coalesce_unset, dumps_msgpack, to_builtins
+from serde_msgspec import (
+    StructBaseStrict,
+    coalesce_unset,
+    dumps_msgpack,
+    to_builtins,
+    validation_error_payload,
+)
 from storage.ipc_utils import payload_hash
 from utils.env_utils import env_bool
 
@@ -92,28 +97,6 @@ class RuntimeProfileEnvPatch(StructBaseStrict, frozen=True):
     diagnostics_sink: object | msgspec.UnsetType | None = msgspec.UNSET
 
 
-class _RuntimeProfileEnvPatchRuntime(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        validate_default=True,
-        frozen=True,
-        arbitrary_types_allowed=True,
-        revalidate_instances="always",
-    )
-
-    config_policy_name: str | msgspec.UnsetType | None = msgspec.UNSET
-    catalog_auto_load_location: str | msgspec.UnsetType | None = msgspec.UNSET
-    catalog_auto_load_format: str | msgspec.UnsetType | None = msgspec.UNSET
-    cache_output_root: str | msgspec.UnsetType | None = msgspec.UNSET
-    runtime_artifact_cache_root: str | msgspec.UnsetType | None = msgspec.UNSET
-    runtime_artifact_cache_enabled: bool | msgspec.UnsetType = msgspec.UNSET
-    metadata_cache_snapshot_enabled: bool | msgspec.UnsetType = msgspec.UNSET
-    diagnostics_sink: object | msgspec.UnsetType | None = msgspec.UNSET
-
-
-_RUNTIME_PROFILE_ENV_ADAPTER = TypeAdapter(_RuntimeProfileEnvPatchRuntime)
-
-
 def _cpu_count() -> int:
     count = os.cpu_count()
     return count if count is not None and count > 0 else 1
@@ -160,7 +143,7 @@ def _env_patch_diagnostics_sink(name: str) -> object | msgspec.UnsetType | None:
 
 
 def _runtime_profile_env_patch() -> RuntimeProfileEnvPatch:
-    payload = {
+    parsed_values = {
         "config_policy_name": _env_patch_text("CODEANATOMY_DATAFUSION_POLICY"),
         "catalog_auto_load_location": _env_patch_text("CODEANATOMY_DATAFUSION_CATALOG_LOCATION"),
         "catalog_auto_load_format": _env_patch_text("CODEANATOMY_DATAFUSION_CATALOG_FORMAT"),
@@ -174,8 +157,13 @@ def _runtime_profile_env_patch() -> RuntimeProfileEnvPatch:
         ),
         "diagnostics_sink": _env_patch_diagnostics_sink("CODEANATOMY_DIAGNOSTICS_SINK"),
     }
-    validated = _RUNTIME_PROFILE_ENV_ADAPTER.validate_python(payload)
-    return RuntimeProfileEnvPatch(**validated.model_dump())
+    payload = {key: value for key, value in parsed_values.items() if value is not msgspec.UNSET}
+    try:
+        return msgspec.convert(payload, type=RuntimeProfileEnvPatch, strict=True)
+    except msgspec.ValidationError as exc:
+        details = validation_error_payload(exc)
+        msg = f"Runtime profile env patch validation failed: {details}"
+        raise ValueError(msg) from exc
 
 
 def _coalesce_diagnostics_sink(

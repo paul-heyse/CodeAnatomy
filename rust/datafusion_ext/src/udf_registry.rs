@@ -123,13 +123,15 @@ pub fn register_all_with_policy(
     if enable_async {
         #[cfg(feature = "async-udf")]
         {
-            let state_ref = ctx.state_ref();
-            let mut state = state_ref.write();
-            let config = state.config_mut();
-            config.set_extension(Arc::new(CodeAnatomyAsyncUdfConfig {
-                ideal_batch_size: async_udf_batch_size,
-                timeout_ms: async_udf_timeout_ms,
-            }));
+            {
+                let state_ref = ctx.state_ref();
+                let mut state = state_ref.write();
+                let config = state.config_mut();
+                config.set_extension(Arc::new(CodeAnatomyAsyncUdfConfig {
+                    ideal_batch_size: async_udf_batch_size,
+                    timeout_ms: async_udf_timeout_ms,
+                }));
+            }
             udf_async::register_async_udfs(ctx)?;
         }
         #[cfg(not(feature = "async-udf"))]

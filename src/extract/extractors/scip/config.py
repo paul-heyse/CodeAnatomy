@@ -62,6 +62,22 @@ def _resolve_path(repo_root: Path, value: str | Path | None) -> str | None:
 
 
 @dataclass(frozen=True)
+class ScipCliOverrides:
+    """CLI-provided overrides for SCIP index settings."""
+
+    disable_scip: bool
+    scip_output_dir: str | Path | None
+    scip_index_path_override: str | Path | None
+    scip_env_json: str | Path | None
+    scip_python_bin: str
+    default_scip_python: str = "scip-python"
+    scip_target_only: str | None = None
+    scip_timeout_s: int | None = None
+    node_max_old_space_mb: int | None = None
+    scip_extra_args: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ScipIndexSettings:
     """Settings for scip-python indexing."""
 
@@ -93,16 +109,7 @@ class ScipIndexSettings:
         config_contents: Mapping[str, object],
         *,
         repo_root: Path,
-        disable_scip: bool,
-        scip_output_dir: str | Path | None,
-        scip_index_path_override: str | Path | None,
-        scip_env_json: str | Path | None,
-        scip_python_bin: str,
-        default_scip_python: str = "scip-python",
-        scip_target_only: str | None,
-        scip_timeout_s: int | None,
-        node_max_old_space_mb: int | None,
-        scip_extra_args: tuple[str, ...],
+        overrides: ScipCliOverrides,
     ) -> ScipIndexSettings:
         """Build SCIP settings by merging config payload and CLI overrides.
 
@@ -121,19 +128,19 @@ class ScipIndexSettings:
         payload_node_max_old_space_mb = _coerce_optional_int(payload.get("node_max_old_space_mb"))
         payload_timeout_s = _coerce_optional_int(payload.get("timeout_s"))
         enabled = _coerce_bool(payload.get("enabled"), default=defaults.enabled)
-        if disable_scip:
+        if overrides.disable_scip:
             enabled = False
 
-        resolved_output = _resolve_path(repo_root, scip_output_dir)
-        resolved_index = _resolve_path(repo_root, scip_index_path_override)
-        resolved_env = _resolve_path(repo_root, scip_env_json)
+        resolved_output = _resolve_path(repo_root, overrides.scip_output_dir)
+        resolved_index = _resolve_path(repo_root, overrides.scip_index_path_override)
+        resolved_env = _resolve_path(repo_root, overrides.scip_env_json)
 
         resolved_scip_python = _coerce_str(
             payload.get("scip_python_bin"),
             default=defaults.scip_python_bin,
         )
-        if scip_python_bin != default_scip_python:
-            resolved_scip_python = scip_python_bin
+        if overrides.scip_python_bin != overrides.default_scip_python:
+            resolved_scip_python = overrides.scip_python_bin
 
         return cls(
             enabled=enabled,
@@ -151,12 +158,12 @@ class ScipIndexSettings:
                 payload.get("scip_cli_bin"),
                 default=defaults.scip_cli_bin,
             ),
-            target_only=scip_target_only
+            target_only=overrides.scip_target_only
             or _coerce_optional_str(payload.get("target_only"))
             or defaults.target_only,
             node_max_old_space_mb=(
-                node_max_old_space_mb
-                if node_max_old_space_mb is not None
+                overrides.node_max_old_space_mb
+                if overrides.node_max_old_space_mb is not None
                 else (
                     payload_node_max_old_space_mb
                     if payload_node_max_old_space_mb is not None
@@ -164,13 +171,13 @@ class ScipIndexSettings:
                 )
             ),
             timeout_s=(
-                scip_timeout_s
-                if scip_timeout_s is not None
+                overrides.scip_timeout_s
+                if overrides.scip_timeout_s is not None
                 else payload_timeout_s
                 if payload_timeout_s is not None
                 else defaults.timeout_s
             ),
-            extra_args=scip_extra_args or extra_args,
+            extra_args=overrides.scip_extra_args or extra_args,
             use_incremental_shards=_coerce_bool(
                 payload.get("use_incremental_shards"),
                 default=defaults.use_incremental_shards,
@@ -219,6 +226,7 @@ class ScipIdentityOverrides:
 
 
 __all__ = [
+    "ScipCliOverrides",
     "ScipIdentityOverrides",
     "ScipIndexConfig",
     "ScipIndexSettings",

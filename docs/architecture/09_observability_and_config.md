@@ -248,6 +248,21 @@ Resolution order:
 2. Optional `OtelConfigSpec` (serializable contract)
 3. Optional `OtelConfigOverrides` (runtime overrides)
 
+### Parse-First Policy (Msgspec-Only)
+
+Configuration boundaries use a strict parse-first contract:
+
+1. **Single boundary parse** with `msgspec` (`json.decode` / `convert`) into
+   `StructBaseStrict` contracts.
+2. **No duplicate runtime model layer** (no mirrored `BaseModel`/adapter classes).
+3. **Cross-field checks as explicit invariants** at parse boundaries (for example,
+   sampler-dependent settings), implemented as pure functions.
+4. **Normalized error payloads** from `msgspec.ValidationError` via
+   `validation_error_payload(...)` for stable diagnostics.
+
+This keeps config parsing deterministic, reduces runtime overhead, and aligns with
+the architecture principle: parse contracts once, then execute typed logic.
+
 ### Custom Processors
 
 **RunIdSpanProcessor** (`obs/otel/processors.py`):

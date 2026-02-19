@@ -34,9 +34,9 @@ fn test_registration_includes_capabilities() {
         schema_hash: [0u8; 32],
         provider_identity: [0u8; 32],
         capabilities: ProviderCapabilities {
-            predicate_pushdown: true,
-            projection_pushdown: true,
-            partition_pruning: false,
+            predicate_pushdown: Some(FilterPushdownStatus::Inexact),
+            projection_pushdown: Some(FilterPushdownStatus::Exact),
+            partition_pruning: None,
         },
         compatibility: DeltaCompatibilityFacts {
             min_reader_version: 1,
@@ -55,8 +55,15 @@ fn test_registration_includes_capabilities() {
     assert!(json.contains("column_mapping_mode"));
 
     let deserialized: TableRegistration = serde_json::from_str(&json).unwrap();
-    assert!(deserialized.capabilities.predicate_pushdown);
-    assert!(!deserialized.capabilities.partition_pruning);
+    assert_eq!(
+        deserialized.capabilities.predicate_pushdown,
+        Some(FilterPushdownStatus::Inexact)
+    );
+    assert_eq!(
+        deserialized.capabilities.projection_pushdown,
+        Some(FilterPushdownStatus::Exact)
+    );
+    assert!(deserialized.capabilities.partition_pruning.is_none());
     assert_eq!(
         deserialized.compatibility.column_mapping_mode.as_deref(),
         Some("name")
@@ -64,13 +71,13 @@ fn test_registration_includes_capabilities() {
 }
 
 #[test]
-fn test_capabilities_default_is_all_false() {
+fn test_capabilities_default_is_all_none() {
     use codeanatomy_engine::providers::scan_config::ProviderCapabilities;
 
     let caps = ProviderCapabilities::default();
-    assert!(!caps.predicate_pushdown);
-    assert!(!caps.projection_pushdown);
-    assert!(!caps.partition_pruning);
+    assert!(caps.predicate_pushdown.is_none());
+    assert!(caps.projection_pushdown.is_none());
+    assert!(caps.partition_pruning.is_none());
 }
 
 #[test]
@@ -81,9 +88,15 @@ fn test_capabilities_with_lineage_tracking() {
     let config = standard_scan_config(&ctx.state(), None, true).unwrap();
     let caps = infer_capabilities(&config);
     // Capabilities should mirror session-derived scan configuration.
-    assert_eq!(caps.predicate_pushdown, config.enable_parquet_pushdown);
-    assert!(caps.projection_pushdown);
-    assert_eq!(caps.partition_pruning, config.wrap_partition_values);
+    assert_eq!(
+        caps.predicate_pushdown.is_some(),
+        config.enable_parquet_pushdown
+    );
+    assert_eq!(caps.projection_pushdown, Some(FilterPushdownStatus::Exact));
+    assert_eq!(
+        caps.partition_pruning.is_some(),
+        config.wrap_partition_values
+    );
 }
 
 #[test]
@@ -91,9 +104,9 @@ fn test_capabilities_serialization_roundtrip() {
     use codeanatomy_engine::providers::scan_config::ProviderCapabilities;
 
     let caps = ProviderCapabilities {
-        predicate_pushdown: true,
-        projection_pushdown: false,
-        partition_pruning: true,
+        predicate_pushdown: Some(FilterPushdownStatus::Inexact),
+        projection_pushdown: Some(FilterPushdownStatus::Exact),
+        partition_pruning: None,
     };
 
     let json = serde_json::to_string(&caps).unwrap();

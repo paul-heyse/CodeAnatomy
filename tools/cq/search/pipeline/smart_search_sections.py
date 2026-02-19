@@ -57,6 +57,7 @@ def _extract_python_meta_fields(payload: dict[str, object]) -> dict[str, object]
 
 
 def _python_payload_for_match(match: EnrichedMatch) -> dict[str, object] | None:
+    payload: dict[str, object] | None
     if match.python_enrichment:
         payload = python_enrichment_payload(match.python_enrichment)
         structure = payload.pop("structure", None)

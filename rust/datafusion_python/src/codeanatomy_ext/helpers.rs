@@ -142,13 +142,7 @@ pub(crate) fn provider_capsule(
     provider: Arc<dyn TableProvider>,
 ) -> PyResult<Py<PyAny>> {
     let task_ctx_provider = global_task_ctx_provider();
-    let ffi_provider = FFI_TableProvider::new(
-        provider,
-        true,
-        None,
-        &task_ctx_provider,
-        None,
-    );
+    let ffi_provider = FFI_TableProvider::new(provider, true, None, &task_ctx_provider, None);
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;

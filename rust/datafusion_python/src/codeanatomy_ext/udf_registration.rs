@@ -44,8 +44,9 @@ fn registry_snapshot_hash(snapshot: &registry_snapshot::RegistrySnapshot) -> PyR
 }
 
 fn registry_snapshot_msgpack(snapshot: &registry_snapshot::RegistrySnapshot) -> PyResult<Vec<u8>> {
-    to_vec_named(snapshot)
-        .map_err(|err| PyRuntimeError::new_err(format!("Failed to serialize registry snapshot: {err}")))
+    to_vec_named(snapshot).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to serialize registry snapshot: {err}"))
+    })
 }
 
 #[pyfunction]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from weakref import WeakKeyDictionary
 
 import msgspec
@@ -155,8 +155,74 @@ class _RuntimeProfileIdentityMixin:
         return id(self)
 
 
+class _RuntimeProfileQueryMixin:
+    """Read-oriented runtime profile helper methods."""
+
+    def delta_runtime_ctx(self) -> SessionContext:
+        """Return canonical SessionContext used for Delta runtime operations."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        return profile.session_context()
+
+    def semantic_cache_overrides(self) -> Mapping[str, CachePolicy]:
+        """Return explicit semantic view cache policy overrides."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        return dict(profile.data_sources.semantic_output.cache_overrides)
+
+    def dataset_candidates(
+        self,
+        destination: str,
+    ) -> tuple[tuple[str, DatasetLocation], ...]:
+        """Return dataset binding candidates for destination resolution."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        candidates = dict(profile.data_sources.dataset_templates)
+        candidates.update(profile.data_sources.extract_output.dataset_locations)
+        direct = candidates.get(destination)
+        if direct is not None:
+            return ((destination, direct),)
+        return tuple(candidates.items())
+
+    def join_repartition_enabled(self, keys: list[str]) -> bool:
+        """Return whether join repartitioning should be applied for keys."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        if not keys:
+            return False
+        if (
+            profile.execution.target_partitions is None
+            or profile.execution.target_partitions < _MIN_TARGET_PARTITIONS_FOR_JOIN_REPARTITION
+        ):
+            return False
+        join_policy = profile.policies.join_policy
+        if join_policy is None:
+            return True
+        return bool(join_policy.repartition_joins)
+
+    def effective_sql_options(self) -> object:
+        """Return effective SQL options for the runtime profile."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        return sql_options_for_profile(profile)
+
+    def schema_hardening_view_types(self) -> frozenset[str]:
+        """Return enabled schema-hardening view type labels."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        schema_hardening = resolved_schema_hardening(profile)
+        if schema_hardening is None or not schema_hardening.enable_view_types:
+            return frozenset()
+        return frozenset({"view"})
+
+    def cdf_cursor_store(self) -> CdfCursorStoreLike | None:
+        """Return configured CDF cursor store."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        return profile.data_sources.cdf_cursor_store
+
+    def diagnostics_sink(self) -> DiagnosticsSink | None:
+        """Return configured diagnostics sink when available."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        return profile.diagnostics.diagnostics_sink
+
+
 class DataFusionRuntimeProfile(
     _RuntimeProfileIdentityMixin,
+    _RuntimeProfileQueryMixin,
     _RuntimeProfileIOFacadeMixin,
     _RuntimeProfileCatalogFacadeMixin,
     _RuntimeProfileDeltaFacadeMixin,
@@ -235,56 +301,6 @@ class DataFusionRuntimeProfile(
             Catalog operations helper.
         """
         return RuntimeProfileCatalog(self)
-
-    def delta_runtime_ctx(self) -> SessionContext:
-        """Return canonical SessionContext used for Delta runtime operations."""
-        return self.session_context()
-
-    def semantic_cache_overrides(self) -> Mapping[str, CachePolicy]:
-        """Return explicit semantic view cache policy overrides."""
-        return dict(self.data_sources.semantic_output.cache_overrides)
-
-    def dataset_candidates(self, destination: str) -> tuple[tuple[str, DatasetLocation], ...]:
-        """Return dataset binding candidates for destination resolution."""
-        candidates = dict(self.data_sources.dataset_templates)
-        candidates.update(self.data_sources.extract_output.dataset_locations)
-        direct = candidates.get(destination)
-        if direct is not None:
-            return ((destination, direct),)
-        return tuple(candidates.items())
-
-    def join_repartition_enabled(self, keys: list[str]) -> bool:
-        """Return whether join repartitioning should be applied for keys."""
-        if not keys:
-            return False
-        if (
-            self.execution.target_partitions is None
-            or self.execution.target_partitions < _MIN_TARGET_PARTITIONS_FOR_JOIN_REPARTITION
-        ):
-            return False
-        join_policy = self.policies.join_policy
-        if join_policy is None:
-            return True
-        return bool(join_policy.repartition_joins)
-
-    def effective_sql_options(self) -> object:
-        """Return effective SQL options for the runtime profile."""
-        return sql_options_for_profile(self)
-
-    def schema_hardening_view_types(self) -> frozenset[str]:
-        """Return enabled schema-hardening view type labels."""
-        schema_hardening = resolved_schema_hardening(self)
-        if schema_hardening is None or not schema_hardening.enable_view_types:
-            return frozenset()
-        return frozenset({"view"})
-
-    def cdf_cursor_store(self) -> CdfCursorStoreLike | None:
-        """Return configured CDF cursor store."""
-        return self.data_sources.cdf_cursor_store
-
-    def diagnostics_sink(self) -> DiagnosticsSink | None:
-        """Return configured diagnostics sink when available."""
-        return self.diagnostics.diagnostics_sink
 
     def _validate_information_schema(self) -> None:
         if not self.catalog.enable_information_schema:

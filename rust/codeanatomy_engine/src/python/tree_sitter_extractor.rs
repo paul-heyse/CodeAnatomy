@@ -192,7 +192,12 @@ fn span_value(start: i64, end: i64) -> JsonValue {
     })
 }
 
-fn text_from_range(source: &str, start: usize, end: usize, max_bytes: usize) -> (Option<String>, bool) {
+fn text_from_range(
+    source: &str,
+    start: usize,
+    end: usize,
+    max_bytes: usize,
+) -> (Option<String>, bool) {
     if start >= end || start >= source.len() {
         return (None, false);
     }
@@ -213,7 +218,12 @@ fn text_from_range(source: &str, start: usize, end: usize, max_bytes: usize) -> 
     (Some(text), true)
 }
 
-fn text_for_node(node: Node<'_>, source: &str, max_bytes: usize, allow_non_leaf: bool) -> (Option<String>, bool) {
+fn text_for_node(
+    node: Node<'_>,
+    source: &str,
+    max_bytes: usize,
+    allow_non_leaf: bool,
+) -> (Option<String>, bool) {
     if !allow_non_leaf && node.child_count() > 0 {
         return (None, false);
     }
@@ -338,7 +348,11 @@ fn child_entries(parent: Node<'_>) -> Vec<(Node<'_>, Option<String>, i32)> {
     }
     let mut index: i32 = 0;
     loop {
-        entries.push((cursor.node(), cursor.field_name().map(str::to_string), index));
+        entries.push((
+            cursor.node(),
+            cursor.field_name().map(str::to_string),
+            index,
+        ));
         index += 1;
         if !cursor.goto_next_sibling() {
             break;
@@ -356,9 +370,9 @@ pub fn extract_tree_sitter_row(
 ) -> Result<JsonValue, DataFusionError> {
     let language: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
     let mut parser = Parser::new();
-    parser
-        .set_language(&language)
-        .map_err(|err| DataFusionError::Execution(format!("tree-sitter language init failed: {err}")))?;
+    parser.set_language(&language).map_err(|err| {
+        DataFusionError::Execution(format!("tree-sitter language init failed: {err}"))
+    })?;
     let started = Instant::now();
     let tree = parser
         .parse(source, None)
@@ -366,7 +380,10 @@ pub fn extract_tree_sitter_row(
     let parse_ms = started.elapsed().as_millis() as i64;
 
     let options = &request.options;
-    let file_id = request.file_id.clone().unwrap_or_else(|| file_path.to_string());
+    let file_id = request
+        .file_id
+        .clone()
+        .unwrap_or_else(|| file_path.to_string());
     let mut nodes: Vec<TreeSitterNodeRow> = Vec::new();
     let mut edges: Vec<TreeSitterEdgeRow> = Vec::new();
     let mut errors: Vec<TreeSitterErrorRow> = Vec::new();
@@ -465,11 +482,12 @@ pub fn extract_tree_sitter_row(
             });
         }
 
-        if options.include_defs && (node.kind() == "function_definition" || node.kind() == "class_definition")
+        if options.include_defs
+            && (node.kind() == "function_definition" || node.kind() == "class_definition")
         {
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|name_node| text_for_node(name_node, source, options.max_text_bytes, true).0);
+            let name = node.child_by_field_name("name").and_then(|name_node| {
+                text_for_node(name_node, source, options.max_text_bytes, true).0
+            });
             defs.push(TreeSitterDefRow {
                 node_id: current_node_id.clone(),
                 parent_id: parent_id.clone(),
@@ -504,7 +522,12 @@ pub fn extract_tree_sitter_row(
                     parent_id: parent_id.clone(),
                     callee_kind: callee_node.kind().to_string(),
                     callee_text,
-                    callee_node_id: node_id(file_path, callee_start, callee_end, callee_node.kind()),
+                    callee_node_id: node_id(
+                        file_path,
+                        callee_start,
+                        callee_end,
+                        callee_node.kind(),
+                    ),
                     span: span_value(start, end),
                     attrs: Vec::new(),
                 });
@@ -534,11 +557,13 @@ pub fn extract_tree_sitter_row(
             };
             let module_text = node
                 .child_by_field_name("module_name")
-                .and_then(|module_node| text_for_node(module_node, source, options.max_text_bytes, true).0);
-            let (name, asname) = split_import_alias(
-                node.child_by_field_name("name")
-                    .and_then(|name_node| text_for_node(name_node, source, options.max_text_bytes, true).0),
-            );
+                .and_then(|module_node| {
+                    text_for_node(module_node, source, options.max_text_bytes, true).0
+                });
+            let (name, asname) =
+                split_import_alias(node.child_by_field_name("name").and_then(|name_node| {
+                    text_for_node(name_node, source, options.max_text_bytes, true).0
+                }));
             let level = module_text.as_ref().map(|module| {
                 let dot_count = module.chars().take_while(|ch| *ch == '.').count();
                 dot_count as i32
@@ -594,9 +619,9 @@ pub fn extract_tree_sitter_row(
                 let decoded = source_value
                     .as_ref()
                     .and_then(|value| decode_docstring_literal(value.as_str()));
-                let owner_name = node
-                    .child_by_field_name("name")
-                    .and_then(|name_node| text_for_node(name_node, source, options.max_text_bytes, true).0);
+                let owner_name = node.child_by_field_name("name").and_then(|name_node| {
+                    text_for_node(name_node, source, options.max_text_bytes, true).0
+                });
                 let mut attrs: Vec<(String, String)> = Vec::new();
                 if truncated {
                     attrs.push(("text_truncated".to_string(), "true".to_string()));
@@ -616,7 +641,12 @@ pub fn extract_tree_sitter_row(
                 query_match_count += 1;
                 if options.include_captures {
                     captures.push(TreeSitterCaptureRow {
-                        capture_id: node_id(file_path, doc_start, doc_end, "ts_capture:docstrings:doc.string"),
+                        capture_id: node_id(
+                            file_path,
+                            doc_start,
+                            doc_end,
+                            "ts_capture:docstrings:doc.string",
+                        ),
                         query_name: "docstrings".to_string(),
                         capture_name: "doc.string".to_string(),
                         pattern_index: 0,
@@ -658,7 +688,10 @@ pub fn extract_tree_sitter_row(
         ("language_name".to_string(), "python".to_string()),
         ("language_abi_version".to_string(), "unknown".to_string()),
         ("parse_ms".to_string(), parse_ms.to_string()),
-        ("node_count".to_string(), (node_ids.len() as i32).to_string()),
+        (
+            "node_count".to_string(),
+            (node_ids.len() as i32).to_string(),
+        ),
         ("named_count".to_string(), named_count.to_string()),
         ("error_count".to_string(), error_count.to_string()),
         ("missing_count".to_string(), missing_count.to_string()),

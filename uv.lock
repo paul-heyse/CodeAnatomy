@@ -287,7 +287,6 @@ dependencies = [
     { name = "polars" },
     { name = "protobuf" },
     { name = "pyarrow" },
-    { name = "pydantic" },
     { name = "pydeps" },
     { name = "pydoclint" },
     { name = "pydocstyle" },
@@ -326,12 +325,12 @@ requires-dist = [
     { name = "ast-grep-py" },
     { name = "asyncio", specifier = ">=4.0.0" },
     { name = "basedpyright" },
-    { name = "codeanatomy-engine", path = "dist/wheels/codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl" },
+    { name = "codeanatomy-engine", path = "dist/wheels/codeanatomy_engine-0.1.0-cp310-abi3-linux_x86_64.whl" },
     { name = "coverage", specifier = ">=7.12.0" },
     { name = "cyclopts", specifier = ">=4.4.1" },
     { name = "cython" },
-    { name = "datafusion", path = "dist/wheels/datafusion-51.0.0-cp310-abi3-macosx_11_0_arm64.whl" },
-    { name = "datafusion-ext", path = "dist/wheels/datafusion_ext-0.1.0-cp310-abi3-macosx_11_0_arm64.whl" },
+    { name = "datafusion", path = "dist/wheels/datafusion-51.0.0-cp310-abi3-linux_x86_64.whl" },
+    { name = "datafusion-ext", path = "dist/wheels/datafusion_ext-0.1.0-cp310-abi3-linux_x86_64.whl" },
     { name = "deltalake", specifier = ">=1.3.2" },
     { name = "diskcache", specifier = ">=5.6.3" },
     { name = "docstr-coverage" },
@@ -357,7 +356,6 @@ requires-dist = [
     { name = "polars", specifier = ">=1.37.1" },
     { name = "protobuf", specifier = ">=6.33.2" },
     { name = "pyarrow" },
-    { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydeps", specifier = ">=3.0.1" },
     { name = "pydoclint" },
     { name = "pydocstyle" },
@@ -393,9 +391,9 @@ requires-dist = [
 [[package]]
 name = "codeanatomy-engine"
 version = "0.1.0"
-source = { path = "dist/wheels/codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl" }
+source = { path = "dist/wheels/codeanatomy_engine-0.1.0-cp310-abi3-linux_x86_64.whl" }
 wheels = [
-    { filename = "codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:9081071d311743de4df936ae7af85ce4793f5b001140e9d7044f09fb99562d7c" },
+    { filename = "codeanatomy_engine-0.1.0-cp310-abi3-linux_x86_64.whl", hash = "sha256:90d696588b4abca71f5536e3abb636882b76ae95544750bb17ccf5f4754b9af0" },
 ]
 
 [[package]]
@@ -500,12 +498,12 @@ wheels = [
 [[package]]
 name = "datafusion"
 version = "51.0.0"
-source = { path = "dist/wheels/datafusion-51.0.0-cp310-abi3-macosx_11_0_arm64.whl" }
+source = { path = "dist/wheels/datafusion-51.0.0-cp310-abi3-linux_x86_64.whl" }
 dependencies = [
     { name = "pyarrow" },
 ]
 wheels = [
-    { filename = "datafusion-51.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b5c272e975e037042cae823e5488ff2a32df90432dcfb957491c2c314304dc8d" },
+    { filename = "datafusion-51.0.0-cp310-abi3-linux_x86_64.whl", hash = "sha256:c02bc1fa8212b68c169d55acf65de1e383af8056dd1c0a7e04fd8f394a586126" },
 ]
 
 [package.metadata]
@@ -518,12 +516,12 @@ requires-dist = [
 [[package]]
 name = "datafusion-ext"
 version = "0.1.0"
-source = { path = "dist/wheels/datafusion_ext-0.1.0-cp310-abi3-macosx_11_0_arm64.whl" }
+source = { path = "dist/wheels/datafusion_ext-0.1.0-cp310-abi3-linux_x86_64.whl" }
 dependencies = [
     { name = "datafusion" },
 ]
 wheels = [
-    { filename = "datafusion_ext-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b1100b57500daa75a1f99914554de3188e7bbc9085f6ec11de85806a97c5b764" },
+    { filename = "datafusion_ext-0.1.0-cp310-abi3-linux_x86_64.whl", hash = "sha256:35fb7f044279b0b7d1f23222b57c8f848d64333df5cf9f2bc872274507a01432" },
 ]
 
 [package.metadata]

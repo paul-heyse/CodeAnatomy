@@ -362,7 +362,14 @@ def extension_module_with_capabilities() -> ModuleType:
 
 
 def extension_capabilities_snapshot() -> Mapping[str, object]:
-    """Return the Rust extension capabilities snapshot when available."""
+    """Return the Rust extension capabilities snapshot when available.
+
+    Returns:
+        Mapping[str, object]: Snapshot payload reported by the extension.
+
+    Raises:
+        TypeError: If the extension returns a non-mapping snapshot payload.
+    """
     module = extension_module_with_capabilities()
     snapshot = module.capabilities_snapshot()
     if isinstance(snapshot, Mapping):
@@ -413,7 +420,14 @@ def validate_extension_capabilities(
     strict: bool = True,
     ctx: SessionContext | None = None,
 ) -> Mapping[str, object]:
-    """Validate extension capabilities for the runtime profile."""
+    """Validate extension capabilities for the runtime profile.
+
+    Returns:
+        Mapping[str, object]: Normalized extension capability report.
+
+    Raises:
+        RuntimeError: If strict validation fails ABI, entrypoint, or probe checks.
+    """
     report = extension_capabilities_report()
     if strict and not report.get("compatible", False):
         msg = report.get("error") or "Extension ABI compatibility check failed."
@@ -450,12 +464,20 @@ def validate_runtime_capabilities(
     strict: bool = True,
     ctx: SessionContext | None = None,
 ) -> Mapping[str, object]:
-    """Compatibility alias for runtime capability validation."""
+    """Compatibility alias for runtime capability validation.
+
+    Returns:
+        Mapping[str, object]: Runtime capability report.
+    """
     return validate_extension_capabilities(strict=strict, ctx=ctx)
 
 
 def capability_report() -> Mapping[str, object]:
-    """Compatibility alias for extension capability reports."""
+    """Compatibility alias for extension capability reports.
+
+    Returns:
+        Mapping[str, object]: Extension capability report payload.
+    """
     return extension_capabilities_report()
 
 
@@ -938,6 +960,10 @@ def validate_rust_udf_snapshot(snapshot: Mapping[str, object]) -> None:
     ----------
     snapshot
         Snapshot payload returned by the extension runtime.
+
+    Raises:
+        TypeError: If the snapshot contains structurally invalid types.
+        ValueError: If required UDF metadata is missing.
     """
     _validate_required_snapshot_keys(snapshot)
     try:
@@ -985,6 +1011,9 @@ def validate_required_udfs(
         Snapshot payload returned by the extension runtime.
     required
         Required UDF names that must be present in the snapshot.
+
+    Raises:
+        ValueError: If required UDFs or required metadata are missing.
     """
     if not required:
         return

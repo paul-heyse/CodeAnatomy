@@ -7,8 +7,8 @@
 //! - Cost-aware cache boundary insertion
 //! - Output DataFrame construction
 
-use datafusion::prelude::*;
 use datafusion::physical_plan::displayable;
+use datafusion::prelude::*;
 use datafusion_common::{DataFusionError, Result};
 use std::collections::{HashMap, VecDeque};
 #[cfg(feature = "tracing")]

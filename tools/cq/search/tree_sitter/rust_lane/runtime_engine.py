@@ -10,7 +10,7 @@ import logging
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from tools.cq.search._shared.error_boundaries import ENRICHMENT_ERRORS
 from tools.cq.search.tree_sitter.rust_lane.availability import (
@@ -294,7 +294,7 @@ def run_rust_enrichment_pipeline(request: _RustPipelineRequestV1) -> dict[str, o
     Returns:
         dict[str, object] | None: Canonical payload when enrichment succeeds.
     """
-    return _run_rust_enrichment_pipeline(cast("_RustPipelineRequestV1", request))
+    return _run_rust_enrichment_pipeline(request)
 
 
 def enrich_rust_context(

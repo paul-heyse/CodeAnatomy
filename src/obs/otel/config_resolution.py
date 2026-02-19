@@ -9,6 +9,7 @@ from collections.abc import Iterable, Mapping
 from importlib.metadata import EntryPoint, entry_points
 from typing import cast
 
+import msgspec
 from opentelemetry.sdk.metrics._internal.aggregation import (
     Aggregation,
     AggregationTemporality,
@@ -30,13 +31,14 @@ from opentelemetry.sdk.trace.sampling import (
     TraceIdRatioBased,
 )
 
+from core_types import NonNegativeInt
 from obs.otel.config_types import (
     BatchProcessorSettings,
     OtelConfig,
     OtelConfigOverrides,
     OtelConfigSpec,
 )
-from runtime_models.adapters import OTEL_CONFIG_ADAPTER
+from serde_msgspec import StructBaseStrict, validation_error_payload
 from utils.env_utils import (
     env_bool,
     env_bool_strict,
@@ -59,6 +61,45 @@ _LOG_LEVEL_MAP = {
     "DEBUG": logging.DEBUG,
     "NOTSET": logging.NOTSET,
 }
+
+
+class _ResolvedOtelConfigPayload(StructBaseStrict, frozen=True):
+    enable_traces: bool
+    enable_metrics: bool
+    enable_logs: bool
+    enable_log_correlation: bool
+    enable_system_metrics: bool
+    metric_export_interval_ms: NonNegativeInt
+    metric_export_timeout_ms: NonNegativeInt
+    bsp_schedule_delay_ms: NonNegativeInt
+    bsp_export_timeout_ms: NonNegativeInt
+    bsp_max_queue_size: NonNegativeInt
+    bsp_max_export_batch_size: NonNegativeInt
+    blrp_schedule_delay_ms: NonNegativeInt
+    blrp_export_timeout_ms: NonNegativeInt
+    blrp_max_queue_size: NonNegativeInt
+    blrp_max_export_batch_size: NonNegativeInt
+    attribute_count_limit: NonNegativeInt | None = None
+    attribute_value_length_limit: NonNegativeInt | None = None
+    log_record_attribute_count_limit: NonNegativeInt | None = None
+    log_record_attribute_value_length_limit: NonNegativeInt | None = None
+    span_attribute_count_limit: NonNegativeInt | None = None
+    span_attribute_length_limit: NonNegativeInt | None = None
+    span_event_count_limit: NonNegativeInt | None = None
+    span_link_count_limit: NonNegativeInt | None = None
+    span_event_attribute_count_limit: NonNegativeInt | None = None
+    span_link_attribute_count_limit: NonNegativeInt | None = None
+    metrics_exemplar_filter: str | None = None
+    metrics_temporality_preference: str | None = None
+    metrics_histogram_aggregation: str | None = None
+    otel_log_level: str | int | None = None
+    python_context: str | None = None
+    id_generator: str | None = None
+    sampler: str | None = None
+    sampler_arg: float | None = None
+    test_mode: bool = False
+    auto_instrumentation: bool = False
+    config_file: str | None = None
 
 
 def _parse_log_level(raw: str | None) -> int | None:
@@ -295,8 +336,25 @@ def _resolve_batch_settings(
     )
 
 
+def _validate_otel_spec_invariants(spec: _ResolvedOtelConfigPayload) -> None:
+    if spec.sampler_arg is None:
+        return
+    if spec.sampler is None:
+        msg = "sampler_arg requires sampler to be set"
+        raise ValueError(msg)
+    if not (0.0 <= spec.sampler_arg <= 1.0):
+        msg = "sampler_arg must be within [0.0, 1.0]"
+        raise ValueError(msg)
+
+
 def _build_otel_config(payload: Mapping[str, object]) -> OtelConfig:
-    resolved = OTEL_CONFIG_ADAPTER.validate_python(payload)
+    try:
+        resolved = msgspec.convert(payload, type=_ResolvedOtelConfigPayload, strict=True)
+    except msgspec.ValidationError as exc:
+        details = validation_error_payload(exc)
+        msg = f"OpenTelemetry config validation failed: {details}"
+        raise ValueError(msg) from exc
+    _validate_otel_spec_invariants(resolved)
     sampler = _resolve_sampler(
         sampler_name=resolved.sampler,
         sampler_arg=resolved.sampler_arg,

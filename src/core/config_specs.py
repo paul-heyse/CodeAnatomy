@@ -8,6 +8,7 @@ from typing import Literal
 import msgspec
 
 from core.config_base import config_fingerprint
+from core_types import NonNegativeFloat, NonNegativeInt
 from obs.otel import OtelConfigSpec
 from planning_engine.config import EngineConfigSpec
 from serde_msgspec import StructBaseStrict
@@ -43,24 +44,24 @@ class CacheConfigSpec(StructBaseStrict, frozen=True):
 class DataFusionCachePolicySpec(StructBaseStrict, frozen=True):
     """DataFusion cache policy configuration values."""
 
-    listing_cache_size: int | None = None
-    metadata_cache_size: int | None = None
-    stats_cache_size: int | None = None
+    listing_cache_size: NonNegativeInt | None = None
+    metadata_cache_size: NonNegativeInt | None = None
+    stats_cache_size: NonNegativeInt | None = None
 
 
 class DiskCacheSettingsSpec(StructBaseStrict, frozen=True):
     """DiskCache settings overrides."""
 
-    size_limit_bytes: int | None = None
-    cull_limit: int | None = None
+    size_limit_bytes: NonNegativeInt | None = None
+    cull_limit: NonNegativeInt | None = None
     eviction_policy: str | None = None
     statistics: bool | None = None
     tag_index: bool | None = None
-    shards: int | None = None
-    timeout_seconds: float | None = None
-    disk_min_file_size: int | None = None
+    shards: NonNegativeInt | None = None
+    timeout_seconds: NonNegativeFloat | None = None
+    disk_min_file_size: NonNegativeInt | None = None
     sqlite_journal_mode: str | None = None
-    sqlite_mmap_size: int | None = None
+    sqlite_mmap_size: NonNegativeInt | None = None
     sqlite_synchronous: str | None = None
 
 
@@ -104,14 +105,14 @@ class IncrementalConfigSpec(StructBaseStrict, frozen=True):
 class DeltaRestoreConfigSpec(StructBaseStrict, frozen=True):
     """Delta restore configuration values."""
 
-    version: int | None = None
+    version: NonNegativeInt | None = None
     timestamp: str | None = None
 
 
 class DeltaExportConfigSpec(StructBaseStrict, frozen=True):
     """Delta export configuration values."""
 
-    version: int | None = None
+    version: NonNegativeInt | None = None
     timestamp: str | None = None
 
 
@@ -125,7 +126,7 @@ class DeltaConfigSpec(StructBaseStrict, frozen=True):
 class DocstringsPolicyConfigSpec(StructBaseStrict, frozen=True):
     """Docstring policy configuration values."""
 
-    coverage_threshold: float | None = msgspec.field(
+    coverage_threshold: NonNegativeFloat | None = msgspec.field(
         default=None,
         name="coverage-threshold",
     )

@@ -6,17 +6,17 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import msgspec
 from datafusion import SQLOptions
 
 from core.config_base import config_fingerprint
 from core_types import IdentifierStr, NonNegativeInt, RunIdStr
-from serde_msgspec import StructBaseStrict, to_builtins
+from serde_msgspec import StructBaseStrict, to_builtins, validation_error_payload
 
 if TYPE_CHECKING:
     from datafusion_engine.plan.cache import PlanCache
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.runtime_profile_config import ExplainRows
-    from runtime_models.compile import DataFusionCompileOptionsRuntime
 
 SchemaMapping = (
     Mapping[str, Mapping[str, str]]
@@ -237,10 +237,22 @@ class DataFusionCompileOptions:
     dynamic_projection: bool = True
 
 
-def compile_options_runtime(
-    spec: DataFusionCompileOptionsSpec,
-) -> DataFusionCompileOptionsRuntime:
-    """Validate compile options spec via runtime models.
+def _validate_compile_options_invariants(spec: DataFusionCompileOptionsSpec) -> None:
+    """Enforce cross-field invariants after msgspec parsing.
+
+    Raises:
+        ValueError: If cache/prepared-statement invariants are violated.
+    """
+    if spec.cache is False and spec.cache_max_columns is not None:
+        msg = "cache_max_columns requires cache=True"
+        raise ValueError(msg)
+    if not spec.prepared_statements and spec.prepared_param_types is not None:
+        msg = "prepared_param_types requires prepared_statements=True"
+        raise ValueError(msg)
+
+
+def compile_options_runtime(spec: DataFusionCompileOptionsSpec) -> DataFusionCompileOptionsSpec:
+    """Validate compile options spec via msgspec parsing and invariants.
 
     Parameters
     ----------
@@ -249,13 +261,21 @@ def compile_options_runtime(
 
     Returns:
     -------
-    DataFusionCompileOptionsRuntime
+    DataFusionCompileOptionsSpec
         Validated runtime compile options.
-    """
-    from runtime_models.adapters import COMPILE_OPTIONS_ADAPTER
 
+    Raises:
+        ValueError: If msgspec parsing fails or cross-field invariants are violated.
+    """
     payload = to_builtins(spec, str_keys=True)
-    return COMPILE_OPTIONS_ADAPTER.validate_python(payload)
+    try:
+        resolved = msgspec.convert(payload, type=DataFusionCompileOptionsSpec, strict=True)
+    except msgspec.ValidationError as exc:
+        details = validation_error_payload(exc)
+        msg = f"Compile options validation failed: {details}"
+        raise ValueError(msg) from exc
+    _validate_compile_options_invariants(resolved)
+    return resolved
 
 
 def compile_options_from_spec(

@@ -115,9 +115,8 @@ pub fn derive_cache_policies(request: &CachePolicyRequest) -> Vec<CachePolicyDec
         };
         let mut policy =
             workload_adjusted_policy(base_policy, out_degree, is_output, workload.as_deref());
-        let mut rationale = format!(
-            "derived_from_topology: out_degree={out_degree}, is_output={is_output}"
-        );
+        let mut rationale =
+            format!("derived_from_topology: out_degree={out_degree}, is_output={is_output}");
         let mut confidence = if is_output { 1.0 } else { 0.85 };
         if let Some(override_policy) =
             normalized_override(request.cache_overrides.get(task_name).map(String::as_str))

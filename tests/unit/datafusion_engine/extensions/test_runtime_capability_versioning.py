@@ -10,6 +10,8 @@ from datafusion_engine.session.runtime_config_policies import (
     effective_datafusion_engine_version,
 )
 
+_DF_MAJOR_V52 = 52
+
 
 def _capability_report(version: str) -> dict[str, object]:
     return {
@@ -29,7 +31,7 @@ def test_effective_datafusion_engine_version_prefers_capability_snapshot() -> No
 
 def test_effective_datafusion_engine_major_version_uses_capability_snapshot() -> None:
     """Major-version behavior gates should use capability-resolved engine version."""
-    assert effective_datafusion_engine_major_version(_capability_report("52.1.0")) == 52
+    assert effective_datafusion_engine_major_version(_capability_report("52.1.0")) == _DF_MAJOR_V52
 
 
 def test_supports_explain_analyze_level_uses_capability_major(
@@ -38,6 +40,6 @@ def test_supports_explain_analyze_level_uses_capability_major(
     """Explain-analyze support should follow capability-resolved engine major."""
     monkeypatch.setattr(
         "datafusion_engine.session.runtime_compile.effective_datafusion_engine_major_version",
-        lambda: 52,
+        lambda: _DF_MAJOR_V52,
     )
     assert supports_explain_analyze_level() is True

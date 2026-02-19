@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from extract.extractors.scip.config import ScipIndexConfig
+from extract.extractors.scip.config import ScipCliOverrides, ScipIndexConfig
 
 _EXPECTED_TIMEOUT_SECONDS = 42
 _EXPECTED_OVERRIDE_TIMEOUT_SECONDS = 7
@@ -29,16 +29,18 @@ def test_from_cli_overrides_merges_config_and_paths() -> None:
     settings = ScipIndexConfig.from_cli_overrides(
         config,
         repo_root=repo_root,
-        disable_scip=False,
-        scip_output_dir="cli/scip",
-        scip_index_path_override=None,
-        scip_env_json=None,
-        scip_python_bin="scip-python",
-        default_scip_python="scip-python",
-        scip_target_only="pkg/module",
-        scip_timeout_s=None,
-        node_max_old_space_mb=None,
-        scip_extra_args=(),
+        overrides=ScipCliOverrides(
+            disable_scip=False,
+            scip_output_dir="cli/scip",
+            scip_index_path_override=None,
+            scip_env_json=None,
+            scip_python_bin="scip-python",
+            default_scip_python="scip-python",
+            scip_target_only="pkg/module",
+            scip_timeout_s=None,
+            node_max_old_space_mb=None,
+            scip_extra_args=(),
+        ),
     )
 
     assert settings.enabled is True
@@ -56,16 +58,18 @@ def test_from_cli_overrides_disable_and_python_override() -> None:
     settings = ScipIndexConfig.from_cli_overrides(
         {"scip": {"enabled": True, "scip_python_bin": "cfg-python"}},
         repo_root=Path("/repo"),
-        disable_scip=True,
-        scip_output_dir=None,
-        scip_index_path_override=None,
-        scip_env_json=None,
-        scip_python_bin="cli-python",
-        default_scip_python="scip-python",
-        scip_target_only=None,
-        scip_timeout_s=7,
-        node_max_old_space_mb=2048,
-        scip_extra_args=("--fast",),
+        overrides=ScipCliOverrides(
+            disable_scip=True,
+            scip_output_dir=None,
+            scip_index_path_override=None,
+            scip_env_json=None,
+            scip_python_bin="cli-python",
+            default_scip_python="scip-python",
+            scip_target_only=None,
+            scip_timeout_s=7,
+            node_max_old_space_mb=2048,
+            scip_extra_args=("--fast",),
+        ),
     )
 
     assert settings.enabled is False

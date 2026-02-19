@@ -95,7 +95,9 @@ fn build_udf_bundle_from_specs(
     }
 }
 
-pub(crate) fn build_udf_bundle_with_options(options: PluginUdfOptions) -> Result<DfUdfBundleV1, String> {
+pub(crate) fn build_udf_bundle_with_options(
+    options: PluginUdfOptions,
+) -> Result<DfUdfBundleV1, String> {
     let (enable_async, timeout_ms, batch_size) = resolve_udf_policy(&options)?;
     #[cfg(not(feature = "async-udf"))]
     if enable_async {
@@ -138,12 +140,7 @@ pub(crate) fn build_table_functions() -> Vec<DfTableFunctionV1> {
             }
         };
         let task_ctx_provider = global_task_ctx_provider();
-        let ffi_fn = FFI_TableFunction::new(
-            Arc::clone(&table_fn),
-            None,
-            &task_ctx_provider,
-            None,
-        );
+        let ffi_fn = FFI_TableFunction::new(Arc::clone(&table_fn), None, &task_ctx_provider, None);
         functions.push(DfTableFunctionV1 {
             name: RString::from(spec.name),
             function: ffi_fn.clone(),

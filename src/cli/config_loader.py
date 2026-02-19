@@ -13,8 +13,6 @@ import msgspec
 from cli.config_models import RootConfigSpec
 from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
 from core_types import JsonValue
-from runtime_models.adapters import ROOT_CONFIG_ADAPTER
-from runtime_models.root import RootConfigRuntime
 from serde_msgspec import validation_error_payload
 
 logger = logging.getLogger(__name__)
@@ -185,22 +183,12 @@ def _decode_root_config(raw: Mapping[str, JsonValue], *, location: str) -> RootC
         details = validation_error_payload(exc)
         msg = f"Config validation failed for {location}: {details}"
         raise ValueError(msg) from exc
-    _validate_root_runtime(config, location=location)
     return config
 
 
 def _config_to_mapping(config: RootConfigSpec) -> dict[str, JsonValue]:
     payload = msgspec.to_builtins(config, str_keys=True)
     return cast("dict[str, JsonValue]", payload)
-
-
-def _validate_root_runtime(config: RootConfigSpec, *, location: str) -> None:
-    payload = msgspec.to_builtins(config, str_keys=True)
-    try:
-        ROOT_CONFIG_ADAPTER.validate_python(payload)
-    except Exception as exc:
-        msg = f"Config validation failed for {location}: {exc}"
-        raise ValueError(msg) from exc
 
 
 def _translate_deprecated_config(
@@ -252,9 +240,10 @@ def _resolve_explicit_payload(path: Path) -> tuple[Mapping[str, JsonValue], str]
     if path.suffix == ".json":
         raw_text = path.read_text(encoding="utf-8")
         try:
-            RootConfigRuntime.model_validate_json(raw_text)
-        except Exception as exc:
-            msg = f"Config validation failed for {path}: {exc}"
+            msgspec.json.decode(raw_text, type=RootConfigSpec, strict=True)
+        except msgspec.ValidationError as exc:
+            details = validation_error_payload(exc)
+            msg = f"Config validation failed for {path}: {details}"
             raise ValueError(msg) from exc
         raw = json.loads(raw_text)
         if not isinstance(raw, dict):

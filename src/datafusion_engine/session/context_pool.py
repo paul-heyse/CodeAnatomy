@@ -139,6 +139,67 @@ def _apply_explain_analyze_level(
     )
 
 
+def _setting_text(value: object, *, lowercase: bool = False) -> str:
+    text = str(value)
+    return text.lower() if lowercase else text
+
+
+def _apply_profile_execution_settings(
+    config: SessionConfig,
+    *,
+    profile: DataFusionRuntimeProfile,
+) -> SessionConfig:
+    settings: tuple[tuple[str, object | None, bool], ...] = (
+        ("datafusion.execution.target_partitions", profile.execution.target_partitions, False),
+        ("datafusion.execution.batch_size", profile.execution.batch_size, False),
+        (
+            "datafusion.optimizer.repartition_aggregations",
+            profile.execution.repartition_aggregations,
+            True,
+        ),
+        ("datafusion.optimizer.repartition_windows", profile.execution.repartition_windows, True),
+        (
+            "datafusion.execution.repartition_file_scans",
+            profile.execution.repartition_file_scans,
+            True,
+        ),
+        (
+            "datafusion.execution.repartition_file_min_size",
+            profile.execution.repartition_file_min_size,
+            False,
+        ),
+        (
+            "datafusion.execution.minimum_parallel_output_files",
+            profile.execution.minimum_parallel_output_files,
+            False,
+        ),
+        (
+            "datafusion.execution.soft_max_rows_per_output_file",
+            profile.execution.soft_max_rows_per_output_file,
+            False,
+        ),
+        (
+            "datafusion.execution.maximum_parallel_row_group_writers",
+            profile.execution.maximum_parallel_row_group_writers,
+            False,
+        ),
+        (
+            "datafusion.execution.objectstore_writer_buffer_size",
+            profile.execution.objectstore_writer_buffer_size,
+            False,
+        ),
+    )
+    for key, value, lowercase in settings:
+        if value is None:
+            continue
+        config = _set_config_if_supported(
+            config,
+            key=key,
+            value=_setting_text(value, lowercase=lowercase),
+        )
+    return config
+
+
 def _split_runtime_settings(
     settings: Mapping[str, str],
 ) -> tuple[dict[str, str], dict[str, str]]:
@@ -284,76 +345,7 @@ class SessionFactory:
             config,
             enable_ident_normalization=effective_ident_normalization(profile),
         )
-        target_partitions = profile.execution.target_partitions
-        if target_partitions is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.execution.target_partitions",
-                value=str(target_partitions),
-            )
-        batch_size = profile.execution.batch_size
-        if batch_size is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.execution.batch_size",
-                value=str(batch_size),
-            )
-        repartition_aggregations = profile.execution.repartition_aggregations
-        if repartition_aggregations is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.optimizer.repartition_aggregations",
-                value=str(repartition_aggregations).lower(),
-            )
-        repartition_windows = profile.execution.repartition_windows
-        if repartition_windows is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.optimizer.repartition_windows",
-                value=str(repartition_windows).lower(),
-            )
-        repartition_file_scans = profile.execution.repartition_file_scans
-        if repartition_file_scans is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.execution.repartition_file_scans",
-                value=str(repartition_file_scans).lower(),
-            )
-        repartition_file_min_size = profile.execution.repartition_file_min_size
-        if repartition_file_min_size is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.execution.repartition_file_min_size",
-                value=str(repartition_file_min_size),
-            )
-        minimum_parallel_output_files = profile.execution.minimum_parallel_output_files
-        if minimum_parallel_output_files is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.execution.minimum_parallel_output_files",
-                value=str(minimum_parallel_output_files),
-            )
-        soft_max_rows_per_output_file = profile.execution.soft_max_rows_per_output_file
-        if soft_max_rows_per_output_file is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.execution.soft_max_rows_per_output_file",
-                value=str(soft_max_rows_per_output_file),
-            )
-        maximum_parallel_row_group_writers = profile.execution.maximum_parallel_row_group_writers
-        if maximum_parallel_row_group_writers is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.execution.maximum_parallel_row_group_writers",
-                value=str(maximum_parallel_row_group_writers),
-            )
-        objectstore_writer_buffer_size = profile.execution.objectstore_writer_buffer_size
-        if objectstore_writer_buffer_size is not None:
-            config = _set_config_if_supported(
-                config,
-                key="datafusion.execution.objectstore_writer_buffer_size",
-                value=str(objectstore_writer_buffer_size),
-            )
+        config = _apply_profile_execution_settings(config, profile=profile)
         catalog_location, catalog_format = effective_catalog_autoload(profile)
         config = _apply_catalog_autoload(
             config,

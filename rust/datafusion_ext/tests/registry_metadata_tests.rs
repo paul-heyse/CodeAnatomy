@@ -6,7 +6,7 @@ struct DummyProvider;
 impl MetadataProvider for DummyProvider {
     fn metadata(&self) -> FunctionMetadata {
         FunctionMetadata {
-            name: "dummy_scalar",
+            name: Some("dummy_scalar"),
             kind: FunctionKind::Scalar,
             rewrite_tags: &["dummy"],
             has_simplify: true,
@@ -24,7 +24,7 @@ impl MetadataProvider for DummyProvider {
 fn metadata_provider_contract_exposes_expected_fields() {
     let provider = DummyProvider;
     let metadata = provider.metadata();
-    assert_eq!(metadata.name, "dummy_scalar");
+    assert_eq!(metadata.name, Some("dummy_scalar"));
     assert_eq!(metadata.kind, FunctionKind::Scalar);
     assert_eq!(metadata.rewrite_tags, &["dummy"]);
     assert!(metadata.has_simplify);

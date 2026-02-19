@@ -11,6 +11,7 @@ from opentelemetry.sdk.trace.id_generator import IdGenerator
 from opentelemetry.sdk.trace.sampling import Sampler
 
 from core.config_base import config_fingerprint
+from core_types import NonNegativeInt
 from serde_msgspec import StructBaseStrict
 
 
@@ -119,26 +120,26 @@ class OtelConfigSpec(StructBaseStrict, frozen=True):
     enable_system_metrics: bool | None = None
     sampler: str | None = None
     sampler_arg: float | None = None
-    metric_export_interval_ms: int | None = None
-    metric_export_timeout_ms: int | None = None
-    bsp_schedule_delay_ms: int | None = None
-    bsp_export_timeout_ms: int | None = None
-    bsp_max_queue_size: int | None = None
-    bsp_max_export_batch_size: int | None = None
-    blrp_schedule_delay_ms: int | None = None
-    blrp_export_timeout_ms: int | None = None
-    blrp_max_queue_size: int | None = None
-    blrp_max_export_batch_size: int | None = None
-    attribute_count_limit: int | None = None
-    attribute_value_length_limit: int | None = None
-    log_record_attribute_count_limit: int | None = None
-    log_record_attribute_value_length_limit: int | None = None
-    span_attribute_count_limit: int | None = None
-    span_attribute_length_limit: int | None = None
-    span_event_count_limit: int | None = None
-    span_link_count_limit: int | None = None
-    span_event_attribute_count_limit: int | None = None
-    span_link_attribute_count_limit: int | None = None
+    metric_export_interval_ms: NonNegativeInt | None = None
+    metric_export_timeout_ms: NonNegativeInt | None = None
+    bsp_schedule_delay_ms: NonNegativeInt | None = None
+    bsp_export_timeout_ms: NonNegativeInt | None = None
+    bsp_max_queue_size: NonNegativeInt | None = None
+    bsp_max_export_batch_size: NonNegativeInt | None = None
+    blrp_schedule_delay_ms: NonNegativeInt | None = None
+    blrp_export_timeout_ms: NonNegativeInt | None = None
+    blrp_max_queue_size: NonNegativeInt | None = None
+    blrp_max_export_batch_size: NonNegativeInt | None = None
+    attribute_count_limit: NonNegativeInt | None = None
+    attribute_value_length_limit: NonNegativeInt | None = None
+    log_record_attribute_count_limit: NonNegativeInt | None = None
+    log_record_attribute_value_length_limit: NonNegativeInt | None = None
+    span_attribute_count_limit: NonNegativeInt | None = None
+    span_attribute_length_limit: NonNegativeInt | None = None
+    span_event_count_limit: NonNegativeInt | None = None
+    span_link_count_limit: NonNegativeInt | None = None
+    span_event_attribute_count_limit: NonNegativeInt | None = None
+    span_link_attribute_count_limit: NonNegativeInt | None = None
     metrics_exemplar_filter: str | None = None
     metrics_temporality_preference: str | None = None
     metrics_histogram_aggregation: str | None = None

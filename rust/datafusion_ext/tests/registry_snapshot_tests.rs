@@ -8,8 +8,8 @@ fn decomposed_snapshot_matches_legacy_facade() {
     let state = ctx.state();
     let via_new = registry_snapshot(&state);
     let via_legacy = legacy_snapshot::registry_snapshot(&state);
-    assert_eq!(via_new.scalar, via_legacy.scalar);
-    assert_eq!(via_new.aggregate, via_legacy.aggregate);
-    assert_eq!(via_new.window, via_legacy.window);
-    assert_eq!(via_new.table, via_legacy.table);
+    assert_eq!(via_new.scalar(), via_legacy.scalar());
+    assert_eq!(via_new.aggregate(), via_legacy.aggregate());
+    assert_eq!(via_new.window(), via_legacy.window());
+    assert_eq!(via_new.table(), via_legacy.table());
 }

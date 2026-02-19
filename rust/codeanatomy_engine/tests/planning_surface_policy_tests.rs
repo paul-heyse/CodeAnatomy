@@ -1,6 +1,4 @@
-use codeanatomy_engine::session::planning_surface::{
-    PlanningSurfacePolicyV1, PlanningSurfaceSpec,
-};
+use codeanatomy_engine::session::planning_surface::{PlanningSurfacePolicyV1, PlanningSurfaceSpec};
 
 #[test]
 fn planning_surface_spec_from_policy_preserves_flags() {

@@ -1,6 +1,4 @@
-use codeanatomy_engine::compiler::plan_codec::{
-    enforce_codec_policy, PlanArtifactCodecPolicyV1,
-};
+use codeanatomy_engine::compiler::plan_codec::{enforce_codec_policy, PlanArtifactCodecPolicyV1};
 
 #[test]
 fn codec_policy_allows_default_substrait_cross_process() {

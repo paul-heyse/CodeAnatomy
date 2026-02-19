@@ -97,7 +97,11 @@ pub(crate) fn build_extraction_session(
 }
 
 #[pyfunction]
-#[instrument(level = "info", skip(py, ctx, request_payload), fields(table_name, table_uri))]
+#[instrument(
+    level = "info",
+    skip(py, ctx, request_payload),
+    fields(table_name, table_uri)
+)]
 pub(crate) fn register_dataset_provider(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,

@@ -390,9 +390,9 @@ pub(crate) fn plugin_manifest(py: Python<'_>, path: Option<String>) -> PyResult<
     payload.set_item("plugin_version", manifest.plugin_version.to_string())?;
     payload.set_item("build_id", manifest.build_id.to_string())?;
     payload.set_item("capabilities", manifest.capabilities)?;
-    let relation_planners = handle
-        .relation_planner_names()
-        .map_err(|err| PyRuntimeError::new_err(format!("Failed to read relation planners: {err}")))?;
+    let relation_planners = handle.relation_planner_names().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to read relation planners: {err}"))
+    })?;
     payload.set_item("relation_planners", relation_planners)?;
     let features: Vec<String> = manifest
         .features

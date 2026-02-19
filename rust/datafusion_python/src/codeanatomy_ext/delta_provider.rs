@@ -23,7 +23,8 @@ use crate::delta_mutations::{
 
 use super::helpers::{
     delta_gate_from_params, extract_session_ctx, json_to_py, scan_config_to_pydict,
-    scan_overrides_from_params, snapshot_to_pydict, storage_options_map, table_version_from_options,
+    scan_overrides_from_params, snapshot_to_pydict, storage_options_map,
+    table_version_from_options,
 };
 use super::provider_capsule_contract::provider_capsule_from_session;
 
@@ -100,7 +101,10 @@ pub(crate) fn delta_cdf_table_provider(
         .map_err(|err| PyRuntimeError::new_err(format!("Delta CDF provider failed: {err}")))?;
     let session_ctx = extract_session_ctx(ctx)?;
     let payload = PyDict::new(py);
-    payload.set_item("provider", provider_capsule_from_session(py, &session_ctx, Arc::new(provider))?)?;
+    payload.set_item(
+        "provider",
+        provider_capsule_from_session(py, &session_ctx, Arc::new(provider))?,
+    )?;
     payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     Ok(payload.into())
 }
@@ -158,7 +162,10 @@ pub(crate) fn delta_table_provider_from_session(
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to build Delta provider: {err}")))?;
     let payload = PyDict::new(py);
-    payload.set_item("provider", provider_capsule_from_session(py, &session_ctx, provider)?)?;
+    payload.set_item(
+        "provider",
+        provider_capsule_from_session(py, &session_ctx, provider)?,
+    )?;
     payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
     if let Some(add_actions) = add_actions {
@@ -228,7 +235,10 @@ pub(crate) fn delta_table_provider_with_files(
             ))
         })?;
     let payload = PyDict::new(py);
-    payload.set_item("provider", provider_capsule_from_session(py, &session_ctx, provider)?)?;
+    payload.set_item(
+        "provider",
+        provider_capsule_from_session(py, &session_ctx, provider)?,
+    )?;
     payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
     let add_payload = crate::delta_observability::add_action_payloads(&add_actions);

@@ -121,9 +121,8 @@ pub(crate) fn install_expr_planners(
 #[pyfunction]
 #[instrument(level = "info", skip_all)]
 pub(crate) fn install_relation_planner(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
-    datafusion_ext::install_relation_planner_native(&extract_session_ctx(ctx)?).map_err(|err| {
-        PyRuntimeError::new_err(format!("RelationPlanner install failed: {err}"))
-    })
+    datafusion_ext::install_relation_planner_native(&extract_session_ctx(ctx)?)
+        .map_err(|err| PyRuntimeError::new_err(format!("RelationPlanner install failed: {err}")))
 }
 
 #[pyfunction]
@@ -136,7 +135,10 @@ pub(crate) fn install_type_planner(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(install_tracing, module)?)?;
     module.add_function(wrap_pyfunction!(install_codeanatomy_policy_config, module)?)?;
-    module.add_function(wrap_pyfunction!(install_codeanatomy_physical_config, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        install_codeanatomy_physical_config,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(install_planner_rules, module)?)?;
     module.add_function(wrap_pyfunction!(install_physical_rules, module)?)?;
     module.add_function(wrap_pyfunction!(install_expr_planners, module)?)?;

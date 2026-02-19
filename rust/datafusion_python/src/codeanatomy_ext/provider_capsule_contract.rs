@@ -4,8 +4,8 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 use datafusion::catalog::TableProvider;
-use datafusion::execution::TaskContextProvider;
 use datafusion::execution::context::SessionContext;
+use datafusion::execution::TaskContextProvider;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -22,14 +22,12 @@ fn provider_capsule_with_session(
     provider: Arc<dyn TableProvider>,
 ) -> PyResult<Py<PyAny>> {
     let task_ctx_provider: Arc<dyn TaskContextProvider> = Arc::new(session.state());
-    let ffi_provider = FFI_TableProvider::new(
-        provider,
-        true,
-        None,
-        &task_ctx_provider,
-        None,
-    );
-    let capsule = PyCapsule::new(py, ffi_provider, Some(datafusion_table_provider_capsule_name()?))?;
+    let ffi_provider = FFI_TableProvider::new(provider, true, None, &task_ctx_provider, None);
+    let capsule = PyCapsule::new(
+        py,
+        ffi_provider,
+        Some(datafusion_table_provider_capsule_name()?),
+    )?;
     Ok(capsule.unbind().into())
 }
 

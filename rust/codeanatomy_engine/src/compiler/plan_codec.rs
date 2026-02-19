@@ -43,10 +43,7 @@ impl Default for PlanArtifactCodecPolicyV1 {
 }
 
 /// Enforce codec policy for proto/substrait capture paths.
-pub fn enforce_codec_policy(
-    policy: &PlanArtifactCodecPolicyV1,
-    cross_process: bool,
-) -> Result<()> {
+pub fn enforce_codec_policy(policy: &PlanArtifactCodecPolicyV1, cross_process: bool) -> Result<()> {
     if cross_process && policy.cross_process_format != "substrait" {
         return Err(datafusion_common::DataFusionError::Plan(
             "cross-process plan artifacts must use Substrait serialization".to_string(),

@@ -142,7 +142,9 @@ impl SessionFactory {
         config_opts.optimizer.max_passes = 3;
         config_opts.optimizer.enable_dynamic_filter_pushdown = true;
         config_opts.optimizer.enable_join_dynamic_filter_pushdown = true;
-        config_opts.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+        config_opts
+            .optimizer
+            .enable_aggregate_dynamic_filter_pushdown = true;
         config_opts.optimizer.enable_topk_dynamic_filter_pushdown = true;
         config_opts.optimizer.enable_sort_pushdown = true;
         config_opts.optimizer.allow_symmetric_joins_without_pruning = true;
@@ -363,8 +365,9 @@ impl SessionFactory {
             planning_surface.relation_planners = vec![Arc::new(
                 datafusion_ext::relation_planner::CodeAnatomyRelationPlanner,
             )];
-            planning_surface.type_planner =
-                Some(Arc::new(datafusion_ext::type_planner::CodeAnatomyTypePlanner));
+            planning_surface.type_planner = Some(Arc::new(
+                datafusion_ext::type_planner::CodeAnatomyTypePlanner,
+            ));
             planning_surface.function_rewrites = datafusion_ext::domain_function_rewrites();
         }
 

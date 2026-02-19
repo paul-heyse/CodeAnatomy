@@ -2211,7 +2211,7 @@ Execute scope items in this order. Items within a phase can be parallelized acro
 
 ## Implementation Checklist
 
-Status updated from static code-shape audit on 2026-02-19.
+Status updated from implementation + static code-shape audit on 2026-02-19.
 Legend: checked = complete, unchecked = partial/incomplete.
 
 ### Scope Items
@@ -2229,7 +2229,7 @@ Legend: checked = complete, unchecked = partial/incomplete.
 - [x] S11 — Make planner/physical rule installation idempotent.
 - [x] S12 — Remove duplicate determinism contract in `spec/hashing.rs`.
 - [x] S13 — Rename `ensure_source_registered` to command-style `register_inline_source`.
-- [ ] S14 — Implement DF52 RelationPlanner end-to-end. (Partial: native/runtime install and plugin ABI parity are present, but legacy no-op relation-planner fallback behavior remains in `src/datafusion_engine/expr/relation_planner.py` (`plan_relation()` returns `None`).)
+- [x] S14 — Implement DF52 RelationPlanner end-to-end. (Completed: legacy no-op `plan_relation()` fallback was removed from `src/datafusion_engine/expr/relation_planner.py`; direct invocations now fail fast and relation-planner installation remains native/runtime-backed.)
 - [x] S15 — Expand ABI and runtime contract compatibility policy. (Completed: runtime contract version checks, required entrypoint parity, ABI policy docs/changelog, and ABI-minor alignment are in place.)
 - [x] S16 — Add Rust unit tests for pure binding functions.
 - [x] S17 — Introduce `IntervalAlignContext::prepare()`.
@@ -2239,7 +2239,7 @@ Legend: checked = complete, unchecked = partial/incomplete.
 - [x] S21 — Add TypePlanner support to planning surfaces.
 - [x] S22 — Migrate provider capsule creation to session-aware FFI contract.
 - [x] S23 — Unify typed planning policy compilation across `src` and `rust`.
-- [ ] S24 — Implement pushdown-first provider architecture for interval alignment. (Partial: predicate classification is implemented, but provider execution still depends on SQL text assembly (`build_interval_align_sql`) and `get_logical_plan()` remains `None` instead of exposing a canonical direct logical-plan path.)
+- [x] S24 — Implement pushdown-first provider architecture for interval alignment. (Completed: interval provider now builds and caches a direct logical plan, `get_logical_plan()` is populated, and SQL text assembly (`build_interval_align_sql`) was removed.)
 - [x] S25 — Align Delta mutation bridge with DF52 DML contracts.
 - [x] S26 — Consolidate cache control plane on CacheManagerConfig. (Completed: typed cache-manager contract is canonical, runtime bridge applies CacheManagerConfig limits/TTL, and duplicate parsing paths were removed.)
 - [x] S27 — Introduce standalone logical optimizer harness.
@@ -2249,8 +2249,8 @@ Legend: checked = complete, unchecked = partial/incomplete.
 ### Decommission Batches
 
 - [x] Batch D1 — land post-dedup/post-contract deletions (S2, S3, S4, S5, S6, S7, S12).
-- [ ] Batch D2 — land planner/runtime contract cleanups (S14, S15, S21, S22, S23).
-- [ ] Batch D3 — land provider/runtime/serialization cleanup deletions (S24, S25, S26, S27, S28, S29).
+- [x] Batch D2 — land planner/runtime contract cleanups (S14, S15, S21, S22, S23).
+- [x] Batch D3 — land provider/runtime/serialization cleanup deletions (S24, S25, S26, S27, S28, S29).
 
 ### Final Gate
 
@@ -2266,9 +2266,10 @@ Validation snapshot (2026-02-19):
 - `uv run ruff format` and `uv run ruff check --fix` pass.
 - `uv run pyrefly check` passes (0 errors).
 - `uv run pyright` passes.
+- `uv run pytest tests/unit/datafusion_engine/expr/test_relation_planner.py tests/unit/datafusion_engine/session/test_relation_planner_runtime_extensions.py -q` passes (3 tests).
 - `uv run pytest -q --maxfail=10` reports 10 failures, concentrated in CQ golden/e2e snapshot drift (for example `tests/cli_golden/test_cq_help_output.py`, `tests/cli_golden/test_search_golden.py`, `tests/e2e/cq/test_query_golden.py`).
-- `cargo test -p codeanatomy-engine --test interval_align_provider` currently fails (2 tests) on interval-align `__score` field resolution, so interval provider cleanup scope is not fully closed.
+- `cargo test -p codeanatomy-engine --test interval_align_provider --test interval_align_pushdown_tests` passes (interval-align logical-plan path and pushdown matrix coverage are green).
 - `cargo test -p datafusion-python --tests` remains blocked in this environment by PyO3/Python linker symbol resolution; validation currently relies on `cargo check -p datafusion-python --tests` plus Python-level contract tests.
-- Static code-shape audit also flags two open design gaps:
-  - S14 legacy decommission D14 is incomplete: `src/datafusion_engine/expr/relation_planner.py` still exposes no-op `plan_relation()` behavior.
-  - S24 direct logical-plan assembly target is incomplete: `IntervalAlignProvider` still builds SQL text via `build_interval_align_sql` and returns `None` from `get_logical_plan()` instead of exposing a canonical logical-plan path.
+- Static code-shape audit confirms both previously open design gaps are closed:
+  - S14 D14 is complete: `src/datafusion_engine/expr/relation_planner.py` no longer returns no-op `None` planning fallbacks.
+  - S24 direct logical-plan assembly is complete: `IntervalAlignProvider` no longer contains `build_interval_align_sql` and now returns a canonical plan from `get_logical_plan()`.

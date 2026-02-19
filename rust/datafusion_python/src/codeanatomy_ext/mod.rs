@@ -3,10 +3,10 @@
 use pyo3::prelude::*;
 
 pub(crate) mod cache_tables;
-pub(crate) mod delta_session_bridge;
 pub(crate) mod delta_maintenance;
 pub(crate) mod delta_mutations;
 pub(crate) mod delta_provider;
+pub(crate) mod delta_session_bridge;
 pub(crate) mod docs_bridge;
 pub(crate) mod factory_policy;
 pub(crate) mod helpers;
@@ -14,8 +14,8 @@ pub(crate) mod plan_bundle_bridge;
 pub(crate) mod plugin_bridge;
 pub(crate) mod provider_capsule_contract;
 pub(crate) mod registry_bridge;
-pub(crate) mod rust_pivot;
 pub(crate) mod rules_bridge;
+pub(crate) mod rust_pivot;
 pub(crate) mod schema_evolution;
 pub(crate) mod session_utils;
 pub(crate) mod substrait_bridge;

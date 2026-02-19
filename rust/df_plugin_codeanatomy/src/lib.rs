@@ -40,9 +40,7 @@ fn manifest() -> DfPluginManifestV1 {
             | caps::WINDOW_UDF
             | caps::TABLE_FUNCTION
             | caps::RELATION_PLANNER,
-        features: RVec::from(vec![RString::from(
-            "relation_planner:codeanatomy_relation",
-        )]),
+        features: RVec::from(vec![RString::from("relation_planner:codeanatomy_relation")]),
     }
 }
 

@@ -1,6 +1,5 @@
 //! Shared helpers for the CodeAnatomy Python extension bridge.
 
-use std::collections::HashMap;
 use arrow::datatypes::SchemaRef;
 use datafusion::execution::context::SessionContext;
 use datafusion_ext::DeltaFeatureGate;
@@ -12,6 +11,7 @@ use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString};
 use rmp_serde::from_slice;
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 
 use crate::context::PySessionContext;
 use crate::delta_control_plane::DeltaScanOverrides;

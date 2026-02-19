@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::path::Path;
+use std::sync::Arc;
 
 use arrow::array::{Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -135,6 +135,24 @@ async fn interval_align_provider_supports_projection_filter_and_limit() {
 }
 
 #[tokio::test]
+async fn interval_align_provider_exposes_direct_logical_plan() {
+    let (left_schema, left_batches, right_schema, right_batches) = interval_inputs();
+    let provider = build_interval_align_provider(
+        left_schema,
+        left_batches,
+        right_schema,
+        right_batches,
+        IntervalAlignProviderConfig::default(),
+    )
+    .await
+    .expect("provider");
+    assert!(
+        provider.get_logical_plan().is_some(),
+        "interval align provider should expose a canonical logical plan"
+    );
+}
+
+#[tokio::test]
 async fn interval_align_execute_returns_left_join_rows() {
     let (left_schema, left_batches, right_schema, right_batches) = interval_inputs();
     let mut config = IntervalAlignProviderConfig::default();
@@ -165,5 +183,13 @@ fn interval_align_provider_avoids_bare_session_context_new() {
     assert!(
         !source.contains("SessionContext::new()"),
         "interval align provider must not build bare SessionContext::new()"
+    );
+    assert!(
+        !source.contains(".sql("),
+        "interval align provider should avoid SQL-text execution path"
+    );
+    assert!(
+        !source.contains("build_interval_align_sql"),
+        "interval align provider should avoid SQL-text plan assembly helpers"
     );
 }

@@ -5,18 +5,18 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::array::{ArrayRef, Int64Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Column;
 use datafusion::datasource::{MemTable, TableType};
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
     dml::InsertOp, Expr, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown,
 };
-use datafusion::physical_plan::collect;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::prelude::{cast, col, greatest, least, lit, when, JoinType};
 use datafusion_common::{DataFusionError, Result, Statistics};
 use serde::{Deserialize, Serialize};
 
@@ -73,12 +73,8 @@ impl Default for IntervalAlignProviderConfig {
 /// TableProvider wrapper for interval-aligned output.
 #[derive(Debug)]
 pub struct IntervalAlignProvider {
-    left_schema: SchemaRef,
-    left_batches: Vec<RecordBatch>,
-    right_schema: SchemaRef,
-    right_batches: Vec<RecordBatch>,
     output_schema: SchemaRef,
-    config: IntervalAlignProviderConfig,
+    logical_plan: LogicalPlan,
 }
 
 impl IntervalAlignProvider {
@@ -91,39 +87,20 @@ impl IntervalAlignProvider {
     ) -> Result<Self> {
         let output_schema =
             build_output_schema(&config, left_schema.as_ref(), right_schema.as_ref())?;
-        Ok(Self {
-            left_schema,
-            left_batches,
-            right_schema,
-            right_batches,
-            output_schema,
-            config,
-        })
-    }
-
-    fn session_state_from_session(session: &dyn Session) -> Result<SessionState> {
-        let Some(session_state) = session.as_any().downcast_ref::<SessionState>() else {
-            return Err(DataFusionError::Plan(
-                "IntervalAlignProvider requires a SessionState-backed session".to_string(),
-            ));
-        };
-        Ok(session_state.clone())
-    }
-
-    async fn build_dataframe(&self, state: &dyn Session) -> Result<datafusion::prelude::DataFrame> {
-        let sql = build_interval_align_sql(
-            &self.config,
-            self.left_schema.as_ref(),
-            self.right_schema.as_ref(),
+        let (left_aug_schema, left_aug_batches) =
+            augment_left_batches_with_row_id(&left_schema, left_batches.as_slice())?;
+        let logical_plan = build_interval_align_logical_plan(
+            &config,
+            left_schema.as_ref(),
+            left_aug_schema,
+            left_aug_batches.as_slice(),
+            right_schema.as_ref(),
+            right_batches.as_slice(),
         )?;
-        let ctx = SessionContext::new_with_state(Self::session_state_from_session(state)?);
-        let left_mem =
-            MemTable::try_new(self.left_schema.clone(), vec![self.left_batches.clone()])?;
-        let right_mem =
-            MemTable::try_new(self.right_schema.clone(), vec![self.right_batches.clone()])?;
-        ctx.register_table("__ca_left", Arc::new(left_mem))?;
-        ctx.register_table("__ca_right", Arc::new(right_mem))?;
-        ctx.sql(sql.as_str()).await
+        Ok(Self {
+            output_schema,
+            logical_plan,
+        })
     }
 }
 
@@ -146,7 +123,7 @@ impl TableProvider for IntervalAlignProvider {
     }
 
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
-        None
+        Some(Cow::Borrowed(&self.logical_plan))
     }
 
     async fn scan(
@@ -156,8 +133,7 @@ impl TableProvider for IntervalAlignProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let df = self.build_dataframe(state).await?;
-        let mut plan = LogicalPlanBuilder::from(df.logical_plan().clone());
+        let mut plan = LogicalPlanBuilder::from(self.logical_plan.clone());
 
         if let Some(filter_expr) = filters.iter().cloned().reduce(|acc, new| acc.and(new)) {
             plan = plan.filter(filter_expr)?;
@@ -205,14 +181,6 @@ impl TableProvider for IntervalAlignProvider {
             "IntervalAlignProvider is read-only".to_string(),
         ))
     }
-}
-
-fn quote_ident(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
-}
-
-fn quote_lit(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn select_columns(selected: &[String], available: &[String]) -> Vec<String> {
@@ -305,16 +273,46 @@ impl IntervalAlignContext {
     }
 }
 
-fn mode_condition(config: &IntervalAlignProviderConfig) -> String {
-    let l_start = format!("l.{}", quote_ident(config.left_start_col.as_str()));
-    let l_end = format!("l.{}", quote_ident(config.left_end_col.as_str()));
-    let r_start = format!("r.{}", quote_ident(config.right_start_col.as_str()));
-    let r_end = format!("r.{}", quote_ident(config.right_end_col.as_str()));
+fn qualified(alias: &str, column: &str) -> String {
+    format!("{alias}.{column}")
+}
+
+fn mode_condition_expr(config: &IntervalAlignProviderConfig) -> Expr {
+    let l_start = col(qualified("l", config.left_start_col.as_str()));
+    let l_end = col(qualified("l", config.left_end_col.as_str()));
+    let r_start = col(qualified("r", config.right_start_col.as_str()));
+    let r_end = col(qualified("r", config.right_end_col.as_str()));
     match config.mode.trim().to_ascii_uppercase().as_str() {
-        "EXACT" => format!("{r_start} = {l_start} AND {r_end} = {l_end}"),
-        "OVERLAP_MAX" => format!("{r_start} < {l_end} AND {r_end} > {l_start}"),
-        _ => format!("{r_start} <= {l_start} AND {r_end} >= {l_end}"),
+        "EXACT" => r_start.eq(l_start).and(r_end.eq(l_end)),
+        "OVERLAP_MAX" => r_start.lt(l_end).and(r_end.gt(l_start)),
+        _ => r_start.lt_eq(l_start).and(r_end.gt_eq(l_end)),
     }
+}
+
+fn overlap_score_expr(config: &IntervalAlignProviderConfig) -> Result<Expr> {
+    let l_start = cast(
+        col(qualified("l", config.left_start_col.as_str())),
+        DataType::Int64,
+    );
+    let l_end = cast(
+        col(qualified("l", config.left_end_col.as_str())),
+        DataType::Int64,
+    );
+    let r_start = cast(
+        col(qualified("r", config.right_start_col.as_str())),
+        DataType::Int64,
+    );
+    let r_end = cast(
+        col(qualified("r", config.right_end_col.as_str())),
+        DataType::Int64,
+    );
+    let min_end = least(vec![l_end.clone(), r_end.clone()]);
+    let max_start = greatest(vec![l_start.clone(), r_start.clone()]);
+    let mut score_builder = when(
+        min_end.clone().gt(max_start.clone()),
+        cast(min_end - max_start, DataType::Float64),
+    );
+    score_builder.otherwise(lit(0.0_f64))
 }
 
 fn classify_interval_align_filter(expr: &Expr) -> TableProviderFilterPushDown {
@@ -326,10 +324,7 @@ fn classify_interval_align_filter(expr: &Expr) -> TableProviderFilterPushDown {
         || text.contains("__rn")
     {
         TableProviderFilterPushDown::Unsupported
-    } else if text.contains("match_score")
-        || text.contains("match_kind")
-        || text.contains("__r")
-    {
+    } else if text.contains("match_score") || text.contains("match_kind") || text.contains("__r") {
         TableProviderFilterPushDown::Inexact
     } else {
         TableProviderFilterPushDown::Exact
@@ -422,148 +417,145 @@ fn build_output_schema(
     Ok(Arc::new(Schema::new(fields)))
 }
 
-fn build_interval_align_sql(
+fn augment_left_batches_with_row_id(
+    left_schema: &SchemaRef,
+    left_batches: &[RecordBatch],
+) -> Result<(SchemaRef, Vec<RecordBatch>)> {
+    let mut fields = left_schema.fields().iter().cloned().collect::<Vec<_>>();
+    fields.push(Arc::new(Field::new("__left_row", DataType::Int64, false)));
+    let augmented_schema = Arc::new(Schema::new(fields));
+
+    let mut next_row_id: i64 = 1;
+    let mut augmented_batches: Vec<RecordBatch> = Vec::with_capacity(left_batches.len());
+    for batch in left_batches {
+        let row_count = i64::try_from(batch.num_rows()).map_err(|_| {
+            DataFusionError::Plan("interval_align row count exceeded i64 range".to_string())
+        })?;
+        let end_row_id = next_row_id
+            .checked_add(row_count)
+            .ok_or_else(|| DataFusionError::Plan("interval_align row id overflow".to_string()))?;
+        let row_ids: Int64Array = (next_row_id..end_row_id).collect();
+        next_row_id = end_row_id;
+
+        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+        columns.push(Arc::new(row_ids));
+        augmented_batches.push(RecordBatch::try_new(augmented_schema.clone(), columns)?);
+    }
+
+    Ok((augmented_schema, augmented_batches))
+}
+
+fn build_interval_align_logical_plan(
     config: &IntervalAlignProviderConfig,
     left_schema: &Schema,
+    left_aug_schema: SchemaRef,
+    left_aug_batches: &[RecordBatch],
     right_schema: &Schema,
-) -> Result<String> {
+    right_batches: &[RecordBatch],
+) -> Result<LogicalPlan> {
     let prepared = IntervalAlignContext::prepare(config, left_schema, right_schema)?;
-    let left_available_set: HashSet<&str> =
-        prepared.left_available.iter().map(String::as_str).collect();
-    let right_available_set: HashSet<&str> =
-        prepared.right_available.iter().map(String::as_str).collect();
-
     if prepared.join_mode != "inner" && prepared.join_mode != "left" {
         return Err(DataFusionError::Plan(format!(
             "interval_align_table unsupported how mode: {}",
             config.how
         )));
     }
-    let join_keyword = if prepared.join_mode == "left" {
-        "LEFT JOIN"
-    } else {
-        "JOIN"
-    };
 
-    let l_path = format!("l.{}", quote_ident(config.left_path_col.as_str()));
-    let r_path = format!("r.{}", quote_ident(config.right_path_col.as_str()));
-    let l_start = format!("l.{}", quote_ident(config.left_start_col.as_str()));
-    let l_end = format!("l.{}", quote_ident(config.left_end_col.as_str()));
-    let r_start = format!("r.{}", quote_ident(config.right_start_col.as_str()));
-    let r_end = format!("r.{}", quote_ident(config.right_end_col.as_str()));
-    let overlap_expr = format!(
-        "CASE WHEN LEAST(CAST({l_end} AS BIGINT), CAST({r_end} AS BIGINT)) > \
-         GREATEST(CAST({l_start} AS BIGINT), CAST({r_start} AS BIGINT)) \
-         THEN CAST(LEAST(CAST({l_end} AS BIGINT), CAST({r_end} AS BIGINT)) - \
-              GREATEST(CAST({l_start} AS BIGINT), CAST({r_start} AS BIGINT)) AS DOUBLE) \
-         ELSE 0.0 END"
-    );
+    let state = SessionStateBuilder::new().with_default_features().build();
+    let ctx = SessionContext::new_with_state(state);
 
-    let mut order_exprs: Vec<String> = vec!["__score DESC".to_string()];
+    let left_provider: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
+        left_aug_schema,
+        vec![left_aug_batches.to_vec()],
+    )?);
+    let right_provider: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
+        Arc::new(right_schema.clone()),
+        vec![right_batches.to_vec()],
+    )?);
+
+    let left_for_match = ctx.read_table(left_provider.clone())?.alias("l")?;
+    let right_for_match = ctx.read_table(right_provider.clone())?.alias("r")?;
+    let match_predicates = vec![
+        col(qualified("l", config.left_path_col.as_str()))
+            .eq(col(qualified("r", config.right_path_col.as_str()))),
+        mode_condition_expr(config),
+    ];
+    let matched = left_for_match.join_on(right_for_match, JoinType::Inner, match_predicates)?;
+
+    let scored = matched.with_column("__score", overlap_score_expr(config)?)?;
+
+    let left_available_set: HashSet<&str> =
+        prepared.left_available.iter().map(String::as_str).collect();
+    let right_available_set: HashSet<&str> = prepared
+        .right_available
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut sort_exprs = vec![
+        col("l.__left_row").sort(true, false),
+        col("__score").sort(false, false),
+    ];
     for tie_breaker in config.tie_breakers.as_slice() {
-        let column = tie_breaker.column.trim();
-        if column.is_empty() {
+        let tie_column = tie_breaker.column.trim();
+        if tie_column.is_empty() {
             continue;
         }
-        let order = if tie_breaker.order.trim().eq_ignore_ascii_case("descending") {
-            "DESC"
-        } else {
-            "ASC"
-        };
-        if right_available_set.contains(column) {
-            order_exprs.push(format!("r.{} {order}", quote_ident(column)));
-        } else if left_available_set.contains(column) {
-            order_exprs.push(format!("l.{} {order}", quote_ident(column)));
+        let asc = !tie_breaker.order.trim().eq_ignore_ascii_case("descending");
+        if right_available_set.contains(tie_column) {
+            sort_exprs.push(col(qualified("r", tie_column)).sort(asc, false));
+        } else if left_available_set.contains(tie_column) {
+            sort_exprs.push(col(qualified("l", tie_column)).sort(asc, false));
         }
     }
-    order_exprs.push(format!(
-        "r.{} ASC",
-        quote_ident(config.right_start_col.as_str())
-    ));
-    order_exprs.push(format!(
-        "r.{} ASC",
-        quote_ident(config.right_end_col.as_str())
-    ));
+    sort_exprs.push(col(qualified("r", config.right_start_col.as_str())).sort(true, false));
+    sort_exprs.push(col(qualified("r", config.right_end_col.as_str())).sort(true, false));
 
-    let mut matched_select_parts: Vec<String> = vec!["l.__left_row AS __left_row".to_string()];
+    let mut best_select_exprs = vec![col("l.__left_row").alias("__left_row"), col("__score")];
     for (original, alias) in prepared.right_aliases.as_slice() {
-        matched_select_parts.push(format!(
-            "r.{} AS {}",
-            quote_ident(original.as_str()),
-            quote_ident(alias.as_str())
-        ));
+        best_select_exprs.push(col(qualified("r", original.as_str())).alias(alias.as_str()));
     }
-    matched_select_parts.push(format!("{overlap_expr} AS __score"));
-    matched_select_parts.push(format!(
-        "ROW_NUMBER() OVER (PARTITION BY l.__left_row ORDER BY {}) AS __rn",
-        order_exprs.join(", ")
-    ));
+    let best_matches = scored
+        .distinct_on(
+            vec![col("l.__left_row")],
+            best_select_exprs,
+            Some(sort_exprs),
+        )?
+        .alias("b")?;
 
-    let mut output_parts: Vec<String> = Vec::new();
+    let left_for_output = ctx.read_table(left_provider)?.alias("l")?;
+    let join_type = if prepared.join_mode == "left" {
+        JoinType::Left
+    } else {
+        JoinType::Inner
+    };
+    let joined = left_for_output.join(
+        best_matches,
+        join_type,
+        &["__left_row"],
+        &["__left_row"],
+        None,
+    )?;
+
+    let mut output_exprs: Vec<Expr> = Vec::new();
     for column in prepared.left_keep.as_slice() {
-        output_parts.push(format!(
-            "l.{} AS {}",
-            quote_ident(column.as_str()),
-            quote_ident(column.as_str())
-        ));
+        output_exprs.push(col(qualified("l", column.as_str())).alias(column.as_str()));
     }
     for (_, alias) in prepared.right_aliases.as_slice() {
-        output_parts.push(format!(
-            "b.{} AS {}",
-            quote_ident(alias.as_str()),
-            quote_ident(alias.as_str())
-        ));
+        output_exprs.push(col(qualified("b", alias.as_str())).alias(alias.as_str()));
     }
     if config.emit_match_meta {
-        let mode_lit = quote_lit(config.mode.trim().to_ascii_uppercase().as_str());
-        let kind_expr = if prepared.join_mode == "left" {
-            format!(
-                "CASE WHEN b.__left_row IS NULL THEN 'NO_MATCH' ELSE {mode_lit} END AS {}",
-                quote_ident(config.match_kind_col.as_str())
-            )
+        let mode_label = config.mode.trim().to_ascii_uppercase();
+        let match_kind_expr = if prepared.join_mode == "left" {
+            let mut builder = when(col("b.__left_row").is_null(), lit("NO_MATCH"));
+            builder.otherwise(lit(mode_label))?
         } else {
-            format!(
-                "{mode_lit} AS {}",
-                quote_ident(config.match_kind_col.as_str())
-            )
+            lit(mode_label)
         };
-        output_parts.push(kind_expr);
-        let score_expr = if prepared.join_mode == "left" {
-            format!(
-                "CASE WHEN b.__left_row IS NULL THEN CAST(NULL AS DOUBLE) ELSE b.__score END AS {}",
-                quote_ident(config.match_score_col.as_str())
-            )
-        } else {
-            format!(
-                "b.__score AS {}",
-                quote_ident(config.match_score_col.as_str())
-            )
-        };
-        output_parts.push(score_expr);
+        output_exprs.push(match_kind_expr.alias(config.match_kind_col.as_str()));
+        output_exprs.push(col("b.__score").alias(config.match_score_col.as_str()));
     }
 
-    Ok(format!(
-        "WITH left_aug AS ( \
-            SELECT l.*, ROW_NUMBER() OVER () AS __left_row \
-            FROM __ca_left l \
-         ), \
-         matched AS ( \
-            SELECT {matched_select} \
-            FROM left_aug l \
-            JOIN __ca_right r \
-              ON {l_path} = {r_path} AND ({condition}) \
-         ), \
-         best AS ( \
-            SELECT * FROM matched WHERE __rn = 1 \
-         ) \
-         SELECT {outputs} \
-         FROM left_aug l \
-         {join_keyword} best b \
-           ON l.__left_row = b.__left_row",
-        matched_select = matched_select_parts.join(", "),
-        condition = mode_condition(config),
-        outputs = output_parts.join(", "),
-    ))
+    Ok(joined.select(output_exprs)?.logical_plan().clone())
 }
 
 pub async fn build_interval_align_provider(

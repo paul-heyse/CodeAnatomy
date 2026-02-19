@@ -12,8 +12,8 @@
 
 mod common;
 
-use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::executor::result::DeterminismContract;
+use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::spec::hashing::hash_spec;
 use codeanatomy_engine::spec::join_graph::{JoinConstraint, JoinEdge, JoinGraph};
 use codeanatomy_engine::spec::outputs::MaterializationMode;

@@ -293,11 +293,13 @@ pub(crate) fn install_codeanatomy_runtime(
     .map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to install CodeAnatomy runtime UDFs: {err}"))
     })?;
-    datafusion_ext::install_sql_macro_factory_native(&extract_session_ctx(ctx)?).map_err(|err| {
-        PyRuntimeError::new_err(format!(
-            "Failed to install CodeAnatomy FunctionFactory runtime: {err}"
-        ))
-    })?;
+    datafusion_ext::install_sql_macro_factory_native(&extract_session_ctx(ctx)?).map_err(
+        |err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to install CodeAnatomy FunctionFactory runtime: {err}"
+            ))
+        },
+    )?;
     let planner_names = ["codeanatomy_domain"];
     datafusion_ext::install_expr_planners_native(&extract_session_ctx(ctx)?, &planner_names)
         .map_err(|err| {

@@ -9,9 +9,9 @@ use datafusion::execution::context::SessionContext;
 use datafusion::prelude::DataFrame;
 #[cfg(feature = "substrait")]
 use datafusion_ext::async_runtime;
+use pyo3::exceptions::PyRuntimeError;
 #[cfg(feature = "substrait")]
 use pyo3::exceptions::PyValueError;
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 

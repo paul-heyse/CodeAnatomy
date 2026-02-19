@@ -226,8 +226,7 @@ impl<'a> SemanticPlanCompiler<'a> {
             } => {
                 let mut resolved_sources = Vec::with_capacity(sources.len());
                 for source in sources {
-                    resolved_sources
-                        .push(self.register_inline_source(source, inline_cache).await?);
+                    resolved_sources.push(self.register_inline_source(source, inline_cache).await?);
                 }
                 union_builder::build_union(
                     self.ctx,
@@ -289,8 +288,7 @@ impl<'a> SemanticPlanCompiler<'a> {
             } => {
                 let mut resolved_sources = Vec::with_capacity(sources.len());
                 for source in sources {
-                    resolved_sources
-                        .push(self.register_inline_source(source, inline_cache).await?);
+                    resolved_sources.push(self.register_inline_source(source, inline_cache).await?);
                 }
                 cpg_builder::build_cpg_emit(self.ctx, *output_kind, resolved_sources.as_slice())
                     .await

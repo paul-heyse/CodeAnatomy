@@ -33,7 +33,10 @@ fn collect_public_names(names: &[String]) -> Vec<String> {
     out
 }
 
-fn collect_public_names_from_dict(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<Vec<String>> {
+fn collect_public_names_from_dict(
+    py: Python<'_>,
+    dict: &Bound<'_, PyDict>,
+) -> PyResult<Vec<String>> {
     let mut names: Vec<String> = Vec::new();
     for (key, _value) in dict.iter() {
         let name: String = key.extract()?;
@@ -63,7 +66,11 @@ mod tests {
 
     #[test]
     fn collect_public_names_is_sorted() {
-        let names = vec!["z_func".to_string(), "a_func".to_string(), "m_func".to_string()];
+        let names = vec![
+            "z_func".to_string(),
+            "a_func".to_string(),
+            "m_func".to_string(),
+        ];
         let public = collect_public_names(&names);
         let mut sorted = public.clone();
         sorted.sort();

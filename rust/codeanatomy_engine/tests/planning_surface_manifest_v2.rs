@@ -1,9 +1,7 @@
 use codeanatomy_engine::session::planning_manifest::{
     manifest_from_surface, manifest_v2_from_surface,
 };
-use codeanatomy_engine::session::planning_surface::{
-    PlanningSurfacePolicyV1, PlanningSurfaceSpec,
-};
+use codeanatomy_engine::session::planning_surface::{PlanningSurfacePolicyV1, PlanningSurfaceSpec};
 
 #[test]
 fn planning_surface_manifest_carries_typed_policy() {

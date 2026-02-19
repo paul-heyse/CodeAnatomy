@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Never, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -13,8 +13,13 @@ class RelationPlannerPort(Protocol):
         """Install relation planner runtime hooks."""
         ...
 
-    def plan_relation(self, relation: object, schema: object) -> object | None:
-        """Return a planned relation object or ``None`` when unhandled."""
+    def plan_relation(self, relation: object, schema: object) -> object:
+        """Plan a relation object.
+
+        Runtime hooks should install planners through ``install_relation_planner``.
+        This method exists only to keep protocol compatibility with callers that
+        still probe planner objects directly.
+        """
         ...
 
 
@@ -26,12 +31,20 @@ class CodeAnatomyRelationPlanner:
         _ = self
         install_relation_planner(ctx)
 
-    def plan_relation(self, relation: object, schema: object) -> object | None:
-        """Return ``None`` to delegate relation planning to DataFusion defaults."""
+    def plan_relation(self, relation: object, schema: object) -> Never:
+        """Raise instead of silently returning a no-op planning result.
+
+        Raises:
+            RuntimeError: Always, because Python-side relation planning is unsupported.
+        """
         _ = self
         _ = relation
         _ = schema
-        return None
+        msg = (
+            "CodeAnatomyRelationPlanner does not expose Python-side relation planning. "
+            "Use install_relation_planner(ctx) to install the native planner hook."
+        )
+        raise RuntimeError(msg)
 
 
 def relation_planner_extension_available() -> bool:

@@ -104,15 +104,13 @@ fn apply_runtime_policy_options(
         let mut cache_manager = CacheManagerConfig::default();
         let mut cache_manager_configured = false;
         if let Some(limit) = options.metadata_cache_limit {
-            cache_manager =
-                cache_manager.with_metadata_cache_limit(usize_from_u64(limit, "metadata_cache_limit")?);
+            cache_manager = cache_manager
+                .with_metadata_cache_limit(usize_from_u64(limit, "metadata_cache_limit")?);
             cache_manager_configured = true;
         }
         if let Some(limit) = options.list_files_cache_limit {
-            cache_manager = cache_manager.with_list_files_cache_limit(usize_from_u64(
-                limit,
-                "list_files_cache_limit",
-            )?);
+            cache_manager = cache_manager
+                .with_list_files_cache_limit(usize_from_u64(limit, "list_files_cache_limit")?);
             cache_manager_configured = true;
         }
         if let Some(ttl_seconds) = options.list_files_cache_ttl_seconds {

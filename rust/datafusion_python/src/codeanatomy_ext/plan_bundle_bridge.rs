@@ -178,7 +178,7 @@ pub(crate) fn arrow_stream_to_batches(py: Python<'_>, obj: Py<PyAny>) -> PyResul
     let mut batches = Vec::new();
     while let Some(batch) = reader.next() {
         let batch = batch
-            .map_err(|err| PyRuntimeError::new_err(format!("Arrow stream batch error: {err}")) )?;
+            .map_err(|err| PyRuntimeError::new_err(format!("Arrow stream batch error: {err}")))?;
         batches.push(batch);
     }
     let mut py_batches = Vec::with_capacity(batches.len());
@@ -196,7 +196,10 @@ pub(crate) fn arrow_stream_to_batches(py: Python<'_>, obj: Py<PyAny>) -> PyResul
 
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(capture_plan_bundle_runtime, module)?)?;
-    module.add_function(wrap_pyfunction!(build_plan_bundle_artifact_with_warnings, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        build_plan_bundle_artifact_with_warnings,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(arrow_stream_to_batches, module)?)?;
     Ok(())
 }

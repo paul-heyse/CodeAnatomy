@@ -122,18 +122,10 @@ impl From<&PlanningSurfaceManifest> for PlanningSurfaceManifestV2 {
             if policy.type_planner_enabled {
                 vec!["codeanatomy_type".to_string()]
             } else {
-                value
-                    .type_planner_name
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
+                value.type_planner_name.iter().cloned().collect::<Vec<_>>()
             }
         } else {
-            value
-                .type_planner_name
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
+            value.type_planner_name.iter().cloned().collect::<Vec<_>>()
         };
         let table_factories = value
             .table_factory_names

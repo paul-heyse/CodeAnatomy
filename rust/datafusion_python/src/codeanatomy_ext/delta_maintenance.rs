@@ -15,6 +15,7 @@ use crate::delta_maintenance::{
     DeltaAddFeaturesRequest, DeltaDropConstraintsRequest, DeltaOptimizeCompactRequest,
     DeltaRestoreRequest, DeltaSetPropertiesRequest, DeltaVacuumRequest,
 };
+use datafusion_ext::async_runtime;
 use datafusion_ext::{DeltaCommitOptions, DeltaFeatureGate};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -22,7 +23,7 @@ use serde::Deserialize;
 use tracing::instrument;
 
 use super::helpers::{
-    extract_session_ctx, maintenance_report_to_pydict, parse_msgpack_payload, runtime,
+    extract_session_ctx, maintenance_report_to_pydict, parse_msgpack_payload,
     table_version_from_options,
 };
 
@@ -137,7 +138,9 @@ pub(crate) fn delta_optimize_compact_request_payload(
         None => None,
     };
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_optimize_compact_native(DeltaOptimizeCompactRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -162,7 +165,9 @@ pub(crate) fn delta_vacuum_request_payload(
     let request: DeltaVacuumRequestPayload =
         parse_msgpack_payload(&request_msgpack, "delta_vacuum_request")?;
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_vacuum_native(DeltaVacuumRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -193,7 +198,9 @@ pub(crate) fn delta_restore_request_payload(
     let table_version = table_version_from_options(request.version, request.timestamp)?;
     let restore_target =
         table_version_from_options(request.restore_version, request.restore_timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_restore_native(DeltaRestoreRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -223,7 +230,9 @@ pub(crate) fn delta_set_properties_request_payload(
         ));
     }
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_set_properties_native(DeltaSetPropertiesRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -253,7 +262,9 @@ pub(crate) fn delta_add_features_request_payload(
         ));
     }
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_add_features_native(DeltaAddFeaturesRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -284,7 +295,9 @@ pub(crate) fn delta_add_constraints_request_payload(
         ));
     }
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_add_constraints_native(DeltaAddConstraintsRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -314,7 +327,9 @@ pub(crate) fn delta_drop_constraints_request_payload(
         ));
     }
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_drop_constraints_native(DeltaDropConstraintsRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -340,7 +355,9 @@ pub(crate) fn delta_create_checkpoint_request_payload(
     let request: DeltaCheckpointRequestPayload =
         parse_msgpack_payload(&request_msgpack, "delta_create_checkpoint_request")?;
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_create_checkpoint_native(
             &extract_session_ctx(ctx)?,
@@ -363,7 +380,9 @@ pub(crate) fn delta_cleanup_metadata_request_payload(
     let request: DeltaCheckpointRequestPayload =
         parse_msgpack_payload(&request_msgpack, "delta_cleanup_metadata_request")?;
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_cleanup_metadata_native(
             &extract_session_ctx(ctx)?,

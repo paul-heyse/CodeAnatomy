@@ -7,6 +7,7 @@ use crate::compiler::graph_validator;
 use crate::compiler::plan_bundle::{DeltaProviderCompatibility, ProviderIdentity};
 use crate::executor::warnings::RunWarning;
 use crate::providers::registration::register_extraction_inputs;
+use crate::rules::overlay::build_overlaid_ruleset;
 use crate::rules::registry::CpgRuleSet;
 use crate::session::envelope::SessionEnvelope;
 use crate::session::factory::{SessionBuildOverrides, SessionFactory};
@@ -28,6 +29,16 @@ pub async fn prepare_execution_context(
     ruleset: &CpgRuleSet,
     tracing_config: Option<&TracingConfig>,
 ) -> Result<PreparedExecutionContext> {
+    let overlaid_ruleset = spec.rule_overlay.as_ref().map(|overlay| {
+        build_overlaid_ruleset(
+            &spec.rulepack_profile,
+            &spec.rule_intents,
+            overlay,
+            session_factory.profile(),
+        )
+    });
+    let effective_ruleset = overlaid_ruleset.as_ref().unwrap_or(ruleset);
+
     let overrides = SessionBuildOverrides {
         enable_function_factory: spec.runtime.enable_function_factory,
         enable_domain_planner: spec.runtime.enable_domain_planner,
@@ -39,7 +50,7 @@ pub async fn prepare_execution_context(
         session_factory
             .build_session_state_from_profile_with_overrides(
                 profile,
-                ruleset,
+                effective_ruleset,
                 spec.spec_hash,
                 tracing_config,
                 overrides,
@@ -47,7 +58,12 @@ pub async fn prepare_execution_context(
             .await?
     } else {
         session_factory
-            .build_session_state_with_overrides(ruleset, spec.spec_hash, tracing_config, overrides)
+            .build_session_state_with_overrides(
+                effective_ruleset,
+                spec.spec_hash,
+                tracing_config,
+                overrides,
+            )
             .await?
     };
 
@@ -88,7 +104,7 @@ pub async fn prepare_execution_context(
     let envelope = SessionEnvelope::capture(
         &state.ctx,
         spec.spec_hash,
-        ruleset.fingerprint,
+        effective_ruleset.fingerprint,
         state.memory_pool_bytes,
         true,
         state.planning_surface_hash,

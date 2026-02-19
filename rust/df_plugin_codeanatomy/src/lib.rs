@@ -19,6 +19,10 @@ use crate::options::parse_udf_options;
 use crate::providers::create_table_provider;
 use crate::udf_bundle::{build_udf_bundle_with_options, exports};
 
+extern "C" fn relation_planner_names() -> RVec<RString> {
+    RVec::from(vec![RString::from("codeanatomy_relation")])
+}
+
 fn manifest() -> DfPluginManifestV1 {
     DfPluginManifestV1 {
         struct_size: size_of::<DfPluginManifestV1>() as u32,
@@ -36,7 +40,9 @@ fn manifest() -> DfPluginManifestV1 {
             | caps::WINDOW_UDF
             | caps::TABLE_FUNCTION
             | caps::RELATION_PLANNER,
-        features: RVec::new(),
+        features: RVec::from(vec![RString::from(
+            "relation_planner:codeanatomy_relation",
+        )]),
     }
 }
 
@@ -62,6 +68,7 @@ pub fn get_library() -> DfPluginMod_Ref {
         manifest: plugin_manifest,
         exports: plugin_exports,
         udf_bundle_with_options: plugin_udf_bundle,
+        relation_planner_names,
         create_table_provider,
     }
     .leak_into_prefix()

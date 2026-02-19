@@ -46,7 +46,7 @@ class SemanticCompilerLike(Protocol):
 
     ctx: SessionContext
 
-    def get_or_register(self, name: str) -> TableInfoLike: ...
+    def ensure_registered(self, name: str) -> TableInfoLike: ...
 
     def resolve_join_keys(
         self,
@@ -80,8 +80,8 @@ def _build_joined_tables(
     right_on: Sequence[str],
     how: JoinHow,
 ) -> DataFrame:
-    left_info = compiler.get_or_register(left_view)
-    right_info = compiler.get_or_register(right_view)
+    left_info = compiler.ensure_registered(left_view)
+    right_info = compiler.ensure_registered(right_view)
 
     left_on, right_on = compiler.resolve_join_keys(
         left_info=left_info,

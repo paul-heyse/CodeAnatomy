@@ -10,6 +10,7 @@ use crate::delta_mutations::{
 use codeanatomy_engine::executor::delta_writer::{
     execute_delta_write_ipc as execute_delta_write_native, DeltaWritePayload,
 };
+use datafusion_ext::async_runtime;
 use datafusion_ext::delta_observability::mutation_report_payload;
 use datafusion_ext::{DeltaCommitOptions, DeltaFeatureGate};
 use deltalake::protocol::SaveMode;
@@ -20,7 +21,7 @@ use serde_json::json;
 use tracing::instrument;
 
 use super::helpers::{
-    extract_session_ctx, json_to_py, mutation_report_to_pydict, parse_msgpack_payload, runtime,
+    extract_session_ctx, json_to_py, mutation_report_to_pydict, parse_msgpack_payload,
     table_version_from_options,
 };
 
@@ -99,6 +100,21 @@ fn save_mode_from_str(mode: &str) -> PyResult<SaveMode> {
     }
 }
 
+fn validate_unsupported_extra_constraints(
+    extra_constraints: &Option<Vec<String>>,
+    operation: &str,
+) -> PyResult<()> {
+    if extra_constraints
+        .as_ref()
+        .is_some_and(|constraints| !constraints.is_empty())
+    {
+        return Err(PyValueError::new_err(format!(
+            "extra_constraints are not supported on {operation} operations. Pass an empty list or omit the field.",
+        )));
+    }
+    Ok(())
+}
+
 #[pyfunction]
 #[instrument(skip(py, ctx, request_msgpack))]
 pub(crate) fn delta_write_ipc_request(
@@ -110,7 +126,9 @@ pub(crate) fn delta_write_ipc_request(
         parse_msgpack_payload(&request_msgpack, "delta_write_ipc_request")?;
     let save_mode = save_mode_from_str(request.mode.as_str())?;
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(execute_delta_write_native(
             &extract_session_ctx(ctx)?,
@@ -180,9 +198,11 @@ pub(crate) fn delta_delete_request(
 ) -> PyResult<Py<PyAny>> {
     let request: DeltaDeleteRequestPayload =
         parse_msgpack_payload(&request_msgpack, "delta_delete_request")?;
-    let _ = request.extra_constraints;
+    validate_unsupported_extra_constraints(&request.extra_constraints, "delete")?;
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_delete_native(DeltaDeleteRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -211,9 +231,11 @@ pub(crate) fn delta_update_request(
             "Delta update requires at least one column assignment.",
         ));
     }
-    let _ = request.extra_constraints;
+    validate_unsupported_extra_constraints(&request.extra_constraints, "update")?;
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_update_native(DeltaUpdateRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -247,7 +269,9 @@ pub(crate) fn delta_merge_request(
         ));
     }
     let table_version = table_version_from_options(request.version, request.timestamp)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let report = runtime
         .block_on(delta_merge_native(DeltaMergeRequest {
             session_ctx: &extract_session_ctx(ctx)?,
@@ -278,4 +302,30 @@ pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(delta_update_request, module)?)?;
     module.add_function(wrap_pyfunction!(delta_merge_request, module)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_unsupported_extra_constraints;
+
+    #[test]
+    fn extra_constraints_validation_allows_none() {
+        let constraints: Option<Vec<String>> = None;
+        let result = validate_unsupported_extra_constraints(&constraints, "delete");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn extra_constraints_validation_allows_empty_list() {
+        let constraints = Some(Vec::<String>::new());
+        let result = validate_unsupported_extra_constraints(&constraints, "update");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn extra_constraints_validation_rejects_non_empty_list() {
+        let constraints = Some(vec!["id > 0".to_string()]);
+        let result = validate_unsupported_extra_constraints(&constraints, "delete");
+        assert!(result.is_err());
+    }
 }

@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, cast
 
 from datafusion import RuntimeEnvBuilder, SessionContext
 
+from datafusion_engine.session.planning_surface_policy import (
+    planning_surface_policy_from_bundle,
+)
+
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
@@ -22,6 +26,12 @@ _RUNTIME_SIZE_SUFFIXES: Mapping[str, int] = {
     "g": 1024 * 1024 * 1024,
     "tb": 1024 * 1024 * 1024 * 1024,
     "t": 1024 * 1024 * 1024 * 1024,
+}
+_RUNTIME_DURATION_SUFFIXES: Mapping[str, int] = {
+    "s": 1,
+    "m": 60,
+    "h": 60 * 60,
+    "d": 24 * 60 * 60,
 }
 
 
@@ -99,6 +109,26 @@ def parse_runtime_size(value: object) -> int | None:
     return _parse_suffixed_runtime_size(stripped)
 
 
+def parse_runtime_duration_seconds(value: object) -> int | None:
+    """Parse a runtime duration value into whole seconds.
+
+    Accepted formats:
+    - integer seconds (``"30"``)
+    - suffixed values (``"30s"``, ``"2m"``, ``"1h"``, ``"1d"``)
+
+    Returns:
+    -------
+    int | None
+        Parsed duration in seconds, or ``None`` when invalid.
+    """
+    stripped = _normalized_runtime_value(value)
+    if stripped is None:
+        return None
+    if stripped.isdigit():
+        return int(stripped)
+    return _parse_suffixed_runtime_duration_seconds(stripped)
+
+
 def resolve_delta_session_builder(
     module_names: tuple[str, ...] = ("datafusion_engine.extensions.datafusion_ext",),
 ) -> DeltaSessionBuilderResolution:
@@ -168,30 +198,24 @@ def build_runtime_policy_options(
     options = options_cls()
     consumed: dict[str, object] = {}
     unsupported: dict[str, str] = {}
-    for key, raw_value in runtime_settings.items():
-        parsed = _parse_runtime_policy_value(key, raw_value)
-        if parsed is None:
-            unsupported[key] = raw_value
-            continue
-        setattr(options, _runtime_policy_rules()[key].attr, parsed)
-        consumed[key] = parsed
-    if not consumed:
-        return DeltaRuntimePolicyBridgeResult(
-            options=None,
-            payload={
-                "enabled": False,
-                "reason": "no_supported_runtime_settings",
-                "runtime_settings_seen": dict(runtime_settings),
-                "unsupported_runtime_settings": unsupported,
-            },
-        )
-    return DeltaRuntimePolicyBridgeResult(
+    handled_keys = _apply_cache_runtime_policy_settings(
         options=options,
-        payload={
-            "enabled": True,
-            "consumed_runtime_settings": consumed,
-            "unsupported_runtime_settings": unsupported,
-        },
+        runtime_settings=runtime_settings,
+        consumed=consumed,
+        unsupported=unsupported,
+    )
+    _apply_standard_runtime_policy_settings(
+        options=options,
+        runtime_settings=runtime_settings,
+        handled_keys=handled_keys,
+        consumed=consumed,
+        unsupported=unsupported,
+    )
+    return _runtime_policy_bridge_result(
+        options=options,
+        runtime_settings=runtime_settings,
+        consumed=consumed,
+        unsupported=unsupported,
     )
 
 
@@ -218,6 +242,7 @@ def build_delta_session_context(
             cause=resolution.cause,
         )
     bridge = DeltaRuntimePolicyBridgeResult(options=None, payload=None)
+    planning_surface_policy = planning_surface_policy_from_bundle(profile.policies).payload()
     try:
         settings = profile.settings_payload()
         bridge = _bridge_payload_for_runtime_policy(resolution, settings)
@@ -225,7 +250,10 @@ def build_delta_session_context(
             profile.catalog.enable_information_schema
         ).lower()
         delta_runtime = delta_runtime_env_options(profile)
-        runtime_policy_bridge = bridge.payload
+        runtime_policy_bridge: dict[str, object] = (
+            dict(bridge.payload) if bridge.payload is not None else {"enabled": False}
+        )
+        runtime_policy_bridge["planning_surface_policy"] = dict(planning_surface_policy)
         if resolution.module_name != "datafusion_engine.extensions.datafusion_ext":
             ctx = resolution.builder(
                 list(settings.items()),
@@ -249,6 +277,7 @@ def build_delta_session_context(
                 runtime_policy_bridge = {
                     "enabled": False,
                     "reason": "legacy_builder_signature",
+                    "planning_surface_policy": dict(planning_surface_policy),
                 }
     except (RuntimeError, TypeError, ValueError) as exc:
         return DeltaSessionBuildResult(
@@ -319,6 +348,121 @@ def _parse_suffixed_runtime_size(value: str) -> int | None:
     return None
 
 
+def _normalized_runtime_value(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip().lower().replace("_", "")
+    return stripped or None
+
+
+def _parse_suffixed_runtime_duration_seconds(value: str) -> int | None:
+    for suffix in sorted(_RUNTIME_DURATION_SUFFIXES, key=len, reverse=True):
+        if not value.endswith(suffix):
+            continue
+        number = value[: -len(suffix)].strip()
+        if not number:
+            return None
+        try:
+            magnitude = float(number)
+        except ValueError:
+            return None
+        if magnitude < 0:
+            return None
+        return int(magnitude * _RUNTIME_DURATION_SUFFIXES[suffix])
+    return None
+
+
+def _apply_cache_runtime_policy_settings(
+    *,
+    options: object,
+    runtime_settings: Mapping[str, str],
+    consumed: dict[str, object],
+    unsupported: dict[str, str],
+) -> set[str]:
+    from datafusion_engine.session.cache_manager_contract import (
+        cache_manager_contract_from_settings,
+    )
+
+    cache_contract = cache_manager_contract_from_settings(
+        enabled=True,
+        settings=runtime_settings,
+    )
+    cache_attr_rules: tuple[tuple[str, str, object | None], ...] = (
+        (
+            "datafusion.runtime.metadata_cache_limit",
+            "metadata_cache_limit",
+            cache_contract.metadata_cache_limit_bytes,
+        ),
+        (
+            "datafusion.runtime.list_files_cache_limit",
+            "list_files_cache_limit",
+            cache_contract.list_files_cache_limit_bytes,
+        ),
+        (
+            "datafusion.runtime.list_files_cache_ttl",
+            "list_files_cache_ttl_seconds",
+            cache_contract.list_files_cache_ttl_seconds,
+        ),
+    )
+    handled_keys: set[str] = set()
+    for runtime_key, attr_name, parsed_value in cache_attr_rules:
+        if runtime_key not in runtime_settings:
+            continue
+        handled_keys.add(runtime_key)
+        if parsed_value is None or not hasattr(options, attr_name):
+            unsupported[runtime_key] = runtime_settings[runtime_key]
+            continue
+        setattr(options, attr_name, parsed_value)
+        consumed[runtime_key] = parsed_value
+    return handled_keys
+
+
+def _apply_standard_runtime_policy_settings(
+    *,
+    options: object,
+    runtime_settings: Mapping[str, str],
+    handled_keys: set[str],
+    consumed: dict[str, object],
+    unsupported: dict[str, str],
+) -> None:
+    for key, raw_value in runtime_settings.items():
+        if key in handled_keys:
+            continue
+        parsed = _parse_runtime_policy_value(key, raw_value)
+        if parsed is None:
+            unsupported[key] = raw_value
+            continue
+        setattr(options, _runtime_policy_rules()[key].attr, parsed)
+        consumed[key] = parsed
+
+
+def _runtime_policy_bridge_result(
+    *,
+    options: object,
+    runtime_settings: Mapping[str, str],
+    consumed: dict[str, object],
+    unsupported: dict[str, str],
+) -> DeltaRuntimePolicyBridgeResult:
+    if not consumed:
+        return DeltaRuntimePolicyBridgeResult(
+            options=None,
+            payload={
+                "enabled": False,
+                "reason": "no_supported_runtime_settings",
+                "runtime_settings_seen": dict(runtime_settings),
+                "unsupported_runtime_settings": unsupported,
+            },
+        )
+    return DeltaRuntimePolicyBridgeResult(
+        options=options,
+        payload={
+            "enabled": True,
+            "consumed_runtime_settings": consumed,
+            "unsupported_runtime_settings": unsupported,
+        },
+    )
+
+
 def _runtime_policy_rules() -> Mapping[str, _RuntimePolicySettingRule]:
     return {
         "datafusion.runtime.memory_limit": _RuntimePolicySettingRule(
@@ -327,10 +471,6 @@ def _runtime_policy_rules() -> Mapping[str, _RuntimePolicySettingRule]:
         ),
         "datafusion.runtime.max_temp_directory_size": _RuntimePolicySettingRule(
             attr="max_temp_directory_size",
-            parser=parse_runtime_size,
-        ),
-        "datafusion.runtime.metadata_cache_limit": _RuntimePolicySettingRule(
-            attr="metadata_cache_limit",
             parser=parse_runtime_size,
         ),
         "datafusion.runtime.temp_directory": _RuntimePolicySettingRule(
@@ -359,6 +499,7 @@ __all__ = [
     "DeltaSessionBuilderResolution",
     "build_delta_session_context",
     "build_runtime_policy_options",
+    "parse_runtime_duration_seconds",
     "parse_runtime_size",
     "resolve_delta_session_builder",
     "split_runtime_settings",

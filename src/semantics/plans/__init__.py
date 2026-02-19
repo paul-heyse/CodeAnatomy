@@ -6,10 +6,12 @@ from semantics.plans.fingerprints import (
     PlanFingerprint,
     compute_plan_fingerprint,
     fingerprints_match,
+    runtime_plan_identity,
 )
 
 __all__ = [
     "PlanFingerprint",
     "compute_plan_fingerprint",
     "fingerprints_match",
+    "runtime_plan_identity",
 ]

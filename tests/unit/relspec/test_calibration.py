@@ -277,7 +277,7 @@ class TestCalibrateObserve:
             bounds=DEFAULT_CALIBRATION_BOUNDS,
             mode="observe",
         )
-        assert result.mode == "observe"
+        assert result.mode == "warn"
         assert result.cost_ratio is not None
         assert result.cost_ratio == pytest.approx(2.0)
 
@@ -354,7 +354,7 @@ class TestCalibrateApply:
             bounds=DEFAULT_CALIBRATION_BOUNDS,
             mode="apply",
         )
-        assert result.mode == "apply"
+        assert result.mode == "enforce"
         # All thresholds should be >= current (EMA toward higher target)
         assert result.adjusted_thresholds.high_fanout_threshold >= current.high_fanout_threshold
         assert (
@@ -414,7 +414,7 @@ class TestCalibrateApply:
 
     @staticmethod
     def test_apply_mode_in_result() -> None:
-        """Result mode is 'apply'."""
+        """Legacy apply mode normalizes to canonical enforce mode."""
         result = calibrate_from_execution_metrics(
             metrics=ExecutionMetricsSummary(
                 predicted_cost=100.0,
@@ -425,7 +425,7 @@ class TestCalibrateApply:
             bounds=DEFAULT_CALIBRATION_BOUNDS,
             mode="apply",
         )
-        assert result.mode == "apply"
+        assert result.mode == "enforce"
 
 
 # ---------------------------------------------------------------------------
@@ -623,6 +623,27 @@ class TestCalibrationConfidence:
         assert "duration" not in conf.evidence_sources
         assert "row_count" not in conf.evidence_sources
 
+    @staticmethod
+    def test_confidence_includes_cache_diagnostics_signal() -> None:
+        """Cache diagnostics should be reflected in confidence evidence sources."""
+        result = calibrate_from_execution_metrics(
+            metrics=ExecutionMetricsSummary(
+                predicted_cost=100.0,
+                actual_cost=120.0,
+                observation_count=10,
+                cache_diagnostics={
+                    "metadata_cache_hit_rate": 0.9,
+                    "list_files_cache_hit_rate": 0.8,
+                },
+            ),
+            current_thresholds=CalibrationThresholds(),
+            bounds=DEFAULT_CALIBRATION_BOUNDS,
+            mode="apply",
+        )
+        conf = result.calibration_confidence
+        assert "cache_diagnostics" in conf.evidence_sources
+        assert "cache_signal=" in result.evidence_summary
+
 
 # ---------------------------------------------------------------------------
 # PolicyCalibrationResult struct
@@ -668,6 +689,6 @@ class TestPolicyCalibrationResult:
         assert isinstance(result.adjusted_thresholds, CalibrationThresholds)
         assert isinstance(result.evidence_summary, str)
         assert isinstance(result.calibration_confidence, InferenceConfidence)
-        assert result.mode == "apply"
+        assert result.mode == "enforce"
         assert isinstance(result.cost_ratio, float)
         assert isinstance(result.bounded, bool)

@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use crate::session::capture::{
     capture_df_settings, GovernancePolicy, PLANNING_AFFECTING_CONFIG_KEYS,
 };
-use crate::session::planning_surface::{PlanningSurfaceSpec, TableFactoryEntry};
+use crate::session::planning_surface::{
+    PlanningSurfacePolicyV1, PlanningSurfaceSpec, TableFactoryEntry,
+};
 
 /// Deterministic manifest of the planning surface configuration.
 ///
@@ -39,6 +41,10 @@ pub struct PlanningSurfaceManifest {
     pub table_factory_names: Vec<String>,
     /// Registered expression planner names (sorted for determinism).
     pub expr_planner_names: Vec<String>,
+    /// Registered relation planner names (sorted for determinism).
+    pub relation_planner_names: Vec<String>,
+    /// Name of the installed type planner, if any.
+    pub type_planner_name: Option<String>,
     /// Name of the installed function factory, if any.
     pub function_factory_name: Option<String>,
     /// Name of the installed query planner, if any.
@@ -63,6 +69,90 @@ pub struct PlanningSurfaceManifest {
     pub delta_codec_enabled: bool,
     /// BLAKE3 digest of the serialized table options configuration.
     pub table_options_digest: [u8; 32],
+    /// Typed planning policy payload used for cross-layer parity checks.
+    pub typed_policy: Option<PlanningSurfacePolicyV1>,
+}
+
+/// Canonical planning-surface manifest (v2) shared with Python surfaces.
+///
+/// This projection keeps only the cross-layer determinism boundary fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PlanningSurfaceManifestV2 {
+    pub expr_planners: Vec<String>,
+    pub relation_planners: Vec<String>,
+    pub type_planners: Vec<String>,
+    pub table_factories: Vec<String>,
+    pub planning_config_keys: BTreeMap<String, String>,
+}
+
+impl PlanningSurfaceManifestV2 {
+    /// Compute deterministic hash of the v2 manifest projection.
+    pub fn hash(&self) -> [u8; 32] {
+        let mut canonical = self.clone();
+        canonical.expr_planners.sort();
+        canonical.relation_planners.sort();
+        canonical.type_planners.sort();
+        canonical.table_factories.sort();
+        let bytes = serde_json::to_vec(&canonical).expect("planning manifest v2 serializable");
+        *blake3::hash(&bytes).as_bytes()
+    }
+}
+
+impl From<&PlanningSurfaceManifest> for PlanningSurfaceManifestV2 {
+    fn from(value: &PlanningSurfaceManifest) -> Self {
+        let expr_planners = if let Some(policy) = &value.typed_policy {
+            if !policy.expr_planner_names.is_empty() {
+                policy.expr_planner_names.clone()
+            } else {
+                value.expr_planner_names.clone()
+            }
+        } else {
+            value.expr_planner_names.clone()
+        };
+        let relation_planners = if let Some(policy) = &value.typed_policy {
+            if policy.relation_planner_enabled {
+                vec!["codeanatomy_relation".to_string()]
+            } else {
+                value.relation_planner_names.clone()
+            }
+        } else {
+            value.relation_planner_names.clone()
+        };
+        let type_planners = if let Some(policy) = &value.typed_policy {
+            if policy.type_planner_enabled {
+                vec!["codeanatomy_type".to_string()]
+            } else {
+                value
+                    .type_planner_name
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            }
+        } else {
+            value
+                .type_planner_name
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let table_factories = value
+            .table_factory_names
+            .iter()
+            .map(|entry| {
+                entry
+                    .split_once(':')
+                    .map(|(name, _)| name.to_string())
+                    .unwrap_or_else(|| entry.clone())
+            })
+            .collect::<Vec<_>>();
+        Self {
+            expr_planners,
+            relation_planners,
+            type_planners,
+            table_factories,
+            planning_config_keys: value.planning_config_keys.clone(),
+        }
+    }
 }
 
 impl PlanningSurfaceManifest {
@@ -77,6 +167,7 @@ impl PlanningSurfaceManifest {
         canonical.file_format_names.sort();
         canonical.table_factory_names.sort();
         canonical.expr_planner_names.sort();
+        canonical.relation_planner_names.sort();
         canonical.table_factory_allowlist.sort_by(|a, b| {
             a.factory_type
                 .cmp(&b.factory_type)
@@ -98,6 +189,11 @@ impl PlanningSurfaceManifest {
 
         let bytes = serde_json::to_vec(&canonical).expect("planning manifest serializable");
         *blake3::hash(&bytes).as_bytes()
+    }
+
+    /// Return the cross-layer v2 projection used by Python parity contracts.
+    pub fn to_v2(&self) -> PlanningSurfaceManifestV2 {
+        PlanningSurfaceManifestV2::from(self)
     }
 }
 
@@ -123,6 +219,15 @@ pub fn manifest_from_surface(spec: &PlanningSurfaceSpec) -> PlanningSurfaceManif
             .iter()
             .map(|planner| std::any::type_name_of_val(planner.as_ref()).to_string())
             .collect(),
+        relation_planner_names: spec
+            .relation_planners
+            .iter()
+            .map(|planner| std::any::type_name_of_val(planner.as_ref()).to_string())
+            .collect(),
+        type_planner_name: spec
+            .type_planner
+            .as_ref()
+            .map(|planner| std::any::type_name_of_val(planner.as_ref()).to_string()),
         function_factory_name: spec
             .function_factory
             .as_ref()
@@ -151,7 +256,13 @@ pub fn manifest_from_surface(spec: &PlanningSurfaceSpec) -> PlanningSurfaceManif
         extension_policy: extension_policy_name(&spec.extension_policy).to_string(),
         delta_codec_enabled: spec.delta_codec_enabled,
         table_options_digest: hash_table_options(spec.table_options.as_ref()),
+        typed_policy: spec.typed_policy.clone(),
     }
+}
+
+/// Build a canonical v2 planning manifest projection from a planning surface.
+pub fn manifest_v2_from_surface(spec: &PlanningSurfaceSpec) -> PlanningSurfaceManifestV2 {
+    manifest_from_surface(spec).to_v2()
 }
 
 /// Build a deterministic manifest from planning surface plus live session state.
@@ -173,6 +284,15 @@ pub async fn manifest_from_surface_with_context(
     manifest.catalog_provider_identities = capture_catalog_provider_identities(ctx);
     manifest.schema_provider_identities = capture_schema_provider_identities(ctx);
     Ok(manifest)
+}
+
+/// Build a canonical v2 planning manifest projection with live session state.
+pub async fn manifest_v2_from_surface_with_context(
+    spec: &PlanningSurfaceSpec,
+    ctx: &SessionContext,
+) -> Result<PlanningSurfaceManifestV2> {
+    let manifest = manifest_from_surface_with_context(spec, ctx).await?;
+    Ok(manifest.to_v2())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -375,6 +495,8 @@ mod tests {
             file_format_names: vec!["parquet".to_string(), "csv".to_string(), "json".to_string()],
             table_factory_names: vec!["delta".to_string(), "memory".to_string()],
             expr_planner_names: vec!["span_alignment".to_string()],
+            relation_planner_names: vec!["codeanatomy_relation".to_string()],
+            type_planner_name: Some("codeanatomy_type".to_string()),
             function_factory_name: Some("sql_macro".to_string()),
             query_planner_name: None,
             function_registry_identity: FunctionRegistryIdentity::default(),
@@ -387,6 +509,12 @@ mod tests {
             extension_policy: "permissive".to_string(),
             delta_codec_enabled: false,
             table_options_digest: [42u8; 32],
+            typed_policy: Some(PlanningSurfacePolicyV1 {
+                enable_default_features: true,
+                expr_planner_names: vec!["codeanatomy_domain".to_string()],
+                relation_planner_enabled: true,
+                type_planner_enabled: true,
+            }),
         }
     }
 
@@ -528,6 +656,8 @@ mod tests {
             file_format_names: vec![],
             table_factory_names: vec![],
             expr_planner_names: vec![],
+            relation_planner_names: vec![],
+            type_planner_name: None,
             function_factory_name: None,
             query_planner_name: None,
             function_registry_identity: FunctionRegistryIdentity::default(),
@@ -540,6 +670,7 @@ mod tests {
             extension_policy: "permissive".to_string(),
             delta_codec_enabled: false,
             table_options_digest: [0u8; 32],
+            typed_policy: None,
         };
         let hash = manifest.hash();
         // Even an empty manifest should produce a non-zero hash

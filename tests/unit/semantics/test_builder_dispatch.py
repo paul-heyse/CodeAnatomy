@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
     from datafusion_engine.plan.bundle_artifact import DataFrameBuilder
-    from semantics.pipeline_builders import _SemanticSpecContext
+    from semantics.pipeline_builders import SemanticSpecContext
 
 
 # ---------------------------------------------------------------------------
@@ -68,12 +68,12 @@ def _stub_builder(_ctx: SessionContext) -> DataFrame:
     return MagicMock()
 
 
-def _stub_context() -> _SemanticSpecContext:
-    """Build a minimal mock ``_SemanticSpecContext``.
+def _stub_context() -> SemanticSpecContext:
+    """Build a minimal mock ``SemanticSpecContext``.
 
     Returns:
     -------
-    _SemanticSpecContext
+    SemanticSpecContext
         A mock object with the expected attribute interface.
     """
     ctx = MagicMock()
@@ -95,7 +95,7 @@ class TestDispatchFromRegistry:
         """Resolve a builder for a name present in the registry."""
         registry: dict[str, DataFrameBuilder] = {"alpha": _stub_builder}
 
-        def factory(_ctx: _SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
+        def factory(_ctx: SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
             return registry
 
         handler = _dispatch_from_registry(factory, "test")
@@ -110,7 +110,7 @@ class TestDispatchFromRegistry:
         """Raise ``KeyError`` when the spec name is not in the registry."""
         registry: dict[str, DataFrameBuilder] = {"alpha": _stub_builder}
 
-        def factory(_ctx: _SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
+        def factory(_ctx: SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
             return registry
 
         handler = _dispatch_from_registry(factory, "test")
@@ -124,7 +124,7 @@ class TestDispatchFromRegistry:
     def test_error_message_includes_context_label() -> None:
         """Verify the error message uses the provided context label."""
 
-        def factory(_ctx: _SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
+        def factory(_ctx: SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
             return {}
 
         handler = _dispatch_from_registry(factory, "span-unnest")
@@ -139,7 +139,7 @@ class TestDispatchFromRegistry:
         """When finalize=True, wrap the resolved builder."""
         registry: dict[str, DataFrameBuilder] = {"alpha": _stub_builder}
 
-        def factory(_ctx: _SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
+        def factory(_ctx: SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
             return registry
 
         handler = _dispatch_from_registry(factory, "test", finalize=True)
@@ -157,7 +157,7 @@ class TestDispatchFromRegistry:
         """When finalize=False (default), return the builder as-is."""
         registry: dict[str, DataFrameBuilder] = {"alpha": _stub_builder}
 
-        def factory(_ctx: _SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
+        def factory(_ctx: SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
             return registry
 
         handler = _dispatch_from_registry(factory, "test", finalize=False)
@@ -172,7 +172,7 @@ class TestDispatchFromRegistry:
         """Verify the registry factory is called with the spec context."""
         received_contexts: list[object] = []
 
-        def factory(ctx: _SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
+        def factory(ctx: SemanticSpecContext) -> Mapping[str, DataFrameBuilder]:
             received_contexts.append(ctx)
             return {"alpha": _stub_builder}
 

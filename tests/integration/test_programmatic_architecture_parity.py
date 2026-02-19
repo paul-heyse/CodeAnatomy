@@ -311,7 +311,7 @@ class TestCalibrationIntegration:
 
     @staticmethod
     def test_apply_mode_produces_adjusted_thresholds() -> None:
-        """Verify 'apply' mode adjusts thresholds from execution metrics."""
+        """Verify legacy 'apply' input normalizes to canonical enforce mode."""
         metrics = ExecutionMetricsSummary(
             predicted_cost=100.0,
             actual_cost=200.0,
@@ -325,7 +325,7 @@ class TestCalibrationIntegration:
             mode="apply",
         )
 
-        assert result.mode == "apply"
+        assert result.mode == "enforce"
         # Under-estimation (actual > predicted) should raise thresholds.
         assert result.cost_ratio is not None
         assert result.cost_ratio > 1.0
@@ -358,7 +358,7 @@ class TestCalibrationIntegration:
 
     @staticmethod
     def test_observe_mode_computes_without_committing() -> None:
-        """Verify 'observe' mode computes adjustments without side effects."""
+        """Verify legacy 'observe' input normalizes to canonical warn mode."""
         metrics = ExecutionMetricsSummary(
             predicted_cost=100.0,
             actual_cost=50.0,
@@ -371,7 +371,7 @@ class TestCalibrationIntegration:
             mode="observe",
         )
 
-        assert result.mode == "observe"
+        assert result.mode == "warn"
         assert result.cost_ratio is not None
         assert result.cost_ratio < 1.0
 

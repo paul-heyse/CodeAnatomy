@@ -23,6 +23,7 @@ pub mod pushdown_probe_extract;
 pub mod scheduling;
 pub mod semantic_validator;
 pub mod spec_helpers;
+pub mod standalone_optimizer_harness;
 pub mod substrait;
 pub mod table_registration;
 pub mod udtf_builder;

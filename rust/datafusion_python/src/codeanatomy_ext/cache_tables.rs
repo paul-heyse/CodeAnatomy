@@ -205,7 +205,7 @@ fn saturating_i64_from_usize(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-fn runtime_execution_metrics_payload(ctx: &SessionContext) -> serde_json::Value {
+pub(crate) fn runtime_execution_metrics_payload(ctx: &SessionContext) -> serde_json::Value {
     let runtime_env = Arc::clone(ctx.state().runtime_env());
     let metadata_entries = runtime_env
         .cache_manager

@@ -51,6 +51,14 @@ _FK_CONFIDENCE: float = 0.85
 _SYMBOL_CONFIDENCE: float = 0.75
 _FILE_EQUI_CONFIDENCE: float = 0.6
 
+# Canonical confidence authority consumed by lightweight IR inference.
+CONFIDENCE_BY_STRATEGY: dict[str, float] = {
+    "span_overlap": _SPAN_CONFIDENCE,
+    "foreign_key": _FK_CONFIDENCE,
+    "symbol_match": _SYMBOL_CONFIDENCE,
+    "equi_join": _FILE_EQUI_CONFIDENCE,
+}
+
 # Threshold for routing to high_confidence vs low_confidence.
 _HIGH_CONFIDENCE_THRESHOLD: float = 0.8
 
@@ -818,6 +826,7 @@ def infer_join_strategy_with_confidence(
 
 
 __all__ = [
+    "CONFIDENCE_BY_STRATEGY",
     "JoinCapabilities",
     "JoinInferenceError",
     "JoinStrategyResult",

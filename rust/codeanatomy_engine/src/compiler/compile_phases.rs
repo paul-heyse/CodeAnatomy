@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use datafusion::prelude::{DataFrame, SessionContext};
-use datafusion_common::{DataFusionError, Result};
 
 use crate::compiler::compile_contract::CompilePlanArtifact;
 use crate::compiler::cost_model::{
@@ -16,10 +15,9 @@ use crate::compiler::plan_bundle::{self, ProviderIdentity};
 use crate::compiler::pushdown_probe_extract::{
     extract_input_filter_predicates, verify_pushdown_contracts,
 };
-use crate::compiler::scheduling::{TaskGraph, TaskSchedule};
-use crate::contracts::pushdown_mode::PushdownEnforcementMode;
+use crate::compiler::scheduling::{build_task_graph_from_spec, TaskSchedule};
 use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
-use crate::providers::pushdown_contract::{PushdownContractReport, PushdownProbe};
+use crate::providers::pushdown_contract::{enforce_pushdown_contracts, PushdownProbe};
 use crate::providers::registration::probe_provider_pushdown;
 use crate::rules::registry::CpgRuleSet;
 use crate::spec::execution_spec::SemanticExecutionSpec;
@@ -36,22 +34,6 @@ pub(crate) struct TaskSchedulePhaseResult {
 }
 
 pub(crate) fn build_task_schedule_phase(spec: &SemanticExecutionSpec) -> TaskSchedulePhaseResult {
-    let view_deps: Vec<(String, Vec<String>)> = spec
-        .view_definitions
-        .iter()
-        .map(|view| (view.name.clone(), view.view_dependencies.clone()))
-        .collect();
-    let scan_deps: Vec<(String, Vec<String>)> = spec
-        .input_relations
-        .iter()
-        .map(|input| (input.logical_name.clone(), Vec::new()))
-        .collect();
-    let output_deps: Vec<(String, Vec<String>)> = spec
-        .output_targets
-        .iter()
-        .map(|target| (target.table_name.clone(), vec![target.source_view.clone()]))
-        .collect();
-
     let mut dependency_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut task_schedule: Option<TaskSchedule> = None;
     let mut stats_quality: Option<StatsQuality> = None;
@@ -60,7 +42,7 @@ pub(crate) fn build_task_schedule_phase(spec: &SemanticExecutionSpec) -> TaskSch
     let mut slack_by_task: BTreeMap<String, f64> = BTreeMap::new();
     let mut warnings = Vec::new();
 
-    if let Ok(task_graph) = TaskGraph::from_inferred_deps(&view_deps, &scan_deps, &output_deps) {
+    if let Ok(task_graph) = build_task_graph_from_spec(spec) {
         dependency_map = task_graph
             .dependencies
             .iter()
@@ -128,56 +110,24 @@ pub(crate) async fn pushdown_probe_phase(
     }
 }
 
-fn enforce_pushdown_contracts(
-    table_name: &str,
-    mode: PushdownEnforcementMode,
-    report: Option<&PushdownContractReport>,
-    warnings: &mut Vec<RunWarning>,
-) -> Result<()> {
-    let Some(report) = report else {
-        return Ok(());
-    };
-    for violation in &report.violations {
-        match mode {
-            PushdownEnforcementMode::Strict => {
-                return Err(DataFusionError::Plan(format!(
-                    "Pushdown contract violation on table '{}': {}",
-                    violation.table_name, violation.predicate_text
-                )))
-            }
-            PushdownEnforcementMode::Warn => warnings.push(
-                RunWarning::new(
-                    WarningCode::PushdownContractViolation,
-                    WarningStage::Compilation,
-                    format!(
-                        "Pushdown contract violation on '{}': {}",
-                        violation.table_name, violation.predicate_text
-                    ),
-                )
-                .with_context("table_name", table_name.to_string())
-                .with_context("predicate", violation.predicate_text.clone()),
-            ),
-            PushdownEnforcementMode::Disabled => {}
-        }
-    }
-    Ok(())
-}
-
 pub(crate) struct ArtifactPhaseResult {
     pub plan_artifacts: Vec<CompilePlanArtifact>,
     pub warnings: Vec<RunWarning>,
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct ArtifactPhaseContext {
+    pub stats_quality: Option<StatsQuality>,
+    pub provider_identities: Vec<ProviderIdentity>,
+    pub planning_surface_hash: [u8; 32],
+}
+
 pub(crate) async fn compile_artifacts_phase(
     ctx: &SessionContext,
     spec: &SemanticExecutionSpec,
     ruleset: &CpgRuleSet,
     output_plans: &[(OutputTarget, DataFrame)],
     pushdown_probe_map: &BTreeMap<String, PushdownProbe>,
-    stats_quality: Option<StatsQuality>,
-    provider_identities: &[ProviderIdentity],
-    planning_surface_hash: [u8; 32],
+    artifact_ctx: &ArtifactPhaseContext,
 ) -> ArtifactPhaseResult {
     let mut plan_artifacts = Vec::new();
     let mut warnings = Vec::new();
@@ -242,17 +192,20 @@ pub(crate) async fn compile_artifacts_phase(
                         ctx,
                         runtime: &runtime,
                         rulepack_fingerprint: ruleset.fingerprint,
-                        provider_identities: provider_identities.to_vec(),
+                        provider_identities: artifact_ctx.provider_identities.clone(),
                         optimizer_traces,
                         pushdown_report,
                         deterministic_inputs: spec.are_inputs_deterministic(),
                         no_volatile_udfs: true,
                         deterministic_optimizer: true,
-                        stats_quality: stats_quality.map(|value| format!("{value:?}")),
+                        stats_quality: artifact_ctx
+                            .stats_quality
+                            .as_ref()
+                            .map(|value| format!("{value:?}")),
                         capture_substrait: spec.runtime.capture_substrait,
                         capture_sql: false,
                         capture_delta_codec: spec.runtime.capture_delta_codec,
-                        planning_surface_hash,
+                        planning_surface_hash: artifact_ctx.planning_surface_hash,
                     },
                 )
                 .await

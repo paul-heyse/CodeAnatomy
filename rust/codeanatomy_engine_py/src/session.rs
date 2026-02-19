@@ -140,3 +140,29 @@ impl SessionFactory {
         self.inner.profile().clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SessionFactory;
+
+    #[test]
+    fn from_class_name_small_is_ok() {
+        assert!(SessionFactory::from_class_name("Small").is_ok());
+    }
+
+    #[test]
+    fn from_class_name_medium_is_ok() {
+        assert!(SessionFactory::from_class_name("Medium").is_ok());
+    }
+
+    #[test]
+    fn from_class_name_large_is_ok() {
+        assert!(SessionFactory::from_class_name("Large").is_ok());
+    }
+
+    #[test]
+    fn from_class_name_unknown_returns_err() {
+        let result = SessionFactory::from_class_name("XLarge");
+        assert!(result.is_err());
+    }
+}

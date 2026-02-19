@@ -83,6 +83,10 @@ class _CompiledPolicyComponents:
     materialization_strategy: str | None
     diagnostics_flags: dict[str, bool]
     workload_class: str | None
+    planning_env_hash: str | None
+    rulepack_hash: str | None
+    information_schema_hash: str | None
+    function_registry_hash: str | None
 
 
 def _component_counts(components: _CompiledPolicyComponents) -> dict[str, int | str | None]:
@@ -96,6 +100,10 @@ def _component_counts(components: _CompiledPolicyComponents) -> dict[str, int | 
         "diagnostics_flags": len(components.diagnostics_flags),
         "materialization_strategy": components.materialization_strategy,
         "workload_class": components.workload_class,
+        "planning_env_hash_present": components.planning_env_hash is not None,
+        "rulepack_hash_present": components.rulepack_hash is not None,
+        "information_schema_hash_present": components.information_schema_hash is not None,
+        "function_registry_hash_present": components.function_registry_hash is not None,
     }
 
 
@@ -126,45 +134,56 @@ def compile_execution_policy(request: CompileExecutionPolicyRequestV1) -> Compil
     CompiledExecutionPolicy
         Frozen policy artifact ready for downstream consumption.
     """
-    components = _derive_policy_components(request)
-    _LOGGER.debug(
-        "Derived execution-policy component sets.",
-        extra={
-            "codeanatomy.policy_components": _component_counts(components),
-        },
-    )
-    preliminary = CompiledExecutionPolicy(
-        cache_policy_by_view=components.cache_policies,
-        scan_policy_overrides=components.scan_policy_map,
-        maintenance_policy_by_dataset=components.maintenance_policy_map,
-        udf_requirements_by_view=components.udf_requirements,
-        join_strategy_by_view=components.join_strategies,
-        inference_confidence_by_view=components.inference_confidence,
-        materialization_strategy=components.materialization_strategy,
-        diagnostics_flags=components.diagnostics_flags,
-        workload_class=components.workload_class,
-    )
-    fingerprint = _compute_policy_fingerprint(preliminary)
-    _LOGGER.debug(
-        "Compiled execution policy fingerprint.",
-        extra={
-            "codeanatomy.policy_fingerprint": fingerprint,
-            "codeanatomy.policy_components": _component_counts(components),
-        },
-    )
+    from obs.otel import SCOPE_PIPELINE, stage_span
 
-    return CompiledExecutionPolicy(
-        cache_policy_by_view=components.cache_policies,
-        scan_policy_overrides=components.scan_policy_map,
-        maintenance_policy_by_dataset=components.maintenance_policy_map,
-        udf_requirements_by_view=components.udf_requirements,
-        join_strategy_by_view=components.join_strategies,
-        inference_confidence_by_view=components.inference_confidence,
-        materialization_strategy=components.materialization_strategy,
-        diagnostics_flags=components.diagnostics_flags,
-        workload_class=components.workload_class,
-        policy_fingerprint=fingerprint,
-    )
+    with stage_span("policy_compile", stage="relspec", scope_name=SCOPE_PIPELINE):
+        components = _derive_policy_components(request)
+        _LOGGER.debug(
+            "Derived execution-policy component sets.",
+            extra={
+                "codeanatomy.policy_components": _component_counts(components),
+            },
+        )
+        preliminary = CompiledExecutionPolicy(
+            cache_policy_by_view=components.cache_policies,
+            scan_policy_overrides=components.scan_policy_map,
+            maintenance_policy_by_dataset=components.maintenance_policy_map,
+            udf_requirements_by_view=components.udf_requirements,
+            join_strategy_by_view=components.join_strategies,
+            inference_confidence_by_view=components.inference_confidence,
+            materialization_strategy=components.materialization_strategy,
+            diagnostics_flags=components.diagnostics_flags,
+            workload_class=components.workload_class,
+            planning_env_hash=components.planning_env_hash,
+            rulepack_hash=components.rulepack_hash,
+            information_schema_hash=components.information_schema_hash,
+            function_registry_hash=components.function_registry_hash,
+        )
+        fingerprint = _compute_policy_fingerprint(preliminary)
+        _LOGGER.debug(
+            "Compiled execution policy fingerprint.",
+            extra={
+                "codeanatomy.policy_fingerprint": fingerprint,
+                "codeanatomy.policy_components": _component_counts(components),
+            },
+        )
+
+        return CompiledExecutionPolicy(
+            cache_policy_by_view=components.cache_policies,
+            scan_policy_overrides=components.scan_policy_map,
+            maintenance_policy_by_dataset=components.maintenance_policy_map,
+            udf_requirements_by_view=components.udf_requirements,
+            join_strategy_by_view=components.join_strategies,
+            inference_confidence_by_view=components.inference_confidence,
+            materialization_strategy=components.materialization_strategy,
+            diagnostics_flags=components.diagnostics_flags,
+            workload_class=components.workload_class,
+            planning_env_hash=components.planning_env_hash,
+            rulepack_hash=components.rulepack_hash,
+            information_schema_hash=components.information_schema_hash,
+            function_registry_hash=components.function_registry_hash,
+            policy_fingerprint=fingerprint,
+        )
 
 
 def _derive_policy_components(
@@ -174,6 +193,12 @@ def _derive_policy_components(
         _cache_overrides_from_semantic_ir(request.semantic_ir),
         _cache_overrides_from_view_nodes(request.view_nodes),
     )
+    (
+        planning_env_hash,
+        rulepack_hash,
+        information_schema_hash,
+        function_registry_hash,
+    ) = _planning_hashes_from_view_nodes(request.view_nodes)
     return _CompiledPolicyComponents(
         cache_policies=_derive_cache_policies(
             request.task_graph,
@@ -196,7 +221,35 @@ def _derive_policy_components(
         ),
         diagnostics_flags=_diagnostics_flags_from_policy(request.diagnostics_policy),
         workload_class=request.workload_class,
+        planning_env_hash=planning_env_hash,
+        rulepack_hash=rulepack_hash,
+        information_schema_hash=information_schema_hash,
+        function_registry_hash=function_registry_hash,
     )
+
+
+def _planning_hashes_from_view_nodes(
+    view_nodes: tuple[ViewNode, ...] | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    if not view_nodes:
+        return (None, None, None, None)
+    for node in view_nodes:
+        bundle = node.plan_bundle
+        artifacts = getattr(bundle, "artifacts", None)
+        if artifacts is None:
+            continue
+        planning_env_hash = getattr(artifacts, "planning_env_hash", None)
+        information_schema_hash = getattr(artifacts, "information_schema_hash", None)
+        function_registry_hash = getattr(artifacts, "function_registry_hash", None)
+        rulepack_hash = getattr(artifacts, "rulepack_hash", None)
+        if isinstance(planning_env_hash, str) and planning_env_hash:
+            return (
+                planning_env_hash,
+                str(rulepack_hash) if isinstance(rulepack_hash, str) else None,
+                str(information_schema_hash) if isinstance(information_schema_hash, str) else None,
+                str(function_registry_hash) if isinstance(function_registry_hash, str) else None,
+            )
+    return (None, None, None, None)
 
 
 def _derive_cache_policies(

@@ -17,13 +17,14 @@ Legacy aliases are accepted for compatibility:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 from relspec.calibration_bounds import CalibrationBounds, validate_calibration_bounds
 from relspec.inference_confidence import InferenceConfidence, high_confidence, low_confidence
 from serde_msgspec import StructBaseStrict
 
 CalibrationMode = Literal["off", "warn", "enforce", "observe", "apply"]
+_ALIAS_MAP: dict[str, str] = {"observe": "warn", "apply": "enforce"}
 
 # EMA smoothing factor.  A value of 0.3 gives recent observations 30%
 # weight while retaining 70% of the prior estimate.
@@ -75,6 +76,7 @@ class ExecutionMetricsSummary(StructBaseStrict, frozen=True):
     observation_count: int
     mean_duration_ms: float | None = None
     mean_row_count: float | None = None
+    cache_diagnostics: dict[str, str | int | float | bool | None] | None = None
 
 
 class PolicyCalibrationResult(StructBaseStrict, frozen=True):
@@ -135,6 +137,9 @@ def calibrate_from_execution_metrics(
         msg = f"Invalid calibration bounds: {'; '.join(bound_errors)}"
         raise ValueError(msg)
 
+    # Normalize legacy aliases at the API boundary so outputs are canonical.
+    mode = cast("CalibrationMode", _ALIAS_MAP.get(mode, mode))
+
     if mode == "off":
         return _result_unchanged(current_thresholds, mode=mode)
 
@@ -152,6 +157,9 @@ def calibrate_from_execution_metrics(
         f"observations={metrics.observation_count}",
         f"direction={direction}",
     ]
+    cache_signal = _cache_diagnostics_signal(metrics)
+    if cache_signal is not None:
+        evidence_parts.append(f"cache_signal={cache_signal:.3f}")
 
     adjusted, was_bounded = _adjust_thresholds(
         current=current_thresholds,
@@ -159,31 +167,29 @@ def calibrate_from_execution_metrics(
         cost_ratio=cost_ratio,
     )
 
-    if mode in {"observe", "warn"}:
-        resolved_mode = "warn" if mode == "warn" else "observe"
+    if mode == "warn":
         confidence = _build_calibration_confidence(
             metrics=metrics,
-            decision_value=resolved_mode,
+            decision_value=mode,
         )
         return PolicyCalibrationResult(
             adjusted_thresholds=adjusted,
             evidence_summary="; ".join(evidence_parts),
             calibration_confidence=confidence,
-            mode=resolved_mode,
+            mode=mode,
             cost_ratio=cost_ratio,
             bounded=was_bounded,
         )
 
-    resolved_mode = "enforce" if mode == "enforce" else "apply"
     confidence = _build_calibration_confidence(
         metrics=metrics,
-        decision_value=resolved_mode,
+        decision_value=mode,
     )
     return PolicyCalibrationResult(
         adjusted_thresholds=adjusted,
         evidence_summary="; ".join(evidence_parts),
         calibration_confidence=confidence,
-        mode=resolved_mode,
+        mode=mode,
         cost_ratio=cost_ratio,
         bounded=was_bounded,
     )
@@ -319,15 +325,18 @@ def _build_calibration_confidence(
         sources.append("duration")
     if metrics.mean_row_count is not None:
         sources.append("row_count")
+    if metrics.cache_diagnostics:
+        sources.append("cache_diagnostics")
 
     evidence = tuple(sources)
 
+    score_boost = 0.05 if metrics.cache_diagnostics else 0.0
     if metrics.observation_count >= _MIN_EVIDENCE_COUNT:
         return high_confidence(
             "calibration",
             decision_value,
             evidence,
-            score=min(0.8 + 0.02 * metrics.observation_count, 1.0),
+            score=min(0.8 + 0.02 * metrics.observation_count + score_boost, 1.0),
         )
 
     return low_confidence(
@@ -335,8 +344,38 @@ def _build_calibration_confidence(
         decision_value,
         f"insufficient observations ({metrics.observation_count} < {_MIN_EVIDENCE_COUNT})",
         evidence,
-        score=0.3 + 0.03 * metrics.observation_count,
+        score=min(0.3 + 0.03 * metrics.observation_count + score_boost, 1.0),
     )
+
+
+def _cache_diagnostics_signal(metrics: ExecutionMetricsSummary) -> float | None:
+    """Derive a normalized cache-efficiency signal from diagnostics payload.
+
+    Returns:
+        float | None: Mean normalized hit-rate signal, or ``None`` when cache
+            diagnostics are absent or unsupported.
+    """
+    diagnostics = metrics.cache_diagnostics
+    if not diagnostics:
+        return None
+    values: list[float] = []
+    for key, value in diagnostics.items():
+        key_text = str(key).lower()
+        if not (key_text.endswith(("_hit_rate", "_ratio")) or "cache_hit_rate" in key_text):
+            continue
+        if isinstance(value, bool):
+            values.append(1.0 if value else 0.0)
+            continue
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+            if 0.0 <= numeric <= 1.0:
+                values.append(numeric)
+                continue
+            if numeric >= 0.0:
+                values.append(min(numeric / 100.0, 1.0))
+    if not values:
+        return None
+    return sum(values) / float(len(values))
 
 
 __all__ = [

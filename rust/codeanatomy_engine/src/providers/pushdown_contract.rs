@@ -22,6 +22,7 @@ use datafusion_expr::Expr;
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::pushdown_mode::PushdownEnforcementMode;
+use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
 
 /// Serializable mirror of DataFusion's `TableProviderFilterPushDown`.
 ///
@@ -168,6 +169,41 @@ pub struct PushdownContractReport {
     pub assertions: Vec<PushdownContractAssertion>,
     pub violations: Vec<PushdownContractAssertion>,
     pub enforcement_mode: PushdownEnforcementMode,
+}
+
+pub(crate) fn enforce_pushdown_contracts(
+    table_name: &str,
+    mode: PushdownEnforcementMode,
+    report: Option<&PushdownContractReport>,
+    warnings: &mut Vec<RunWarning>,
+) -> datafusion_common::Result<()> {
+    let Some(report) = report else {
+        return Ok(());
+    };
+    for violation in &report.violations {
+        match mode {
+            PushdownEnforcementMode::Strict => {
+                return Err(DataFusionError::Plan(format!(
+                    "Pushdown contract violation on table '{}': {}",
+                    violation.table_name, violation.predicate_text
+                )));
+            }
+            PushdownEnforcementMode::Warn => warnings.push(
+                RunWarning::new(
+                    WarningCode::PushdownContractViolation,
+                    WarningStage::Compilation,
+                    format!(
+                        "Pushdown contract violation on '{}': {}",
+                        violation.table_name, violation.predicate_text
+                    ),
+                )
+                .with_context("table_name", table_name.to_string())
+                .with_context("predicate", violation.predicate_text.clone()),
+            ),
+            PushdownEnforcementMode::Disabled => {}
+        }
+    }
+    Ok(())
 }
 
 /// Probe a provider's filter pushdown capabilities.

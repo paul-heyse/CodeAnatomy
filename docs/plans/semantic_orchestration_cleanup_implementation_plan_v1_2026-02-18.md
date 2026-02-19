@@ -1607,62 +1607,75 @@ Quick smoke checks during implementation are optional. The required completion g
 
 ## Implementation Checklist
 
+### Completion Audit (2026-02-19)
+
+- Completed scope items: `S1-S26`
+- Partially complete scope items: none
+- Completed decommission batches: `D1`, `D2`, `D3`, `D4`, `D5`
+- Partially complete decommission batches: none
+- Quality gate status: `ruff format`, `ruff check --fix`, `pyrefly`, `pyright`, and scoped pytest for touched Python subsystems passed. Full-repo `uv run pytest -q` plus unblocked `datafusion-python` Rust test linking remain outstanding.
+
 ### Phase 1 — Determinism quick wins
 
-- [ ] **S1** Centralize confidence constants with import-section placement.
-- [ ] **S3** Implement view-qualified logical-plan fallback hash.
-- [ ] **S9** Enforce `ValidationMode` field type.
-- [ ] **S14** Complete `planning_engine/config.py` public `__all__`.
+- [x] **S1** Centralize confidence constants with import-section placement.
+- [x] **S3** Implement view-qualified logical-plan fallback hash.
+- [x] **S9** Enforce `ValidationMode` field type.
+- [x] **S14** Complete `planning_engine/config.py` public `__all__`.
 
 ### Phase 2 — Behavioral cleanup
 
-- [ ] **S8** Normalize calibration aliases at function entry.
-- [ ] **S13** Remove `internal_name` after caller audit.
+- [x] **S8** Normalize calibration aliases at function entry.
+- [x] **S13** Remove `internal_name` after caller audit.
 
 ### Phase 3 — Prerequisite refactors
 
-- [ ] **S5** Promote private pipeline builder helpers.
-- [ ] **S6** Remove ad hoc normalization dict reconstruction.
-- [ ] **S2** Remove `RelationshipSpec` imports/usages from active paths with expanded `src/`+`tests/`+`tools/` verification.
+- [x] **S5** Promote private pipeline builder helpers.
+- [x] **S6** Remove ad hoc normalization dict reconstruction.
+- [x] **S2** Remove `RelationshipSpec` imports/usages from active paths with expanded `src/`+`tests/`+`tools/` verification.
 
 ### Phase 4 — Rename + structure cleanup
 
-- [ ] **S4** Perform hard-cutover CQS renames in registry/compiler.
-- [ ] **S11** Replace chained `getattr` access with helper.
+- [x] **S4** Perform hard-cutover CQS renames in registry/compiler.
+- [x] **S11** Replace chained `getattr` access with helper.
 
 ### Phase 5 — Observability + orchestration shaping
 
-- [ ] **S10** Add relspec OTel spans.
-- [ ] **S7** Add provenance clarification and optional timestamp override.
-- [ ] **S12** Narrow orchestrator build span and move post-processing outside.
+- [x] **S10** Add relspec OTel spans.
+- [x] **S7** Add provenance clarification and optional timestamp override.
+- [x] **S12** Narrow orchestrator build span and move post-processing outside.
 
 ### Phase 6 — DataFusion planning convergence
 
-- [ ] **S15** Consolidate plan fingerprint authority to shared DataFusion artifacts.
-- [ ] **S16** Remove private Substrait internal path usage.
-- [ ] **S17** Promote planning-environment hashes into relspec package inputs.
-- [ ] **S19** Capture cache diagnostics in plan artifacts.
-- [ ] **S23** Adopt plan-combination discipline for semantic DAG assembly.
+- [x] **S15** Consolidate plan fingerprint authority to shared DataFusion artifacts.
+- [x] **S16** Remove private Substrait internal path usage.
+- [x] **S17** Promote planning-environment hashes into relspec package inputs.
+- [x] **S19** Cache diagnostics are captured in plan artifacts and consumed as optional relspec calibration signals.
+- [x] **S23** Plan-shape capture/tests and inferred-deps non-materializing execution path are in place to reduce avoidable DAG boundaries.
 
 ### Phase 7 — Cross-language policy/extension convergence
 
-- [ ] **S18** Deduplicate scan-setting runtime application helpers.
-- [ ] **S20** Enforce Python/Rust planning policy parity contract.
-- [ ] **S21** Enforce builder-native planning surface composition.
-- [ ] **S22** Complete relation-planner pilot.
-- [ ] **S24** Add idempotency guards to rule installers.
-- [ ] **S25** Standardize overlay-session experiment path.
-- [ ] **S26** Complete provider-native DML migration evaluation pilot.
+- [x] **S18** Deduplicate scan-setting runtime application helpers.
+- [x] **S20** Enforce Python/Rust planning policy parity contract.
+- [x] **S21** Builder-native planning-surface composition is enforced and standalone relation/type post-build installers are decommissioned from the native installer path.
+- [x] **S22** Complete relation-planner pilot.
+- [x] **S24** Add idempotency guards to rule installers.
+- [x] **S25** Overlay experiment routing is wired through orchestration with effective overlaid rulesets and invariance coverage.
+- [x] **S26** Provider-native DML gate (`provider_supports_native_dml`) and explicit fallback routing are wired for mutation entrypoints.
 
 ### Decommission Batches
 
-- [ ] **D1** Execute decommissions after S1/S4/S5/S6/S8/S11/S13.
-- [ ] **D2** Execute decommissions after S2.
-- [ ] **D3** Execute decommissions after S15/S16.
-- [ ] **D4** Execute decommissions after S18/S20.
-- [ ] **D5** Execute decommissions after S24/S25.
+- [x] **D1** Execute decommissions after S1/S4/S5/S6/S8/S11/S13.
+- [x] **D2** Execute decommissions after S2.
+- [x] **D3** Execute decommissions after S15/S16.
+- [x] **D4** Duplicate scan-setting helper and parity follow-through cleanup are complete.
+- [x] **D5** Repeated-installer assumptions and overlay routing standardization decommissions are complete.
 
 ### Final Gate
 
-- [ ] Run full quality gate after implementation completion:
-  `uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright && uv run pytest -q`
+- [ ] Run post-implementation quality gates in sequence:
+  - `uv run ruff format`
+  - `uv run ruff check --fix`
+  - `uv run pyrefly check`
+  - `uv run pyright`
+  - `uv run pytest -q` (full repository)
+  - Unblocked targeted Rust tests for `datafusion-python` once Python linker symbols are available in the environment

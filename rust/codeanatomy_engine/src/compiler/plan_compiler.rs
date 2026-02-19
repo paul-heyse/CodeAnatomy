@@ -10,7 +10,7 @@
 use datafusion::physical_plan::displayable;
 use datafusion::prelude::*;
 use datafusion_common::{DataFusionError, Result};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 #[cfg(feature = "tracing")]
 use tracing::instrument;
 
@@ -21,6 +21,7 @@ use crate::compiler::inline_policy::{compute_inline_policy, InlineDecision};
 use crate::compiler::join_builder;
 use crate::compiler::param_compiler;
 use crate::compiler::plan_utils::compute_view_fanout;
+use crate::compiler::scheduling::build_task_graph_from_spec;
 use crate::compiler::semantic_validator::{
     self, SemanticValidationError, SemanticValidationWarning,
 };
@@ -93,7 +94,7 @@ impl<'a> SemanticPlanCompiler<'a> {
             .collect::<Vec<_>>();
 
         // 2. Topological sort
-        let ordered = self.topological_sort()?;
+        let ordered = self.ordered_views()?;
 
         // 2.5. Compute inline policy for cross-view optimization
         let ref_counts = self.compute_ref_counts();
@@ -163,87 +164,18 @@ impl<'a> SemanticPlanCompiler<'a> {
         })
     }
 
-    /// Topological sort of view definitions using Kahn's algorithm.
-    ///
-    /// Only counts view-to-view edges (input relations are pre-registered).
-    /// Deterministic tie-breaking via sorted queue.
-    /// Explicit cycle detection: if ordered.len() != view_count, fails with diagnostic.
-    fn topological_sort(&self) -> Result<Vec<ViewDefinition>> {
-        let view_count = self.spec.view_definitions.len();
-
-        // Build dependency graph (view name → dependencies)
-        let mut graph: HashMap<&str, Vec<&str>> = HashMap::new();
-        let mut in_degree: HashMap<&str, usize> = HashMap::new();
-
-        for view in &self.spec.view_definitions {
-            graph.insert(
-                &view.name,
-                view.view_dependencies.iter().map(|s| s.as_str()).collect(),
-            );
-            in_degree.insert(&view.name, view.view_dependencies.len());
-        }
-
-        // Initialize queue with zero in-degree nodes (sorted for determinism)
-        let mut queue: VecDeque<&str> = in_degree
-            .iter()
-            .filter(|(_, &deg)| deg == 0)
-            .map(|(name, _)| *name)
-            .collect();
-
-        // Sort for deterministic tie-breaking
-        let mut queue_vec: Vec<&str> = queue.into_iter().collect();
-        queue_vec.sort();
-        queue = queue_vec.into_iter().collect();
-
-        // Kahn's algorithm
-        let mut ordered = Vec::new();
-
-        while let Some(node) = queue.pop_front() {
-            ordered.push(node);
-
-            // Find all nodes that depend on this one
-            for view in &self.spec.view_definitions {
-                if view.view_dependencies.iter().any(|dep| dep == node) {
-                    let deg = in_degree.get_mut(view.name.as_str()).unwrap();
-                    *deg -= 1;
-
-                    if *deg == 0 {
-                        queue.push_back(&view.name);
-
-                        // Re-sort queue for determinism
-                        let mut queue_vec: Vec<&str> = queue.into_iter().collect();
-                        queue_vec.sort();
-                        queue = queue_vec.into_iter().collect();
-                    }
-                }
-            }
-        }
-
-        // Cycle detection
-        if ordered.len() != view_count {
-            let unresolved: Vec<&str> = in_degree
-                .iter()
-                .filter(|(_, &deg)| deg > 0)
-                .map(|(name, _)| *name)
-                .collect();
-
-            return Err(DataFusionError::Plan(format!(
-                "Cycle detected in view dependencies. Unresolvable views: {:?}",
-                unresolved
-            )));
-        }
-
-        // Map back to ViewDefinitions
+    fn ordered_views(&self) -> Result<Vec<ViewDefinition>> {
+        let task_graph = build_task_graph_from_spec(self.spec)?;
         let name_to_view: HashMap<&str, &ViewDefinition> = self
             .spec
             .view_definitions
             .iter()
-            .map(|v| (v.name.as_str(), v))
+            .map(|view| (view.name.as_str(), view))
             .collect();
-
-        Ok(ordered
+        Ok(task_graph
+            .topological_order
             .iter()
-            .map(|name| (*name_to_view.get(name).unwrap()).clone())
+            .filter_map(|name| name_to_view.get(name.as_str()).cloned().cloned())
             .collect())
     }
 
@@ -264,7 +196,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 span_columns,
                 text_columns,
             } => {
-                let source = self.ensure_source_registered(source, inline_cache).await?;
+                let source = self.register_inline_source(source, inline_cache).await?;
                 view_builder::build_normalize(
                     self.ctx,
                     &view_def.name,
@@ -282,8 +214,8 @@ impl<'a> SemanticPlanCompiler<'a> {
                 join_type,
                 join_keys,
             } => {
-                let left = self.ensure_source_registered(left, inline_cache).await?;
-                let right = self.ensure_source_registered(right, inline_cache).await?;
+                let left = self.register_inline_source(left, inline_cache).await?;
+                let right = self.register_inline_source(right, inline_cache).await?;
                 join_builder::build_join(self.ctx, &left, &right, join_type, join_keys).await
             }
 
@@ -295,7 +227,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 let mut resolved_sources = Vec::with_capacity(sources.len());
                 for source in sources {
                     resolved_sources
-                        .push(self.ensure_source_registered(source, inline_cache).await?);
+                        .push(self.register_inline_source(source, inline_cache).await?);
                 }
                 union_builder::build_union(
                     self.ctx,
@@ -307,12 +239,12 @@ impl<'a> SemanticPlanCompiler<'a> {
             }
 
             ViewTransform::Project { source, columns } => {
-                let source = self.ensure_source_registered(source, inline_cache).await?;
+                let source = self.register_inline_source(source, inline_cache).await?;
                 view_builder::build_project(self.ctx, &source, columns).await
             }
 
             ViewTransform::Filter { source, predicate } => {
-                let source = self.ensure_source_registered(source, inline_cache).await?;
+                let source = self.register_inline_source(source, inline_cache).await?;
                 view_builder::build_filter(self.ctx, &source, predicate).await
             }
 
@@ -321,7 +253,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 group_by,
                 aggregations,
             } => {
-                let source = self.ensure_source_registered(source, inline_cache).await?;
+                let source = self.register_inline_source(source, inline_cache).await?;
                 view_builder::build_aggregate(self.ctx, &source, group_by, aggregations).await
             }
 
@@ -358,7 +290,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 let mut resolved_sources = Vec::with_capacity(sources.len());
                 for source in sources {
                     resolved_sources
-                        .push(self.ensure_source_registered(source, inline_cache).await?);
+                        .push(self.register_inline_source(source, inline_cache).await?);
                 }
                 cpg_builder::build_cpg_emit(self.ctx, *output_kind, resolved_sources.as_slice())
                     .await
@@ -370,7 +302,7 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// inline cache.
     ///
     /// This method is intentionally side-effecting.
-    async fn ensure_source_registered(
+    async fn register_inline_source(
         &self,
         source: &str,
         inline_cache: &HashMap<String, DataFrame>,
@@ -580,7 +512,7 @@ mod tests {
         let ctx = SessionContext::new();
         let compiler = SemanticPlanCompiler::new(&ctx, &spec);
 
-        let result = compiler.topological_sort().unwrap();
+        let result = compiler.ordered_views().unwrap();
         assert_eq!(result.len(), 0);
     }
 
@@ -610,7 +542,7 @@ mod tests {
         let ctx = SessionContext::new();
         let compiler = SemanticPlanCompiler::new(&ctx, &spec);
 
-        let result = compiler.topological_sort().unwrap();
+        let result = compiler.ordered_views().unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "view1");
     }
@@ -663,7 +595,7 @@ mod tests {
         let ctx = SessionContext::new();
         let compiler = SemanticPlanCompiler::new(&ctx, &spec);
 
-        let result = compiler.topological_sort().unwrap();
+        let result = compiler.ordered_views().unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].name, "view1");
         assert_eq!(result[1].name, "view2");
@@ -729,7 +661,7 @@ mod tests {
         let ctx = SessionContext::new();
         let compiler = SemanticPlanCompiler::new(&ctx, &spec);
 
-        let result = compiler.topological_sort().unwrap();
+        let result = compiler.ordered_views().unwrap();
         assert_eq!(result.len(), 4);
         assert_eq!(result[0].name, "base");
         // left and right can be in any order (deterministic but either is valid)
@@ -776,7 +708,7 @@ mod tests {
         let ctx = SessionContext::new();
         let compiler = SemanticPlanCompiler::new(&ctx, &spec);
 
-        let result = compiler.topological_sort();
+        let result = compiler.ordered_views();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Cycle detected"));
     }

@@ -35,6 +35,11 @@ def test_delete_update_merge_use_df52_request_entrypoints(
 
     monkeypatch.setattr(control_plane_mutation, "_require_internal_entrypoint", _resolve)
     monkeypatch.setattr(control_plane_mutation, "_internal_ctx", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        control_plane_mutation,
+        "provider_supports_native_dml",
+        lambda *_args, **_kwargs: True,
+    )
 
     delete_response = control_plane_mutation.delta_delete(
         ctx,

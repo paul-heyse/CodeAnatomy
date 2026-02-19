@@ -317,6 +317,10 @@ class SessionFactory:
     def build_config(self) -> SessionConfig:
         """Return a SessionConfig configured from the runtime profile.
 
+        Raises:
+            RuntimeError: Propagated when DataFusion rejects a config
+                key/value application.
+
         Returns:
         -------
         SessionConfig
@@ -328,6 +332,7 @@ class SessionFactory:
             supports_explain_analyze_level,
         )
         from datafusion_engine.session.runtime_config_policies import (
+            planning_surface_policy_for_profile,
             resolved_config_policy,
             resolved_schema_hardening,
         )
@@ -370,6 +375,12 @@ class SessionFactory:
         config = _apply_settings_overrides(config, profile.policies.settings_overrides)
         config = _apply_feature_settings(config, profile.policies.feature_gates)
         config = _apply_join_settings(config, profile.policies.join_policy)
+        planning_policy = planning_surface_policy_for_profile(profile)
+        if planning_policy.type_planner_enabled and not profile.features.enable_expr_planners:
+            msg = (
+                "Typed planning policy enables TypePlanner while ExprPlanner surfaces are disabled."
+            )
+            raise RuntimeError(msg)
         return _apply_explain_analyze_level(
             config,
             level=profile.diagnostics.explain_analyze_level,

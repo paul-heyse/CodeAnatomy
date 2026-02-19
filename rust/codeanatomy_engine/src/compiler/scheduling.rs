@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::spec::execution_spec::SemanticExecutionSpec;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaskType {
     View,
@@ -245,6 +247,7 @@ impl TaskGraph {
                 }
             })
             .collect();
+        sort_queue(&mut queue);
         let mut order = Vec::with_capacity(self.nodes.len());
 
         while let Some(node) = queue.pop_front() {
@@ -255,6 +258,7 @@ impl TaskGraph {
                         *entry = entry.saturating_sub(1);
                         if *entry == 0 {
                             queue.push_back(child.clone());
+                            sort_queue(&mut queue);
                         }
                     }
                 }
@@ -346,6 +350,32 @@ impl TaskGraph {
         }
         false
     }
+}
+
+fn sort_queue(queue: &mut VecDeque<String>) {
+    let mut values: Vec<String> = queue.drain(..).collect();
+    values.sort();
+    queue.extend(values);
+}
+
+/// Build a task graph from a semantic execution spec.
+pub fn build_task_graph_from_spec(spec: &SemanticExecutionSpec) -> Result<TaskGraph> {
+    let view_deps: Vec<(String, Vec<String>)> = spec
+        .view_definitions
+        .iter()
+        .map(|view| (view.name.clone(), view.view_dependencies.clone()))
+        .collect();
+    let scan_deps: Vec<(String, Vec<String>)> = spec
+        .input_relations
+        .iter()
+        .map(|input| (input.logical_name.clone(), Vec::new()))
+        .collect();
+    let output_deps: Vec<(String, Vec<String>)> = spec
+        .output_targets
+        .iter()
+        .map(|target| (target.table_name.clone(), vec![target.source_view.clone()]))
+        .collect();
+    TaskGraph::from_inferred_deps(&view_deps, &scan_deps, &output_deps)
 }
 
 #[cfg(test)]

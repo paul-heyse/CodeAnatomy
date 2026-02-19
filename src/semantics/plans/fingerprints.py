@@ -181,7 +181,11 @@ def _compute_schema_hash(df: DataFrame) -> str:
     return _hash_string(schema_repr)
 
 
-def _compute_logical_plan_hash(df: DataFrame) -> str:
+def _compute_logical_plan_hash(
+    df: DataFrame,
+    *,
+    view_name: str = "",
+) -> str:
     """Compute hash from optimized logical plan.
 
     Prefers the optimized logical plan for determinism. Falls back
@@ -191,6 +195,8 @@ def _compute_logical_plan_hash(df: DataFrame) -> str:
     ----------
     df
         DataFrame to extract plan from.
+    view_name
+        Optional semantic view name used to qualify fallback hashes.
 
     Returns:
     -------
@@ -219,8 +225,10 @@ def _compute_logical_plan_hash(df: DataFrame) -> str:
         except (RuntimeError, TypeError, ValueError):
             pass
 
-    # Ultimate fallback
-    return _hash_string("unknown_plan")
+    # Ultimate fallback: qualify with view name to avoid conflating
+    # distinct failing plans under one cache key.
+    fallback_key = f"unknown_plan:{view_name}" if view_name else "unknown_plan"
+    return _hash_string(fallback_key)
 
 
 def _plan_to_string(plan: object) -> str | None:
@@ -254,89 +262,6 @@ def _plan_to_string(plan: object) -> str | None:
         return None
 
 
-def _encode_substrait_bytes(plan_obj: object) -> bytes | None:
-    encode_method = getattr(plan_obj, "encode", None)
-    if not callable(encode_method):
-        return None
-    encoded = encode_method()
-    if isinstance(encoded, (bytes, bytearray)):
-        return bytes(encoded)
-    return None
-
-
-def _internal_substrait_bytes(
-    ctx: SessionContext,
-    optimized_plan: object,
-) -> bytes | None:
-    try:
-        import datafusion as datafusion_module
-    except ImportError:
-        return None
-
-    datafusion_internal = getattr(datafusion_module, "_internal", None)
-    if datafusion_internal is None:
-        return None
-
-    internal_substrait = getattr(datafusion_internal, "substrait", None)
-    internal_producer = getattr(internal_substrait, "Producer", None)
-    to_substrait = getattr(internal_producer, "to_substrait_plan", None)
-    if not callable(to_substrait):
-        return None
-
-    raw_plan = getattr(optimized_plan, "_raw_plan", optimized_plan)
-    try:
-        substrait_plan = to_substrait(raw_plan, ctx.ctx)
-    except (RuntimeError, TypeError, ValueError, AttributeError):
-        return None
-
-    return _encode_substrait_bytes(substrait_plan)
-
-
-def _public_substrait_bytes(
-    ctx: SessionContext,
-    optimized_plan: object,
-) -> bytes | None:
-    try:
-        from datafusion.substrait import Producer as SubstraitProducer
-    except ImportError:
-        return None
-
-    to_substrait = getattr(SubstraitProducer, "to_substrait_plan", None)
-    if not callable(to_substrait):
-        return None
-
-    try:
-        substrait_plan = to_substrait(optimized_plan, ctx)
-    except (RuntimeError, TypeError, ValueError, AttributeError):
-        return None
-
-    return _encode_substrait_bytes(substrait_plan)
-
-
-def _encode_substrait_plan(
-    ctx: SessionContext,
-    optimized_plan: object,
-) -> bytes | None:
-    """Encode an optimized logical plan to Substrait bytes.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context for Substrait producer.
-    optimized_plan
-        Optimized logical plan to encode.
-
-    Returns:
-    -------
-    bytes | None
-        Encoded Substrait bytes, or None if encoding fails.
-    """
-    internal_bytes = _internal_substrait_bytes(ctx, optimized_plan)
-    if internal_bytes is not None:
-        return internal_bytes
-    return _public_substrait_bytes(ctx, optimized_plan)
-
-
 def _compute_substrait_hash(
     ctx: SessionContext,
     df: DataFrame,
@@ -358,22 +283,38 @@ def _compute_substrait_hash(
     str | None
         Substrait hash, or None if unavailable.
     """
-    optimized_method = getattr(df, "optimized_logical_plan", None)
-    if not callable(optimized_method):
+    try:
+        from datafusion_engine.plan.substrait_artifacts import substrait_bytes_from_rust_bundle
+    except ImportError:
         return None
 
     try:
-        optimized_plan = optimized_method()
-        if optimized_plan is None:
-            return None
-
-        encoded = _encode_substrait_plan(ctx, optimized_plan)
-        if encoded is not None:
-            return _hash_bytes(encoded)
+        encoded, _required_udfs = substrait_bytes_from_rust_bundle(
+            ctx,
+            df,
+            session_runtime=None,
+        )
+        return _hash_bytes(encoded)
     except (RuntimeError, TypeError, ValueError, AttributeError):
         pass
 
     return None
+
+
+def runtime_plan_identity(bundle: object) -> str:
+    """Return canonical runtime identity for a plan bundle-like object.
+
+    Raises:
+        TypeError: If the object does not expose a usable plan identity field.
+    """
+    identity = getattr(bundle, "plan_identity_hash", None)
+    if isinstance(identity, str) and identity:
+        return identity
+    fingerprint = getattr(bundle, "plan_fingerprint", None)
+    if isinstance(fingerprint, str) and fingerprint:
+        return fingerprint
+    msg = "bundle must expose plan_identity_hash or plan_fingerprint"
+    raise TypeError(msg)
 
 
 def compute_plan_fingerprint(
@@ -402,7 +343,7 @@ def compute_plan_fingerprint(
     PlanFingerprint
         Fingerprint with plan and schema hashes.
     """
-    logical_plan_hash = _compute_logical_plan_hash(df)
+    logical_plan_hash = _compute_logical_plan_hash(df, view_name=view_name)
     schema_hash = _compute_schema_hash(df)
 
     substrait_hash: str | None = None
@@ -439,4 +380,5 @@ __all__ = [
     "PlanFingerprint",
     "compute_plan_fingerprint",
     "fingerprints_match",
+    "runtime_plan_identity",
 ]

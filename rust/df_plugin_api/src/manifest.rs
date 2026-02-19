@@ -2,9 +2,12 @@ use abi_stable::std_types::{RString, RVec};
 use abi_stable::StableAbi;
 
 pub const DF_PLUGIN_ABI_MAJOR: u16 = 1;
-pub const DF_PLUGIN_ABI_MINOR: u16 = 1;
+pub const DF_PLUGIN_ABI_MINOR: u16 = 2;
 
 pub mod caps {
+    // Capability bits are additive feature flags.
+    // Hosts must treat unknown bits as unsupported and only trust bits backed
+    // by executable export surfaces for the negotiated ABI version.
     pub const TABLE_PROVIDER: u64 = 1 << 0;
     pub const SCALAR_UDF: u64 = 1 << 1;
     pub const AGG_UDF: u64 = 1 << 2;

@@ -24,10 +24,17 @@ from datafusion_engine.expr.planner import (
     expr_planner_payloads,
     install_expr_planners,
 )
+from datafusion_engine.expr.relation_planner import (
+    install_relation_planner,
+    relation_planner_extension_available,
+)
 from datafusion_engine.schema.introspection_core import SchemaIntrospector
 from datafusion_engine.session._session_constants import (
     DATAFUSION_SQL_ERROR,
     create_schema_introspector,
+)
+from datafusion_engine.session.planning_surface_policy import (
+    planning_surface_policy_from_bundle,
 )
 from datafusion_engine.session.protocols import PlannerExtensionPort
 from datafusion_engine.session.runtime_dataset_io import (
@@ -69,6 +76,29 @@ logger = logging.getLogger(__name__)
 _DDL_CATALOG_WARNING_STATE: dict[str, bool] = {"emitted": False}
 _PLANNER_RULES_INSTALLED: weakref.WeakKeyDictionary[object, bool] = weakref.WeakKeyDictionary()
 _CACHE_TABLES_INSTALLED: weakref.WeakKeyDictionary[object, bool] = weakref.WeakKeyDictionary()
+
+
+def planning_surface_manifest_v2_payload(
+    profile: DataFusionRuntimeProfile,
+) -> Mapping[str, object]:
+    """Return canonical planning-surface manifest payload (v2)."""
+    from datafusion_engine.plan.contracts import PlanningSurfaceManifestV2
+
+    policy = planning_surface_policy_from_bundle(profile.policies)
+    table_factories = ("delta",)
+    planning_keys = {
+        key: str(value)
+        for key, value in profile.settings_payload().items()
+        if key.startswith("datafusion.")
+    }
+    manifest = PlanningSurfaceManifestV2(
+        expr_planners=policy.expr_planner_names,
+        relation_planners=("codeanatomy_relation",) if policy.relation_planner_enabled else (),
+        type_planners=("codeanatomy_type",) if policy.type_planner_enabled else (),
+        table_factories=table_factories,
+        planning_config_keys=planning_keys,
+    )
+    return msgspec.to_builtins(manifest)
 
 
 def _deferred_import(module_path: str, attr_name: str) -> object:
@@ -969,18 +999,28 @@ def _install_expr_planners(profile: DataFusionRuntimeProfile, ctx: SessionContex
     error: str | None = None
     cause: Exception | None = None
     planner_hook = profile.policies.expr_planner_hook
-    if planner_hook is None and not expr_planner_extension_available():
+    type_planner_hook = profile.policies.type_planner_hook
+    if planner_hook is None and (
+        not expr_planner_extension_available() or not relation_planner_extension_available()
+    ):
         available = False
-        error = "DataFusion extension ExprPlanner entrypoint is unavailable."
+        error = "DataFusion extension planner entrypoints are unavailable."
     else:
         try:
+            from datafusion_engine.extensions import datafusion_ext
+
             if isinstance(planner_hook, PlannerExtensionPort):
                 planner_hook.install_expr_planners(ctx)
                 planner_hook.install_relation_planner(ctx)
             elif planner_hook is None:
                 install_expr_planners(ctx, planner_names=profile.policies.expr_planner_names)
+                install_relation_planner(ctx)
             else:
                 planner_hook(ctx)
+            if type_planner_hook is not None:
+                type_planner_hook(ctx)
+            else:
+                datafusion_ext.install_type_planner(ctx)
             installed = True
         except (RuntimeError, TypeError, ValueError, ImportError) as exc:
             error = str(exc)
@@ -1145,6 +1185,7 @@ def record_delta_session_defaults(
             "installed": installed,
             "error": error,
             "runtime_policy_bridge": runtime_policy_bridge,
+            "planning_surface_manifest_v2": planning_surface_manifest_v2_payload(profile),
         },
     )
 

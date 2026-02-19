@@ -112,7 +112,7 @@ def test_resolve_delta_cdf_fails_fast_when_control_plane_fails(
     )
 
     with pytest.raises(DataFusionEngineError) as excinfo:
-        _ = resolve_delta_cdf(location=location, name="events")
+        _ = resolve_delta_cdf(location=location, name="events", ctx=_ctx_stub())
 
     assert excinfo.value.kind == ErrorKind.PLUGIN
     assert "degraded python fallback paths have been removed" in str(excinfo.value).lower()

@@ -73,4 +73,6 @@ __all__ = [
     "EngineProfile",
     "ExtractionConfig",
     "IncrementalConfig",
+    "RulepackProfile",
+    "TracingPreset",
 ]

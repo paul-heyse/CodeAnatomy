@@ -27,18 +27,13 @@ use datafusion_expr::{
     TableType,
 };
 use datafusion_ext::physical_rules::ensure_physical_config;
-use datafusion_ffi::table_provider::FFI_TableProvider;
-use df_plugin_common::schema_from_ipc;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
+use tracing::instrument;
 
-use super::helpers::{extract_session_ctx, global_task_ctx_provider};
-
-fn decode_schema_ipc(schema_ipc: &[u8]) -> PyResult<SchemaRef> {
-    schema_from_ipc(schema_ipc)
-        .map_err(|err| PyValueError::new_err(format!("Failed to decode schema IPC: {err}")))
-}
+use super::helpers::{decode_schema_ipc, extract_session_ctx};
+use super::provider_capsule_contract::provider_capsule_from_session;
 
 #[derive(Debug)]
 struct CpgTableProvider {
@@ -257,9 +252,15 @@ pub(crate) fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<Py<Py
 }
 
 #[pyfunction]
+#[instrument(
+    level = "info",
+    skip(py, schema_ipc, partition_schema_ipc, expr_adapter_factory),
+    fields(table_name = %table_name, path = %path)
+)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn parquet_listing_table_provider(
     py: Python<'_>,
+    ctx: &Bound<'_, PyAny>,
     path: String,
     file_extension: String,
     table_name: String,
@@ -362,13 +363,7 @@ pub(crate) fn parquet_listing_table_provider(
         defaults,
         constraints,
     );
-    let task_ctx_provider = global_task_ctx_provider();
-    let ffi_provider =
-        FFI_TableProvider::new(Arc::new(wrapped), true, None, &task_ctx_provider, None);
-    let name = CString::new("datafusion_table_provider")
-        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
-    let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
-    Ok(capsule.unbind().into())
+    provider_capsule_from_session(py, &extract_session_ctx(ctx)?, Arc::new(wrapped))
 }
 
 #[pyfunction]

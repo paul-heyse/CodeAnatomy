@@ -63,6 +63,32 @@ impl ConfigExtension for CodeAnatomyPolicyConfig {
     const PREFIX: &'static str = PREFIX;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodeAnatomyPolicyRuleInstalled {
+    installed: bool,
+}
+
+impl Default for CodeAnatomyPolicyRuleInstalled {
+    fn default() -> Self {
+        Self { installed: true }
+    }
+}
+
+crate::impl_extension_options!(
+    CodeAnatomyPolicyRuleInstalled,
+    prefix = "codeanatomy_policy_rule_installed",
+    unknown_key = "Unknown policy rule install marker key: {key}",
+    fields = [(
+        installed,
+        bool,
+        "Marker extension that indicates CodeAnatomyPolicyRule was installed."
+    ),]
+);
+
+impl ConfigExtension for CodeAnatomyPolicyRuleInstalled {
+    const PREFIX: &'static str = "codeanatomy_policy_rule_installed";
+}
+
 #[derive(Debug, Default)]
 pub struct CodeAnatomyPolicyRule;
 
@@ -100,7 +126,21 @@ pub fn ensure_policy_config(options: &mut ConfigOptions) -> Result<&mut CodeAnat
 pub fn install_policy_rules(ctx: &SessionContext) -> Result<()> {
     let state_ref = ctx.state_ref();
     let mut state = state_ref.write();
+    if state
+        .config()
+        .options()
+        .extensions
+        .get::<CodeAnatomyPolicyRuleInstalled>()
+        .is_some()
+    {
+        return Ok(());
+    }
     state.add_analyzer_rule(Arc::new(CodeAnatomyPolicyRule));
+    state
+        .config_mut()
+        .options_mut()
+        .extensions
+        .insert(CodeAnatomyPolicyRuleInstalled::default());
     Ok(())
 }
 

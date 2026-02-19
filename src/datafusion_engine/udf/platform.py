@@ -235,8 +235,8 @@ def _resolve_expr_planner_names(
         derived_planners = domain_planner_names_from_snapshot(snapshot)
         if planner_names:
             return tuple(dict.fromkeys((*planner_names, *derived_planners)))
-        return derived_planners
-    if resolved.enable_expr_planners and resolved.expr_planner_hook is None and not planner_names:
+        if derived_planners:
+            return derived_planners
         return ("codeanatomy_domain",)
     return planner_names
 

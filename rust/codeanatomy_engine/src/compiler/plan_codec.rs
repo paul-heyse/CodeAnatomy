@@ -24,6 +24,36 @@
 use std::sync::Arc;
 
 use datafusion_common::Result;
+use serde::{Deserialize, Serialize};
+
+/// Plan artifact codec policy shared with Python contract surfaces.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanArtifactCodecPolicyV1 {
+    pub cross_process_format: String,
+    pub allow_proto_internal: bool,
+}
+
+impl Default for PlanArtifactCodecPolicyV1 {
+    fn default() -> Self {
+        Self {
+            cross_process_format: "substrait".to_string(),
+            allow_proto_internal: true,
+        }
+    }
+}
+
+/// Enforce codec policy for proto/substrait capture paths.
+pub fn enforce_codec_policy(
+    policy: &PlanArtifactCodecPolicyV1,
+    cross_process: bool,
+) -> Result<()> {
+    if cross_process && policy.cross_process_format != "substrait" {
+        return Err(datafusion_common::DataFusionError::Plan(
+            "cross-process plan artifacts must use Substrait serialization".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Feature-gated: real implementations

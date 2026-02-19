@@ -35,7 +35,7 @@ def canonical_output_name(
     *,
     manifest: HasOutputNameMap | None = None,
 ) -> str:
-    """Get canonical output name for an internal view name.
+    """Return canonical output name for a view (identity by default).
 
     When a manifest with a populated ``output_name_map`` is provided, the
     manifest-backed map is authoritative.  Otherwise the internal name is
@@ -59,23 +59,6 @@ def canonical_output_name(
     if manifest is not None and manifest.output_name_map is not None:
         return manifest.output_name_map.get(internal_name, internal_name)
     return internal_name
-
-
-def internal_name(output_name: str) -> str:
-    """Get internal name from a canonical output name.
-
-    Parameters
-    ----------
-    output_name
-        The canonical output name.
-
-    Returns:
-    -------
-    str
-        The internal view name without suffix.
-        Returns the output name unchanged if no mapping exists.
-    """
-    return output_name
 
 
 def output_name_map_from_views(
@@ -107,6 +90,5 @@ __all__ = [
     "HasName",
     "HasOutputNameMap",
     "canonical_output_name",
-    "internal_name",
     "output_name_map_from_views",
 ]

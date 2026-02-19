@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
+from datafusion_engine.plan.contracts import PlanArtifactPolicyV1
+
 if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
@@ -39,6 +41,10 @@ def substrait_bytes_from_rust_bundle(
     """
     from datafusion_engine.plan.rust_bundle_bridge import build_plan_bundle_artifact_with_warnings
 
+    policy = PlanArtifactPolicyV1()
+    if policy.cross_process_format != "substrait":
+        msg = "cross-process plan artifact policy must use Substrait serialization."
+        raise ValueError(msg)
     payload: dict[str, object] = {
         "capture_substrait": True,
         "capture_sql": False,

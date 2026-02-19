@@ -1,24 +1,17 @@
 //! Shared helpers for the CodeAnatomy Python extension bridge.
 
 use std::collections::HashMap;
-use std::ffi::CString;
-use std::sync::{Arc, OnceLock};
-
 use arrow::datatypes::SchemaRef;
-use datafusion::catalog::TableProvider;
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::TaskContextProvider;
 use datafusion_ext::DeltaFeatureGate;
-use datafusion_ffi::table_provider::FFI_TableProvider;
 use deltalake::delta_datafusion::DeltaScanConfig;
 use df_plugin_common::{schema_from_ipc, DELTA_SCAN_CONFIG_VERSION};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyCapsule, PyDict, PyFloat, PyInt, PyList, PyString};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString};
 use rmp_serde::from_slice;
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
-use tokio::runtime::Runtime;
 
 use crate::context::PySessionContext;
 use crate::delta_control_plane::DeltaScanOverrides;
@@ -29,7 +22,6 @@ use crate::delta_observability::{
     scan_config_schema_ipc, snapshot_info_as_values,
 };
 use crate::delta_protocol::{gate_from_parts, DeltaSnapshotInfo, TableVersion};
-use crate::utils::get_global_ctx;
 
 /// Extract the underlying DataFusion `SessionContext` from a Python object.
 pub(crate) fn extract_session_ctx(ctx: &Bound<'_, PyAny>) -> PyResult<SessionContext> {
@@ -101,7 +93,7 @@ pub(crate) fn table_version_from_options(
         .map_err(|err| PyValueError::new_err(format!("Invalid Delta table version options: {err}")))
 }
 
-fn decode_schema_ipc(schema_ipc: &[u8]) -> PyResult<SchemaRef> {
+pub(crate) fn decode_schema_ipc(schema_ipc: &[u8]) -> PyResult<SchemaRef> {
     schema_from_ipc(schema_ipc)
         .map_err(|err| PyValueError::new_err(format!("Failed to decode schema IPC: {err}")))
 }
@@ -124,29 +116,6 @@ pub(crate) fn scan_overrides_from_params(
         wrap_partition_values,
         schema,
     })
-}
-
-pub(crate) fn runtime() -> PyResult<Runtime> {
-    Runtime::new()
-        .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))
-}
-
-pub(crate) fn global_task_ctx_provider() -> Arc<dyn TaskContextProvider> {
-    static TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
-    let provider = TASK_CTX_PROVIDER.get_or_init(|| Arc::new(get_global_ctx().clone()));
-    Arc::clone(provider) as Arc<dyn TaskContextProvider>
-}
-
-pub(crate) fn provider_capsule(
-    py: Python<'_>,
-    provider: Arc<dyn TableProvider>,
-) -> PyResult<Py<PyAny>> {
-    let task_ctx_provider = global_task_ctx_provider();
-    let ffi_provider = FFI_TableProvider::new(provider, true, None, &task_ctx_provider, None);
-    let name = CString::new("datafusion_table_provider")
-        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
-    let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
-    Ok(capsule.unbind().into())
 }
 
 pub(crate) fn json_to_py(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {

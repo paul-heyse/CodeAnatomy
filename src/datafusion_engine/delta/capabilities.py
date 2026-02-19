@@ -16,7 +16,11 @@ from datafusion_engine.extensions.context_adaptation import (
 )
 
 _DELTA_EXTENSION_MODULES: tuple[str, ...] = ("datafusion_engine.extensions.datafusion_ext",)
-_DELTA_SESSION_BUILDER = "delta_session_context"
+_NATIVE_DML_ENTRYPOINTS: dict[str, str] = {
+    "delete": "delta_delete_request",
+    "update": "delta_update_request",
+    "merge": "delta_merge_request",
+}
 
 
 @dataclass(frozen=True)
@@ -59,7 +63,7 @@ def probe_delta_entrypoint(
     policy = ExtensionContextPolicy(
         module_names=_DELTA_EXTENSION_MODULES,
         entrypoint=entrypoint,
-        allow_fallback=True,
+        allow_fallback=False,
         require_non_fallback=require_non_fallback,
     )
     resolved = resolve_delta_extension_module(entrypoint=policy.entrypoint)
@@ -106,8 +110,7 @@ def probe_delta_entrypoint(
                 ctx=ctx,
                 internal_ctx=internal_ctx,
                 args=args,
-                allow_fallback=True,
-                fallback_ctx_factory=_build_delta_session_context,
+                allow_fallback=False,
             ),
         )
     except (TypeError, RuntimeError, ValueError) as exc:
@@ -186,10 +189,10 @@ def resolve_delta_extension_module(
 
 
 def delta_context_candidates(
-    ctx: SessionContext,
+    ctx: object,
     module: object,
     *,
-    allow_fallback: bool = True,
+    allow_fallback: bool = False,
 ) -> tuple[tuple[str, object], ...]:
     """Return ordered context candidates for Delta extension entrypoints.
 
@@ -198,11 +201,12 @@ def delta_context_candidates(
     tuple[tuple[str, object], ...]
         Ordered (kind, context) candidates to probe.
     """
+    _ = module
     return select_context_candidate(
         ctx,
         internal_ctx=getattr(ctx, "ctx", None),
         allow_fallback=allow_fallback,
-        fallback_ctx=_build_delta_session_context(module),
+        fallback_ctx=None,
     )
 
 
@@ -212,7 +216,7 @@ def invoke_delta_entrypoint(
     *,
     ctx: SessionContext,
     args: Sequence[object] = (),
-    allow_fallback: bool = True,
+    allow_fallback: bool = False,
 ) -> tuple[str, object]:
     """Invoke a Delta entrypoint with context adaptation and rich errors.
 
@@ -231,23 +235,9 @@ def invoke_delta_entrypoint(
             internal_ctx=getattr(ctx, "ctx", None),
             args=args,
             allow_fallback=allow_fallback,
-            fallback_ctx_factory=_build_delta_session_context,
         ),
     )
     return selection.ctx_kind, payload
-
-
-def _build_delta_session_context(module: object) -> object | None:
-    builder = getattr(module, _DELTA_SESSION_BUILDER, None)
-    if not callable(builder):
-        return None
-    try:
-        return builder()
-    except (TypeError, RuntimeError, ValueError):
-        try:
-            return builder(None, None, None)
-        except (TypeError, RuntimeError, ValueError):
-            return None
 
 
 def _probe_args_for_entrypoint(entrypoint: str) -> tuple[object, ...]:
@@ -256,12 +246,52 @@ def _probe_args_for_entrypoint(entrypoint: str) -> tuple[object, ...]:
     return ()
 
 
+def native_dml_compatibility(
+    ctx: SessionContext,
+    *,
+    operation: str,
+    require_non_fallback: bool = True,
+) -> DeltaExtensionCompatibility:
+    """Return compatibility payload for a native DML operation.
+
+    Raises:
+        ValueError: If ``operation`` is not one of delete/update/merge.
+    """
+    try:
+        entrypoint = _NATIVE_DML_ENTRYPOINTS[operation]
+    except KeyError:
+        msg = f"Unsupported native DML operation: {operation}"
+        raise ValueError(msg) from None
+    return is_delta_extension_compatible(
+        ctx,
+        entrypoint=entrypoint,
+        require_non_fallback=require_non_fallback,
+    )
+
+
+def provider_supports_native_dml(
+    ctx: SessionContext,
+    *,
+    operation: str,
+    require_non_fallback: bool = True,
+) -> bool:
+    """Return whether provider-native DML is supported for ``operation``."""
+    compatibility = native_dml_compatibility(
+        ctx,
+        operation=operation,
+        require_non_fallback=require_non_fallback,
+    )
+    return compatibility.available and compatibility.compatible
+
+
 __all__ = [
     "DeltaExtensionCompatibility",
     "DeltaExtensionModule",
     "delta_context_candidates",
     "invoke_delta_entrypoint",
     "is_delta_extension_compatible",
+    "native_dml_compatibility",
     "probe_delta_entrypoint",
+    "provider_supports_native_dml",
     "resolve_delta_extension_module",
 ]

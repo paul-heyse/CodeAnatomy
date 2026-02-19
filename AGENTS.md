@@ -388,10 +388,10 @@ The `cq index` and `cq cache` admin commands are deprecated stubs that print dep
 
 ## 3. Quality Gate
 
-**Run after task completion**, not during implementation. Single command for all checks:
+**Run after task completion unless otherwise directed**, not during implementation. Both skills and ad hoc instructions request that quality checks only be performed after full implementation of scope in a broader plan. This is a hard requirement that supercedes the guidance to run these checks after tasks. Single command for all checks:
 
 ```bash
-uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright && uv run pytest -q
+uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright
 ```
 
 **In order:**
@@ -399,9 +399,8 @@ uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run 
 2. `ruff check --fix` - Lint + autofix. You must run ruff check with the "--fix" argument to apply autofixes, which should always be applied
 3. `pyrefly check` - Strict type/contract validation (the real gate). Never include a " ." after "uv run pyrefly check". The unmodified "uv run pyrefly check" will check the whole repo in the manner that we intend.
 4. `pyright` - IDE-level type checking (basic mode)
-5. `pytest -q` - Unit tests (add `-m "not e2e"` for fast iteration)
 
-**Timing:** Complete your implementation first, then run the full gate. Don't interrupt workflow with mid-task linting.
+**Timing:** Complete your implementation first, then run the full gate. Don't interrupt workflow with mid-task linting. If you have been given a plan, do not stop work for these quality checks, or stop work at all unless requested until the entire plan scope is implemented and have you audited the code base versus the plan document to confirm that is the case.
 
 ---
 
@@ -475,7 +474,7 @@ result = build_graph_product(GraphProductBuildRequest(repo_root="."))
 Detailed policies live in context-specific files:
 
 - `tests/AGENTS.md` - Test categories, markers, mocking policy
-- `rust/AGENTS.md` - Rust build, crate structure, artifacts
+- `rust/AGENTS.md` - Rust build, crate structure, artifacts4
 - `src/datafusion_engine/AGENTS.md` - DataFusion integration guidance
 - `src/semantics/AGENTS.md` - Span canonicalization, compiler rules
 

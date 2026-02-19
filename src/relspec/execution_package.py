@@ -48,6 +48,18 @@ class PolicyFingerprintLike(Protocol):
     @property
     def policy_fingerprint(self) -> str | None: ...
 
+    @property
+    def planning_env_hash(self) -> str | None: ...
+
+    @property
+    def rulepack_hash(self) -> str | None: ...
+
+    @property
+    def information_schema_hash(self) -> str | None: ...
+
+    @property
+    def function_registry_hash(self) -> str | None: ...
+
 
 class SettingsHashValueLike(Protocol):
     """Protocol for settings hash attribute access."""
@@ -76,6 +88,10 @@ class ExecutionPackageArtifact(StructBaseCompat, frozen=True):
     capability_snapshot_hash: str
     plan_bundle_fingerprints: dict[str, str]
     session_config_hash: str
+    planning_env_hash: str
+    rulepack_hash: str
+    information_schema_hash: str
+    function_registry_hash: str
     created_at_unix_ms: int
 
 
@@ -143,13 +159,23 @@ def _normalize_plan_bundle_fingerprints(
     return dict(sorted(plan_bundles.items()))
 
 
-def _composite_fingerprint(
+def _hash_opt_str(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def _composite_fingerprint(  # noqa: PLR0913
     *,
     manifest_hash: str,
     policy_artifact_hash: str,
     capability_snapshot_hash: str,
     plan_bundle_fingerprints: dict[str, str],
     session_config_hash: str,
+    planning_env_hash: str,
+    rulepack_hash: str,
+    information_schema_hash: str,
+    function_registry_hash: str,
 ) -> str:
     payload = (
         ("manifest_hash", manifest_hash),
@@ -157,17 +183,26 @@ def _composite_fingerprint(
         ("capability_snapshot_hash", capability_snapshot_hash),
         ("plan_bundle_fingerprints", tuple(sorted(plan_bundle_fingerprints.items()))),
         ("session_config_hash", session_config_hash),
+        ("planning_env_hash", planning_env_hash),
+        ("rulepack_hash", rulepack_hash),
+        ("information_schema_hash", information_schema_hash),
+        ("function_registry_hash", function_registry_hash),
     )
     return hash_msgpack_canonical(payload)
 
 
-def build_execution_package(
+def build_execution_package(  # noqa: PLR0913
     *,
     manifest: ManifestHashLike | ManifestWithSemanticIr | None = None,
     compiled_policy: PolicyFingerprintLike | None = None,
     capability_snapshot: SettingsHashValueLike | None = None,
     plan_bundle_fingerprints: Mapping[str, str] | None = None,
     session_config: SettingsHashCallableLike | SettingsHashValueLike | str | None = None,
+    planning_env_hash: str | None = None,
+    rulepack_hash: str | None = None,
+    information_schema_hash: str | None = None,
+    function_registry_hash: str | None = None,
+    created_at_unix_ms: int | None = None,
 ) -> ExecutionPackageArtifact:
     """Build a reproducible execution package from pipeline components.
 
@@ -198,6 +233,26 @@ def build_execution_package(
     capability_hash = _hash_capability_snapshot(capability_snapshot)
     normalized_bundles = _normalize_plan_bundle_fingerprints(plan_bundle_fingerprints)
     config_hash = _hash_session_config(session_config)
+    resolved_planning_env_hash = (
+        planning_env_hash
+        if planning_env_hash is not None
+        else _hash_opt_str(getattr(compiled_policy, "planning_env_hash", None))
+    )
+    resolved_rulepack_hash = (
+        rulepack_hash
+        if rulepack_hash is not None
+        else _hash_opt_str(getattr(compiled_policy, "rulepack_hash", None))
+    )
+    resolved_information_schema_hash = (
+        information_schema_hash
+        if information_schema_hash is not None
+        else _hash_opt_str(getattr(compiled_policy, "information_schema_hash", None))
+    )
+    resolved_function_registry_hash = (
+        function_registry_hash
+        if function_registry_hash is not None
+        else _hash_opt_str(getattr(compiled_policy, "function_registry_hash", None))
+    )
 
     fingerprint = _composite_fingerprint(
         manifest_hash=manifest_hash,
@@ -205,7 +260,14 @@ def build_execution_package(
         capability_snapshot_hash=capability_hash,
         plan_bundle_fingerprints=normalized_bundles,
         session_config_hash=config_hash,
+        planning_env_hash=resolved_planning_env_hash,
+        rulepack_hash=resolved_rulepack_hash,
+        information_schema_hash=resolved_information_schema_hash,
+        function_registry_hash=resolved_function_registry_hash,
     )
+    # created_at_unix_ms is provenance metadata only; it is intentionally
+    # excluded from _composite_fingerprint so retried builds stay deterministic.
+    recorded_at = created_at_unix_ms if created_at_unix_ms is not None else int(time.time() * 1000)
 
     return ExecutionPackageArtifact(
         package_fingerprint=fingerprint,
@@ -214,7 +276,11 @@ def build_execution_package(
         capability_snapshot_hash=capability_hash,
         plan_bundle_fingerprints=normalized_bundles,
         session_config_hash=config_hash,
-        created_at_unix_ms=int(time.time() * 1000),
+        planning_env_hash=resolved_planning_env_hash,
+        rulepack_hash=resolved_rulepack_hash,
+        information_schema_hash=resolved_information_schema_hash,
+        function_registry_hash=resolved_function_registry_hash,
+        created_at_unix_ms=recorded_at,
     )
 
 

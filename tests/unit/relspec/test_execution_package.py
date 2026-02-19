@@ -17,6 +17,7 @@ from tests.test_helpers.immutability import assert_immutable_assignment
 FIXED_CREATED_AT_UNIX_MS = 1_700_000_000_000
 EXPECTED_PLAN_BUNDLE_COUNT = 3
 SCHEMA_FINGERPRINT_LENGTH = 32
+_EXPLICIT_TIMESTAMP_OVERRIDE = 123
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,10 @@ class _ManifestStub:
 @dataclass(frozen=True)
 class _PolicyStub:
     policy_fingerprint: str | None
+    planning_env_hash: str | None = None
+    rulepack_hash: str | None = None
+    information_schema_hash: str | None = None
+    function_registry_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,10 @@ class TestExecutionPackageArtifactConstruction:
             capability_snapshot_hash="ch_001",
             plan_bundle_fingerprints={"view_a": "fp_a", "view_b": "fp_b"},
             session_config_hash="sh_001",
+            planning_env_hash="env_001",
+            rulepack_hash="rules_001",
+            information_schema_hash="info_001",
+            function_registry_hash="registry_001",
             created_at_unix_ms=FIXED_CREATED_AT_UNIX_MS,
         )
         assert pkg.package_fingerprint == "abc123"
@@ -61,6 +70,10 @@ class TestExecutionPackageArtifactConstruction:
         assert pkg.capability_snapshot_hash == "ch_001"
         assert pkg.plan_bundle_fingerprints == {"view_a": "fp_a", "view_b": "fp_b"}
         assert pkg.session_config_hash == "sh_001"
+        assert pkg.planning_env_hash == "env_001"
+        assert pkg.rulepack_hash == "rules_001"
+        assert pkg.information_schema_hash == "info_001"
+        assert pkg.function_registry_hash == "registry_001"
         assert pkg.created_at_unix_ms == FIXED_CREATED_AT_UNIX_MS
 
     @staticmethod
@@ -73,6 +86,10 @@ class TestExecutionPackageArtifactConstruction:
             capability_snapshot_hash="c",
             plan_bundle_fingerprints={},
             session_config_hash="s",
+            planning_env_hash="",
+            rulepack_hash="",
+            information_schema_hash="",
+            function_registry_hash="",
             created_at_unix_ms=0,
         )
         assert_immutable_assignment(
@@ -181,6 +198,12 @@ class TestBuildExecutionPackageTimestamp:
         pkg = build_execution_package()
         assert pkg.created_at_unix_ms > 0
 
+    @staticmethod
+    def test_explicit_timestamp_override_is_used() -> None:
+        """Caller-provided timestamp should be preserved as provenance metadata."""
+        pkg = build_execution_package(created_at_unix_ms=_EXPLICIT_TIMESTAMP_OVERRIDE)
+        assert pkg.created_at_unix_ms == _EXPLICIT_TIMESTAMP_OVERRIDE
+
 
 class TestBuildExecutionPackagePlanBundleFingerprints:
     """Test plan_bundle_fingerprints handling."""
@@ -220,6 +243,10 @@ class TestBuildExecutionPackageGracefulDegradation:
         assert not pkg.policy_artifact_hash
         assert not pkg.capability_snapshot_hash
         assert not pkg.session_config_hash
+        assert not pkg.planning_env_hash
+        assert not pkg.rulepack_hash
+        assert not pkg.information_schema_hash
+        assert not pkg.function_registry_hash
         assert pkg.plan_bundle_fingerprints == {}
         assert isinstance(pkg.package_fingerprint, str)
         assert len(pkg.package_fingerprint) > 0
@@ -246,6 +273,22 @@ class TestBuildExecutionPackageGracefulDegradation:
         pkg = build_execution_package(session_config="direct_hash_string")
         assert pkg.session_config_hash == "direct_hash_string"
 
+    @staticmethod
+    def test_planning_hashes_default_from_compiled_policy() -> None:
+        """Planning hash fields should propagate from compiled policy when present."""
+        policy = _PolicyStub(
+            policy_fingerprint="policy",
+            planning_env_hash="env_hash",
+            rulepack_hash="rulepack_hash",
+            information_schema_hash="info_hash",
+            function_registry_hash="registry_hash",
+        )
+        pkg = build_execution_package(compiled_policy=policy)
+        assert pkg.planning_env_hash == "env_hash"
+        assert pkg.rulepack_hash == "rulepack_hash"
+        assert pkg.information_schema_hash == "info_hash"
+        assert pkg.function_registry_hash == "registry_hash"
+
 
 class TestExecutionPackageMsgspecRoundTrip:
     """Test msgspec serialization round-trip for ExecutionPackageArtifact."""
@@ -260,6 +303,10 @@ class TestExecutionPackageMsgspecRoundTrip:
             capability_snapshot_hash="ch",
             plan_bundle_fingerprints={"v1": "f1", "v2": "f2"},
             session_config_hash="sh",
+            planning_env_hash="env",
+            rulepack_hash="rulepack",
+            information_schema_hash="info",
+            function_registry_hash="registry",
             created_at_unix_ms=FIXED_CREATED_AT_UNIX_MS,
         )
         encoded = msgspec.json.encode(original)
@@ -282,6 +329,10 @@ class TestExecutionPackageMsgspecRoundTrip:
             capability_snapshot_hash="ch_mp",
             plan_bundle_fingerprints={"view_x": "fp_x"},
             session_config_hash="sh_mp",
+            planning_env_hash="env_mp",
+            rulepack_hash="rulepack_mp",
+            information_schema_hash="info_mp",
+            function_registry_hash="registry_mp",
             created_at_unix_ms=FIXED_CREATED_AT_UNIX_MS,
         )
         encoded = msgspec.msgpack.encode(original)
@@ -299,6 +350,10 @@ class TestExecutionPackageMsgspecRoundTrip:
             capability_snapshot_hash="",
             plan_bundle_fingerprints={},
             session_config_hash="",
+            planning_env_hash="",
+            rulepack_hash="",
+            information_schema_hash="",
+            function_registry_hash="",
             created_at_unix_ms=0,
         )
         encoded = msgspec.json.encode(original)

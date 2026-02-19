@@ -41,6 +41,7 @@ Example:
 from __future__ import annotations
 
 from semantics.joins.inference import (
+    CONFIDENCE_BY_STRATEGY,
     JoinInferenceError,
     JoinStrategyResult,
     build_join_inference_confidence,
@@ -57,6 +58,7 @@ from semantics.joins.strategies import (
 )
 
 __all__ = [
+    "CONFIDENCE_BY_STRATEGY",
     "FILE_EQUI_JOIN",
     "SPAN_CONTAINS_STRATEGY",
     "SPAN_OVERLAP_STRATEGY",

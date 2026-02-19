@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::helpers::{json_to_py, parse_python_payload, runtime};
 use arrow::array::{RecordBatch, RecordBatchReader};
 use arrow::datatypes::SchemaRef;
 use arrow::ffi_stream::ArrowArrayStreamReader;
@@ -14,10 +13,13 @@ use codeanatomy_engine::providers::{execute_interval_align, IntervalAlignProvide
 use codeanatomy_engine::python::tree_sitter_extractor::{
     extract_tree_sitter_row as extract_ts_native, TreeSitterExtractRequest,
 };
+use datafusion_ext::async_runtime;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyList};
 use serde::Deserialize;
+
+use super::helpers::{json_to_py, parse_python_payload};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
@@ -121,7 +123,9 @@ pub(crate) fn interval_align_table(
     };
     let (left_schema, left_batches) = batches_from_pyarrow(left)?;
     let (right_schema, right_batches) = batches_from_pyarrow(right)?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let (schema, batches) = runtime.block_on(async {
         execute_interval_align(
             left_schema,

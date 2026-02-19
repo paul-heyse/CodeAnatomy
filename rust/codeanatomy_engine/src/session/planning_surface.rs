@@ -18,10 +18,20 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion_common::config::TableOptions;
 use datafusion_common::Result;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::planner::{ExprPlanner, RelationPlanner, TypePlanner};
 use datafusion_expr::registry::FunctionRegistry;
+use serde::{Deserialize, Serialize};
 
 use crate::session::capture::GovernancePolicy;
+
+/// Typed planning policy contract shared across Rust and Python layers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PlanningSurfacePolicyV1 {
+    pub enable_default_features: bool,
+    pub expr_planner_names: Vec<String>,
+    pub relation_planner_enabled: bool,
+    pub type_planner_enabled: bool,
+}
 
 /// Typed specification of everything that configures the planning surface
 /// of a DataFusion session.
@@ -43,6 +53,10 @@ pub struct PlanningSurfaceSpec {
     pub table_factory_allowlist: Vec<TableFactoryEntry>,
     /// Expression planners for domain-specific operator resolution.
     pub expr_planners: Vec<Arc<dyn ExprPlanner>>,
+    /// Relation planners for SQL table-factor planning extensions.
+    pub relation_planners: Vec<Arc<dyn RelationPlanner>>,
+    /// Optional type planner for SQL type-resolution hooks.
+    pub type_planner: Option<Arc<dyn TypePlanner>>,
     /// Optional SQL macro function factory for `CREATE FUNCTION` support.
     pub function_factory: Option<Arc<dyn FunctionFactory>>,
     /// Optional custom query planner (e.g. DeltaPlanner).
@@ -55,6 +69,19 @@ pub struct PlanningSurfaceSpec {
     pub extension_policy: GovernancePolicy,
     /// Function rewrites that must be installed post-build (no builder API).
     pub function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,
+    /// Typed policy payload used for cross-layer planning parity.
+    pub typed_policy: Option<PlanningSurfacePolicyV1>,
+}
+
+impl PlanningSurfaceSpec {
+    /// Build a planning surface spec from the typed policy contract.
+    pub fn from_policy(policy: PlanningSurfacePolicyV1) -> Self {
+        Self {
+            enable_default_features: policy.enable_default_features,
+            typed_policy: Some(policy),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -84,6 +111,12 @@ pub fn apply_to_builder(
     }
     if !spec.expr_planners.is_empty() {
         builder = builder.with_expr_planners(spec.expr_planners.clone());
+    }
+    if !spec.relation_planners.is_empty() {
+        builder = builder.with_relation_planners(spec.relation_planners.clone());
+    }
+    if let Some(type_planner) = spec.type_planner.clone() {
+        builder = builder.with_type_planner(type_planner);
     }
     if let Some(factory) = spec.function_factory.clone() {
         builder = builder.with_function_factory(Some(factory));
@@ -130,6 +163,8 @@ mod tests {
         assert!(spec.table_factories.is_empty());
         assert!(spec.table_factory_allowlist.is_empty());
         assert!(spec.expr_planners.is_empty());
+        assert!(spec.relation_planners.is_empty());
+        assert!(spec.type_planner.is_none());
         assert!(spec.function_factory.is_none());
         assert!(spec.query_planner.is_none());
         assert!(!spec.delta_codec_enabled);
@@ -139,5 +174,6 @@ mod tests {
             GovernancePolicy::Permissive
         ));
         assert!(spec.function_rewrites.is_empty());
+        assert!(spec.typed_policy.is_none());
     }
 }

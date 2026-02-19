@@ -36,6 +36,7 @@ from datafusion_engine.session.runtime_config_policies import (
     _effective_catalog_autoload_for_profile,
     _resolved_config_policy_for_profile,
     _resolved_schema_hardening_for_profile,
+    cache_manager_contract_for_profile,
 )
 from datafusion_engine.session.runtime_context import _RuntimeContextMixin
 from datafusion_engine.session.runtime_diagnostics_mixin import _RuntimeDiagnosticsMixin
@@ -437,6 +438,7 @@ class DataFusionRuntimeProfile(
             builder,
             enabled=self.features.enable_cache_manager,
             factory=self.policies.cache_manager_factory,
+            contract=cache_manager_contract_for_profile(self),
         )
         if self.policies.runtime_env_hook is not None:
             builder = self.policies.runtime_env_hook(builder)

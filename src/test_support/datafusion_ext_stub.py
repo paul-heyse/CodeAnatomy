@@ -194,6 +194,16 @@ def install_expr_planners(ctx: SessionContext, planners: object) -> None:
     _ = (ctx, planners)
 
 
+def install_relation_planner(ctx: SessionContext) -> None:
+    """Install stub RelationPlanner extensions."""
+    _ = ctx
+
+
+def install_type_planner(ctx: SessionContext) -> None:
+    """Install stub TypePlanner extensions."""
+    _ = ctx
+
+
 def install_planner_rules(ctx: SessionContext) -> None:
     """Install stub logical planner rules."""
     _ = ctx
@@ -237,6 +247,20 @@ def capabilities_snapshot() -> dict[str, object]:
         "datafusion_version": None,
         "arrow_version": None,
         "plugin_abi": {"major": None, "minor": None},
+        "runtime_install_contract": {
+            "version": 4,
+            "supports_unified_entrypoint": True,
+            "supports_modular_entrypoints": True,
+            "required_modular_entrypoints": [
+                "register_codeanatomy_udfs",
+                "install_function_factory",
+                "install_expr_planners",
+                "install_relation_planner",
+                "install_type_planner",
+                "registry_snapshot",
+                "registry_snapshot_msgpack",
+            ],
+        },
         "udf_registry": {
             "scalar": 0,
             "aggregate": 0,
@@ -253,7 +277,7 @@ def session_context_contract_probe(ctx: SessionContext) -> dict[str, object]:
     _ = ctx
     return {
         "ok": True,
-        "plugin_abi": {"major": 1, "minor": 1},
+        "plugin_abi": {"major": 1, "minor": 2},
         "metadata_cache_limit_bytes": 0,
         "metadata_cache_entries": 0,
         "metadata_cache_hits": 0,
@@ -939,7 +963,7 @@ def install_codeanatomy_runtime(
     _ = (enable_async_udfs, async_udf_timeout_ms, async_udf_batch_size)
     snapshot = registry_snapshot(ctx)
     return {
-        "contract_version": 3,
+        "contract_version": 4,
         "runtime_install_mode": "unified",
         "snapshot_msgpack": registry_snapshot_msgpack(ctx),
         "snapshot": snapshot,
@@ -2007,6 +2031,8 @@ __all__ = [
     "install_delta_table_factory",
     "install_expr_planners",
     "install_function_factory",
+    "install_relation_planner",
+    "install_type_planner",
     "interval_align_score",
     "lag_window",
     "last_value_agg",

@@ -64,20 +64,6 @@ fn canonicalize_value(value: serde_json::Value) -> CanonicalValue {
     }
 }
 
-/// Determinism contract for replay validation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeterminismContract {
-    pub spec_hash: [u8; 32],
-    pub envelope_hash: [u8; 32],
-}
-
-impl DeterminismContract {
-    /// Validate replay by comparing spec and envelope hashes.
-    pub fn is_replay_valid(&self, other: &DeterminismContract) -> bool {
-        self.spec_hash == other.spec_hash && self.envelope_hash == other.envelope_hash
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

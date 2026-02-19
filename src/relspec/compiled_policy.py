@@ -77,7 +77,11 @@ class CompiledExecutionPolicy(StructBaseStrict, frozen=True):
     materialization_strategy: str | None = None
     diagnostics_flags: dict[str, bool] = msgspec.field(default_factory=dict)
     workload_class: str | None = None
-    validation_mode: str = "warn"
+    validation_mode: ValidationMode = "warn"
+    planning_env_hash: str | None = None
+    rulepack_hash: str | None = None
+    information_schema_hash: str | None = None
+    function_registry_hash: str | None = None
     policy_fingerprint: str | None = None
 
 

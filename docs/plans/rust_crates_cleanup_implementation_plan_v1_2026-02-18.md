@@ -2211,41 +2211,44 @@ Execute scope items in this order. Items within a phase can be parallelized acro
 
 ## Implementation Checklist
 
+Status updated from static code-shape audit on 2026-02-19.
+Legend: checked = complete, unchecked = partial/incomplete.
+
 ### Scope Items
 
-- [ ] S1 — Fix silent `extra_constraints` drop on delete/update.
-- [ ] S2 — Deduplicate `enforce_pushdown_contracts`.
-- [ ] S3 — Deduplicate task graph construction.
-- [ ] S4 — Unify topological sort implementations.
-- [ ] S5 — Replace per-call `Runtime::new()` with shared runtime.
-- [ ] S6 — Consolidate duplicate session extraction.
-- [ ] S7 — Consolidate duplicate `decode_schema_ipc`.
-- [ ] S8 — Remove bare nested SessionContext use in IntervalAlign provider path.
-- [ ] S9 — Add always-on log observability with safe `log` macro syntax.
-- [ ] S10 — Add bridge layer tracing instrumentation.
-- [ ] S11 — Make planner/physical rule installation idempotent.
-- [ ] S12 — Remove duplicate determinism contract in `spec/hashing.rs`.
-- [ ] S13 — Rename `ensure_source_registered` to command-style `register_inline_source`.
-- [ ] S14 — Implement DF52 RelationPlanner end-to-end.
-- [ ] S15 — Expand ABI and runtime contract compatibility policy.
-- [ ] S16 — Add Rust unit tests for pure binding functions.
-- [ ] S17 — Introduce `IntervalAlignContext::prepare()`.
-- [ ] S18 — Introduce `SessionBuildParams` / `ArtifactPhaseContext` wrappers.
-- [ ] S19 — Fix `build_udf_bundle` error propagation.
-- [ ] S20 — Split `session_utils.rs` and `udf_registration.rs`.
-- [ ] S21 — Add TypePlanner support to planning surfaces.
-- [ ] S22 — Migrate provider capsule creation to session-aware FFI contract.
-- [ ] S23 — Unify typed planning policy compilation across `src` and `rust`.
-- [ ] S24 — Implement pushdown-first provider architecture for interval alignment.
-- [ ] S25 — Align Delta mutation bridge with DF52 DML contracts.
-- [ ] S26 — Consolidate cache control plane on CacheManagerConfig.
-- [ ] S27 — Introduce standalone logical optimizer harness.
-- [ ] S28 — Harden plan artifact serialization policy (Substrait-first cross-process).
-- [ ] S29 — Establish planning-surface manifest parity across `src` and `rust`.
+- [x] S1 — Fix silent `extra_constraints` drop on delete/update.
+- [x] S2 — Deduplicate `enforce_pushdown_contracts`.
+- [x] S3 — Deduplicate task graph construction.
+- [x] S4 — Unify topological sort implementations.
+- [x] S5 — Replace per-call `Runtime::new()` with shared runtime.
+- [x] S6 — Consolidate duplicate session extraction.
+- [x] S7 — Consolidate duplicate `decode_schema_ipc`.
+- [x] S8 — Remove bare nested SessionContext use in IntervalAlign provider path.
+- [x] S9 — Add always-on log observability with safe `log` macro syntax.
+- [x] S10 — Add bridge layer tracing instrumentation.
+- [x] S11 — Make planner/physical rule installation idempotent.
+- [x] S12 — Remove duplicate determinism contract in `spec/hashing.rs`.
+- [x] S13 — Rename `ensure_source_registered` to command-style `register_inline_source`.
+- [ ] S14 — Implement DF52 RelationPlanner end-to-end. (Partial: native/runtime install and plugin ABI parity are present, but legacy no-op relation-planner fallback behavior remains in `src/datafusion_engine/expr/relation_planner.py` (`plan_relation()` returns `None`).)
+- [x] S15 — Expand ABI and runtime contract compatibility policy. (Completed: runtime contract version checks, required entrypoint parity, ABI policy docs/changelog, and ABI-minor alignment are in place.)
+- [x] S16 — Add Rust unit tests for pure binding functions.
+- [x] S17 — Introduce `IntervalAlignContext::prepare()`.
+- [x] S18 — Introduce `SessionBuildParams` / `ArtifactPhaseContext` wrappers.
+- [x] S19 — Fix `build_udf_bundle` error propagation.
+- [x] S20 — Split `session_utils.rs` and `udf_registration.rs`. (Completed: split modules are wired and compile parity restored, including `session_utils.rs` regression fix.)
+- [x] S21 — Add TypePlanner support to planning surfaces.
+- [x] S22 — Migrate provider capsule creation to session-aware FFI contract.
+- [x] S23 — Unify typed planning policy compilation across `src` and `rust`.
+- [ ] S24 — Implement pushdown-first provider architecture for interval alignment. (Partial: predicate classification is implemented, but provider execution still depends on SQL text assembly (`build_interval_align_sql`) and `get_logical_plan()` remains `None` instead of exposing a canonical direct logical-plan path.)
+- [x] S25 — Align Delta mutation bridge with DF52 DML contracts.
+- [x] S26 — Consolidate cache control plane on CacheManagerConfig. (Completed: typed cache-manager contract is canonical, runtime bridge applies CacheManagerConfig limits/TTL, and duplicate parsing paths were removed.)
+- [x] S27 — Introduce standalone logical optimizer harness.
+- [x] S28 — Harden plan artifact serialization policy (Substrait-first cross-process).
+- [x] S29 — Establish planning-surface manifest parity across `src` and `rust`. (Completed: canonical relation/type planner identities are aligned across layers and Rust parity tests are green.)
 
 ### Decommission Batches
 
-- [ ] Batch D1 — land post-dedup/post-contract deletions (S2, S3, S4, S5, S6, S7, S12).
+- [x] Batch D1 — land post-dedup/post-contract deletions (S2, S3, S4, S5, S6, S7, S12).
 - [ ] Batch D2 — land planner/runtime contract cleanups (S14, S15, S21, S22, S23).
 - [ ] Batch D3 — land provider/runtime/serialization cleanup deletions (S24, S25, S26, S27, S28, S29).
 
@@ -2254,6 +2257,18 @@ Execute scope items in this order. Items within a phase can be parallelized acro
 - [ ] `cargo build --workspace` — clean build across all crates
 - [ ] `cargo test --workspace` — all tests pass
 - [ ] `cargo clippy --workspace` — no new warnings (especially no `too_many_arguments` suppressions remaining after S18)
-- [ ] `uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright && uv run pytest -q` for affected Python integration surfaces
+- [ ] `uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright && uv run pytest -q` for affected Python integration surfaces (`ruff`/`pyrefly`/`pyright` pass; repo-wide `pytest` still failing in CQ golden/e2e snapshot suites)
 - [ ] Verify no `#[pyfunction]` signatures were changed (FFI contract preservation)
-- [ ] Verify no `extern "C"` function signatures were changed (plugin ABI preservation)
+- [x] Verify no breaking `extern "C"` signature changes (plugin ABI preservation). Additive `relation_planner_names` export landed with ABI-minor bump to `DF_PLUGIN_ABI_MINOR=2`.
+
+Validation snapshot (2026-02-19):
+
+- `uv run ruff format` and `uv run ruff check --fix` pass.
+- `uv run pyrefly check` passes (0 errors).
+- `uv run pyright` passes.
+- `uv run pytest -q --maxfail=10` reports 10 failures, concentrated in CQ golden/e2e snapshot drift (for example `tests/cli_golden/test_cq_help_output.py`, `tests/cli_golden/test_search_golden.py`, `tests/e2e/cq/test_query_golden.py`).
+- `cargo test -p codeanatomy-engine --test interval_align_provider` currently fails (2 tests) on interval-align `__score` field resolution, so interval provider cleanup scope is not fully closed.
+- `cargo test -p datafusion-python --tests` remains blocked in this environment by PyO3/Python linker symbol resolution; validation currently relies on `cargo check -p datafusion-python --tests` plus Python-level contract tests.
+- Static code-shape audit also flags two open design gaps:
+  - S14 legacy decommission D14 is incomplete: `src/datafusion_engine/expr/relation_planner.py` still exposes no-op `plan_relation()` behavior.
+  - S24 direct logical-plan assembly target is incomplete: `IntervalAlignProvider` still builds SQL text via `build_interval_align_sql` and returns `None` from `get_logical_plan()` instead of exposing a canonical logical-plan path.

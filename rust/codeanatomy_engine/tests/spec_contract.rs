@@ -13,7 +13,8 @@
 mod common;
 
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
-use codeanatomy_engine::spec::hashing::{hash_spec, DeterminismContract};
+use codeanatomy_engine::executor::result::DeterminismContract;
+use codeanatomy_engine::spec::hashing::hash_spec;
 use codeanatomy_engine::spec::join_graph::{JoinConstraint, JoinEdge, JoinGraph};
 use codeanatomy_engine::spec::outputs::MaterializationMode;
 use codeanatomy_engine::spec::relations::{
@@ -186,11 +187,13 @@ fn test_determinism_contract() {
     let contract1 = DeterminismContract {
         spec_hash,
         envelope_hash: [1u8; 32],
+        rulepack_fingerprint: [9u8; 32],
     };
 
     let contract2 = DeterminismContract {
         spec_hash,
         envelope_hash: [1u8; 32],
+        rulepack_fingerprint: [9u8; 32],
     };
 
     assert!(
@@ -202,6 +205,7 @@ fn test_determinism_contract() {
     let contract3 = DeterminismContract {
         spec_hash,
         envelope_hash: [2u8; 32],
+        rulepack_fingerprint: [9u8; 32],
     };
 
     assert!(

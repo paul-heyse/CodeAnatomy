@@ -12,6 +12,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from core_types import JsonValue
+from datafusion_engine.catalog.introspection import capture_cache_diagnostics
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
 from datafusion_engine.delta.store_policy import delta_store_policy_hash
 from datafusion_engine.plan.bundle_environment import (
@@ -166,6 +167,7 @@ class _PlanArtifactsInputs:
     udf_artifacts: UdfArtifacts
     function_registry_hash: str
     environment: _EnvironmentArtifacts
+    cache_diagnostics: Mapping[str, object] | None
     substrait_validation: Mapping[str, object] | None
     proto_enabled: bool = True
 
@@ -482,6 +484,9 @@ def _plan_artifacts_from_components(
         rulepack_hash=inputs.environment.rulepack_hash,
         information_schema_snapshot=dict(inputs.environment.information_schema_snapshot),
         information_schema_hash=inputs.environment.information_schema_hash,
+        cache_diagnostics=(
+            dict(inputs.cache_diagnostics) if inputs.cache_diagnostics is not None else None
+        ),
         substrait_validation=(
             dict(inputs.substrait_validation) if inputs.substrait_validation is not None else None
         ),
@@ -552,6 +557,7 @@ def _collect_bundle_assembly_state(
         options=options,
         substrait_bytes=plan_core.substrait_bytes,
     )
+    cache_diagnostics = _capture_cache_diagnostics(ctx)
     merged_delta_inputs = _merged_delta_inputs_for_bundle(
         ctx,
         plan=plan_core.optimized or plan_core.logical,
@@ -583,6 +589,7 @@ def _collect_bundle_assembly_state(
             udf_artifacts=udf_artifacts,
             function_registry_hash=function_registry_hash,
             environment=environment,
+            cache_diagnostics=cache_diagnostics,
             substrait_validation=substrait_validation,
             proto_enabled=proto_enabled,
         )
@@ -745,6 +752,16 @@ def _capture_explain_analyze(
     if not session_runtime.profile.diagnostics.explain_analyze:
         return None
     return capture_explain(df, verbose=True, analyze=True)
+
+
+def _capture_cache_diagnostics(ctx: SessionContext) -> Mapping[str, object] | None:
+    try:
+        diagnostics = capture_cache_diagnostics(ctx)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if not isinstance(diagnostics, Mapping):
+        return None
+    return diagnostics
 
 
 __all__: list[str] = []

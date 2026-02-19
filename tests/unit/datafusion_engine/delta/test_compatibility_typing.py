@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
+import pytest
+
+from datafusion_engine.delta import capabilities as delta_capabilities
 from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
 from datafusion_engine.delta.control_plane_core import _compatibility_message
 from datafusion_engine.delta.provider_artifacts import (
     DeltaProviderBuildRequest,
     build_delta_provider_build_result,
 )
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
 
 
 def test_provider_artifact_uses_typed_compatibility_fields() -> None:
@@ -60,3 +68,27 @@ def test_control_plane_compatibility_message_uses_typed_contract() -> None:
     assert "ctx_kind=outer" in message
     assert "probe_result=error" in message
     assert "error=incompatible" in message
+
+
+def test_provider_supports_native_dml_uses_typed_compatibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native DML support helper should consume typed compatibility values."""
+    monkeypatch.setattr(
+        delta_capabilities,
+        "is_delta_extension_compatible",
+        lambda *_args, **_kwargs: DeltaExtensionCompatibility(
+            available=True,
+            compatible=True,
+            error=None,
+            entrypoint="delta_delete_request",
+            module="datafusion_engine.extensions.datafusion_ext",
+            ctx_kind="outer",
+            probe_result="ok",
+        ),
+    )
+
+    assert delta_capabilities.provider_supports_native_dml(
+        cast("SessionContext", object()),
+        operation="delete",
+    )

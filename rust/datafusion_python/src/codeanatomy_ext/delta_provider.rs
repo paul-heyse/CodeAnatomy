@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use datafusion_ext::async_runtime;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -21,10 +22,10 @@ use crate::delta_mutations::{
 };
 
 use super::helpers::{
-    delta_gate_from_params, extract_session_ctx, json_to_py, provider_capsule, runtime,
-    scan_config_to_pydict, scan_overrides_from_params, snapshot_to_pydict, storage_options_map,
-    table_version_from_options,
+    delta_gate_from_params, extract_session_ctx, json_to_py, scan_config_to_pydict,
+    scan_overrides_from_params, snapshot_to_pydict, storage_options_map, table_version_from_options,
 };
+use super::provider_capsule_contract::provider_capsule_from_session;
 
 #[pyclass]
 #[derive(Clone)]
@@ -59,6 +60,7 @@ impl DeltaCdfOptions {
 #[instrument(skip(py, table_uri, storage_options, options))]
 pub(crate) fn delta_cdf_table_provider(
     py: Python<'_>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -83,7 +85,9 @@ pub(crate) fn delta_cdf_table_provider(
         ending_timestamp: options.ending_timestamp,
         allow_out_of_range: options.allow_out_of_range,
     };
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let table_version = table_version_from_options(version, timestamp)?;
     let (provider, snapshot) = runtime
         .block_on(delta_cdf_provider_native(DeltaCdfProviderRequest {
@@ -94,8 +98,9 @@ pub(crate) fn delta_cdf_table_provider(
             gate,
         }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta CDF provider failed: {err}")))?;
+    let session_ctx = extract_session_ctx(ctx)?;
     let payload = PyDict::new(py);
-    payload.set_item("provider", provider_capsule(py, Arc::new(provider))?)?;
+    payload.set_item("provider", provider_capsule_from_session(py, &session_ctx, Arc::new(provider))?)?;
     payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     Ok(payload.into())
 }
@@ -134,12 +139,15 @@ pub(crate) fn delta_table_provider_from_session(
         wrap_partition_values,
         schema_ipc,
     )?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let table_version = table_version_from_options(version, timestamp)?;
+    let session_ctx = extract_session_ctx(ctx)?;
     let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
         .block_on(delta_provider_from_session_native(
             DeltaProviderFromSessionRequest {
-                session_ctx: &extract_session_ctx(ctx)?,
+                session_ctx: &session_ctx,
                 table_uri: &table_uri,
                 storage_options: storage,
                 table_version,
@@ -150,7 +158,7 @@ pub(crate) fn delta_table_provider_from_session(
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to build Delta provider: {err}")))?;
     let payload = PyDict::new(py);
-    payload.set_item("provider", provider_capsule(py, provider)?)?;
+    payload.set_item("provider", provider_capsule_from_session(py, &session_ctx, provider)?)?;
     payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
     if let Some(add_actions) = add_actions {
@@ -197,12 +205,15 @@ pub(crate) fn delta_table_provider_with_files(
         wrap_partition_values,
         schema_ipc,
     )?;
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let table_version = table_version_from_options(version, timestamp)?;
+    let session_ctx = extract_session_ctx(ctx)?;
     let (provider, snapshot, scan_config, add_actions) = runtime
         .block_on(delta_provider_with_files_native(
             DeltaProviderWithFilesRequest {
-                session_ctx: &extract_session_ctx(ctx)?,
+                session_ctx: &session_ctx,
                 table_uri: &table_uri,
                 storage_options: storage,
                 table_version,
@@ -217,7 +228,7 @@ pub(crate) fn delta_table_provider_with_files(
             ))
         })?;
     let payload = PyDict::new(py);
-    payload.set_item("provider", provider_capsule(py, provider)?)?;
+    payload.set_item("provider", provider_capsule_from_session(py, &session_ctx, provider)?)?;
     payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
     let add_payload = crate::delta_observability::add_action_payloads(&add_actions);
@@ -273,7 +284,9 @@ pub(crate) fn delta_snapshot_info(
         required_reader_features,
         required_writer_features,
     );
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let table_version = table_version_from_options(version, timestamp)?;
     let snapshot = runtime
         .block_on(delta_snapshot_info_native(
@@ -317,7 +330,9 @@ pub(crate) fn delta_add_actions(
         required_reader_features,
         required_writer_features,
     );
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let table_version = table_version_from_options(version, timestamp)?;
     let (snapshot, add_actions) = runtime
         .block_on(delta_add_actions_native(DeltaAddActionsRequest {
@@ -358,7 +373,9 @@ pub(crate) fn delta_data_checker(
         required_reader_features,
         required_writer_features,
     );
-    let runtime = runtime()?;
+    let runtime = async_runtime::shared_runtime().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to acquire shared Tokio runtime: {err}"))
+    })?;
     let table_version = table_version_from_options(version, timestamp)?;
     runtime
         .block_on(delta_data_check_native(DeltaDataCheckRequest {

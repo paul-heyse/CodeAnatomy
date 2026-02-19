@@ -566,7 +566,7 @@ class SemanticCompiler:
 
         dfs: list[DataFrame] = []
         for name in spec.table_names:
-            info = self.get_or_register(name)
+            info = self.ensure_registered(name)
             projected = self._project_to_schema(info.df, spec.schema)
             dfs.append(projected.with_column(spec.discriminator, lit(name)))
 
@@ -607,13 +607,13 @@ class SemanticCompiler:
         TableInfo
             Analyzed table information.
         """
-        return self._registry.resolve(
+        return self._registry.ensure_and_get(
             name,
             lambda: TableInfo.analyze(name, self.ctx.table(name), config=self._config),
         )
 
-    def get_or_register(self, name: str) -> TableInfo:
-        """Get or register a table.
+    def ensure_registered(self, name: str) -> TableInfo:
+        """Ensure a table is registered and return analyzed table info.
 
         Parameters
         ----------
@@ -625,7 +625,7 @@ class SemanticCompiler:
         TableInfo
             Table information.
         """
-        return self._registry.resolve(
+        return self._registry.ensure_and_get(
             name,
             lambda: TableInfo.analyze(name, self.ctx.table(name), config=self._config),
         )
@@ -658,7 +658,7 @@ class SemanticCompiler:
             from datafusion_engine.udf.expr import udf_expr
 
             self._require_udfs(("stable_id", "span_make"))
-            info = self.get_or_register(spec.table)
+            info = self.ensure_registered(spec.table)
             df = info.df
             names = set(self._schema_names(df))
 
@@ -768,7 +768,7 @@ class SemanticCompiler:
             if spec is not None:
                 return self.normalize_from_spec(spec)
 
-            info = self.get_or_register(table_name)
+            info = self.ensure_registered(table_name)
             sem = info.sem
             sem.require_unambiguous_spans(table=table_name)
             sem.require_evidence(table=table_name)
@@ -825,7 +825,7 @@ class SemanticCompiler:
 
             from datafusion_engine.udf.expr import udf_expr
 
-            info = self.get_or_register(table_name)
+            info = self.ensure_registered(table_name)
             self._require_udfs(("utf8_normalize",))
             df = info.df
 
@@ -969,8 +969,8 @@ class SemanticCompiler:
         ):
             from datafusion import lit
 
-            left_info = self.get_or_register(left_table)
-            right_info = self.get_or_register(right_table)
+            left_info = self.ensure_registered(left_table)
+            right_info = self.ensure_registered(right_table)
             left_info.sem.require_entity(table=left_table)
             right_info.sem.require_symbol_source(table=right_table)
 
@@ -1105,7 +1105,7 @@ class SemanticCompiler:
 
         dfs: list[DataFrame] = []
         for name in table_names:
-            info = self.get_or_register(name)
+            info = self.ensure_registered(name)
             dfs.append(info.df.with_column(discriminator, lit(name)))
 
         first_schema = dfs[0].schema()
@@ -1236,7 +1236,7 @@ class SemanticCompiler:
         ):
             from datafusion import col, functions
 
-            info = self.get_or_register(table_name)
+            info = self.ensure_registered(table_name)
             df = info.df
 
             # Build aggregation expressions
@@ -1291,7 +1291,7 @@ class SemanticCompiler:
         ):
             from datafusion import col, functions, lit
 
-            info = self.get_or_register(table_name)
+            info = self.ensure_registered(table_name)
 
             # Use window function to rank, then filter to rank 1
             partition_by = [col(c) for c in key_columns]

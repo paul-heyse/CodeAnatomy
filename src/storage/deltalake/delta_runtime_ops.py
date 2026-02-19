@@ -645,7 +645,14 @@ def read_delta_cdf(
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ):
+        if runtime_profile is not None:
+            ctx = runtime_profile.session_context()
+        else:
+            from datafusion import SessionContext
+
+            ctx = SessionContext()
         bundle = delta_cdf_table_provider(
+            ctx,
             table_path,
             storage_options=storage_options,
             log_storage_options=log_storage_options,
@@ -655,12 +662,6 @@ def read_delta_cdf(
             msg = "Delta CDF provider requires Rust control-plane support."
             raise ValueError(msg)
         provider = bundle.provider
-        if runtime_profile is not None:
-            ctx = runtime_profile.session_context()
-        else:
-            from datafusion import SessionContext
-
-            ctx = SessionContext()
         df = ctx.read_table(provider)
         if resolved_options.predicate:
             try:
@@ -932,6 +933,7 @@ def delta_json_scalar(value: object) -> object:
 
 
 def delta_cdf_table_provider(
+    ctx: SessionContext,
     table_path: str,
     *,
     storage_options: StorageOptions | None,
@@ -950,13 +952,14 @@ def delta_cdf_table_provider(
         from datafusion_engine.delta.control_plane_core import DeltaCdfRequest, delta_cdf_provider
 
         return delta_cdf_provider(
+            ctx,
             request=DeltaCdfRequest(
                 table_uri=table_path,
                 storage_options=storage or None,
                 version=None,
                 timestamp=None,
                 options=cdf_options_to_spec(options),
-            )
+            ),
         )
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None

@@ -90,6 +90,7 @@ def resolve_dataset_provider(request: DatasetResolutionRequest) -> DatasetResolu
     provider_kind = _provider_kind(request.location)
     if provider_kind == "delta_cdf":
         return _resolve_delta_cdf(
+            ctx=request.ctx,
             location=request.location,
             name=request.name,
         )
@@ -197,12 +198,13 @@ def _register_dataset_provider_bridge(
 
 def _resolve_delta_cdf(
     *,
+    ctx: SessionContext,
     location: DatasetLocation,
     name: str | None,
 ) -> DatasetResolution:
     contract = build_delta_cdf_contract(location)
     try:
-        bundle = delta_cdf_provider(request=contract.to_request())
+        bundle = delta_cdf_provider(ctx, request=contract.to_request())
     except (DataFusionEngineError, RuntimeError, TypeError, ValueError) as exc:
         msg = "Delta CDF control-plane failed; degraded Python fallback paths have been removed."
         raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc

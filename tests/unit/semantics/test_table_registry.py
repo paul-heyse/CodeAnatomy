@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
 from semantics.table_registry import TableRegistry
+
+if TYPE_CHECKING:
+    from semantics.compiler import TableInfo
 
 
 def test_table_registry_register_get_and_names() -> None:
     """TableRegistry stores and returns table entries deterministically."""
     registry = TableRegistry()
-    sentinel = object()
-    registry.register("b", sentinel)  # type: ignore[arg-type]
-    registry.register("a", sentinel)  # type: ignore[arg-type]
+    sentinel = cast("TableInfo", object())
+    registry.register("b", sentinel)
+    registry.register("a", sentinel)
 
     assert registry.get("a") is sentinel
     assert registry.get("missing") is None
@@ -23,23 +28,23 @@ def test_table_registry_register_get_and_names() -> None:
 def test_table_registry_rejects_duplicate_registration() -> None:
     """Registering the same table name twice raises ValueError."""
     registry = TableRegistry()
-    sentinel = object()
-    registry.register("dup", sentinel)  # type: ignore[arg-type]
+    sentinel = cast("TableInfo", object())
+    registry.register("dup", sentinel)
     with pytest.raises(ValueError, match="Table already registered"):
-        registry.register("dup", sentinel)  # type: ignore[arg-type]
+        registry.register("dup", sentinel)
 
 
-def test_table_registry_resolve_registers_once() -> None:
-    """Resolve should call factory only for first lookup."""
+def test_table_registry_ensure_and_get_registers_once() -> None:
+    """ensure_and_get should call factory only for first lookup."""
     registry = TableRegistry()
     calls = {"count": 0}
 
-    def _factory() -> object:
+    def _factory() -> TableInfo:
         calls["count"] += 1
-        return object()
+        return cast("TableInfo", object())
 
-    first = registry.resolve("node", _factory)  # type: ignore[arg-type]
-    second = registry.resolve("node", _factory)  # type: ignore[arg-type]
+    first = registry.ensure_and_get("node", _factory)
+    second = registry.ensure_and_get("node", _factory)
 
     assert first is second
     assert calls["count"] == 1

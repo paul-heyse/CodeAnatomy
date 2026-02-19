@@ -6,6 +6,8 @@ import importlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
+from datafusion_engine.extensions.required_entrypoints import REQUIRED_RUNTIME_ENTRYPOINTS
+
 
 @dataclass(frozen=True)
 class ExtensionContextPolicy:
@@ -14,7 +16,7 @@ class ExtensionContextPolicy:
     module_names: tuple[str, ...]
     entrypoint: str
     required_attr: str | None = None
-    allow_fallback: bool = True
+    allow_fallback: bool = False
     require_non_fallback: bool = False
 
 
@@ -50,7 +52,7 @@ class ExtensionEntrypointInvocation:
     internal_ctx: object | None = None
     args: Sequence[object] = ()
     kwargs: Mapping[str, object] | None = None
-    allow_fallback: bool = True
+    allow_fallback: bool = False
     fallback_ctx_factory: Callable[[object], object | None] | None = None
 
 
@@ -84,7 +86,7 @@ def select_context_candidate(
     ctx: object,
     *,
     internal_ctx: object | None = None,
-    allow_fallback: bool = True,
+    allow_fallback: bool = False,
     fallback_ctx: object | None = None,
 ) -> tuple[tuple[str, object], ...]:
     """Return ordered context candidates for extension entrypoints.
@@ -132,13 +134,14 @@ def invoke_entrypoint_with_adapted_context(
         msg = f"Extension entrypoint {entrypoint} is unavailable."
         raise TypeError(msg)
 
+    allow_fallback = invocation.allow_fallback and entrypoint not in REQUIRED_RUNTIME_ENTRYPOINTS
     fallback_ctx: object | None = None
-    if invocation.allow_fallback and callable(invocation.fallback_ctx_factory):
+    if allow_fallback and callable(invocation.fallback_ctx_factory):
         fallback_ctx = invocation.fallback_ctx_factory(module)
     candidates = select_context_candidate(
         invocation.ctx,
         internal_ctx=invocation.internal_ctx,
-        allow_fallback=invocation.allow_fallback,
+        allow_fallback=allow_fallback,
         fallback_ctx=fallback_ctx,
     )
     resolved_kwargs: dict[str, object] = (

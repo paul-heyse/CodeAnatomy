@@ -33,6 +33,11 @@ pub struct DfTableFunctionV1 {
 
 #[repr(C)]
 #[derive(StableAbi)]
+/// Plugin export surface for ABI major/minor compatibility.
+///
+/// Compatibility policy:
+/// - Changes to existing field names/types/order are breaking and require ABI-major bump.
+/// - New fields must be appended at the end and coordinated with host compatibility checks.
 pub struct DfPluginExportsV1 {
     pub table_provider_names: RVec<RString>,
     pub udf_bundle: DfUdfBundleV1,
@@ -49,6 +54,7 @@ pub struct DfPluginMod {
     pub exports: extern "C" fn() -> DfPluginExportsV1,
     pub udf_bundle_with_options:
         extern "C" fn(options_json: ROption<RString>) -> DfResult<DfUdfBundleV1>,
+    pub relation_planner_names: extern "C" fn() -> RVec<RString>,
     #[sabi(last_prefix_field)]
     pub create_table_provider: extern "C" fn(
         name: RStr<'_>,

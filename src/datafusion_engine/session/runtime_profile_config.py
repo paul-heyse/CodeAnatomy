@@ -475,6 +475,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
     function_factory_hook: Callable[[SessionContext], None] | None = None
     expr_planner_names: tuple[str, ...] = ("codeanatomy_domain",)
     expr_planner_hook: Callable[[SessionContext], None] | None = None
+    type_planner_hook: Callable[[SessionContext], None] | None = None
     physical_expr_adapter_factory: object | None = None
     schema_adapter_factories: Mapping[str, object] = msgspec.field(default_factory=dict)
     udf_catalog_policy: Literal["default", "strict"] = "default"
@@ -636,6 +637,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
             "function_factory_hook": self._callable_identity(self.function_factory_hook),
             "expr_planner_names": list(self.expr_planner_names),
             "expr_planner_hook": self._callable_identity(self.expr_planner_hook),
+            "type_planner_hook": self._callable_identity(self.type_planner_hook),
             "physical_expr_adapter_factory": self._callable_identity(
                 self.physical_expr_adapter_factory
             ),

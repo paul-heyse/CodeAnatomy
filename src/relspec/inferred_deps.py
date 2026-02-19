@@ -121,13 +121,7 @@ class _DataFusionLineagePort:
 
         if not isinstance(bundle, DataFusionPlanArtifact):
             return frozenset()
-        snapshot: Mapping[str, object] | object = getattr(
-            getattr(bundle, "artifacts", None),
-            "udf_snapshot",
-            {},
-        )
-        if not isinstance(snapshot, Mapping):
-            snapshot = {"status": "unavailable"}
+        snapshot = _get_udf_snapshot(bundle)
         resolved = resolve_required_udfs_from_bundle(bundle, snapshot=snapshot)
         return frozenset(str(name) for name in resolved)
 
@@ -162,6 +156,19 @@ _DEFAULT_LINEAGE_PORT = _DataFusionLineagePort()
 _DEFAULT_DATASET_SPEC_PROVIDER = _DefaultDatasetSpecProvider()
 
 
+def _get_udf_snapshot(bundle: object) -> Mapping[str, object]:
+    """Extract udf_snapshot from bundle.artifacts with safe fallbacks.
+
+    Returns:
+        Mapping[str, object]: Snapshot payload, or ``{"status": "unavailable"}``.
+    """
+    artifacts = getattr(bundle, "artifacts", None)
+    raw = getattr(artifacts, "udf_snapshot", {})
+    if not isinstance(raw, Mapping):
+        return {"status": "unavailable"}
+    return raw
+
+
 def infer_deps_from_plan_bundle(
     inputs: InferredDepsInputs,
 ) -> InferredDeps:
@@ -184,54 +191,57 @@ def infer_deps_from_plan_bundle(
         TypeError: If the lineage adapter returns a payload that is not `LineageReport`.
 
     """
-    plan_bundle = inputs.plan_bundle
-    lineage_port = inputs.lineage_port or _DEFAULT_LINEAGE_PORT
+    from obs.otel import SCOPE_PIPELINE, stage_span
 
-    # Extract lineage from the optimized logical plan
-    lineage_snapshot = inputs.snapshot or plan_bundle.artifacts.udf_snapshot
-    lineage_obj = lineage_port.extract_lineage(
-        plan_bundle.optimized_logical_plan,
-        udf_snapshot=lineage_snapshot if isinstance(lineage_snapshot, Mapping) else None,
-    )
-    if not isinstance(lineage_obj, LineageReport):
-        msg = "LineagePort.extract_lineage must return LineageReport."
-        raise TypeError(msg)
-    lineage = lineage_obj
+    with stage_span("lineage_infer", stage="relspec", scope_name=SCOPE_PIPELINE):
+        plan_bundle = inputs.plan_bundle
+        lineage_port = inputs.lineage_port or _DEFAULT_LINEAGE_PORT
 
-    # Map lineage to InferredDeps format
-    tables = _expand_nested_inputs(lineage.referenced_tables)
-    columns_by_table = dict(lineage.required_columns_by_dataset)
+        # Extract lineage from the optimized logical plan.
+        default_snapshot = _get_udf_snapshot(plan_bundle)
+        lineage_snapshot = inputs.snapshot or default_snapshot
+        lineage_obj = lineage_port.extract_lineage(
+            plan_bundle.optimized_logical_plan,
+            udf_snapshot=lineage_snapshot if isinstance(lineage_snapshot, Mapping) else None,
+        )
+        if not isinstance(lineage_obj, LineageReport):
+            msg = "LineagePort.extract_lineage must return LineageReport."
+            raise TypeError(msg)
+        lineage = lineage_obj
 
-    # Compute required types and metadata from registry
-    required_types = _required_types_from_registry(
-        columns_by_table,
-        ctx=inputs.ctx,
-        dataset_spec_provider=inputs.dataset_spec_provider,
-    )
-    required_metadata = _required_metadata_for_tables(
-        columns_by_table,
-        ctx=inputs.ctx,
-        dataset_spec_provider=inputs.dataset_spec_provider,
-    )
+        # Map lineage to InferredDeps format.
+        tables = _expand_nested_inputs(lineage.referenced_tables)
+        columns_by_table = dict(lineage.required_columns_by_dataset)
 
-    resolved_udfs = _resolve_required_udfs(
-        inputs=inputs,
-        plan_bundle=plan_bundle,
-        lineage_port=lineage_port,
-    )
+        required_types = _required_types_from_registry(
+            columns_by_table,
+            ctx=inputs.ctx,
+            dataset_spec_provider=inputs.dataset_spec_provider,
+        )
+        required_metadata = _required_metadata_for_tables(
+            columns_by_table,
+            ctx=inputs.ctx,
+            dataset_spec_provider=inputs.dataset_spec_provider,
+        )
 
-    return InferredDeps(
-        task_name=inputs.task_name,
-        output=inputs.output,
-        inputs=tables,
-        required_columns=columns_by_table,
-        required_types=required_types,
-        required_metadata=required_metadata,
-        plan_fingerprint=plan_bundle.plan_fingerprint,
-        required_udfs=resolved_udfs,
-        required_rewrite_tags=lineage.required_rewrite_tags,
-        scans=getattr(lineage, "scans", ()),
-    )
+        resolved_udfs = _resolve_required_udfs(
+            inputs=inputs,
+            plan_bundle=plan_bundle,
+            lineage_port=lineage_port,
+        )
+
+        return InferredDeps(
+            task_name=inputs.task_name,
+            output=inputs.output,
+            inputs=tables,
+            required_columns=columns_by_table,
+            required_types=required_types,
+            required_metadata=required_metadata,
+            plan_fingerprint=plan_bundle.plan_fingerprint,
+            required_udfs=resolved_udfs,
+            required_rewrite_tags=lineage.required_rewrite_tags,
+            scans=getattr(lineage, "scans", ()),
+        )
 
 
 def _resolve_required_udfs(

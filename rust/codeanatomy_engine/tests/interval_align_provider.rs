@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::path::Path;
 
 use arrow::array::{Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -51,7 +52,7 @@ fn interval_inputs() -> (Arc<Schema>, Vec<RecordBatch>, Arc<Schema>, Vec<RecordB
 }
 
 #[tokio::test]
-async fn interval_align_provider_reports_inexact_pushdown() {
+async fn interval_align_provider_reports_exact_pushdown_for_base_columns() {
     let (left_schema, left_batches, right_schema, right_batches) = interval_inputs();
     let provider = build_interval_align_provider(
         left_schema,
@@ -66,7 +67,45 @@ async fn interval_align_provider_reports_inexact_pushdown() {
     let statuses = provider
         .supports_filters_pushdown(&[&filter])
         .expect("statuses");
+    assert_eq!(statuses, vec![TableProviderFilterPushDown::Exact]);
+}
+
+#[tokio::test]
+async fn interval_align_provider_reports_inexact_for_match_metadata() {
+    let (left_schema, left_batches, right_schema, right_batches) = interval_inputs();
+    let provider = build_interval_align_provider(
+        left_schema,
+        left_batches,
+        right_schema,
+        right_batches,
+        IntervalAlignProviderConfig::default(),
+    )
+    .await
+    .expect("provider");
+    let filter = col("match_score").gt(lit(0.1_f64));
+    let statuses = provider
+        .supports_filters_pushdown(&[&filter])
+        .expect("statuses");
     assert_eq!(statuses, vec![TableProviderFilterPushDown::Inexact]);
+}
+
+#[tokio::test]
+async fn interval_align_provider_reports_unsupported_for_volatile_filter() {
+    let (left_schema, left_batches, right_schema, right_batches) = interval_inputs();
+    let provider = build_interval_align_provider(
+        left_schema,
+        left_batches,
+        right_schema,
+        right_batches,
+        IntervalAlignProviderConfig::default(),
+    )
+    .await
+    .expect("provider");
+    let filter = datafusion::functions::expr_fn::random().gt(lit(0.5_f64));
+    let statuses = provider
+        .supports_filters_pushdown(&[&filter])
+        .expect("statuses");
+    assert_eq!(statuses, vec![TableProviderFilterPushDown::Unsupported]);
 }
 
 #[tokio::test]
@@ -112,4 +151,19 @@ async fn interval_align_execute_returns_left_join_rows() {
     assert!(schema.field_with_name("match_kind").is_ok());
     let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
     assert_eq!(total_rows, 2);
+}
+
+#[test]
+fn interval_align_provider_avoids_bare_session_context_new() {
+    let source = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("providers")
+            .join("interval_align_provider.rs"),
+    )
+    .expect("read interval_align_provider.rs");
+    assert!(
+        !source.contains("SessionContext::new()"),
+        "interval align provider must not build bare SessionContext::new()"
+    );
 }

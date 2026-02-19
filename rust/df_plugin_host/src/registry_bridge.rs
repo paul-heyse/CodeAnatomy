@@ -16,6 +16,28 @@ use df_plugin_api::{caps, DfResult};
 use crate::loader::PluginHandle;
 
 impl PluginHandle {
+    pub fn relation_planner_names(&self) -> Result<Vec<String>> {
+        let manifest = self.manifest();
+        let exported = (self.module().relation_planner_names())()
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>();
+        let advertises_capability = (manifest.capabilities & caps::RELATION_PLANNER) != 0;
+        if advertises_capability && exported.is_empty() {
+            return Err(DataFusionError::Plan(format!(
+                "Plugin {name} advertises relation_planner capability without exported planner names.",
+                name = manifest.plugin_name
+            )));
+        }
+        if !advertises_capability && !exported.is_empty() {
+            return Err(DataFusionError::Plan(format!(
+                "Plugin {name} exports relation planner names without relation_planner capability.",
+                name = manifest.plugin_name
+            )));
+        }
+        Ok(exported)
+    }
+
     fn install_delta_plan_codecs(ctx: &SessionContext) {
         let state_ref = ctx.state_ref();
         let mut state = state_ref.write();

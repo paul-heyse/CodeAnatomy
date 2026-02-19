@@ -55,6 +55,31 @@ if TYPE_CHECKING:
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
 
 
+def _plan_shape_snapshot(df: DataFrame) -> dict[str, str]:
+    """Capture available planning surfaces without collecting results.
+
+    Returns:
+        dict[str, str]: Surface labels mapped to observed plan shape state.
+    """
+    snapshot: dict[str, str] = {}
+    for label, attr in (
+        ("logical", "logical_plan"),
+        ("optimized", "optimized_logical_plan"),
+        ("physical", "execution_plan"),
+    ):
+        method = getattr(df, attr, None)
+        if not callable(method):
+            snapshot[label] = "unavailable"
+            continue
+        try:
+            plan = method()
+        except (RuntimeError, TypeError, ValueError):
+            snapshot[label] = "error"
+            continue
+        snapshot[label] = type(plan).__name__ if plan is not None else "none"
+    return snapshot
+
+
 def _validate_required_rewrite_tags(
     snapshot: Mapping[str, object],
     *,
@@ -226,6 +251,7 @@ class DataFusionExecutionFacade:
         ) as span:
             try:
                 df = builder(self.ctx)
+                plan_shapes = _plan_shape_snapshot(df)
                 bundle = build_plan_artifact(
                     self.ctx,
                     df,
@@ -256,6 +282,9 @@ class DataFusionExecutionFacade:
                 {
                     "plan_fingerprint": bundle.plan_fingerprint,
                     "plan_identity_hash": bundle.plan_identity_hash,
+                    "plan_shape_logical": plan_shapes.get("logical", "unknown"),
+                    "plan_shape_optimized": plan_shapes.get("optimized", "unknown"),
+                    "plan_shape_physical": plan_shapes.get("physical", "unknown"),
                     "duration_s": duration_s,
                 },
             )

@@ -14,12 +14,13 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyCapsuleMethods, PyDict};
 use serde_json::{Map as JsonMap, Value as JsonValue};
+use tracing::instrument;
 
 use crate::delta_control_plane::scan_config_from_session as delta_scan_config_from_session_native;
 use crate::delta_observability::{scan_config_payload, scan_config_schema_ipc};
 
+use super::delta_session_bridge::install_delta_plan_codecs_inner;
 use super::helpers::extract_session_ctx;
-use super::session_utils::install_delta_plan_codecs_inner;
 
 const PLUGIN_HANDLE_CAPSULE_NAME: &str = "datafusion_ext.DfPluginHandle";
 
@@ -156,6 +157,7 @@ fn udf_config_payload_from_ctx(ctx: &SessionContext) -> JsonValue {
 }
 
 #[pyfunction]
+#[instrument(level = "info", skip_all, fields(path = %path))]
 pub(crate) fn load_df_plugin(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
     let handle = load_plugin(Path::new(&path)).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to load DataFusion plugin {path:?}: {err}"))
@@ -166,6 +168,7 @@ pub(crate) fn load_df_plugin(py: Python<'_>, path: String) -> PyResult<Py<PyAny>
 }
 
 #[pyfunction]
+#[instrument(level = "info", skip_all)]
 #[pyo3(signature = (ctx, plugin, options_json = None))]
 pub(crate) fn register_df_plugin_udfs(
     py: Python<'_>,
@@ -242,6 +245,7 @@ pub(crate) fn create_df_plugin_table_provider(
 }
 
 #[pyfunction]
+#[instrument(skip(py, ctx, plugin, table_names, options_json))]
 pub(crate) fn register_df_plugin_table_providers(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
@@ -290,6 +294,7 @@ pub(crate) fn register_df_plugin_table_providers(
 }
 
 #[pyfunction]
+#[instrument(level = "info", skip_all)]
 pub(crate) fn register_df_plugin(
     py: Python<'_>,
     ctx: &Bound<'_, PyAny>,
@@ -385,6 +390,10 @@ pub(crate) fn plugin_manifest(py: Python<'_>, path: Option<String>) -> PyResult<
     payload.set_item("plugin_version", manifest.plugin_version.to_string())?;
     payload.set_item("build_id", manifest.build_id.to_string())?;
     payload.set_item("capabilities", manifest.capabilities)?;
+    let relation_planners = handle
+        .relation_planner_names()
+        .map_err(|err| PyRuntimeError::new_err(format!("Failed to read relation planners: {err}")))?;
+    payload.set_item("relation_planners", relation_planners)?;
     let features: Vec<String> = manifest
         .features
         .iter()

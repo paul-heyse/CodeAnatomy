@@ -19,8 +19,10 @@ from datafusion_engine.session._session_constants import (
     parse_major_version,
 )
 from serde_msgspec import StructBaseStrict
+from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
+    from datafusion_engine.session.planning_surface_policy import PlanningSurfacePolicyV1
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 __all__ = [
@@ -41,8 +43,12 @@ __all__ = [
     "DataFusionJoinPolicy",
     "DataFusionSettingsContract",
     "SchemaHardeningProfile",
+    "cache_manager_contract_for_profile",
     "effective_datafusion_engine_major_version",
     "effective_datafusion_engine_version",
+    "feature_gate_parity_hash",
+    "feature_gate_parity_settings",
+    "planning_surface_policy_for_profile",
     "resolved_config_policy",
     "resolved_schema_hardening",
 ]
@@ -137,6 +143,40 @@ def effective_datafusion_engine_major_version(
     if version is None:
         return None
     return parse_major_version(version)
+
+
+def planning_surface_policy_for_profile(
+    profile: DataFusionRuntimeProfile,
+) -> PlanningSurfacePolicyV1:
+    """Compile typed planning policy payload from runtime profile policies.
+
+    Returns:
+        PlanningSurfacePolicyV1: Typed planning policy payload.
+    """
+    from datafusion_engine.session.planning_surface_policy import (
+        planning_surface_policy_from_bundle,
+    )
+
+    return planning_surface_policy_from_bundle(profile.policies)
+
+
+def cache_manager_contract_for_profile(
+    profile: DataFusionRuntimeProfile,
+) -> Mapping[str, object]:
+    """Compile typed cache-manager contract payload from a runtime profile.
+
+    Returns:
+        Mapping[str, object]: Cache-manager contract payload.
+    """
+    from datafusion_engine.session.cache_manager_contract import (
+        cache_manager_contract_from_settings,
+    )
+
+    contract = cache_manager_contract_from_settings(
+        enabled=profile.features.enable_cache_manager,
+        settings=profile.settings_payload(),
+    )
+    return contract.payload()
 
 
 class DataFusionConfigPolicy(StructBaseStrict, frozen=True):
@@ -242,6 +282,29 @@ class DataFusionFeatureGates(StructBaseStrict, frozen=True):
             Deterministic fingerprint for the feature gates.
         """
         return config_fingerprint(self.fingerprint_payload())
+
+
+_FEATURE_GATE_PARITY_KEYS: tuple[str, ...] = (
+    "datafusion.optimizer.enable_dynamic_filter_pushdown",
+    "datafusion.optimizer.enable_join_dynamic_filter_pushdown",
+    "datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown",
+    "datafusion.optimizer.enable_topk_dynamic_filter_pushdown",
+    "datafusion.optimizer.enable_sort_pushdown",
+    "datafusion.optimizer.allow_symmetric_joins_without_pruning",
+)
+
+
+def feature_gate_parity_settings(feature_gates: DataFusionFeatureGates) -> dict[str, str]:
+    """Return the cross-language parity subset for feature-gate settings."""
+    settings = feature_gates.settings()
+    return {key: settings[key] for key in _FEATURE_GATE_PARITY_KEYS}
+
+
+def feature_gate_parity_hash(feature_gates: DataFusionFeatureGates) -> str:
+    """Return deterministic parity hash for feature-gate contract checks."""
+    settings = feature_gate_parity_settings(feature_gates)
+    payload = "|".join(f"{key}={settings[key]}" for key in sorted(settings))
+    return hash_sha256_hex(payload.encode("utf-8"))
 
 
 class DataFusionJoinPolicy(StructBaseStrict, frozen=True):

@@ -10,7 +10,6 @@ from semantics import pipeline_cache as _pipeline_cache
 from semantics import pipeline_dispatch as _pipeline_dispatch
 from semantics.diagnostics import semantic_diagnostic_view_builders
 from semantics.quality import QualityRelationshipSpec
-from semantics.specs import RelationshipSpec
 from semantics.view_kinds import ViewKind
 from utils.hashing import hash_msgpack_canonical
 
@@ -26,18 +25,28 @@ if TYPE_CHECKING:
     from semantics.registry import SemanticNormalizationSpec, SemanticSpecIndex
 
 
-def _cache_policy_for(
+def cache_policy_for(
     name: str,
     policy: Mapping[str, CachePolicy] | None,
 ) -> CachePolicy:
+    """Resolve cache policy for a semantic view name.
+
+    Returns:
+        CachePolicy: Effective cache policy for ``name``.
+    """
     return _pipeline_cache.cache_policy_for(name, policy)
 
 
-def _normalize_cache_policy(policy: str) -> CachePolicy:
+def normalize_cache_policy(policy: str) -> CachePolicy:
+    """Normalize a cache policy string to the canonical policy literal.
+
+    Returns:
+        CachePolicy: Canonical cache policy value.
+    """
     return _pipeline_cache.normalize_cache_policy(policy)
 
 
-def _bundle_for_builder(
+def bundle_for_builder(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
@@ -71,7 +80,9 @@ def _bundle_for_builder(
     ir_hash = semantic_ir.ir_hash
     if model_hash is None or ir_hash is None:
         return bundle
-    base_identity = bundle.plan_identity_hash or bundle.plan_fingerprint
+    from semantics.plans import runtime_plan_identity
+
+    base_identity = runtime_plan_identity(bundle)
     cache_payload = {
         "base_plan_hash": base_identity,
         "view_name": view_name,
@@ -129,13 +140,12 @@ def _normalize_spec_builder(
 
 
 def _relationship_builder(
-    spec: RelationshipSpec | QualityRelationshipSpec,
+    spec: QualityRelationshipSpec,
     *,
     config: SemanticConfig | None,
-    use_cdf: bool,
     join_group: SemanticIRJoinGroup | None = None,
 ) -> DataFrameBuilder:
-    """Build a DataFrame builder from a declarative RelationshipSpec.
+    """Build a DataFrame builder from a declarative relationship spec.
 
     Parameters
     ----------
@@ -143,8 +153,6 @@ def _relationship_builder(
         The declarative relationship specification.
     config
         Optional semantic configuration.
-    use_cdf
-        Whether to enable CDF-aware incremental joins.
     join_group
         Optional join-fusion group for shared joins.
 
@@ -155,7 +163,7 @@ def _relationship_builder(
     """
 
     def _builder(inner_ctx: SessionContext) -> DataFrame:
-        from semantics.compiler import RelationOptions, SemanticCompiler
+        from semantics.compiler import SemanticCompiler
         from semantics.table_registry import TableRegistry
 
         compiler = SemanticCompiler(
@@ -163,37 +171,24 @@ def _relationship_builder(
             config=config,
             table_registry=TableRegistry(),
         )
-        if isinstance(spec, QualityRelationshipSpec):
-            file_quality_df = None
-            if spec.join_file_quality:
-                from semantics.signals import build_file_quality_view
+        file_quality_df = None
+        if spec.join_file_quality:
+            from semantics.signals import build_file_quality_view
 
-                try:
-                    file_quality_df = inner_ctx.table(spec.file_quality_view)
-                except (KeyError, OSError, RuntimeError, TypeError, ValueError):
-                    file_quality_df = build_file_quality_view(inner_ctx)
-            if join_group is None:
-                return compiler.compile_relationship_with_quality(
-                    spec,
-                    file_quality_df=file_quality_df,
-                )
-            joined = inner_ctx.table(join_group.name)
-            return compiler.compile_relationship_from_join(
-                joined,
+            try:
+                file_quality_df = inner_ctx.table(spec.file_quality_view)
+            except (KeyError, OSError, RuntimeError, TypeError, ValueError):
+                file_quality_df = build_file_quality_view(inner_ctx)
+        if join_group is None:
+            return compiler.compile_relationship_with_quality(
                 spec,
                 file_quality_df=file_quality_df,
             )
-
-        return compiler.relate(
-            spec.left_table,
-            spec.right_table,
-            options=RelationOptions(
-                strategy_hint=spec.to_strategy_type(),
-                filter_sql=spec.filter_sql,
-                origin=spec.origin,
-                use_cdf=use_cdf,
-                output_name=spec.name,
-            ),
+        joined = inner_ctx.table(join_group.name)
+        return compiler.compile_relationship_from_join(
+            joined,
+            spec,
+            file_quality_df=file_quality_df,
         )
 
     return _builder
@@ -262,7 +257,7 @@ def _finalize_df_to_contract(
     return df.select(*selections)
 
 
-def _finalize_output_builder(
+def finalize_output_builder(
     view_name: str,
     builder: DataFrameBuilder,
 ) -> DataFrameBuilder:
@@ -379,9 +374,17 @@ def _bytecode_line_table_builder(
     return _builder
 
 
-def _ordered_semantic_specs(
+def ordered_semantic_specs(
     specs: Sequence[SemanticSpecIndex],
 ) -> tuple[SemanticSpecIndex, ...]:
+    """Topologically order semantic specs by declared dependencies.
+
+    Returns:
+        tuple[SemanticSpecIndex, ...]: Deterministic topological ordering.
+
+    Raises:
+        ValueError: If duplicate names or dependency cycles are detected.
+    """
     spec_by_name: dict[str, SemanticSpecIndex] = {}
     for spec in specs:
         if spec.name in spec_by_name:
@@ -416,8 +419,9 @@ def _ordered_semantic_specs(
 
 
 @dataclass(frozen=True)
-class _SemanticSpecContext:
-    normalization_by_output: Mapping[str, SemanticNormalizationSpec]
+class SemanticSpecContext:
+    """Resolved context required to build semantic views from spec indices."""
+
     relationship_by_name: Mapping[str, QualityRelationshipSpec]
     input_mapping: Mapping[str, str]
     config: SemanticConfig | None
@@ -429,11 +433,16 @@ class _SemanticSpecContext:
     manifest: SemanticProgramManifest
 
 
-def _semantic_view_specs(
+def semantic_view_specs(
     *,
     ordered_specs: Sequence[SemanticSpecIndex],
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> list[tuple[str, DataFrameBuilder]]:
+    """Build the ordered semantic view-spec to builder mapping.
+
+    Returns:
+        list[tuple[str, DataFrameBuilder]]: Ordered semantic view builder entries.
+    """
     return _pipeline_dispatch.semantic_view_specs(
         ordered_specs=ordered_specs,
         context=context,
@@ -450,15 +459,15 @@ def _semantic_view_specs(
 
 
 def _dispatch_from_registry(
-    registry_factory: Callable[[_SemanticSpecContext], Mapping[str, DataFrameBuilder]],
+    registry_factory: Callable[[SemanticSpecContext], Mapping[str, DataFrameBuilder]],
     context_label: str,
     *,
     finalize: bool = False,
-) -> Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]:
+) -> Callable[[SemanticSpecIndex, SemanticSpecContext], DataFrameBuilder]:
     return _pipeline_dispatch.dispatch_from_registry(
         registry_factory,
         context_label,
-        finalize_builder=_finalize_output_builder if finalize else None,
+        finalize_builder=finalize_output_builder if finalize else None,
     )
 
 
@@ -469,11 +478,9 @@ def _dispatch_from_registry(
 
 def _builder_for_normalize_spec(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
-    norm_spec = context.normalization_by_output.get(
-        spec.name
-    ) or context.normalization_spec_for_output(spec.name)
+    norm_spec = context.normalization_spec_for_output(spec.name)
     if norm_spec is None:
         msg = f"Missing normalization spec for output {spec.name!r}."
         raise KeyError(msg)
@@ -486,7 +493,7 @@ def _builder_for_normalize_spec(
 
 def _builder_for_scip_normalize_spec(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     _ = spec
     return _scip_norm_builder(
@@ -497,7 +504,7 @@ def _builder_for_scip_normalize_spec(
 
 def _builder_for_bytecode_line_index_spec(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     line_table = spec.inputs[0] if spec.inputs else "py_bc_line_table"
     line_index = spec.inputs[1] if len(spec.inputs) > 1 else "file_line_index_v1"
@@ -508,7 +515,7 @@ def _builder_for_bytecode_line_index_spec(
 
 
 def _span_unnest_registry(
-    _context: _SemanticSpecContext,
+    _context: SemanticSpecContext,
 ) -> Mapping[str, DataFrameBuilder]:
     """Return the span-unnest builder registry (lazy imports)."""
     from semantics.span_unnest import (
@@ -527,7 +534,7 @@ def _span_unnest_registry(
 
 
 def _symtable_registry(
-    _context: _SemanticSpecContext,
+    _context: SemanticSpecContext,
 ) -> Mapping[str, DataFrameBuilder]:
     """Return the symtable builder registry (lazy imports)."""
     from datafusion_engine.symtable import views as symtable_views
@@ -543,7 +550,7 @@ def _symtable_registry(
 
 def _builder_for_join_group_spec(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     join_group = context.join_groups_by_name.get(spec.name)
     if join_group is None:
@@ -554,7 +561,7 @@ def _builder_for_join_group_spec(
 
 def _builder_for_relate_spec(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     rel_spec = context.relationship_by_name.get(spec.name)
     if rel_spec is None:
@@ -564,38 +571,37 @@ def _builder_for_relate_spec(
     return _relationship_builder(
         rel_spec,
         config=context.config,
-        use_cdf=context.use_cdf,
         join_group=join_group,
     )
 
 
 def _builder_for_union_edges_spec(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     return _union_edges_builder(list(spec.inputs), config=context.config)
 
 
 def _builder_for_union_nodes_spec(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     return _union_nodes_builder(list(spec.inputs), config=context.config)
 
 
 def _builder_for_projection_spec(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     builder = _relation_output_builder(
         relationship_names=tuple(context.relationship_by_name),
         relationship_by_name=context.relationship_by_name,
     )
-    return _finalize_output_builder(spec.name, builder)
+    return finalize_output_builder(spec.name, builder)
 
 
 def _diagnostic_registry(
-    _context: _SemanticSpecContext,
+    _context: SemanticSpecContext,
 ) -> Mapping[str, DataFrameBuilder]:
     """Return the diagnostic builder registry."""
     return semantic_diagnostic_view_builders()
@@ -603,20 +609,20 @@ def _diagnostic_registry(
 
 def _builder_for_export_spec(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     _ = context
     if spec.name == "dim_exported_defs":
         from semantics.incremental.export_builders import exported_defs_df_builder
 
-        return _finalize_output_builder(spec.name, exported_defs_df_builder)
+        return finalize_output_builder(spec.name, exported_defs_df_builder)
     msg = f"Unsupported export output {spec.name!r}."
     raise ValueError(msg)
 
 
 def _builder_for_normalize_kind(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     if spec.kind == ViewKind.NORMALIZE:
         return _builder_for_normalize_spec(spec, context)
@@ -632,7 +638,7 @@ def _builder_for_normalize_kind(
 
 def _builder_for_derive_kind(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     if spec.kind == ViewKind.SYMTABLE:
         return _dispatch_from_registry(_symtable_registry, "symtable")(spec, context)
@@ -642,7 +648,7 @@ def _builder_for_derive_kind(
 
 def _builder_for_relate_kind(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     if spec.kind == ViewKind.JOIN_GROUP:
         return _builder_for_join_group_spec(spec, context)
@@ -654,7 +660,7 @@ def _builder_for_relate_kind(
 
 def _builder_for_union_kind(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     if spec.kind == ViewKind.UNION_EDGES:
         return _builder_for_union_edges_spec(spec, context)
@@ -666,7 +672,7 @@ def _builder_for_union_kind(
 
 def _builder_for_project_kind(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     if spec.kind == ViewKind.PROJECTION:
         return _builder_for_projection_spec(spec, context)
@@ -687,7 +693,7 @@ def _builder_for_project_kind(
 
 def _builder_for_diagnostic_kind(
     spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     if spec.kind == ViewKind.DIAGNOSTIC:
         return _dispatch_from_registry(_diagnostic_registry, "diagnostic", finalize=True)(
@@ -699,7 +705,7 @@ def _builder_for_diagnostic_kind(
 
 
 _CONSOLIDATED_BUILDER_HANDLERS: dict[
-    str, Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]
+    str, Callable[[SemanticSpecIndex, SemanticSpecContext], DataFrameBuilder]
 ] = {
     "normalize": _builder_for_normalize_kind,
     "derive": _builder_for_derive_kind,
@@ -713,7 +719,7 @@ _CONSOLIDATED_BUILDER_HANDLERS: dict[
 def _builder_for_semantic_spec(
     spec: SemanticSpecIndex,
     *,
-    context: _SemanticSpecContext,
+    context: SemanticSpecContext,
 ) -> DataFrameBuilder:
     return _pipeline_dispatch.builder_for_semantic_spec(
         spec,
@@ -724,3 +730,14 @@ def _builder_for_semantic_spec(
 
 def _input_table(input_mapping: Mapping[str, str], name: str) -> str:
     return input_mapping.get(name, name)
+
+
+__all__ = [
+    "SemanticSpecContext",
+    "bundle_for_builder",
+    "cache_policy_for",
+    "finalize_output_builder",
+    "normalize_cache_policy",
+    "ordered_semantic_specs",
+    "semantic_view_specs",
+]

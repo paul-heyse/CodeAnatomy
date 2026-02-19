@@ -80,9 +80,19 @@ class AsyncUdfPolicy:
 
 
 _EXPECTED_PLUGIN_ABI_MAJOR = 1
-_EXPECTED_PLUGIN_ABI_MINOR = 1
+_EXPECTED_PLUGIN_ABI_MINOR = 2
 _REGISTRY_SNAPSHOT_VERSION = 1
 _RUNTIME_INSTALL_ENTRYPOINT = "install_codeanatomy_runtime"
+_EXPECTED_RUNTIME_INSTALL_CONTRACT_VERSION = 4
+_REQUIRED_MODULAR_ENTRYPOINTS: tuple[str, ...] = (
+    "register_codeanatomy_udfs",
+    "install_function_factory",
+    "install_expr_planners",
+    "install_relation_planner",
+    "install_type_planner",
+    "registry_snapshot",
+    "registry_snapshot_msgpack",
+)
 
 
 def _module_supports_runtime_install(module: ModuleType) -> bool:
@@ -166,7 +176,7 @@ def _install_codeanatomy_runtime_snapshot(
         registries=registries,
     )
     payload_mapping["snapshot_msgpack"] = bytes(snapshot_msgpack)
-    payload_mapping.setdefault("contract_version", 3)
+    payload_mapping.setdefault("contract_version", _EXPECTED_RUNTIME_INSTALL_CONTRACT_VERSION)
     payload_mapping.setdefault("runtime_install_mode", "unified")
     payload_mapping.setdefault("udf_installed", True)
     payload_mapping.setdefault("function_factory_installed", True)
@@ -177,6 +187,22 @@ def _install_codeanatomy_runtime_snapshot(
     )
     payload_mapping["snapshot"] = normalized_snapshot
     normalized_payload = normalize_runtime_install_snapshot(payload_mapping)
+    if normalized_payload.contract_version != _EXPECTED_RUNTIME_INSTALL_CONTRACT_VERSION:
+        msg = (
+            "Rust runtime install contract_version is incompatible: "
+            f"expected={_EXPECTED_RUNTIME_INSTALL_CONTRACT_VERSION} "
+            f"actual={normalized_payload.contract_version}"
+        )
+        raise RuntimeError(msg)
+    missing_modular = [
+        name
+        for name in _REQUIRED_MODULAR_ENTRYPOINTS
+        if not callable(getattr(internal, name, None))
+    ]
+    if missing_modular:
+        missing_csv = ", ".join(sorted(missing_modular))
+        msg = f"Rust runtime extension is missing required modular entrypoints: {missing_csv}"
+        raise RuntimeError(msg)
     registries.runtime_payloads[ctx] = {
         "contract_version": normalized_payload.contract_version,
         "runtime_install_mode": normalized_payload.runtime_install_mode,

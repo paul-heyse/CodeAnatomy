@@ -1,26 +1,22 @@
-//! UDF registration and config bridge surface.
+//! UDF registration and runtime capability bridge surface.
 
 use std::sync::Arc;
 
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
-use datafusion_ext::physical_rules::{
-    ensure_physical_config, install_physical_rules as install_physical_rules_native,
-};
-use datafusion_ext::planner_rules::{
-    ensure_policy_config, install_policy_rules as install_policy_rules_native,
-};
-use datafusion_ext::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
+use datafusion_ext::udf_config::CodeAnatomyUdfConfig;
 use df_plugin_host::{DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 use rmp_serde::to_vec_named;
-use serde_json::{json, Map as JsonMap, Value as JsonValue};
+use tracing::instrument;
 
-use crate::{registry_snapshot, udf_docs};
+use crate::registry_snapshot;
 
 use super::helpers::{extract_session_ctx, json_to_py};
+
+pub(crate) const RUNTIME_INSTALL_CONTRACT_VERSION: u32 = 4;
 
 fn registry_snapshot_hash(snapshot: &registry_snapshot::RegistrySnapshot) -> PyResult<String> {
     let mut hasher = Blake2bVar::new(16).map_err(|err| {
@@ -70,113 +66,6 @@ pub(crate) fn install_function_factory(
         policy_ipc.as_bytes(),
     )
     .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))
-}
-
-fn json_string_list(value: Option<&JsonValue>) -> Vec<String> {
-    let Some(JsonValue::Array(values)) = value else {
-        return Vec::new();
-    };
-    values
-        .iter()
-        .filter_map(JsonValue::as_str)
-        .map(ToString::to_string)
-        .collect()
-}
-
-fn json_object(value: Option<&JsonValue>) -> Option<&JsonMap<String, JsonValue>> {
-    match value {
-        Some(JsonValue::Object(entries)) => Some(entries),
-        _ => None,
-    }
-}
-
-fn dtype_for_param(
-    signature_inputs: Option<&JsonMap<String, JsonValue>>,
-    name: &str,
-    index: usize,
-) -> String {
-    let Some(entries) = signature_inputs else {
-        return "Utf8".to_string();
-    };
-    let Some(JsonValue::Array(signatures)) = entries.get(name) else {
-        return "Utf8".to_string();
-    };
-    let Some(JsonValue::Array(first_signature)) = signatures.first() else {
-        return "Utf8".to_string();
-    };
-    first_signature
-        .get(index)
-        .and_then(JsonValue::as_str)
-        .map_or_else(|| "Utf8".to_string(), ToString::to_string)
-}
-
-#[pyfunction]
-pub(crate) fn derive_function_factory_policy(
-    py: Python<'_>,
-    snapshot: &Bound<'_, PyAny>,
-    allow_async: bool,
-) -> PyResult<Py<PyAny>> {
-    let json_module = py.import("json")?;
-    let dumped = json_module.call_method1("dumps", (snapshot,))?;
-    let snapshot_json: String = dumped.extract()?;
-    let parsed: JsonValue = serde_json::from_str(&snapshot_json).map_err(|err| {
-        PyValueError::new_err(format!(
-            "Invalid snapshot payload for FunctionFactory policy: {err}"
-        ))
-    })?;
-    let snapshot_obj = parsed.as_object().ok_or_else(|| {
-        PyValueError::new_err("FunctionFactory policy derivation requires a mapping snapshot.")
-    })?;
-
-    let scalar_names = json_string_list(snapshot_obj.get("scalar"));
-    let parameter_names = json_object(snapshot_obj.get("parameter_names"));
-    let signature_inputs = json_object(snapshot_obj.get("signature_inputs"));
-    let return_types = json_object(snapshot_obj.get("return_types"));
-    let volatility = json_object(snapshot_obj.get("volatility"));
-
-    let primitives = scalar_names
-        .iter()
-        .map(|name| {
-            let params = json_string_list(parameter_names.and_then(|entries| entries.get(name)));
-            let params_payload = params
-                .iter()
-                .enumerate()
-                .map(|(index, param_name)| {
-                    json!({
-                        "name": param_name,
-                        "dtype": dtype_for_param(signature_inputs, name, index),
-                    })
-                })
-                .collect::<Vec<_>>();
-            let return_type = return_types
-                .and_then(|entries| entries.get(name))
-                .and_then(|value| value.as_array())
-                .and_then(|rows| rows.first())
-                .and_then(JsonValue::as_str)
-                .map_or_else(|| "Utf8".to_string(), ToString::to_string);
-            let volatility_value = volatility
-                .and_then(|entries| entries.get(name))
-                .and_then(JsonValue::as_str)
-                .map_or_else(|| "stable".to_string(), ToString::to_string);
-            json!({
-                "name": name,
-                "params": params_payload,
-                "return_type": return_type,
-                "volatility": volatility_value,
-                "description": JsonValue::Null,
-                "supports_named_args": !params.is_empty(),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let domain_operator_hooks = json_string_list(snapshot_obj.get("domain_operator_hooks"));
-    let payload = json!({
-        "primitives": primitives,
-        "prefer_named_arguments": parameter_names.map_or(false, |entries| !entries.is_empty()),
-        "allow_async": allow_async,
-        "domain_operator_hooks": domain_operator_hooks,
-    });
-    json_to_py(py, &payload)
 }
 
 #[pyfunction(name = "registry_snapshot")]
@@ -241,13 +130,13 @@ pub(crate) fn registry_snapshot_py(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> Py
         let entry = PyDict::new(py);
         for (key, value) in defaults {
             match value {
-                UdfConfigValue::Bool(flag) => {
+                datafusion_ext::udf_config::UdfConfigValue::Bool(flag) => {
                     entry.set_item(key, flag)?;
                 }
-                UdfConfigValue::Int(value) => {
+                datafusion_ext::udf_config::UdfConfigValue::Int(value) => {
                     entry.set_item(key, value)?;
                 }
-                UdfConfigValue::String(text) => {
+                datafusion_ext::udf_config::UdfConfigValue::String(text) => {
                     entry.set_item(key, text)?;
                 }
             }
@@ -271,6 +160,7 @@ pub(crate) fn registry_snapshot_msgpack_py(
 }
 
 #[pyfunction]
+#[instrument(level = "info", skip_all, fields(enable_async))]
 #[pyo3(signature = (
     ctx,
     enable_async = false,
@@ -296,6 +186,7 @@ pub(crate) fn register_codeanatomy_udfs(
 }
 
 #[pyfunction]
+#[instrument(level = "info", skip_all)]
 pub(crate) fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let ctx = datafusion::execution::context::SessionContext::new();
     datafusion_ext::udf_registry::register_all(&ctx).map_err(|err| {
@@ -303,7 +194,7 @@ pub(crate) fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
     })?;
     let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
     let hash = registry_snapshot_hash(&snapshot)?;
-    let payload = json!({
+    let payload = serde_json::json!({
         "datafusion_version": datafusion::DATAFUSION_VERSION,
         "arrow_version": arrow::ARROW_VERSION,
         "plugin_abi": {
@@ -311,13 +202,15 @@ pub(crate) fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
             "minor": DF_PLUGIN_ABI_MINOR,
         },
         "runtime_install_contract": {
-            "version": 3,
+            "version": RUNTIME_INSTALL_CONTRACT_VERSION,
             "supports_unified_entrypoint": true,
             "supports_modular_entrypoints": true,
             "required_modular_entrypoints": [
                 "register_codeanatomy_udfs",
                 "install_function_factory",
                 "install_expr_planners",
+                "install_relation_planner",
+                "install_type_planner",
                 "registry_snapshot",
                 "registry_snapshot_msgpack",
             ],
@@ -377,6 +270,7 @@ pub(crate) fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
 }
 
 #[pyfunction]
+#[instrument(level = "info", skip_all, fields(enable_async_udfs))]
 #[pyo3(signature = (
     ctx,
     enable_async_udfs = false,
@@ -399,13 +293,11 @@ pub(crate) fn install_codeanatomy_runtime(
     .map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to install CodeAnatomy runtime UDFs: {err}"))
     })?;
-    datafusion_ext::install_sql_macro_factory_native(&extract_session_ctx(ctx)?).map_err(
-        |err| {
-            PyRuntimeError::new_err(format!(
-                "Failed to install CodeAnatomy FunctionFactory runtime: {err}"
-            ))
-        },
-    )?;
+    datafusion_ext::install_sql_macro_factory_native(&extract_session_ctx(ctx)?).map_err(|err| {
+        PyRuntimeError::new_err(format!(
+            "Failed to install CodeAnatomy FunctionFactory runtime: {err}"
+        ))
+    })?;
     let planner_names = ["codeanatomy_domain"];
     datafusion_ext::install_expr_planners_native(&extract_session_ctx(ctx)?, &planner_names)
         .map_err(|err| {
@@ -413,6 +305,17 @@ pub(crate) fn install_codeanatomy_runtime(
                 "Failed to install CodeAnatomy ExprPlanner runtime: {err}"
             ))
         })?;
+    datafusion_ext::install_relation_planner_native(&extract_session_ctx(ctx)?).map_err(|err| {
+        PyRuntimeError::new_err(format!(
+            "Failed to install CodeAnatomy RelationPlanner runtime: {err}"
+        ))
+    })?;
+    datafusion_ext::install_type_planner_native(&extract_session_ctx(ctx)?).map_err(|err| {
+        PyRuntimeError::new_err(format!(
+            "Failed to install CodeAnatomy TypePlanner runtime: {err}"
+        ))
+    })?;
+
     let snapshot = registry_snapshot::registry_snapshot(&extract_session_ctx(ctx)?.state());
     let snapshot_json = serde_json::to_value(&snapshot).map_err(|err| {
         PyRuntimeError::new_err(format!(
@@ -421,20 +324,22 @@ pub(crate) fn install_codeanatomy_runtime(
     })?;
     let snapshot_msgpack = registry_snapshot_msgpack(&snapshot)?;
     let payload = PyDict::new(py);
-    payload.set_item("contract_version", 3)?;
+    payload.set_item("contract_version", RUNTIME_INSTALL_CONTRACT_VERSION)?;
     payload.set_item("runtime_install_mode", "unified")?;
     payload.set_item("snapshot", json_to_py(py, &snapshot_json)?)?;
     payload.set_item("snapshot_msgpack", PyBytes::new(py, &snapshot_msgpack))?;
     payload.set_item("udf_installed", true)?;
     payload.set_item("function_factory_installed", true)?;
     payload.set_item("expr_planners_installed", true)?;
+    payload.set_item("relation_planner_installed", true)?;
+    payload.set_item("type_planner_installed", true)?;
     payload.set_item("expr_planner_names", planner_names)?;
     payload.set_item("cache_registrar_available", true)?;
     payload.set_item(
         "async",
         json_to_py(
             py,
-            &json!({
+            &serde_json::json!({
                 "enabled": enable_async_udfs,
                 "timeout_ms": async_udf_timeout_ms,
                 "batch_size": async_udf_batch_size,
@@ -444,129 +349,13 @@ pub(crate) fn install_codeanatomy_runtime(
     Ok(payload.into())
 }
 
-#[pyfunction]
-pub(crate) fn udf_docs_snapshot(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    let payload = PyDict::new(py);
-    let add_doc = |name: &str, doc: &datafusion_expr::Documentation| -> PyResult<()> {
-        let entry = PyDict::new(py);
-        entry.set_item("description", doc.description.clone())?;
-        entry.set_item("syntax", doc.syntax_example.clone())?;
-        entry.set_item("section", doc.doc_section.label)?;
-        if let Some(example) = &doc.sql_example {
-            entry.set_item("sql_example", example.clone())?;
-        } else {
-            entry.set_item("sql_example", py.None())?;
-        }
-        if let Some(arguments) = &doc.arguments {
-            entry.set_item("arguments", PyList::new(py, arguments.clone())?)?;
-        } else {
-            entry.set_item("arguments", PyList::empty(py))?;
-        }
-        if let Some(alternatives) = &doc.alternative_syntax {
-            entry.set_item("alternative_syntax", PyList::new(py, alternatives.clone())?)?;
-        } else {
-            entry.set_item("alternative_syntax", PyList::empty(py))?;
-        }
-        if let Some(related) = &doc.related_udfs {
-            entry.set_item("related_udfs", PyList::new(py, related.clone())?)?;
-        } else {
-            entry.set_item("related_udfs", PyList::empty(py))?;
-        }
-        payload.set_item(name, entry)?;
-        Ok(())
-    };
-
-    let state = extract_session_ctx(ctx)?.state();
-    let docs = udf_docs::registry_docs(&state);
-    for (name, doc) in docs {
-        add_doc(name.as_str(), doc)?;
-    }
-    Ok(payload.into())
-}
-
-#[pyfunction]
-#[pyo3(signature = (ctx, allow_ddl = None, allow_dml = None, allow_statements = None))]
-pub(crate) fn install_codeanatomy_policy_config(
-    ctx: &Bound<'_, PyAny>,
-    allow_ddl: Option<bool>,
-    allow_dml: Option<bool>,
-    allow_statements: Option<bool>,
-) -> PyResult<()> {
-    let state_ref = extract_session_ctx(ctx)?.state_ref();
-    let mut state = state_ref.write();
-    let config = state.config_mut();
-    let policy = ensure_policy_config(config.options_mut()).map_err(|err| {
-        PyRuntimeError::new_err(format!("Planner policy configuration failed: {err}"))
-    })?;
-    if let Some(value) = allow_ddl {
-        policy.allow_ddl = value;
-    }
-    if let Some(value) = allow_dml {
-        policy.allow_dml = value;
-    }
-    if let Some(value) = allow_statements {
-        policy.allow_statements = value;
-    }
-    Ok(())
-}
-
-#[pyfunction]
-#[pyo3(signature = (ctx, enabled = None))]
-pub(crate) fn install_codeanatomy_physical_config(
-    ctx: &Bound<'_, PyAny>,
-    enabled: Option<bool>,
-) -> PyResult<()> {
-    let state_ref = extract_session_ctx(ctx)?.state_ref();
-    let mut state = state_ref.write();
-    let config = state.config_mut();
-    let physical = ensure_physical_config(config.options_mut()).map_err(|err| {
-        PyRuntimeError::new_err(format!("Physical policy configuration failed: {err}"))
-    })?;
-    if let Some(value) = enabled {
-        physical.enabled = value;
-    }
-    Ok(())
-}
-
-#[pyfunction]
-pub(crate) fn install_planner_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
-    install_policy_rules_native(&extract_session_ctx(ctx)?)
-        .map_err(|err| PyRuntimeError::new_err(format!("Planner rule install failed: {err}")))
-}
-
-#[pyfunction]
-pub(crate) fn install_physical_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
-    install_physical_rules_native(&extract_session_ctx(ctx)?)
-        .map_err(|err| PyRuntimeError::new_err(format!("Physical rule install failed: {err}")))
-}
-
-#[pyfunction]
-pub(crate) fn install_expr_planners(
-    ctx: &Bound<'_, PyAny>,
-    planner_names: Vec<String>,
-) -> PyResult<()> {
-    let names: Vec<&str> = planner_names.iter().map(String::as_str).collect();
-    datafusion_ext::install_expr_planners_native(&extract_session_ctx(ctx)?, &names)
-        .map_err(|err| PyRuntimeError::new_err(format!("ExprPlanner install failed: {err}")))
-}
-
 pub(crate) fn register_functions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(install_function_factory, module)?)?;
-    module.add_function(wrap_pyfunction!(derive_function_factory_policy, module)?)?;
     module.add_function(wrap_pyfunction!(install_codeanatomy_udf_config, module)?)?;
     module.add_function(wrap_pyfunction!(register_codeanatomy_udfs, module)?)?;
     module.add_function(wrap_pyfunction!(registry_snapshot_py, module)?)?;
     module.add_function(wrap_pyfunction!(registry_snapshot_msgpack_py, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_docs_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(capabilities_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(install_codeanatomy_runtime, module)?)?;
-    module.add_function(wrap_pyfunction!(install_codeanatomy_policy_config, module)?)?;
-    module.add_function(wrap_pyfunction!(
-        install_codeanatomy_physical_config,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(install_planner_rules, module)?)?;
-    module.add_function(wrap_pyfunction!(install_physical_rules, module)?)?;
-    module.add_function(wrap_pyfunction!(install_expr_planners, module)?)?;
     Ok(())
 }

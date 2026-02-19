@@ -42,7 +42,7 @@ class RustUdfSnapshot(StructBaseCompat, frozen=True):
 class RuntimeInstallSnapshot(StructBaseStrict, frozen=True):
     """Normalized runtime install payload returned by native extension."""
 
-    contract_version: int = 3
+    contract_version: int = 4
     runtime_install_mode: str = "unified"
     udf_installed: bool = True
     function_factory_installed: bool = True
@@ -122,7 +122,7 @@ def normalize_runtime_install_snapshot(payload: Mapping[str, object]) -> Runtime
         RuntimeInstallSnapshot: Canonical runtime snapshot contract.
     """
     return RuntimeInstallSnapshot(
-        contract_version=_coerce_int(payload.get("contract_version", 3), default=3),
+        contract_version=_coerce_int(payload.get("contract_version", 4), default=4),
         runtime_install_mode=str(payload.get("runtime_install_mode", "unified")),
         udf_installed=bool(payload.get("udf_installed", True)),
         function_factory_installed=bool(payload.get("function_factory_installed", True)),

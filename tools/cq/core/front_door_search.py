@@ -8,6 +8,7 @@ from tools.cq.core.front_door_contracts import (
     FrontDoorInsightV1,
     InsightNeighborhoodV1,
     InsightRiskCountersV1,
+    NeighborhoodSource,
     SearchInsightBuildRequestV1,
 )
 from tools.cq.core.front_door_risk import risk_from_counters
@@ -32,7 +33,7 @@ def build_neighborhood_from_slices(
     slices: tuple[NeighborhoodSliceV1, ...] | list[NeighborhoodSliceV1],
     *,
     preview_per_slice: int,
-    source: str,
+    source: NeighborhoodSource,
     overflow_artifact_ref: str | None = None,
 ) -> InsightNeighborhoodV1:
     """Delegate neighborhood assembly to the canonical assembly module.
@@ -43,7 +44,7 @@ def build_neighborhood_from_slices(
     return build_neighborhood_from_support(
         slices,
         preview_per_slice=preview_per_slice,
-        source=source,  # type: ignore[arg-type]
+        source=source,
         overflow_artifact_ref=overflow_artifact_ref,
     )
 

@@ -111,18 +111,8 @@ pub(crate) fn build_udf_bundle_with_options(
     Ok(build_udf_bundle_from_specs(specs, &config))
 }
 
-fn build_udf_bundle() -> DfUdfBundleV1 {
-    match build_udf_bundle_with_options(PluginUdfOptions::default()) {
-        Ok(bundle) => bundle,
-        Err(err) => {
-            tracing::error!(error = %err, "Failed to build UDF bundle");
-            DfUdfBundleV1 {
-                scalar: RVec::new(),
-                aggregate: RVec::new(),
-                window: RVec::new(),
-            }
-        }
-    }
+fn build_udf_bundle() -> Result<DfUdfBundleV1, String> {
+    build_udf_bundle_with_options(PluginUdfOptions::default())
 }
 
 pub(crate) fn build_table_functions() -> Vec<DfTableFunctionV1> {
@@ -157,9 +147,12 @@ pub(crate) fn build_table_functions() -> Vec<DfTableFunctionV1> {
 
 pub(crate) fn exports() -> DfPluginExportsV1 {
     let table_provider_names = RVec::from(vec![RString::from("delta"), RString::from("delta_cdf")]);
+    let udf_bundle = build_udf_bundle().unwrap_or_else(|err| {
+        panic!("Failed to build default UDF bundle during plugin export: {err}")
+    });
     DfPluginExportsV1 {
         table_provider_names,
-        udf_bundle: build_udf_bundle(),
+        udf_bundle,
         table_functions: RVec::from(build_table_functions()),
     }
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
+import msgspec
 from datafusion import SessionContext
 
 from datafusion_engine.plan.bundle_environment import (
@@ -20,6 +21,12 @@ from utils.hashing import hash_msgpack_canonical
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.runtime_session import SessionRuntime
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item) for item in value)
+    return ()
 
 
 def session_config_snapshot(ctx: SessionContext) -> Mapping[str, object]:
@@ -71,9 +78,35 @@ def planning_env_snapshot(
     if session_runtime is None:
         return {}
     profile = session_runtime.profile
+    from datafusion_engine.plan.contracts import PlanningSurfaceManifestV2
+    from datafusion_engine.session.runtime_extensions import (
+        planning_surface_manifest_v2_payload,
+    )
+
     session_config = session_config_snapshot(session_runtime.ctx)
     sql_policy_payload = _sql_policy_payload(profile)
     schema_hardening = profile.policies.schema_hardening
+    manifest_payload = planning_surface_manifest_v2_payload(profile)
+    if isinstance(manifest_payload, Mapping):
+        expr_planners = _string_tuple(manifest_payload.get("expr_planners"))
+        relation_planners = _string_tuple(manifest_payload.get("relation_planners"))
+        type_planners = _string_tuple(manifest_payload.get("type_planners"))
+        table_factories = _string_tuple(manifest_payload.get("table_factories"))
+        raw_keys = manifest_payload.get("planning_config_keys", {})
+        planning_config_keys = (
+            {str(key): str(value) for key, value in raw_keys.items()}
+            if isinstance(raw_keys, Mapping)
+            else {}
+        )
+        manifest = PlanningSurfaceManifestV2(
+            expr_planners=expr_planners,
+            relation_planners=relation_planners,
+            type_planners=type_planners,
+            table_factories=table_factories,
+            planning_config_keys=planning_config_keys,
+        )
+    else:
+        manifest = PlanningSurfaceManifestV2()
     return {
         "datafusion_version": getattr(profile, "datafusion_version", None),
         "session_config": session_config,
@@ -114,6 +147,7 @@ def planning_env_snapshot(
             "explain_format": schema_hardening.explain_format if schema_hardening else None,
             "enable_view_types": schema_hardening.enable_view_types if schema_hardening else None,
         },
+        "planning_surface_manifest_v2": msgspec.to_builtins(manifest),
     }
 
 

@@ -19,7 +19,7 @@ def _capability_report(version: str) -> dict[str, object]:
         "compatible": True,
         "snapshot": {
             "datafusion_version": version,
-            "plugin_abi": {"major": 1, "minor": 1},
+            "plugin_abi": {"major": 1, "minor": 2},
         },
     }
 

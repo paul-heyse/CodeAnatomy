@@ -11,6 +11,7 @@ from datafusion import RuntimeEnvBuilder, SessionContext
 from datafusion_engine.session.context_pool import _build_delta_session_context
 from datafusion_engine.session.delta_session_builder import (
     build_runtime_policy_options,
+    parse_runtime_duration_seconds,
     parse_runtime_size,
 )
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -24,6 +25,8 @@ class _RuntimePolicyOptions:
     def __init__(self) -> None:
         self.memory_limit: int | None = None
         self.metadata_cache_limit: int | None = None
+        self.list_files_cache_limit: int | None = None
+        self.list_files_cache_ttl_seconds: int | None = None
         self.temp_directory: str | None = None
         self.max_temp_directory_size: int | None = None
 
@@ -88,6 +91,12 @@ def test_delta_session_factory_bridges_runtime_settings_to_options(
     assert runtime_policy.metadata_cache_limit == int(
         settings["datafusion.runtime.metadata_cache_limit"]
     )
+    assert runtime_policy.list_files_cache_limit == parse_runtime_size(
+        settings["datafusion.runtime.list_files_cache_limit"]
+    )
+    assert runtime_policy.list_files_cache_ttl_seconds == parse_runtime_duration_seconds(
+        settings["datafusion.runtime.list_files_cache_ttl"]
+    )
     assert runtime_policy.memory_limit == int(settings["datafusion.runtime.memory_limit"])
     assert runtime_policy.temp_directory == settings["datafusion.runtime.temp_directory"]
     assert runtime_policy.max_temp_directory_size == int(
@@ -97,8 +106,8 @@ def test_delta_session_factory_bridges_runtime_settings_to_options(
     assert result.runtime_policy_bridge.get("enabled") is True
     unsupported = result.runtime_policy_bridge.get("unsupported_runtime_settings")
     assert isinstance(unsupported, dict)
-    assert "datafusion.runtime.list_files_cache_limit" in unsupported
-    assert "datafusion.runtime.list_files_cache_ttl" in unsupported
+    assert "datafusion.runtime.list_files_cache_limit" not in unsupported
+    assert "datafusion.runtime.list_files_cache_ttl" not in unsupported
 
 
 def test_delta_session_factory_falls_back_to_legacy_builder_signature(
@@ -153,7 +162,7 @@ def test_runtime_policy_options_reports_no_supported_settings() -> None:
     module = _BridgeModule()
     bridge = build_runtime_policy_options(
         module=module,
-        runtime_settings={"datafusion.runtime.list_files_cache_limit": "64M"},
+        runtime_settings={"datafusion.runtime.unsupported_setting": "value"},
     )
     assert bridge.options is None
     assert bridge.payload is not None

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::compiler::compile_phases::{
-    build_task_schedule_phase, compile_artifacts_phase, pushdown_probe_phase,
+    build_task_schedule_phase, compile_artifacts_phase, pushdown_probe_phase, ArtifactPhaseContext,
 };
 use crate::compiler::cost_model::StatsQuality;
 use crate::compiler::plan_bundle::{PlanBundleArtifact, ProviderIdentity};
@@ -90,9 +90,11 @@ pub async fn compile_request(request: CompileRequest<'_>) -> Result<CompileRespo
         ruleset,
         &output_plans,
         &pushdown.pushdown_probe_map,
-        scheduling.stats_quality,
-        &prepared.provider_identities,
-        prepared.envelope.planning_surface_hash,
+        &ArtifactPhaseContext {
+            stats_quality: scheduling.stats_quality,
+            provider_identities: prepared.provider_identities.clone(),
+            planning_surface_hash: prepared.envelope.planning_surface_hash,
+        },
     )
     .await;
     warnings.extend(artifacts.warnings);

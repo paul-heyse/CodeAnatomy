@@ -158,6 +158,7 @@ def mock_plan_bundle() -> DataFusionPlanArtifact:
         rulepack_hash=None,
         information_schema_snapshot={},
         information_schema_hash="mock_info_schema_hash",
+        cache_diagnostics=None,
         substrait_validation=None,
         logical_plan_proto=None,
         optimized_plan_proto=None,

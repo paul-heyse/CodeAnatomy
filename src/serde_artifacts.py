@@ -208,6 +208,7 @@ class PlanArtifacts(StructBaseCompat, frozen=True):
     rulepack_hash: HashValue | None
     information_schema_snapshot: dict[str, JsonValueLax]
     information_schema_hash: HashValue
+    cache_diagnostics: dict[str, JsonValueLax] | None
     substrait_validation: dict[str, JsonValueLax] | None
     logical_plan_proto: LogicalPlanProtoBytes | None
     optimized_plan_proto: OptimizedPlanProtoBytes | None

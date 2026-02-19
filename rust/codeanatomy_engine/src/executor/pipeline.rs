@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 #[cfg(feature = "tracing")]
 use tracing::instrument;
 
@@ -43,15 +43,14 @@ use crate::compiler::plan_compiler::SemanticPlanCompiler;
 use crate::compiler::pushdown_probe_extract::{
     extract_input_filter_predicates, verify_pushdown_contracts,
 };
-use crate::compiler::scheduling::{TaskGraph, TaskSchedule};
-use crate::contracts::pushdown_mode::PushdownEnforcementMode;
+use crate::compiler::scheduling::{build_task_graph_from_spec, TaskSchedule};
 use crate::executor::delta_writer::LineageContext;
 use crate::executor::maintenance;
 use crate::executor::metrics_collector::{self, summarize_collected_metrics, CollectedMetrics};
 use crate::executor::result::RunResult;
 use crate::executor::runner::execute_and_materialize_with_plans;
 use crate::executor::warnings::{warning_counts_by_code, RunWarning, WarningCode, WarningStage};
-use crate::providers::pushdown_contract::PushdownProbe;
+use crate::providers::pushdown_contract::{enforce_pushdown_contracts, PushdownProbe};
 use crate::providers::registration::probe_provider_pushdown;
 use crate::session::envelope::SessionEnvelope;
 use crate::spec::execution_spec::SemanticExecutionSpec;
@@ -123,6 +122,7 @@ pub async fn execute_pipeline(
     let mut stats_quality_label: Option<String> = None;
 
     // 1. Compile spec into output DataFrames
+    log::info!("pipeline step 1/6: compile semantic plan");
     let compiler = SemanticPlanCompiler::new(ctx, spec);
     let compilation = compiler.compile_with_warnings().await?;
     warnings.extend(compilation.warnings);
@@ -247,6 +247,10 @@ pub async fn execute_pipeline(
     }
 
     // 3. Execute and materialize, retaining physical plan references for metrics
+    log::info!(
+        "pipeline step 3/6: materialize output plans (targets={})",
+        output_plans.len()
+    );
     let provider_identity_hash_input: Vec<(String, [u8; 32])> = provider_identities
         .iter()
         .map(|identity| (identity.table_name.clone(), identity.identity_hash))
@@ -283,6 +287,7 @@ pub async fn execute_pipeline(
     }
 
     // 5. Post-materialization Delta maintenance (when configured).
+    log::info!("pipeline step 5/6: post-materialization maintenance");
     //
     // Failures are captured as warnings, not propagated as errors.
     if let Some(schedule) = &spec.maintenance {
@@ -331,23 +336,7 @@ fn build_task_graph_and_costs(
     spec: &SemanticExecutionSpec,
     warnings: &mut Vec<RunWarning>,
 ) -> (Option<TaskSchedule>, Option<StatsQuality>) {
-    let view_deps: Vec<(String, Vec<String>)> = spec
-        .view_definitions
-        .iter()
-        .map(|view| (view.name.clone(), view.view_dependencies.clone()))
-        .collect();
-    let scan_deps: Vec<(String, Vec<String>)> = spec
-        .input_relations
-        .iter()
-        .map(|input| (input.logical_name.clone(), Vec::new()))
-        .collect();
-    let output_deps: Vec<(String, Vec<String>)> = spec
-        .output_targets
-        .iter()
-        .map(|target| (target.table_name.clone(), vec![target.source_view.clone()]))
-        .collect();
-
-    let Ok(task_graph) = TaskGraph::from_inferred_deps(&view_deps, &scan_deps, &output_deps) else {
+    let Ok(task_graph) = build_task_graph_from_spec(spec) else {
         return (None, None);
     };
     let cost_outcome = derive_task_costs(&task_graph, None, &CostModelConfig::default());
@@ -384,41 +373,6 @@ async fn probe_pushdown_contracts(
         }
     }
     pushdown_probe_map
-}
-
-fn enforce_pushdown_contracts(
-    table_name: &str,
-    mode: PushdownEnforcementMode,
-    report: Option<&crate::providers::pushdown_contract::PushdownContractReport>,
-    warnings: &mut Vec<RunWarning>,
-) -> Result<()> {
-    let Some(report) = report else {
-        return Ok(());
-    };
-    for violation in &report.violations {
-        match mode {
-            PushdownEnforcementMode::Strict => {
-                return Err(DataFusionError::Plan(format!(
-                    "Pushdown contract violation on table '{}': {}",
-                    violation.table_name, violation.predicate_text
-                )));
-            }
-            PushdownEnforcementMode::Warn => warnings.push(
-                RunWarning::new(
-                    WarningCode::PushdownContractViolation,
-                    WarningStage::Compilation,
-                    format!(
-                        "Pushdown contract violation on '{}': {}",
-                        violation.table_name, violation.predicate_text
-                    ),
-                )
-                .with_context("table_name", table_name.to_string())
-                .with_context("predicate", violation.predicate_text.clone()),
-            ),
-            PushdownEnforcementMode::Disabled => {}
-        }
-    }
-    Ok(())
 }
 
 /// Aggregate physical metrics across all executed plan trees.

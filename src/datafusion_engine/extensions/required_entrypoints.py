@@ -18,6 +18,8 @@ REQUIRED_RUNTIME_ENTRYPOINTS: tuple[str, ...] = (
     "register_cache_tables",
     "install_planner_rules",
     "install_physical_rules",
+    "install_relation_planner",
+    "install_type_planner",
     "install_tracing",
     "capture_plan_bundle_runtime",
     "build_plan_bundle_artifact_with_warnings",

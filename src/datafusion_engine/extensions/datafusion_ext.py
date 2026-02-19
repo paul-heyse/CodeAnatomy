@@ -211,6 +211,16 @@ def install_physical_rules(ctx: Any) -> None:
     _call_required("install_physical_rules", ctx)
 
 
+def install_relation_planner(ctx: Any) -> None:
+    """Install relation planner via required extension entrypoint."""
+    _call_required("install_relation_planner", ctx)
+
+
+def install_type_planner(ctx: Any) -> None:
+    """Install type planner via required extension entrypoint."""
+    _call_required("install_type_planner", ctx)
+
+
 def install_schema_evolution_adapter_factory(ctx: Any) -> None:
     """Install schema evolution adapter factory via required entrypoint."""
     _call_required("install_schema_evolution_adapter_factory", ctx)
@@ -384,8 +394,10 @@ __all__ = [
     "install_codeanatomy_runtime",
     "install_physical_rules",
     "install_planner_rules",
+    "install_relation_planner",
     "install_schema_evolution_adapter_factory",
     "install_tracing",
+    "install_type_planner",
     "register_cache_tables",
     "register_dataset_provider",
     "replay_substrait_plan",

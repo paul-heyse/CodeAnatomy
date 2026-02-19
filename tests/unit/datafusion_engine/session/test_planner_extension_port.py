@@ -25,13 +25,17 @@ class _PlannerPlugin:
 def test_install_expr_planners_uses_planner_extension_port(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Planner protocol object installs expr+relation planners directly."""
+    """Planner protocol object installs expr+relation hooks without fallback."""
     plugin = _PlannerPlugin()
     install_expr_planners = runtime_extensions.__dict__["_install_expr_planners"]
 
     profile = SimpleNamespace(
         features=SimpleNamespace(enable_expr_planners=True),
-        policies=SimpleNamespace(expr_planner_hook=plugin, expr_planner_names=("default",)),
+        policies=SimpleNamespace(
+            expr_planner_hook=plugin,
+            expr_planner_names=("default",),
+            type_planner_hook=None,
+        ),
     )
 
     def _record_noop(*_args: object, **_kwargs: object) -> None:
@@ -42,12 +46,16 @@ def test_install_expr_planners_uses_planner_extension_port(
         raise AssertionError(msg)
 
     monkeypatch.setattr(runtime_extensions, "_record_expr_planners", _record_noop)
+    monkeypatch.setattr(runtime_extensions, "relation_planner_extension_available", lambda: True)
     monkeypatch.setattr(
         runtime_extensions,
         "install_expr_planners",
         _unexpected_fallback,
     )
-
+    monkeypatch.setattr(
+        "datafusion_engine.extensions.datafusion_ext.install_type_planner",
+        lambda _ctx: None,
+    )
     install_expr_planners(profile, object())
 
     assert plugin.calls == ["expr", "relation"]
@@ -60,7 +68,11 @@ def test_install_expr_planners_records_unavailable_when_extension_missing(
     install_expr_planners = runtime_extensions.__dict__["_install_expr_planners"]
     profile = SimpleNamespace(
         features=SimpleNamespace(enable_expr_planners=True),
-        policies=SimpleNamespace(expr_planner_hook=None, expr_planner_names=("default",)),
+        policies=SimpleNamespace(
+            expr_planner_hook=None,
+            expr_planner_names=("default",),
+            type_planner_hook=None,
+        ),
     )
     recorded: dict[str, object] = {}
 

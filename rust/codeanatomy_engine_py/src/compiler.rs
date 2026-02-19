@@ -460,3 +460,81 @@ impl SemanticPlanCompiler {
         self.compile(spec_json)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_and_validate_spec;
+    use codeanatomy_engine::spec::execution_spec::SPEC_SCHEMA_VERSION;
+    use serde_json::json;
+
+    fn minimal_spec_json(version: u32) -> String {
+        serde_json::to_string(&json!({
+            "version": version,
+            "input_relations": [
+                {
+                    "logical_name": "input",
+                    "delta_location": "memory:///input",
+                    "requires_lineage": false,
+                    "version_pin": null
+                }
+            ],
+            "view_definitions": [
+                {
+                    "name": "view1",
+                    "view_kind": "project",
+                    "view_dependencies": [],
+                    "transform": {
+                        "kind": "Project",
+                        "source": "input",
+                        "columns": ["id"]
+                    },
+                    "output_schema": {"columns": {"id": "Int64"}}
+                }
+            ],
+            "join_graph": {"edges": [], "constraints": []},
+            "output_targets": [
+                {
+                    "table_name": "out",
+                    "delta_location": null,
+                    "source_view": "view1",
+                    "columns": [],
+                    "materialization_mode": "Overwrite",
+                    "partition_by": [],
+                    "write_metadata": {},
+                    "max_commit_retries": null
+                }
+            ],
+            "rule_intents": [],
+            "rulepack_profile": "Default"
+        }))
+        .expect("serialize minimal spec")
+    }
+
+    #[test]
+    fn parse_valid_spec_returns_ok() {
+        let result = parse_and_validate_spec(minimal_spec_json(SPEC_SCHEMA_VERSION).as_str());
+        assert!(result.is_ok(), "valid spec should parse: {result:?}");
+    }
+
+    #[test]
+    fn parse_spec_below_min_version_returns_err() {
+        let result = parse_and_validate_spec(minimal_spec_json(0).as_str());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_empty_view_definitions_returns_err() {
+        let payload = json!({
+            "version": SPEC_SCHEMA_VERSION,
+            "input_relations": [],
+            "view_definitions": [],
+            "join_graph": {"edges": [], "constraints": []},
+            "output_targets": [],
+            "rule_intents": [],
+            "rulepack_profile": "Default"
+        });
+        let json = serde_json::to_string(&payload).expect("serialize empty view spec");
+        let result = parse_and_validate_spec(&json);
+        assert!(result.is_err());
+    }
+}

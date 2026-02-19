@@ -401,11 +401,12 @@ plugin_abs_path="$(pwd)/rust/datafusion_ext_py/plugin/$(basename "${plugin_lib}"
 from __future__ import annotations
 
 import json
+import importlib
 import sys
 import tempfile
+import tomllib
 import zipfile
 from pathlib import Path
-import tomllib
 
 datafusion_wheel = Path("${datafusion_wheel}")
 datafusion_ext_wheel = Path("${datafusion_ext_wheel}")
@@ -431,7 +432,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
         archive.extractall(tmpdir)
     sys.path.insert(0, tmpdir)
     try:
-        import datafusion_ext  # type: ignore[import-not-found]
+        datafusion_ext = importlib.import_module("datafusion_ext")
     except Exception:
         core_version = ""
     else:

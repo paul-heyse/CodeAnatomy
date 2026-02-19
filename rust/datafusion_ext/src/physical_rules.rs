@@ -53,6 +53,32 @@ impl ConfigExtension for CodeAnatomyPhysicalConfig {
     const PREFIX: &'static str = PREFIX;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodeAnatomyPhysicalRuleInstalled {
+    installed: bool,
+}
+
+impl Default for CodeAnatomyPhysicalRuleInstalled {
+    fn default() -> Self {
+        Self { installed: true }
+    }
+}
+
+crate::impl_extension_options!(
+    CodeAnatomyPhysicalRuleInstalled,
+    prefix = "codeanatomy_physical_rule_installed",
+    unknown_key = "Unknown physical rule install marker key: {key}",
+    fields = [(
+        installed,
+        bool,
+        "Marker extension that indicates CodeAnatomyPhysicalRule was installed."
+    ),]
+);
+
+impl ConfigExtension for CodeAnatomyPhysicalRuleInstalled {
+    const PREFIX: &'static str = "codeanatomy_physical_rule_installed";
+}
+
 pub fn ensure_physical_config(
     options: &mut ConfigOptions,
 ) -> Result<&mut CodeAnatomyPhysicalConfig> {
@@ -107,7 +133,18 @@ pub fn install_physical_rules(ctx: &SessionContext) -> Result<()> {
     let state_ref = ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
-    let _ = ensure_physical_config(config.options_mut())?;
+    let options = config.options_mut();
+    let _ = ensure_physical_config(options)?;
+    if options
+        .extensions
+        .get::<CodeAnatomyPhysicalRuleInstalled>()
+        .is_some()
+    {
+        return Ok(());
+    }
+    options
+        .extensions
+        .insert(CodeAnatomyPhysicalRuleInstalled::default());
     let builder = SessionStateBuilder::from(state.clone())
         .with_physical_optimizer_rule(Arc::new(CodeAnatomyPhysicalRule));
     *state = builder.build();

@@ -328,11 +328,12 @@ def _attach_cache_manager(
     *,
     enabled: bool,
     factory: Callable[[], object] | None,
+    contract: Mapping[str, object] | None = None,
 ) -> RuntimeEnvBuilder:
     if not enabled:
         return builder
     if factory is None:
-        msg = "Cache manager enabled but cache_manager_factory is not set."
+        msg = f"Cache manager enabled but cache_manager_factory is not set. contract={contract}"
         raise ValueError(msg)
     cache_manager = factory()
     if cache_manager is None:

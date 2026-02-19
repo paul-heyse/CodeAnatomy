@@ -19,6 +19,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::optimizer::OptimizerRule;
 use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
+use crate::compiler::standalone_optimizer_harness::run_standalone_optimizer_harness;
 
 /// A single optimizer rule application step captured during a lab run.
 ///
@@ -77,15 +78,20 @@ pub fn run_optimizer_lab(
     max_passes: usize,
     skip_failed_rules: bool,
 ) -> Result<LabResult> {
-    let (optimized, traces) = crate::compiler::optimizer_pipeline::optimize_with_rules(
+    let harness = run_standalone_optimizer_harness(
         input,
         rules,
         max_passes,
         skip_failed_rules,
         true,
     )?;
-    let change_count = traces.iter().filter(|trace| trace.plan_changed).count();
-    let steps = traces
+    let change_count = harness
+        .pass_traces
+        .iter()
+        .filter(|trace| trace.plan_changed)
+        .count();
+    let steps = harness
+        .pass_traces
         .into_iter()
         .enumerate()
         .map(|(ordinal, trace)| RuleStep {
@@ -96,7 +102,7 @@ pub fn run_optimizer_lab(
         .collect();
 
     Ok(LabResult {
-        optimized_plan: optimized,
+        optimized_plan: harness.optimized_plan,
         steps,
         rules_with_changes: change_count,
     })

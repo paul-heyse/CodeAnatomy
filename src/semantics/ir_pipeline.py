@@ -23,6 +23,9 @@ from semantics.ir import (
     SemanticIRView,
 )
 from semantics.ir_optimize import IRCost, order_join_groups, prune_ir
+from semantics.joins.inference import (
+    CONFIDENCE_BY_STRATEGY as _STRATEGY_CONFIDENCE,
+)
 from semantics.joins.inference import infer_join_strategy_with_confidence
 from semantics.naming import canonical_output_name
 from semantics.output_names import RELATION_OUTPUT_NAME
@@ -1082,15 +1085,6 @@ def _cache_policy_for_position(position: GraphPosition) -> str | None:
     return None
 
 
-# Confidence scores mirror those in semantics.joins.inference so that
-# the lightweight field-based inference in the IR pipeline produces
-# comparable confidence values.
-_STRATEGY_CONFIDENCE: dict[str, float] = {
-    "span_overlap": 0.95,
-    "foreign_key": 0.85,
-    "symbol_match": 0.75,
-    "equi_join": 0.6,
-}
 _CACHE_POLICY_CONFIDENCE: dict[str, float] = {
     "eager": 0.9,
     "lazy": 0.85,

@@ -11,9 +11,11 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Column;
 use datafusion::datasource::{MemTable, TableType};
 use datafusion::execution::context::SessionContext;
+use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion::logical_expr::{
     dml::InsertOp, Expr, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown,
 };
+use datafusion::physical_plan::collect;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{DataFusionError, Result, Statistics};
 use serde::{Deserialize, Serialize};
@@ -99,13 +101,22 @@ impl IntervalAlignProvider {
         })
     }
 
-    async fn build_dataframe(&self) -> Result<datafusion::prelude::DataFrame> {
+    fn session_state_from_session(session: &dyn Session) -> Result<SessionState> {
+        let Some(session_state) = session.as_any().downcast_ref::<SessionState>() else {
+            return Err(DataFusionError::Plan(
+                "IntervalAlignProvider requires a SessionState-backed session".to_string(),
+            ));
+        };
+        Ok(session_state.clone())
+    }
+
+    async fn build_dataframe(&self, state: &dyn Session) -> Result<datafusion::prelude::DataFrame> {
         let sql = build_interval_align_sql(
             &self.config,
             self.left_schema.as_ref(),
             self.right_schema.as_ref(),
         )?;
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_state(Self::session_state_from_session(state)?);
         let left_mem =
             MemTable::try_new(self.left_schema.clone(), vec![self.left_batches.clone()])?;
         let right_mem =
@@ -145,7 +156,7 @@ impl TableProvider for IntervalAlignProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let df = self.build_dataframe().await?;
+        let df = self.build_dataframe(state).await?;
         let mut plan = LogicalPlanBuilder::from(df.logical_plan().clone());
 
         if let Some(filter_expr) = filters.iter().cloned().reduce(|acc, new| acc.and(new)) {
@@ -174,7 +185,10 @@ impl TableProvider for IntervalAlignProvider {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+        Ok(filters
+            .iter()
+            .map(|expr| classify_interval_align_filter(expr))
+            .collect())
     }
 
     fn statistics(&self) -> Option<Statistics> {
@@ -245,6 +259,52 @@ fn resolve_right_aliases(
     aliases
 }
 
+struct IntervalAlignContext {
+    left_available: Vec<String>,
+    right_available: Vec<String>,
+    left_keep: Vec<String>,
+    right_aliases: Vec<(String, String)>,
+    join_mode: String,
+}
+
+impl IntervalAlignContext {
+    fn prepare(
+        config: &IntervalAlignProviderConfig,
+        left_schema: &Schema,
+        right_schema: &Schema,
+    ) -> Result<Self> {
+        let left_available = schema_columns(left_schema);
+        let right_available = schema_columns(right_schema);
+        if left_available.is_empty() || right_available.is_empty() {
+            return Err(DataFusionError::Plan(
+                "interval_align_table requires non-empty left and right schemas".to_string(),
+            ));
+        }
+        validate_required_columns(
+            config,
+            left_available.as_slice(),
+            right_available.as_slice(),
+        )?;
+
+        let left_keep = select_columns(config.select_left.as_slice(), left_available.as_slice());
+        let right_keep = select_columns(config.select_right.as_slice(), right_available.as_slice());
+        let right_aliases = resolve_right_aliases(
+            right_keep.as_slice(),
+            left_keep.as_slice(),
+            config.right_suffix.as_str(),
+            config.match_kind_col.as_str(),
+            config.match_score_col.as_str(),
+        );
+        Ok(Self {
+            left_available,
+            right_available,
+            left_keep,
+            right_aliases,
+            join_mode: config.how.trim().to_ascii_lowercase(),
+        })
+    }
+}
+
 fn mode_condition(config: &IntervalAlignProviderConfig) -> String {
     let l_start = format!("l.{}", quote_ident(config.left_start_col.as_str()));
     let l_end = format!("l.{}", quote_ident(config.left_end_col.as_str()));
@@ -254,6 +314,25 @@ fn mode_condition(config: &IntervalAlignProviderConfig) -> String {
         "EXACT" => format!("{r_start} = {l_start} AND {r_end} = {l_end}"),
         "OVERLAP_MAX" => format!("{r_start} < {l_end} AND {r_end} > {l_start}"),
         _ => format!("{r_start} <= {l_start} AND {r_end} >= {l_end}"),
+    }
+}
+
+fn classify_interval_align_filter(expr: &Expr) -> TableProviderFilterPushDown {
+    let text = expr.to_string().to_ascii_lowercase();
+    if text.contains("random(")
+        || text.contains("now(")
+        || text.contains("current_timestamp")
+        || text.contains("__left_row")
+        || text.contains("__rn")
+    {
+        TableProviderFilterPushDown::Unsupported
+    } else if text.contains("match_score")
+        || text.contains("match_kind")
+        || text.contains("__r")
+    {
+        TableProviderFilterPushDown::Inexact
+    } else {
+        TableProviderFilterPushDown::Exact
     }
 }
 
@@ -303,44 +382,22 @@ fn build_output_schema(
     left_schema: &Schema,
     right_schema: &Schema,
 ) -> Result<SchemaRef> {
-    let left_available = schema_columns(left_schema);
-    let right_available = schema_columns(right_schema);
-    if left_available.is_empty() || right_available.is_empty() {
-        return Err(DataFusionError::Plan(
-            "interval_align_table requires non-empty left and right schemas".to_string(),
-        ));
-    }
-    validate_required_columns(
-        config,
-        left_available.as_slice(),
-        right_available.as_slice(),
-    )?;
+    let prepared = IntervalAlignContext::prepare(config, left_schema, right_schema)?;
 
-    let left_keep = select_columns(config.select_left.as_slice(), left_available.as_slice());
-    let right_keep = select_columns(config.select_right.as_slice(), right_available.as_slice());
-    let right_aliases = resolve_right_aliases(
-        right_keep.as_slice(),
-        left_keep.as_slice(),
-        config.right_suffix.as_str(),
-        config.match_kind_col.as_str(),
-        config.match_score_col.as_str(),
-    );
-
-    let join_mode = config.how.trim().to_ascii_lowercase();
-    if join_mode != "inner" && join_mode != "left" {
+    if prepared.join_mode != "inner" && prepared.join_mode != "left" {
         return Err(DataFusionError::Plan(format!(
             "interval_align_table unsupported how mode: {}",
             config.how
         )));
     }
-    let right_nullable = join_mode == "left";
+    let right_nullable = prepared.join_mode == "left";
     let mut fields: Vec<Arc<Field>> = Vec::new();
 
-    for column in left_keep {
+    for column in prepared.left_keep {
         let field = left_schema.field_with_name(column.as_str())?;
         fields.push(Arc::new(field.as_ref().clone()));
     }
-    for (original, alias) in right_aliases {
+    for (original, alias) in prepared.right_aliases {
         let field = right_schema.field_with_name(original.as_str())?;
         let renamed = Field::new(
             alias.as_str(),
@@ -370,39 +427,19 @@ fn build_interval_align_sql(
     left_schema: &Schema,
     right_schema: &Schema,
 ) -> Result<String> {
-    let left_available = schema_columns(left_schema);
-    let right_available = schema_columns(right_schema);
-    if left_available.is_empty() || right_available.is_empty() {
-        return Err(DataFusionError::Plan(
-            "interval_align_table requires non-empty left and right schemas".to_string(),
-        ));
-    }
-    validate_required_columns(
-        config,
-        left_available.as_slice(),
-        right_available.as_slice(),
-    )?;
+    let prepared = IntervalAlignContext::prepare(config, left_schema, right_schema)?;
+    let left_available_set: HashSet<&str> =
+        prepared.left_available.iter().map(String::as_str).collect();
+    let right_available_set: HashSet<&str> =
+        prepared.right_available.iter().map(String::as_str).collect();
 
-    let left_keep = select_columns(config.select_left.as_slice(), left_available.as_slice());
-    let right_keep = select_columns(config.select_right.as_slice(), right_available.as_slice());
-    let right_aliases = resolve_right_aliases(
-        right_keep.as_slice(),
-        left_keep.as_slice(),
-        config.right_suffix.as_str(),
-        config.match_kind_col.as_str(),
-        config.match_score_col.as_str(),
-    );
-    let left_available_set: HashSet<&str> = left_available.iter().map(String::as_str).collect();
-    let right_available_set: HashSet<&str> = right_available.iter().map(String::as_str).collect();
-
-    let join_mode = config.how.trim().to_ascii_lowercase();
-    if join_mode != "inner" && join_mode != "left" {
+    if prepared.join_mode != "inner" && prepared.join_mode != "left" {
         return Err(DataFusionError::Plan(format!(
             "interval_align_table unsupported how mode: {}",
             config.how
         )));
     }
-    let join_keyword = if join_mode == "left" {
+    let join_keyword = if prepared.join_mode == "left" {
         "LEFT JOIN"
     } else {
         "JOIN"
@@ -449,7 +486,7 @@ fn build_interval_align_sql(
     ));
 
     let mut matched_select_parts: Vec<String> = vec!["l.__left_row AS __left_row".to_string()];
-    for (original, alias) in right_aliases.as_slice() {
+    for (original, alias) in prepared.right_aliases.as_slice() {
         matched_select_parts.push(format!(
             "r.{} AS {}",
             quote_ident(original.as_str()),
@@ -463,14 +500,14 @@ fn build_interval_align_sql(
     ));
 
     let mut output_parts: Vec<String> = Vec::new();
-    for column in left_keep.as_slice() {
+    for column in prepared.left_keep.as_slice() {
         output_parts.push(format!(
             "l.{} AS {}",
             quote_ident(column.as_str()),
             quote_ident(column.as_str())
         ));
     }
-    for (_, alias) in right_aliases.as_slice() {
+    for (_, alias) in prepared.right_aliases.as_slice() {
         output_parts.push(format!(
             "b.{} AS {}",
             quote_ident(alias.as_str()),
@@ -479,7 +516,7 @@ fn build_interval_align_sql(
     }
     if config.emit_match_meta {
         let mode_lit = quote_lit(config.mode.trim().to_ascii_uppercase().as_str());
-        let kind_expr = if join_mode == "left" {
+        let kind_expr = if prepared.join_mode == "left" {
             format!(
                 "CASE WHEN b.__left_row IS NULL THEN 'NO_MATCH' ELSE {mode_lit} END AS {}",
                 quote_ident(config.match_kind_col.as_str())
@@ -491,7 +528,7 @@ fn build_interval_align_sql(
             )
         };
         output_parts.push(kind_expr);
-        let score_expr = if join_mode == "left" {
+        let score_expr = if prepared.join_mode == "left" {
             format!(
                 "CASE WHEN b.__left_row IS NULL THEN CAST(NULL AS DOUBLE) ELSE b.__score END AS {}",
                 quote_ident(config.match_score_col.as_str())
@@ -561,10 +598,10 @@ pub async fn execute_interval_align(
         config,
     )
     .await?;
-    let ctx = SessionContext::new();
-    ctx.register_table("__ca_interval_align", provider)?;
-    let df = ctx.sql("SELECT * FROM __ca_interval_align").await?;
-    let schema = df.schema().as_arrow().clone().into();
-    let batches = df.collect().await?;
+    let state = SessionStateBuilder::new().with_default_features().build();
+    let execution_plan = provider.scan(&state, None, &[], None).await?;
+    let task_ctx = Arc::new(datafusion::execution::TaskContext::from(&state));
+    let schema = provider.schema();
+    let batches = collect(execution_plan, task_ctx).await?;
     Ok((schema, batches))
 }

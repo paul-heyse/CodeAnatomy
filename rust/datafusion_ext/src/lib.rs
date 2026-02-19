@@ -20,9 +20,11 @@ pub mod macros;
 pub mod operator_utils;
 pub mod physical_rules;
 pub mod planner_rules;
+pub mod relation_planner;
 pub mod registry;
 pub mod registry_snapshot;
 pub mod sql_macro_factory;
+pub mod type_planner;
 pub mod udaf_arg_best;
 pub mod udaf_builtin;
 pub mod udf;
@@ -49,6 +51,20 @@ pub fn install_sql_macro_factory_native(ctx: &SessionContext) -> Result<()> {
     let mut state = state_ref.write();
     let new_state = sql_macro_factory::with_sql_macro_factory(&state);
     *state = new_state;
+    Ok(())
+}
+
+pub fn install_relation_planner_native(ctx: &SessionContext) -> Result<()> {
+    ctx.register_relation_planner(Arc::new(relation_planner::CodeAnatomyRelationPlanner))?;
+    Ok(())
+}
+
+pub fn install_type_planner_native(ctx: &SessionContext) -> Result<()> {
+    let state_ref = ctx.state_ref();
+    let mut state = state_ref.write();
+    let builder = datafusion::execution::session_state::SessionStateBuilder::from(state.clone())
+        .with_type_planner(Arc::new(type_planner::CodeAnatomyTypePlanner));
+    *state = builder.build();
     Ok(())
 }
 

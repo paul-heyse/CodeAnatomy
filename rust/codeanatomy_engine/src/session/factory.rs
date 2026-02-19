@@ -28,7 +28,8 @@ use crate::spec::runtime::TracingConfig;
 use super::format_policy::{build_table_options, default_file_formats, FormatPolicySpec};
 use super::planning_manifest::{manifest_from_surface_with_context, PlanningSurfaceManifest};
 use super::planning_surface::{
-    apply_to_builder, install_rewrites, PlanningSurfaceSpec, TableFactoryEntry,
+    apply_to_builder, install_rewrites, PlanningSurfacePolicyV1, PlanningSurfaceSpec,
+    TableFactoryEntry,
 };
 use super::profile_coverage::reserved_profile_warnings;
 use super::profiles::EnvironmentProfile;
@@ -49,6 +50,13 @@ pub struct SessionBuildState {
     pub memory_pool_bytes: u64,
     pub planning_surface_manifest: PlanningSurfaceManifest,
     pub planning_surface_hash: [u8; 32],
+    pub build_warnings: Vec<RunWarning>,
+}
+
+pub struct SessionBuildParams {
+    pub profile_name: String,
+    pub spec_hash: [u8; 32],
+    pub tracing_config: Option<TracingConfig>,
     pub build_warnings: Vec<RunWarning>,
 }
 
@@ -133,6 +141,8 @@ impl SessionFactory {
         config_opts.optimizer.skip_failed_rules = false;
         config_opts.optimizer.max_passes = 3;
         config_opts.optimizer.enable_dynamic_filter_pushdown = true;
+        config_opts.optimizer.enable_join_dynamic_filter_pushdown = true;
+        config_opts.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
         config_opts.optimizer.enable_topk_dynamic_filter_pushdown = true;
         config_opts.optimizer.enable_sort_pushdown = true;
         config_opts.optimizer.allow_symmetric_joins_without_pruning = true;
@@ -142,15 +152,17 @@ impl SessionFactory {
         config_opts.explain.show_schema = true;
 
         self.build_session_state_internal(
-            format!("{:?}", self.profile.class),
+            SessionBuildParams {
+                profile_name: format!("{:?}", self.profile.class),
+                spec_hash,
+                tracing_config: tracing_config.cloned(),
+                build_warnings: Vec::new(),
+            },
             self.profile.memory_pool_bytes,
             config,
             runtime,
             ruleset,
-            spec_hash,
-            tracing_config,
             overrides,
-            Vec::new(),
         )
         .await
     }
@@ -221,6 +233,10 @@ impl SessionFactory {
         opts.optimizer.skip_failed_rules = profile.skip_failed_rules;
         opts.optimizer.filter_null_join_keys = profile.filter_null_join_keys;
         opts.optimizer.enable_dynamic_filter_pushdown = profile.enable_dynamic_filter_pushdown;
+        opts.optimizer.enable_join_dynamic_filter_pushdown =
+            profile.enable_join_dynamic_filter_pushdown;
+        opts.optimizer.enable_aggregate_dynamic_filter_pushdown =
+            profile.enable_aggregate_dynamic_filter_pushdown;
         opts.optimizer.enable_topk_dynamic_filter_pushdown =
             profile.enable_topk_dynamic_filter_pushdown;
         opts.optimizer.enable_sort_pushdown = profile.enable_sort_pushdown;
@@ -231,33 +247,34 @@ impl SessionFactory {
         opts.explain.show_schema = profile.show_schema;
 
         self.build_session_state_internal(
-            profile.profile_name.clone(),
+            SessionBuildParams {
+                profile_name: profile.profile_name.clone(),
+                spec_hash,
+                tracing_config: tracing_config.cloned(),
+                build_warnings: reserved_profile_warnings(profile),
+            },
             profile.memory_pool_bytes as u64,
             config,
             runtime,
             ruleset,
-            spec_hash,
-            tracing_config,
             overrides,
-            reserved_profile_warnings(profile),
         )
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn build_session_state_internal(
         &self,
-        profile_name: String,
+        params: SessionBuildParams,
         memory_pool_bytes: u64,
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
         ruleset: &CpgRuleSet,
-        spec_hash: [u8; 32],
-        tracing_config: Option<&TracingConfig>,
         overrides: SessionBuildOverrides,
-        mut build_warnings: Vec<RunWarning>,
     ) -> Result<SessionBuildState> {
-        let tracing_config = tracing_config.cloned().unwrap_or_default();
+        let profile_name = params.profile_name;
+        let spec_hash = params.spec_hash;
+        let mut build_warnings = params.build_warnings;
+        let tracing_config = params.tracing_config.unwrap_or_default();
         engine_tracing::init_otel_tracing(&tracing_config)?;
         let trace_ctx = engine_tracing::TraceRuleContext::from_hashes(
             &spec_hash,
@@ -343,8 +360,24 @@ impl SessionFactory {
         }
         if overrides.enable_domain_planner {
             planning_surface.expr_planners = datafusion_ext::domain_expr_planners();
+            planning_surface.relation_planners = vec![Arc::new(
+                datafusion_ext::relation_planner::CodeAnatomyRelationPlanner,
+            )];
+            planning_surface.type_planner =
+                Some(Arc::new(datafusion_ext::type_planner::CodeAnatomyTypePlanner));
             planning_surface.function_rewrites = datafusion_ext::domain_function_rewrites();
         }
+
+        planning_surface.typed_policy = Some(PlanningSurfacePolicyV1 {
+            enable_default_features: planning_surface.enable_default_features,
+            expr_planner_names: if overrides.enable_domain_planner {
+                vec!["codeanatomy_domain".to_string()]
+            } else {
+                Vec::new()
+            },
+            relation_planner_enabled: !planning_surface.relation_planners.is_empty(),
+            type_planner_enabled: planning_surface.type_planner.is_some(),
+        });
 
         planning_surface.table_factory_allowlist = planning_surface
             .table_factories

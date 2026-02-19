@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
+from datafusion_engine.plan.contracts import PlanArtifactPolicyV1
 from serde_msgspec import dumps_msgpack, ensure_raw, to_builtins
 from serde_msgspec_ext import SubstraitBytes
 from utils.hashing import hash_json_default
@@ -372,13 +373,28 @@ def substrait_msgpack(payload: bytes) -> bytes:
     return dumps_msgpack(SubstraitBytes(payload))
 
 
-def proto_msgpack(payload: object | None) -> bytes | None:
+def proto_msgpack(
+    payload: object | None,
+    *,
+    cross_process: bool = False,
+    policy: PlanArtifactPolicyV1 | None = None,
+) -> bytes | None:
     """Encode optional protobuf payload as msgpack bytes.
+
+    Raises:
+        ValueError: If cross-process encoding is requested while the active
+            policy disallows protobuf payloads.
 
     Returns:
         bytes | None: Msgpack-encoded protobuf payload or ``None``.
     """
     if payload is None:
+        return None
+    resolved_policy = policy or PlanArtifactPolicyV1()
+    if cross_process and resolved_policy.cross_process_format != "proto":
+        msg = "cross-process artifacts must use Substrait; proto payload is disallowed."
+        raise ValueError(msg)
+    if not cross_process and not resolved_policy.allow_proto_internal:
         return None
     return dumps_msgpack(payload)
 

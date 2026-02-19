@@ -12,7 +12,7 @@ The entire pipeline in ~50 lines:
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
@@ -30,13 +30,13 @@ from semantics.output_materialization import (
     materialize_semantic_outputs,
 )
 from semantics.pipeline_builders import (
-    _bundle_for_builder,
-    _cache_policy_for,
-    _finalize_output_builder,
-    _normalize_cache_policy,
-    _ordered_semantic_specs,
-    _semantic_view_specs,
-    _SemanticSpecContext,
+    SemanticSpecContext,
+    bundle_for_builder,
+    cache_policy_for,
+    finalize_output_builder,
+    normalize_cache_policy,
+    ordered_semantic_specs,
+    semantic_view_specs,
 )
 from semantics.pipeline_diagnostics import (
     SemanticQualityDiagnosticsRequest,
@@ -45,7 +45,6 @@ from semantics.pipeline_diagnostics import (
 from semantics.pipeline_diagnostics import (
     record_semantic_compile_artifacts as _record_semantic_compile_artifacts,
 )
-from semantics.specs import RelationshipSpec
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -122,7 +121,7 @@ class CpgBuildOptions:
         if self.compiled_cache_policy is None:
             return
         normalized = {
-            name: _normalize_cache_policy(str(value))
+            name: normalize_cache_policy(str(value))
             for name, value in self.compiled_cache_policy.items()
         }
         object.__setattr__(self, "compiled_cache_policy", normalized)
@@ -293,12 +292,10 @@ def cpg_view_specs(
     """
     from semantics.registry import (
         RELATIONSHIP_SPECS,
-        SEMANTIC_NORMALIZATION_SPECS,
         SemanticSpecIndex,
         normalization_spec_for_output,
     )
 
-    normalization_by_output = {spec.output_name: spec for spec in SEMANTIC_NORMALIZATION_SPECS}
     relationship_by_name = {spec.name: spec for spec in RELATIONSHIP_SPECS}
     semantic_ir = request.semantic_ir
     ir = semantic_ir
@@ -311,8 +308,7 @@ def cpg_view_specs(
         msg = "Runtime profile is required for CPG output views."
         raise ValueError(msg)
 
-    context = _SemanticSpecContext(
-        normalization_by_output=normalization_by_output,
+    context = SemanticSpecContext(
         relationship_by_name=relationship_by_name,
         input_mapping=request.input_mapping,
         config=request.config,
@@ -332,8 +328,8 @@ def cpg_view_specs(
         )
         for view in ir.views
     )
-    return _semantic_view_specs(
-        ordered_specs=_ordered_semantic_specs(spec_index),
+    return semantic_view_specs(
+        ordered_specs=ordered_semantic_specs(spec_index),
         context=context,
     )
 
@@ -372,7 +368,7 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
     cache_overrides = request.runtime_profile.semantic_cache_overrides()
     if cache_overrides:
         normalized_overrides: dict[str, CachePolicy] = {
-            name: _normalize_cache_policy(value) for name, value in cache_overrides.items()
+            name: normalize_cache_policy(value) for name, value in cache_overrides.items()
         }
         resolved_cache.update(normalized_overrides)
     nodes: list[ViewNode] = []
@@ -383,14 +379,14 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
                 name=name,
                 deps=(),
                 builder=builder,
-                plan_bundle=_bundle_for_builder(
+                plan_bundle=bundle_for_builder(
                     request.ctx,
                     runtime_profile=request.runtime_profile,
                     builder=builder,
                     view_name=name,
                     semantic_ir=request.semantic_ir,
                 ),
-                cache_policy=_cache_policy_for(name, resolved_cache),
+                cache_policy=cache_policy_for(name, resolved_cache),
             )
         )
     return nodes
@@ -403,6 +399,7 @@ def _execute_cpg_build(
     resolved: CpgBuildOptions,
     effective_use_cdf: bool,
     execution_context: SemanticExecutionContext,
+    emit_quality_diagnostics: bool = True,
 ) -> _CpgBuildExecutionResult:
     """Run one semantic CPG build pass and return resolved build artifacts.
 
@@ -491,17 +488,18 @@ def _execute_cpg_build(
             requested_outputs=resolved_outputs,
             manifest=manifest,
         )
-    emit_semantic_quality_diagnostics(
-        SemanticQualityDiagnosticsRequest(
-            ctx=ctx,
-            runtime_profile=runtime_profile,
-            dataset_resolver=early_resolver,
-            schema_policy=resolved.schema_policy,
-            requested_outputs=resolved_outputs,
-            manifest=manifest,
-            finalize_builder=_finalize_output_builder,
+    if emit_quality_diagnostics:
+        emit_semantic_quality_diagnostics(
+            SemanticQualityDiagnosticsRequest(
+                ctx=ctx,
+                runtime_profile=runtime_profile,
+                dataset_resolver=early_resolver,
+                schema_policy=resolved.schema_policy,
+                requested_outputs=resolved_outputs,
+                manifest=manifest,
+                finalize_builder=finalize_output_builder,
+            )
         )
-    )
     return _CpgBuildExecutionResult(
         nodes=tuple(nodes),
         semantic_ir=semantic_ir,
@@ -614,12 +612,16 @@ def build_cpg_from_inferred_deps(
             "codeanatomy.has_cache_policy": resolved.cache_policy is not None,
         },
     ):
+        # Inferred-dependency compilation should preserve a single logical DAG
+        # and avoid extra materialization boundaries.
+        inference_options = replace(resolved, materialize_outputs=False)
         build_result = _execute_cpg_build(
             ctx,
             runtime_profile=runtime_profile,
-            resolved=resolved,
+            resolved=inference_options,
             effective_use_cdf=effective_use_cdf,
             execution_context=execution_context,
+            emit_quality_diagnostics=False,
         )
 
         deps: dict[str, object] = {}
@@ -682,7 +684,6 @@ __all__ = [
     "CpgBuildOptions",
     "CpgViewNodesRequest",
     "CpgViewSpecsRequest",
-    "RelationshipSpec",
     "SemanticOutputWriteContext",
     "build_cpg",
     "build_cpg_from_inferred_deps",

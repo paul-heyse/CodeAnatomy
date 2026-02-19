@@ -151,9 +151,6 @@ def orchestrate_build(request: OrchestrateBuildRequestV1) -> BuildResult:
     repo_root = Path(request.repo_root)
     work_dir = Path(request.work_dir)
     output_dir = Path(request.output_dir)
-    cpg_outputs: dict[str, dict[str, object]]
-    auxiliary_outputs: dict[str, dict[str, object]]
-
     with stage_span("build_orchestrator", stage="orchestrator", scope_name=SCOPE_PIPELINE):
         extraction_result = _run_extraction_phase(
             repo_root,
@@ -177,20 +174,18 @@ def orchestrate_build(request: OrchestrateBuildRequestV1) -> BuildResult:
             spec,
             request.engine_profile,
         )
-        cpg_outputs = _collect_cpg_outputs(run_result, output_dir=output_dir)
-        auxiliary_output_options = _AuxiliaryOutputOptions(
+    cpg_outputs, auxiliary_outputs, warnings = _post_process_results(
+        run_result=run_result,
+        run_artifacts=run_artifacts,
+        extraction_result=extraction_result,
+        output_dir=output_dir,
+        options=_AuxiliaryOutputOptions(
             include_errors=request.include_errors,
             include_manifest=request.include_manifest,
             include_run_bundle=request.include_run_bundle,
-        )
-        auxiliary_outputs = _collect_auxiliary_outputs(
-            output_dir=output_dir,
-            artifacts=run_artifacts,
-            extraction_result=extraction_result,
-            options=auxiliary_output_options,
-        )
-        _record_observability(spec, run_result)
-        warnings = _extract_warnings(run_result)
+        ),
+        spec=spec,
+    )
 
     return BuildResult(
         cpg_outputs=cpg_outputs,
@@ -199,6 +194,33 @@ def orchestrate_build(request: OrchestrateBuildRequestV1) -> BuildResult:
         extraction_timing=extraction_result.timing,
         warnings=warnings,
     )
+
+
+def _post_process_results(
+    *,
+    run_result: dict[str, object],
+    run_artifacts: dict[str, object],
+    extraction_result: ExtractionResult,
+    output_dir: Path,
+    options: _AuxiliaryOutputOptions,
+    spec: SemanticExecutionSpec,
+) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], list[dict[str, object]]]:
+    """Collect outputs and emit observability after stage dispatch completes.
+
+    Returns:
+        tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], list[dict[str, object]]]:
+            Collected CPG outputs, auxiliary outputs, and warning payloads.
+    """
+    cpg_outputs = _collect_cpg_outputs(run_result, output_dir=output_dir)
+    auxiliary_outputs = _collect_auxiliary_outputs(
+        output_dir=output_dir,
+        artifacts=run_artifacts,
+        extraction_result=extraction_result,
+        options=options,
+    )
+    _record_observability(spec, run_result)
+    warnings = _extract_warnings(run_result)
+    return cpg_outputs, auxiliary_outputs, warnings
 
 
 def _run_extraction_phase(

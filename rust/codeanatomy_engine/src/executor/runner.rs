@@ -78,6 +78,11 @@ pub async fn execute_and_materialize_with_plans(
         let pre_registered_target = ctx.table(&target.table_name).await.ok();
         let use_native_delta_writer =
             target.delta_location.is_some() || pre_registered_target.is_none();
+        log::info!(
+            "materialization path selected: table={}, native_delta_writer={}",
+            target.table_name,
+            use_native_delta_writer
+        );
         if pre_registered_target.is_none() || target.delta_location.is_some() {
             if pre_registered_target.is_some() && target.delta_location.is_some() {
                 let _ = ctx.deregister_table(&target.table_name)?;
@@ -149,6 +154,12 @@ pub async fn execute_and_materialize_with_plans(
             partition_count: partition_count as u32,
             write_outcome: outcome,
         });
+        log::info!(
+            "materialization complete: table={}, rows_written={}, partitions={}",
+            target.table_name,
+            rows_written,
+            partition_count
+        );
     }
 
     Ok((results, physical_plans))

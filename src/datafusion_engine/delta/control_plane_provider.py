@@ -166,6 +166,7 @@ def delta_provider_with_files(
 
 
 def delta_cdf_provider(
+    ctx: SessionContext,
     *,
     request: DeltaCdfRequest,
 ) -> DeltaCdfProviderBundle:
@@ -192,6 +193,10 @@ def delta_cdf_provider(
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     ext_options = _cdf_options_to_ext(module, request.options)
     response = provider_factory(
+        _internal_ctx(
+            ctx,
+            entrypoint="delta_cdf_table_provider",
+        ),
         request.table_uri,
         storage_payload,
         request.version,

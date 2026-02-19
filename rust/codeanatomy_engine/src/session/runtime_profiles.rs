@@ -86,6 +86,10 @@ pub struct RuntimeProfileSpec {
     pub filter_null_join_keys: bool,
     /// Enable dynamic filter pushdown.
     pub enable_dynamic_filter_pushdown: bool,
+    /// Enable join-specific dynamic filter pushdown.
+    pub enable_join_dynamic_filter_pushdown: bool,
+    /// Enable aggregate-specific dynamic filter pushdown.
+    pub enable_aggregate_dynamic_filter_pushdown: bool,
     /// Enable top-K dynamic filter pushdown.
     pub enable_topk_dynamic_filter_pushdown: bool,
     /// Enable sort pushdown.
@@ -145,6 +149,8 @@ impl RuntimeProfileSpec {
             skip_failed_rules: false,
             filter_null_join_keys: true,
             enable_dynamic_filter_pushdown: true,
+            enable_join_dynamic_filter_pushdown: true,
+            enable_aggregate_dynamic_filter_pushdown: true,
             enable_topk_dynamic_filter_pushdown: true,
             enable_sort_pushdown: true,
             allow_symmetric_joins_without_pruning: true,

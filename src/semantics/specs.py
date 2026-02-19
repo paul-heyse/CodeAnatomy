@@ -72,6 +72,8 @@ class SemanticTableSpec(StructBaseStrict, frozen=True):
     text_cols: tuple[str, ...] = ()
 
 
+# DEPRECATED: RelationshipSpec is superseded by QualityRelationshipSpec in
+# semantics/quality.py. Active pipeline registration now uses quality specs.
 class RelationshipSpec(StructBaseStrict, frozen=True):
     """Declarative specification for a semantic relationship.
 

@@ -39,8 +39,15 @@ class TableRegistry:
         """Return sorted table names currently registered."""
         return self.all_names()
 
-    def resolve(self, name: str, factory: Callable[[], TableInfo]) -> TableInfo:
-        """Return existing table info or register a newly-created one."""
+    def ensure_and_get(self, name: str, factory: Callable[[], TableInfo]) -> TableInfo:
+        """Register-if-absent and return table info.
+
+        This helper may mutate registry state by registering ``name``.
+        Use ``get`` for read-only access when registration is not expected.
+
+        Returns:
+            TableInfo: Existing or newly-created table info for ``name``.
+        """
         existing = self.get(name)
         if existing is not None:
             return existing

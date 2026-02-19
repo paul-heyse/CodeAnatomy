@@ -46,7 +46,7 @@ def _import_override(module: ModuleType, *, match: str) -> Callable[[str], Modul
 def test_delta_extension_compatibility_uses_fallback_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Treat fallback Delta contexts as compatible when direct ctx probes fail."""
+    """Required Delta entrypoints reject fallback-only context compatibility."""
     module = _FallbackOnlyModule()
     monkeypatch.setattr(capabilities, "_DELTA_EXTENSION_MODULES", ("datafusion_ext",))
     monkeypatch.setattr(
@@ -56,17 +56,18 @@ def test_delta_extension_compatibility_uses_fallback_context(
     compatibility = capabilities.is_delta_extension_compatible(SessionContext())
 
     assert compatibility.available is True
-    assert compatibility.compatible is True
+    assert compatibility.compatible is False
     assert compatibility.entrypoint == "delta_scan_config_from_session"
     assert compatibility.module == "datafusion_ext"
-    assert compatibility.ctx_kind == "fallback"
-    assert compatibility.probe_result == "ok"
+    assert compatibility.ctx_kind is None
+    assert compatibility.probe_result == "error"
+    assert compatibility.error is not None
 
 
 def test_delta_extension_compatibility_strict_non_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reject fallback-only compatibility when strict probing is requested."""
+    """Strict and non-strict probes both reject fallback-only required entrypoints."""
     module = _FallbackOnlyModule()
     monkeypatch.setattr(capabilities, "_DELTA_EXTENSION_MODULES", ("datafusion_ext",))
     monkeypatch.setattr(
@@ -82,8 +83,9 @@ def test_delta_extension_compatibility_strict_non_fallback(
     assert compatibility.compatible is False
     assert compatibility.entrypoint == "delta_scan_config_from_session"
     assert compatibility.module == "datafusion_ext"
-    assert compatibility.ctx_kind == "fallback"
-    assert compatibility.probe_result == "fallback_disallowed"
+    assert compatibility.ctx_kind is None
+    assert compatibility.probe_result == "error"
+    assert compatibility.error is not None
 
 
 def test_delta_extension_compatibility_reports_missing_entrypoint(

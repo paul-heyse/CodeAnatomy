@@ -32,4 +32,25 @@ class PlanWithDeltaPinsRequestV1(msgspec.Struct, frozen=True):
     semantic_context: SemanticContextLike | None = None
 
 
-__all__ = ["PlanWithDeltaPinsRequestV1"]
+class PlanArtifactPolicyV1(msgspec.Struct, frozen=True):
+    """Serialization policy for plan artifacts across process boundaries."""
+
+    cross_process_format: str = "substrait"
+    allow_proto_internal: bool = True
+
+
+class PlanningSurfaceManifestV2(msgspec.Struct, frozen=True):
+    """Canonical planning-surface manifest shared by Python and Rust layers."""
+
+    expr_planners: tuple[str, ...] = ()
+    relation_planners: tuple[str, ...] = ()
+    type_planners: tuple[str, ...] = ()
+    table_factories: tuple[str, ...] = ()
+    planning_config_keys: dict[str, str] = msgspec.field(default_factory=dict)
+
+
+__all__ = [
+    "PlanArtifactPolicyV1",
+    "PlanWithDeltaPinsRequestV1",
+    "PlanningSurfaceManifestV2",
+]

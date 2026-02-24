@@ -16,9 +16,7 @@
     "section_4_tldr",
     "section_4",
     "section_5_tldr",
-    "section_5",
-    "section_6_tldr",
-    "section_6"
+    "section_5"
   ],
   "neighbors": {
     "next": "section_0_tldr",
@@ -33,5 +31,5 @@
     "<!--LDMD:END id=\"run_meta\"-->",
     ""
   ],
-  "search_match_count": 17
+  "search_match_count": 13
 }

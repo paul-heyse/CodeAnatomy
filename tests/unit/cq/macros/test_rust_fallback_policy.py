@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from tools.cq.core.schema import CqResult, RunMeta, mk_result, update_result_summary
+from tools.cq.macros.multilang_fallback import RustMacroFallbackRequestV1
 from tools.cq.macros.rust_fallback_policy import (
     RustFallbackPolicyV1,
     apply_rust_fallback_policy,
@@ -29,21 +30,13 @@ def test_apply_rust_fallback_policy_uses_summary_key(monkeypatch: pytest.MonkeyP
     """Test apply rust fallback policy uses summary key."""
     captured: dict[str, object] = {}
 
-    def _fake_apply(
-        *,
-        result: CqResult,
-        root: Path,
-        pattern: str,
-        macro_name: str,
-        fallback_matches: int,
-        query: str | None,
-    ) -> CqResult:
-        captured["root"] = root
-        captured["pattern"] = pattern
-        captured["macro_name"] = macro_name
-        captured["fallback_matches"] = fallback_matches
-        captured["query"] = query
-        return result
+    def _fake_apply(request: RustMacroFallbackRequestV1) -> CqResult:
+        captured["root"] = request.root
+        captured["pattern"] = request.pattern
+        captured["macro_name"] = request.macro_name
+        captured["fallback_matches"] = request.fallback_matches
+        captured["query"] = request.query
+        return request.result
 
     monkeypatch.setattr(
         "tools.cq.macros.multilang_fallback.apply_rust_macro_fallback",
@@ -71,21 +64,9 @@ def test_apply_rust_fallback_policy_non_int_summary_defaults_zero(
     """Test apply rust fallback policy non int summary defaults zero."""
     captured: dict[str, object] = {}
 
-    def _fake_apply(
-        *,
-        result: CqResult,
-        root: Path,
-        pattern: str,
-        macro_name: str,
-        fallback_matches: int,
-        query: str | None,
-    ) -> CqResult:
-        _ = root
-        _ = pattern
-        _ = macro_name
-        _ = query
-        captured["fallback_matches"] = fallback_matches
-        return result
+    def _fake_apply(request: RustMacroFallbackRequestV1) -> CqResult:
+        captured["fallback_matches"] = request.fallback_matches
+        return request.result
 
     monkeypatch.setattr(
         "tools.cq.macros.multilang_fallback.apply_rust_macro_fallback",
@@ -100,3 +81,55 @@ def test_apply_rust_fallback_policy_non_int_summary_defaults_zero(
     )
     apply_rust_fallback_policy(result, root=Path(), policy=policy)
     assert captured["fallback_matches"] == 0
+
+
+def test_apply_rust_fallback_policy_uses_unsupported_contract_for_rust_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Macros with rust capability=none should route to unsupported contract."""
+    captured: dict[str, object] = {}
+
+    def _fake_unsupported(
+        *,
+        result: CqResult,
+        root: Path,
+        macro_name: str,
+        rust_only: bool,
+        query: str | None,
+    ) -> CqResult:
+        captured["root"] = root
+        captured["macro_name"] = macro_name
+        captured["rust_only"] = rust_only
+        captured["query"] = query
+        return result
+
+    def _should_not_call(*_args: object, **_kwargs: object) -> CqResult:
+        msg = "rust fallback search should not run for rust:none macros"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        "tools.cq.macros.multilang_fallback.apply_unsupported_macro_contract",
+        _fake_unsupported,
+    )
+    monkeypatch.setattr(
+        "tools.cq.macros.multilang_fallback.apply_rust_macro_fallback",
+        _should_not_call,
+    )
+
+    run = RunMeta(
+        macro="impact",
+        argv=["cq", "impact", "register_udf", "--include", "rust/**/*.rs"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=0.0,
+    )
+    result = mk_result(run)
+    policy = RustFallbackPolicyV1(
+        macro_name="impact",
+        pattern="register_udf",
+        query="register_udf",
+    )
+    out = apply_rust_fallback_policy(result, root=Path(), policy=policy)
+    assert out is result
+    assert captured["macro_name"] == "impact"
+    assert captured["rust_only"] is True

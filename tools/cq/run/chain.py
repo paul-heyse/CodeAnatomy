@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from cyclopts.exceptions import CycloptsError
 
+from tools.cq.core.types import parse_query_language_scope
 from tools.cq.run.spec import (
     BytecodeSurfaceStep,
     CallsStep,
@@ -138,6 +139,9 @@ def _build_search_step(args: tuple[object, ...], opts: object | None) -> RunStep
         mode=mode,
         include_strings=getattr(opts, "include_strings", False),
         in_dir=getattr(opts, "in_dir", None),
+        lang_scope=parse_query_language_scope(
+            str(getattr(opts, "lang", "auto")) if opts is not None else None
+        ),
     )
 
 

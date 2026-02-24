@@ -8,7 +8,14 @@ from typing import Any, Literal, cast
 
 import msgspec
 
-type SummaryVariantName = Literal["search", "calls", "impact", "run", "neighborhood"]
+type SummaryVariantName = Literal[
+    "search",
+    "calls",
+    "impact",
+    "sig-impact",
+    "run",
+    "neighborhood",
+]
 
 
 class _ComparableSequence(tuple[object, ...]):
@@ -289,6 +296,12 @@ class ImpactSummaryV1(SummaryEnvelopeV1, frozen=True):
     call_sites: int = 0
 
 
+class SigImpactSummaryV1(ImpactSummaryV1, frozen=True):
+    """Signature-impact summary payload."""
+
+    summary_variant: SummaryVariantName = "sig-impact"
+
+
 class RunSummaryV1(SummaryEnvelopeV1, frozen=True):
     """Run/chain summary payload."""
 
@@ -303,6 +316,8 @@ class NeighborhoodSummaryV1(SummaryEnvelopeV1, frozen=True):
 
     summary_variant: SummaryVariantName = "neighborhood"
     target_resolution_kind: str | None = None
+    target_resolution_degrade_events: int = 0
+    target_resolution_ambiguous: bool = False
     top_k: int | None = None
     enable_semantic_enrichment: bool | None = None
     incremental_enrichment_mode: str | None = None
@@ -318,7 +333,12 @@ class NeighborhoodSummaryV1(SummaryEnvelopeV1, frozen=True):
 
 
 type SummaryV1 = (
-    SearchSummaryV1 | CallsSummaryV1 | ImpactSummaryV1 | RunSummaryV1 | NeighborhoodSummaryV1
+    SearchSummaryV1
+    | CallsSummaryV1
+    | ImpactSummaryV1
+    | SigImpactSummaryV1
+    | RunSummaryV1
+    | NeighborhoodSummaryV1
 )
 
 
@@ -326,6 +346,7 @@ _SUMMARY_VARIANT_BY_NAME: dict[SummaryVariantName, type[SummaryEnvelopeV1]] = {
     "search": SearchSummaryV1,
     "calls": CallsSummaryV1,
     "impact": ImpactSummaryV1,
+    "sig-impact": SigImpactSummaryV1,
     "run": RunSummaryV1,
     "neighborhood": NeighborhoodSummaryV1,
 }
@@ -344,9 +365,9 @@ _MODE_TO_VARIANT_NAME: dict[str, SummaryVariantName] = {
     "calls": "calls",
     "macro:calls": "calls",
     "impact": "impact",
-    "sig-impact": "impact",
+    "sig-impact": "sig-impact",
     "macro:impact": "impact",
-    "macro:sig-impact": "impact",
+    "macro:sig-impact": "sig-impact",
     "run": "run",
     "chain": "run",
     "neighborhood": "neighborhood",
@@ -361,7 +382,7 @@ _MACRO_TO_VARIANT_NAME: dict[str, SummaryVariantName] = {
     "side-effects": "search",
     "calls": "calls",
     "impact": "impact",
-    "sig-impact": "impact",
+    "sig-impact": "sig-impact",
     "run": "run",
     "chain": "run",
     "neighborhood": "neighborhood",
@@ -493,7 +514,12 @@ def summary_from_mapping(
     """
     if isinstance(
         value,
-        SearchSummaryV1 | CallsSummaryV1 | ImpactSummaryV1 | RunSummaryV1 | NeighborhoodSummaryV1,
+        SearchSummaryV1
+        | CallsSummaryV1
+        | ImpactSummaryV1
+        | SigImpactSummaryV1
+        | RunSummaryV1
+        | NeighborhoodSummaryV1,
     ):
         return value
     if isinstance(value, SummaryEnvelopeV1):
@@ -539,13 +565,13 @@ def as_calls_summary(summary: SummaryV1) -> CallsSummaryV1:
     raise TypeError(msg)
 
 
-def as_impact_summary(summary: SummaryV1) -> ImpactSummaryV1:
+def as_impact_summary(summary: SummaryV1) -> ImpactSummaryV1 | SigImpactSummaryV1:
     """Return ``ImpactSummaryV1`` or raise when variant mismatches.
 
     Raises:
         TypeError: If ``summary`` is not the ``impact`` variant.
     """
-    if isinstance(summary, ImpactSummaryV1):
+    if isinstance(summary, ImpactSummaryV1 | SigImpactSummaryV1):
         return summary
     msg = f"Expected impact summary variant, got {type(summary).__name__}"
     raise TypeError(msg)
@@ -644,6 +670,7 @@ __all__ = [
     "RunSummaryV1",
     "SearchSummaryV1",
     "SemanticTelemetryV1",
+    "SigImpactSummaryV1",
     "SummaryEnvelopeV1",
     "SummaryV1",
     "SummaryVariantName",

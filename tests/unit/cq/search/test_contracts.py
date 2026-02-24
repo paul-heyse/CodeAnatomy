@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from tools.cq.core.contracts import SummaryBuildRequest
-from tools.cq.orchestration.multilang_summary import build_multilang_summary
+from tools.cq.orchestration.multilang_summary import (
+    build_multilang_summary,
+    partition_stats_from_result_summary,
+)
 from tools.cq.search._shared.search_contracts import (
     CrossLanguageDiagnostic,
     EnrichmentTelemetry,
@@ -15,6 +18,7 @@ from tools.cq.search._shared.search_contracts import (
 
 RUST_MATCH_COUNT = 3
 RUST_CACHE_HIT_COUNT = 2
+PARTITION_FILE_COUNT = 2
 
 
 def test_search_summary_contract_preserves_required_keys() -> None:
@@ -97,3 +101,21 @@ def test_search_summary_contract_accepts_enrichment_telemetry() -> None:
     )
     assert contract.enrichment_telemetry is not None
     assert contract.enrichment_telemetry.rust.cache_hits == RUST_CACHE_HIT_COUNT
+
+
+def test_partition_stats_coerces_zero_total_matches_to_matches() -> None:
+    """Partition totals should not remain zero when matches are positive."""
+    stats = partition_stats_from_result_summary(
+        {
+            "matches": RUST_MATCH_COUNT,
+            "total_matches": 0,
+            "files_scanned": PARTITION_FILE_COUNT,
+            "scanned_files": 0,
+            "caps_hit": None,
+        }
+    )
+    assert stats["matches"] == RUST_MATCH_COUNT
+    assert stats["total_matches"] == RUST_MATCH_COUNT
+    assert stats["files_scanned"] == PARTITION_FILE_COUNT
+    assert stats["scanned_files"] == PARTITION_FILE_COUNT
+    assert stats["caps_hit"] == "none"

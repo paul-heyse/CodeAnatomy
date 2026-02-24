@@ -8,10 +8,12 @@ constant (or builds one at runtime for dynamic patterns) and calls
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from tools.cq.core.schema import CqResult
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.semantic.diagnostics import CAPABILITY_MATRIX
 
 
 class RustFallbackPolicyV1(CqStruct, frozen=True):
@@ -46,7 +48,22 @@ def apply_rust_fallback_policy(
     CqResult
         The mutated result with Rust fallback data merged in.
     """
-    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
+    from tools.cq.macros.multilang_fallback import (
+        RustMacroFallbackRequestV1,
+        apply_rust_macro_fallback,
+        apply_unsupported_macro_contract,
+    )
+
+    capability = CAPABILITY_MATRIX.get(f"macro:{policy.macro_name}")
+    rust_level = capability.get("rust", "none") if capability is not None else "none"
+    if rust_level == "none":
+        return apply_unsupported_macro_contract(
+            result=result,
+            root=root,
+            macro_name=policy.macro_name,
+            rust_only=_is_rust_only_request(result.run.argv),
+            query=policy.query,
+        )
 
     fallback_matches = 0
     if policy.fallback_matches_summary_key:
@@ -54,13 +71,50 @@ def apply_rust_fallback_policy(
         fallback_matches = int(raw) if isinstance(raw, int) else 0
 
     return apply_rust_macro_fallback(
-        result=result,
-        root=root,
-        pattern=policy.pattern,
-        macro_name=policy.macro_name,
-        fallback_matches=fallback_matches,
-        query=policy.query,
+        RustMacroFallbackRequestV1(
+            result=result,
+            root=root,
+            pattern=policy.pattern,
+            macro_name=policy.macro_name,
+            fallback_matches=fallback_matches,
+            query=policy.query,
+        )
     )
+
+
+def _is_rust_only_request(argv: Sequence[str]) -> bool:
+    """Heuristically detect Rust-only command intent from argv tokens.
+
+    Returns:
+        bool: True when argv tokens indicate Rust scope without Python scope.
+    """
+    has_rust_scope = False
+    has_python_scope = False
+    previous: str | None = None
+    for raw in argv:
+        token = str(raw).strip().lower()
+        if token in {"--lang", "--in", "--include", "--exclude"}:
+            previous = token
+            continue
+
+        if previous in {"--lang", "--in"}:
+            if token == "rust":
+                has_rust_scope = True
+            elif token == "python":
+                has_python_scope = True
+        previous = None
+
+        if "lang=rust" in token or "in=rust" in token:
+            has_rust_scope = True
+        if token.endswith(".rs") or ".rs" in token or "rust/" in token or "/rust/" in token:
+            has_rust_scope = True
+
+        if "lang=python" in token or "in=python" in token:
+            has_python_scope = True
+        if token.endswith(".py") or ".py" in token or "/python/" in token:
+            has_python_scope = True
+
+    return has_rust_scope and not has_python_scope
 
 
 __all__ = ["RustFallbackPolicyV1", "apply_rust_fallback_policy"]

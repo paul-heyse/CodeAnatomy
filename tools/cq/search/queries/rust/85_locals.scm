@@ -12,7 +12,7 @@
 
 ((closure_expression
    parameters: (closure_parameters
-                 (closure_parameter
+                 (parameter
                    pattern: (identifier) @local.definition))) @local.binding
  (#set! cq.emit "locals")
  (#set! cq.kind "local_definition")

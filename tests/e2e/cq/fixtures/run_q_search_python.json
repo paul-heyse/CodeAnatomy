@@ -12,9 +12,7 @@
     "function: resolve",
     "function: resolve",
     "function: build_pipeline",
-    "class: __init__",
-    "module: AsyncService",
-    "Query pack lint failed: 2 errors"
+    "class: __init__"
   ],
   "sections": [
     {
@@ -27,20 +25,19 @@
       "title": "q_0: python: Neighborhood Preview"
     },
     {
-      "count": 3,
+      "count": 2,
       "messages": [
         "function: build_pipeline",
-        "class: __init__",
-        "module: AsyncService"
+        "class: __init__"
       ],
       "title": "search_1: Target Candidates"
     },
     {
       "count": 6,
       "messages": [
-        "function: build_pipeline (2 occurrences) [object_id=obj_603105605b3d64060f9165d8]",
+        "reference: build_pipeline (2 occurrences) [object_id=obj_5203622b44d7ebbb9815fa14]",
         "reference: __all__ (1 occurrences) [object_id=obj_5d0f6478f9775a7e1f1647ac]",
-        "class: __init__ (1 occurrences) [object_id=obj_0c6c2e2387b0054bd45f66a1]",
+        "reference: __init__ (1 occurrences) [object_id=obj_9c4f4c66302937dba37c8622]",
         "reference: AsyncService (1 occurrences) [object_id=obj_30011743a28c999d459335d2]",
         "module: AsyncService (1 occurrences) [object_id=obj_8819fb69cb8bf00bf0218fbc]",
         "module: AsyncService (1 occurrences) [object_id=obj_cc1ff9d9607462d503a1f03c]"
@@ -52,9 +49,9 @@
       "messages": [
         "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:6:25 (block ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:1-10) [from_import] [object_id=obj_cc1ff9d9607462d503a1f03c] [line_id=ae8e6eaa16c0adf4d37876e3]",
         "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:7:25 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:5-11) [from_import] [object_id=obj_8819fb69cb8bf00bf0218fbc] [line_id=6460e90205328a006b7f26ff]",
-        "build_pipeline: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:21:62 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:21-42) [annotation] [object_id=obj_603105605b3d64060f9165d8] [line_id=aee4a8ac1ad892144ca9b7d4]",
+        "build_pipeline: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:21:62 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:21-42) [annotation] [object_id=obj_5203622b44d7ebbb9815fa14] [line_id=d4a8bc3bc6ba74cd08c743b8]",
         "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:36:14 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:29-42) [reference] [object_id=obj_30011743a28c999d459335d2] [line_id=a8273df42dd5d37d50a89e9e]",
-        "__init__: ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:25:6 (block ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:25-53) [reference] [object_id=obj_0c6c2e2387b0054bd45f66a1] [line_id=0d796fabd151630bbc40076b]"
+        "__init__: ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:25:6 (block ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:25-53) [reference] [object_id=obj_9c4f4c66302937dba37c8622] [line_id=9bbbea3bee226a650c4232db]"
       ],
       "title": "search_1: Occurrences"
     },
@@ -83,13 +80,6 @@
         "./tests/e2e/cq/_golden_workspace/python_project/app/services.py: 1 matches"
       ],
       "title": "search_1: Hot Files"
-    },
-    {
-      "count": 1,
-      "messages": [
-        "Query pack lint failed: 2 errors"
-      ],
-      "title": "search_1: Cross-Language Diagnostics"
     }
   ],
   "summary": {

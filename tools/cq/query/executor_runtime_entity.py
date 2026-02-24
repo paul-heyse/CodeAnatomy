@@ -62,6 +62,7 @@ from tools.cq.query.query_summary import (
 from tools.cq.query.scan import EntityCandidates, ScanContext
 from tools.cq.query.scan import build_entity_candidates as _build_entity_candidates
 from tools.cq.query.scan import build_scan_context as _build_scan_context
+from tools.cq.query.section_fallbacks import ensure_query_sections
 from tools.cq.query.shared_utils import extract_def_name
 
 if TYPE_CHECKING:
@@ -268,6 +269,7 @@ def _execute_entity_query_impl(ctx: QueryExecutionContext) -> CqResult:
         {
             **summary_update_mapping(summary_updates),
             "files_scanned": len({r.file for r in state.records}),
+            "total_matches": len(findings),
         },
     )
     result = msgspec.structs.replace(
@@ -276,6 +278,7 @@ def _execute_entity_query_impl(ctx: QueryExecutionContext) -> CqResult:
         key_findings=findings,
         sections=sections,
     )
+    result = ensure_query_sections(result, title="Findings")
     result = runtime.maybe_add_entity_explain(state, result)
     result = runtime.finalize_single_scope_summary(ctx, result)
     result = runtime.attach_entity_insight(result, services=ctx.services)
@@ -333,6 +336,7 @@ def _execute_entity_query_from_records_impl(request: EntityQueryRequest) -> CqRe
         {
             **summary_update_mapping(summary_updates),
             "files_scanned": len({r.file for r in state.records}),
+            "total_matches": len(findings),
         },
     )
     result = msgspec.structs.replace(
@@ -341,6 +345,7 @@ def _execute_entity_query_from_records_impl(request: EntityQueryRequest) -> CqRe
         key_findings=findings,
         sections=sections,
     )
+    result = ensure_query_sections(result, title="Findings")
     result = runtime.maybe_add_entity_explain(state, result)
     result = runtime.finalize_single_scope_summary(ctx, result)
     result = runtime.attach_entity_insight(result, services=ctx.services)

@@ -89,14 +89,51 @@ def extract_rust_use_import_name(text: str) -> str | None:
     Returns:
         str | None: Local symbol name imported by the `use` declaration.
     """
+    names = extract_rust_use_import_names(text)
+    return names[0] if names else None
+
+
+def extract_rust_use_import_names(text: str) -> tuple[str, ...]:
+    """Extract all local names imported by one Rust ``use`` declaration.
+
+    Returns:
+        tuple[str, ...]: Imported symbol names in declaration order.
+    """
     cleaned = text.split("//", maxsplit=1)[0].strip()
-    match = re.match(r"use\s+([^;]+);?", cleaned)
+    match = re.match(r"(?:pub(?:\([^)]*\))?\s+)?use\s+([^;]+);?", cleaned)
     if not match:
-        return None
+        return ()
     use_target = match.group(1).strip()
-    if " as " in use_target:
-        return use_target.rsplit(" as ", maxsplit=1)[1].strip()
-    return use_target.rsplit("::", maxsplit=1)[-1].strip("{} ").strip()
+    if not use_target:
+        return ()
+
+    def _final_name(raw: str) -> str:
+        token = raw.strip()
+        if " as " in token:
+            token = token.rsplit(" as ", maxsplit=1)[1].strip()
+        token = token.rsplit("::", maxsplit=1)[-1].strip()
+        return token.strip("{} ").strip()
+
+    if "{" not in use_target:
+        name = _final_name(use_target)
+        return (name,) if name else ()
+
+    group_match = re.match(r"(.+?)::\{(.+)\}$", use_target)
+    if not group_match:
+        # Fallback for malformed or nested groupings we do not model explicitly.
+        name = _final_name(use_target)
+        return (name,) if name else ()
+
+    grouped = group_match.group(2)
+    names: list[str] = []
+    for token in grouped.split(","):
+        cleaned_token = token.strip()
+        if not cleaned_token or cleaned_token in {"*", "self"}:
+            continue
+        final = _final_name(cleaned_token)
+        if final:
+            names.append(final)
+    return tuple(names)
 
 
 def parse_import_bindings(text: str) -> tuple[ParsedImportBinding, ...]:
@@ -203,6 +240,7 @@ __all__ = [
     "extract_from_import_name",
     "extract_from_module_name",
     "extract_rust_use_import_name",
+    "extract_rust_use_import_names",
     "extract_simple_import_alias",
     "extract_simple_import_name",
     "parse_import_bindings",

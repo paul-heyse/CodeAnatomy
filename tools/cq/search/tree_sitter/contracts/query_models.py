@@ -170,7 +170,7 @@ def lint_query_pack_source(
                 language=language,
                 pack_name=pack_name,
                 code="compile_error",
-                message=type(exc).__name__,
+                message=str(exc) or type(exc).__name__,
             )
         )
         return tuple(issues)

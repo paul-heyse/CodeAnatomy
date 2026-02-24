@@ -131,10 +131,15 @@ def execute_neighborhood(request: NeighborhoodExecutionRequestV1) -> CqResult:
         )
     )
     result = _coerce_neighborhood_summary(result)
+    target_resolution_ambiguous = any(
+        event.category == "ambiguous_symbol" for event in resolved.degrade_events
+    )
     result = update_result_summary(
         result,
         {
             "target_resolution_kind": resolved.resolution_kind,
+            "target_resolution_degrade_events": len(resolved.degrade_events),
+            "target_resolution_ambiguous": target_resolution_ambiguous,
             "incremental_enrichment_mode": incremental_mode.value,
         },
     )

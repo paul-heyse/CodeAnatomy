@@ -3,8 +3,7 @@
     "./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py"
   ],
   "key_findings": [
-    "function: dispatch_wrapper",
-    "Query pack lint failed: 2 errors"
+    "function: dispatch_wrapper"
   ],
   "sections": [
     {
@@ -17,9 +16,9 @@
     {
       "count": 6,
       "messages": [
-        "Enclosing Context: 1 (top: @trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or LocalBackend()\n    resolver: Callable[[str], str] = active.dispatch\n    return resolver(payload))",
-        "Parent Scopes: 2 (top: @trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or LocalBackend()\n    resolver: Callable[[str], str] = active.dispatch\n    return resolver(payload), from __future__ import annotations\n\nfrom abc import ABC, abstractmethod\nfrom collections.abc import Callable\nfrom typing import override\n\n\ndef trace(label: str) -> Callable[[Callable[..., str]], Callable[..., str]]:\n    def decorate(fn: Callable[..., str]) -> Callable[..., str]:\n        def wrapped(*args: object, **kwargs: object) -> str:\n            _ = label\n            return fn(*args, **kwargs)\n\n        return wrapped\n\n    return decorate\n\n\nclass Backend(ABC):\n    @abstractmethod\n    def dispatch(self, payload: str) -> str:\n        raise NotImplementedError\n\n\nclass LocalBackend(Backend):\n    @override\n    def dispatch(self, payload: str) -> str:\n        return payload.upper()\n\n\n@trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or LocalBackend()\n    resolver: Callable[[str], str] = active.dispatch\n    return resolver(payload)\n\n\ndef make_pipeline(prefix: str) -> Callable[[str], str]:\n    def _inner(value: str) -> str:\n        return f\"{prefix}:{dispatch_wrapper(value)}\"\n\n    return _inner)",
-        "Children: 4 (top: dispatch_wrapper, (payload: str, backend: Backend | None = None), str, active = backend or LocalBackend()\n    resolver: Callable[[str], str] = active.dispatch\n    return resolver(payload))",
+        "Enclosing Context: 1 (top: @trace(\"runtime\"))",
+        "Parent Scopes: 2 (top: @trace(\"runtime\"), from __future__ import annotations)",
+        "Children: 4 (top: dispatch_wrapper, (payload: str, backend: Backend | None = None), str, active = backend or LocalBackend())",
         "Siblings: 3 (top: @trace(\"runtime\"), LocalBackend, make_pipeline)",
         "Conjunction Peers: 1 (top: @trace(\"runtime\"))",
         "Callees: 2 (top: LocalBackend(), resolver(payload))"
@@ -27,17 +26,16 @@
       "title": "Neighborhood Preview"
     },
     {
-      "count": 2,
+      "count": 1,
       "messages": [
-        "function: dispatch_wrapper (1 occurrences) [object_id=obj_1d591aa7c5bd4178092fd052]",
-        "reference: dispatch_wrapper (1 occurrences) [object_id=obj_9a6a131a3c12ab22756f9290]"
+        "reference: dispatch_wrapper (2 occurrences) [object_id=obj_9a6a131a3c12ab22756f9290]"
       ],
       "title": "Resolved Objects"
     },
     {
       "count": 2,
       "messages": [
-        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:32:4 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:32-37) [reference] [object_id=obj_1d591aa7c5bd4178092fd052] [line_id=79f005e1e2c3e7ffc0c534b1]",
+        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:32:4 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:32-37) [reference] [object_id=obj_9a6a131a3c12ab22756f9290] [line_id=562aa3acbe5657600877c3fa]",
         "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:40:27 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:39-42) [reference] [object_id=obj_9a6a131a3c12ab22756f9290] [line_id=4440880f8d06e0c255bd41f9]"
       ],
       "title": "Occurrences"
@@ -55,13 +53,6 @@
         "./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py: 2 matches"
       ],
       "title": "Hot Files"
-    },
-    {
-      "count": 1,
-      "messages": [
-        "Query pack lint failed: 2 errors"
-      ],
-      "title": "Cross-Language Diagnostics"
     }
   ],
   "summary": {

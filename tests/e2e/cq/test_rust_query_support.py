@@ -51,3 +51,15 @@ def test_run_step_rust_query(
     assert proc.returncode == 0, proc.stderr
     result = loads_json(proc.stdout)
     assert any("helper" in finding.message for finding in result.key_findings)
+
+
+def test_rust_grouped_use_import_name_filter(
+    run_query: Callable[[str], CqResult],
+) -> None:
+    """Grouped Rust use-imports should match name filters by imported symbol."""
+    scope = "tests/e2e/cq/_fixtures/rust_grouped_imports.rs"
+    session_result = run_query(f"entity=import name=SessionContext lang=rust in={scope}")
+    assert any("SessionContext" in finding.message for finding in session_result.key_findings)
+
+    alias_result = run_query(f"entity=import name=PublicSessionContext lang=rust in={scope}")
+    assert any("PublicSessionContext" in finding.message for finding in alias_result.key_findings)

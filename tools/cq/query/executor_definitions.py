@@ -27,6 +27,7 @@ from tools.cq.query.executor_definitions_imports import (
     import_match_key,
     import_to_finding,
 )
+from tools.cq.query.import_utils import extract_rust_use_import_names
 from tools.cq.query.scan import ScanContext
 from tools.cq.query.shared_utils import extract_def_name
 
@@ -89,6 +90,7 @@ def process_import_query(
         {
             "total_imports": len(import_records),
             "matches": len(result.key_findings),
+            "total_matches": len(result.key_findings),
         },
     )
 
@@ -297,6 +299,7 @@ def finalize_def_query_summary(result: CqResult, scan_ctx: ScanContext) -> CqRes
             "total_defs": len(scan_ctx.def_records),
             "total_calls": len(scan_ctx.call_records),
             "matches": len(result.key_findings),
+            "total_matches": len(result.key_findings),
         },
     )
 
@@ -366,6 +369,18 @@ def matches_name(record: SgRecord, name: str) -> bool:
 
     if not extracted_name:
         return False
+
+    if (
+        record.record == "import"
+        and record.kind == "use_declaration"
+        and isinstance(record.text, str)
+    ):
+        rust_use_names = extract_rust_use_import_names(record.text)
+        if rust_use_names:
+            if name.startswith("~"):
+                pattern = name[1:]
+                return any(re.search(pattern, candidate) for candidate in rust_use_names)
+            return name in rust_use_names
 
     # Regex match if pattern starts with ~
     if name.startswith("~"):

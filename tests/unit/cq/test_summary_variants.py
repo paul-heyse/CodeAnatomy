@@ -9,6 +9,7 @@ from tools.cq.core.summary_types import (
     NeighborhoodSummaryV1,
     RunSummaryV1,
     SearchSummaryV1,
+    SigImpactSummaryV1,
     SummaryEnvelopeV1,
     resolve_summary_variant_name,
     summary_for_macro,
@@ -33,6 +34,7 @@ def test_summary_for_macro_selects_expected_variant() -> None:
     assert isinstance(summary_for_macro("q"), SearchSummaryV1)
     assert isinstance(summary_for_macro("calls"), CallsSummaryV1)
     assert isinstance(summary_for_macro("impact"), ImpactSummaryV1)
+    assert isinstance(summary_for_macro("sig-impact"), SigImpactSummaryV1)
     assert isinstance(summary_for_macro("run"), RunSummaryV1)
     assert isinstance(summary_for_macro("neighborhood"), NeighborhoodSummaryV1)
 
@@ -41,7 +43,8 @@ def test_summary_from_mapping_selects_variant_from_mode() -> None:
     """Mode values resolve to expected summary variants."""
     assert isinstance(summary_from_mapping({"mode": "entity"}), SearchSummaryV1)
     assert isinstance(summary_from_mapping({"mode": "macro:calls"}), CallsSummaryV1)
-    assert isinstance(summary_from_mapping({"mode": "sig-impact"}), ImpactSummaryV1)
+    assert isinstance(summary_from_mapping({"mode": "sig-impact"}), SigImpactSummaryV1)
+    assert isinstance(summary_from_mapping({"mode": "macro:sig-impact"}), SigImpactSummaryV1)
     assert isinstance(summary_from_mapping({"mode": "run"}), RunSummaryV1)
     assert isinstance(summary_from_mapping({"mode": "neighborhood"}), NeighborhoodSummaryV1)
 

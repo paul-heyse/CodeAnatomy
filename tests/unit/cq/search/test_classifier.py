@@ -252,6 +252,28 @@ import os
         assert result.category in {"from_import", "reference"}
 
     @staticmethod
+    def test_classify_rust_string_literal(tmp_path: Path) -> None:
+        """Rust string literals should classify as string matches, not callsites."""
+        source = tmp_path / "sample.rs"
+        line = 'const FEATURE_MSG: &str = "Async UDFs require the async-udf feature";\n'
+        source.write_text(line, encoding="utf-8")
+        clear_caches()
+        cache_context = ClassifierCacheContext()
+        sg_root = get_sg_root(source, lang="rust", cache_context=cache_context)
+        assert sg_root is not None
+
+        col = line.index("Async UDFs require the async-udf feature")
+        result = classify_from_node(
+            sg_root,
+            1,
+            col,
+            lang="rust",
+            cache_context=cache_context,
+        )
+        assert result is not None
+        assert result.category == "string_match"
+
+    @staticmethod
     def test_containing_scope_detected(python_source: Path) -> None:
         """Test that containing scope is detected."""
         clear_caches()

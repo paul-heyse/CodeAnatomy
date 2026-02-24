@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from tools.cq.core.typed_boundary import BoundaryDecodeError, decode_json_strict
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_strict, decode_json_strict
 from tools.cq.run.spec import RunStep
+from tools.cq.run.step_payload_normalization import normalize_step_payload
 
 
 def parse_run_step_json(raw: str) -> RunStep:
@@ -19,7 +20,9 @@ def parse_run_step_json(raw: str) -> RunStep:
         BoundaryDecodeError: If JSON is malformed or does not match RunStep schema.
     """
     try:
-        return decode_json_strict(raw, type_=RunStep)
+        raw_payload = decode_json_strict(raw, type_=dict[str, object])
+        normalized = normalize_step_payload(raw_payload)
+        return convert_strict(normalized, type_=RunStep)
     except BoundaryDecodeError as exc:
         msg = f"Invalid run step JSON: {exc}"
         raise BoundaryDecodeError(msg) from exc
@@ -38,7 +41,10 @@ def parse_run_steps_json(raw: str) -> list[RunStep]:
         BoundaryDecodeError: If JSON is malformed or does not match RunStep schema.
     """
     try:
-        return decode_json_strict(raw, type_=list[RunStep])
+        raw_payloads = decode_json_strict(raw, type_=list[dict[str, object]])
+        return [
+            convert_strict(normalize_step_payload(item), type_=RunStep) for item in raw_payloads
+        ]
     except BoundaryDecodeError as exc:
         msg = f"Invalid run steps JSON array: {exc}"
         raise BoundaryDecodeError(msg) from exc

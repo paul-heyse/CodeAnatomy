@@ -7,7 +7,7 @@ from pathlib import Path
 from tools.cq.cli_app.app import app
 from tools.cq.cli_app.options import RunOptions, options_from_params
 from tools.cq.run.loader import load_run_plan
-from tools.cq.run.spec import CallsStep, NeighborhoodStep, QStep, RunLoadInput
+from tools.cq.run.spec import CallsStep, NeighborhoodStep, QStep, RunLoadInput, SearchStep
 
 MULTI_STEP_PLAN_COUNT = 2
 DEFAULT_NEIGHBORHOOD_TOP_K = 10
@@ -127,6 +127,26 @@ def test_run_plan_inline_mixed_steps_array_with_neighborhood() -> None:
     assert len(plan.steps) == MULTI_STEP_PLAN_COUNT
     assert isinstance(plan.steps[0], QStep)
     assert isinstance(plan.steps[1], NeighborhoodStep)
+
+
+def test_run_plan_inline_search_alias_fields() -> None:
+    """Ensure --step search payload accepts lang/in aliases."""
+    _cmd, bound, _ignored = app.parse_args(
+        [
+            "run",
+            "--step",
+            '{"type":"search","query":"register_udf","lang":"rust","in":"rust"}',
+        ],
+        exit_on_error=False,
+        print_error=False,
+    )
+    opts = bound.kwargs["opts"]
+    options = options_from_params(opts, type_=RunOptions)
+    plan = load_run_plan(_to_load_input(options))
+    assert len(plan.steps) == 1
+    assert isinstance(plan.steps[0], SearchStep)
+    assert plan.steps[0].lang_scope == "rust"
+    assert plan.steps[0].in_dir == "rust"
 
 
 def test_run_plan_toml(tmp_path: Path) -> None:

@@ -4,24 +4,24 @@
     "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
   ],
   "key_findings": [
-    "reference: compile_target",
-    "Query pack lint failed: 2 errors"
+    "function: compile_target"
   ],
   "sections": [
     {
       "count": 1,
       "messages": [
-        "reference: compile_target"
+        "function: compile_target"
       ],
       "title": "Target Candidates"
     },
     {
-      "count": 4,
+      "count": 5,
       "messages": [
-        "Enclosing Context: 1 (top: use corelib::{compile_target, Compiler, Engine, Runnable};)",
-        "Parent Scopes: 1 (top: use corelib::{compile_target, Compiler, Engine, Runnable};\n\npub fn compile_for_app(input: &str) -> String {\n    let engine = Engine::new(\"app\");\n    engine.compile(input)\n}\n\npub fn run_pipeline() -> String {\n    let engine = Engine::new(\"app\");\n    format!(\"{}:{}\", compile_target(\"seed\"), engine.run())\n})",
-        "Children: 1 (top: corelib::{compile_target, Compiler, Engine, Runnable})",
-        "Siblings: 2 (top: compile_for_app)"
+        "Enclosing Context: 1 (top: compile_target)",
+        "Parent Scopes: 1 (top: pub mod engine;)",
+        "Children: 5 (top: pub, compile_target, (input: &str), String, {)",
+        "Siblings: 4 (top: make_metric!(cpu_usage);, #[cfg(test)])",
+        "Callees: 2 (top: Engine::new(\"core\"), engine.compile(input))"
       ],
       "title": "Neighborhood Preview"
     },
@@ -61,13 +61,6 @@
         "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs: 2 matches"
       ],
       "title": "Hot Files"
-    },
-    {
-      "count": 1,
-      "messages": [
-        "Query pack lint failed: 2 errors"
-      ],
-      "title": "Cross-Language Diagnostics"
     }
   ],
   "summary": {
@@ -88,8 +81,8 @@
       },
       "neighborhood": {
         "callees": {
-          "availability": "unavailable",
-          "total": 0
+          "availability": "full",
+          "total": 2
         },
         "callers": {
           "availability": "unavailable",
@@ -97,7 +90,7 @@
         },
         "hierarchy_or_scope": {
           "availability": "full",
-          "total": 5
+          "total": 11
         },
         "references": {
           "availability": "unavailable",
@@ -106,7 +99,7 @@
       },
       "risk": {
         "counters": {
-          "callees": 0,
+          "callees": 2,
           "callers": 0,
           "forwarding_count": 0,
           "hazard_count": 0
@@ -115,11 +108,11 @@
       },
       "source": "search",
       "target": {
-        "kind": "reference",
+        "kind": "function",
         "location": {
-          "col": 14,
-          "file": "tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs",
-          "line": 1
+          "col": 7,
+          "file": "tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs",
+          "line": 10
         },
         "selection_reason": "top_definition",
         "symbol": "compile_target"

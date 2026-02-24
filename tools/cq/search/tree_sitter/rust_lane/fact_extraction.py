@@ -105,6 +105,7 @@ def _rust_fact_lists(
         captures,
         source_bytes,
         "import.path",
+        "import.leaf",
         "import.extern.name",
     )
     modules = _capture_texts_from_captures(
@@ -223,10 +224,16 @@ def _extend_rust_fact_lists_from_rows(
                 key="call.macro.path",
             )
         elif row.emit == "imports":
+            base = row.captures.get("import.base")
+            leaf = row.captures.get("import.leaf")
+            if isinstance(base, str) and isinstance(leaf, str):
+                composed = f"{base}::{leaf}"
+                if composed not in imports:
+                    imports.append(composed)
             _extend_fact_list(
                 target=imports,
                 captures=row.captures,
-                keys=("import.path", "import.extern.name"),
+                keys=("import.path", "import.leaf", "import.extern.name"),
             )
         elif row.emit == "modules":
             _extend_fact_list(
@@ -347,23 +354,15 @@ def _import_rows_from_matches(
     for row in rows:
         if row.emit != "imports":
             continue
-        target_path = None
-        for key in ("import.path", "import.extern.name"):
-            value = row.captures.get(key)
-            if isinstance(value, str) and value:
-                target_path = value
-                break
+        target_path = _import_target_path(row.captures)
         if target_path is None:
             continue
-        visibility_capture = row.captures.get("import.visibility")
-        visibility_text = visibility_capture if isinstance(visibility_capture, str) else ""
-        visibility = "public" if visibility_text.startswith("pub") else "private"
-        is_reexport = visibility == "public"
-        source_module_id = str(default_source)
-        for module_name, module_id in module_lookup.items():
-            if target_path.startswith(f"{module_name}::"):
-                source_module_id = module_id
-                break
+        visibility, is_reexport = _import_visibility(row.captures)
+        source_module_id = _resolve_source_module_id(
+            target_path=target_path,
+            module_lookup=module_lookup,
+            default_source=str(default_source),
+        )
         key = (source_module_id, target_path, visibility, is_reexport)
         if key in seen:
             continue
@@ -377,6 +376,37 @@ def _import_rows_from_matches(
             }
         )
     return out
+
+
+def _import_target_path(captures: Mapping[str, object]) -> str | None:
+    base = captures.get("import.base")
+    leaf = captures.get("import.leaf")
+    if isinstance(base, str) and base and isinstance(leaf, str) and leaf:
+        return f"{base}::{leaf}"
+    for key in ("import.path", "import.extern.name"):
+        value = captures.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _import_visibility(captures: Mapping[str, object]) -> tuple[str, bool]:
+    visibility_capture = captures.get("import.visibility")
+    visibility_text = visibility_capture if isinstance(visibility_capture, str) else ""
+    visibility = "public" if visibility_text.startswith("pub") else "private"
+    return visibility, visibility == "public"
+
+
+def _resolve_source_module_id(
+    *,
+    target_path: str,
+    module_lookup: Mapping[str, str],
+    default_source: str,
+) -> str:
+    for module_name, module_id in module_lookup.items():
+        if target_path.startswith(f"{module_name}::"):
+            return module_id
+    return default_source
 
 
 def _macro_expansion_requests(

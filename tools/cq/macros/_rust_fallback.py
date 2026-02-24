@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tools.cq.core.schema import Anchor, Finding
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.search._shared.types import QueryMode
 from tools.cq.search.semantic.diagnostics import (
     build_capability_diagnostics,
     features_from_macro,
@@ -22,6 +23,7 @@ def rust_fallback_search(
     pattern: str,
     *,
     macro_name: str,
+    mode: QueryMode = QueryMode.REGEX,
 ) -> tuple[list[Finding], list[Finding], dict[str, object]]:
     """Search Rust files for pattern, returning findings, diagnostics, and partition stats.
 
@@ -29,6 +31,7 @@ def rust_fallback_search(
         root: Repository root path.
         pattern: Search pattern (typically a function/symbol name).
         macro_name: Name of the calling macro for diagnostics.
+        mode: Ripgrep query mode used to interpret ``pattern``.
 
     Returns:
         Tuple of (rust_findings, capability_diagnostics, rust_partition_stats).
@@ -43,6 +46,7 @@ def rust_fallback_search(
             pattern,
             limits=INTERACTIVE,
             lang_scope="rust",
+            mode=mode,
         )
 
     findings: list[Finding] = []

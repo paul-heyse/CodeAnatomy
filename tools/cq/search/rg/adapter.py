@@ -330,6 +330,7 @@ def search_content(
     file_globs: list[str] | None = None,
     limits: SearchLimits | None = None,
     lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE,
+    mode: QueryMode = QueryMode.REGEX,
 ) -> list[tuple[Path, int, str]]:
     """Search file contents and return ``(path, line, text)`` triples.
 
@@ -347,7 +348,7 @@ def search_content(
                 "request": RgRunRequest(
                     root=root,
                     pattern=pattern,
-                    mode=QueryMode.REGEX,
+                    mode=mode,
                     lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
                     include_globs=file_globs or [],
                     exclude_globs=[],

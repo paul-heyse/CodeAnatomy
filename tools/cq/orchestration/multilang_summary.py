@@ -131,23 +131,31 @@ def partition_stats_from_result_summary(
     files_scanned = _coerce_int(summary_map.get("files_scanned"), 0)
     if files_scanned == 0:
         files_scanned = _coerce_int(summary_map.get("scanned_files"), 0)
-    matches = _coerce_int(summary_map.get("matches"), fallback_matches)
+
+    matches = _coerce_int(summary_map.get("matches"), 0)
+    raw_total_matches = _coerce_int(summary_map.get("total_matches"), 0)
     if matches == 0:
-        matches = _coerce_int(summary_map.get("total_matches"), fallback_matches)
+        matches = raw_total_matches if raw_total_matches > 0 else fallback_matches
+    total_matches = raw_total_matches if raw_total_matches > 0 else matches
+
+    raw_scanned_files = _coerce_int(summary_map.get("scanned_files"), 0)
+    scanned_files = raw_scanned_files if raw_scanned_files > 0 else files_scanned
+    raw_caps_hit = summary_map.get("caps_hit")
+    caps_hit = raw_caps_hit if isinstance(raw_caps_hit, str) and raw_caps_hit else "none"
 
     payload = LanguagePartitionStats(
         matches=matches,
         files_scanned=files_scanned,
-        scanned_files=_coerce_int(summary_map.get("scanned_files"), files_scanned),
+        scanned_files=scanned_files,
         scanned_files_is_estimate=_coerce_bool(
             summary_map.get("scanned_files_is_estimate"),
             default=False,
         ),
         matched_files=_coerce_int(summary_map.get("matched_files"), 0),
-        total_matches=_coerce_int(summary_map.get("total_matches"), matches),
+        total_matches=total_matches,
         timed_out=_coerce_bool(summary_map.get("timed_out"), default=False),
         truncated=_coerce_bool(summary_map.get("truncated"), default=False),
-        caps_hit=str(summary_map.get("caps_hit", "none")),
+        caps_hit=caps_hit,
         error=(
             str(summary_map.get("error"))
             if isinstance(summary_map.get("error"), str) and str(summary_map.get("error"))

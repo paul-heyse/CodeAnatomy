@@ -8,7 +8,7 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.typed_boundary import BoundaryDecodeError, decode_toml_strict
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_strict, decode_toml_strict
 from tools.cq.run.spec import (
     RunLoadInput,
     RunPlan,
@@ -17,6 +17,7 @@ from tools.cq.run.spec import (
     is_run_step,
     normalize_step_ids,
 )
+from tools.cq.run.step_payload_normalization import normalize_plan_payload, normalize_step_payload
 
 
 class RunPlanError(RuntimeError):
@@ -56,7 +57,9 @@ def _load_plan_file(path: Path) -> RunPlan:
         raise RunPlanError(msg) from exc
 
     try:
-        return decode_toml_strict(payload, type_=RunPlan)
+        raw_plan = decode_toml_strict(payload, type_=dict[str, object])
+        normalized = normalize_plan_payload(raw_plan)
+        return convert_strict(normalized, type_=RunPlan)
     except BoundaryDecodeError as exc:
         msg = f"Invalid TOML in plan file: {path}"
         raise RunPlanError(msg) from exc
@@ -76,7 +79,7 @@ def _coerce_step(item: object) -> RunStep:
         item = asdict(item)
     if isinstance(item, dict):
         try:
-            return coerce_run_step(item)
+            return coerce_run_step(normalize_step_payload(item))
         except BoundaryDecodeError as exc:
             msg = f"Invalid step schema: {exc}"
             raise RunPlanError(msg) from exc

@@ -47,7 +47,7 @@ def test_execute_neighborhood_sets_resolution_and_evicts(
         target_uri=None,
         symbol_hint=None,
         degrade_events=(),
-        resolution_kind="symbol",
+        resolution_kind="symbol_fallback",
     )
     monkeypatch.setattr("tools.cq.neighborhood.executor.parse_target_spec", lambda target: target)
     monkeypatch.setattr(
@@ -89,7 +89,10 @@ def test_execute_neighborhood_sets_resolution_and_evicts(
         )
     )
 
-    assert as_neighborhood_summary(result.summary).target_resolution_kind == "symbol"
+    summary = as_neighborhood_summary(result.summary)
+    assert summary.target_resolution_kind == "symbol_fallback"
+    assert summary.target_resolution_degrade_events == 0
+    assert summary.target_resolution_ambiguous is False
     assert captured["target"] == "build_graph"
     assert captured["language"] == "python"
     assert evicted["language"] == "python"

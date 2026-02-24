@@ -3,24 +3,24 @@
     "./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs"
   ],
   "key_findings": [
-    "reference: compile_target",
-    "Query pack lint failed: 2 errors"
+    "function: compile_target"
   ],
   "sections": [
     {
       "count": 1,
       "messages": [
-        "reference: compile_target"
+        "function: compile_target"
       ],
       "title": "Target Candidates"
     },
     {
-      "count": 4,
+      "count": 5,
       "messages": [
-        "Enclosing Context: 1 (top: compile_target(input))",
-        "Parent Scopes: 3 (top: {\n    compile_target(input)\n}, invoke_compile, pub trait Compiler {\n    fn compile(&self, input: &str) -> String;\n}\n\npub struct CoreCompiler;\n\nimpl Compiler for CoreCompiler {\n    fn compile(&self, input: &str) -> String {\n        format!(\"core:{input}\")\n    }\n}\n\npub(crate) fn compile_target(input: &str) -> String {\n    CoreCompiler.compile(input)\n}\n\n#[macro_export]\nmacro_rules! forward_compile {\n    ($value:expr) => {\n        crate::compile_target($value)\n    };\n}\n\npub fn invoke_compile(input: &str) -> String {\n    compile_target(input)\n})",
-        "Children: 2 (top: compile_target, (input))",
-        "Callees: 1 (top: compile_target(input))"
+        "Enclosing Context: 1 (top: compile_target)",
+        "Parent Scopes: 1 (top: pub trait Compiler {)",
+        "Children: 5 (top: pub(crate), compile_target, (input: &str), String, {)",
+        "Siblings: 4 (top: impl Compiler for CoreCompiler {, #[macro_export])",
+        "Callees: 1 (top: CoreCompiler.compile(input))"
       ],
       "title": "Neighborhood Preview"
     },
@@ -55,13 +55,6 @@
         "./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs: 3 matches"
       ],
       "title": "Hot Files"
-    },
-    {
-      "count": 1,
-      "messages": [
-        "Query pack lint failed: 2 errors"
-      ],
-      "title": "Cross-Language Diagnostics"
     }
   ],
   "summary": {
@@ -91,7 +84,7 @@
         },
         "hierarchy_or_scope": {
           "availability": "full",
-          "total": 6
+          "total": 11
         },
         "references": {
           "availability": "unavailable",
@@ -109,11 +102,11 @@
       },
       "source": "search",
       "target": {
-        "kind": "reference",
+        "kind": "function",
         "location": {
-          "col": 4,
+          "col": 14,
           "file": "tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs",
-          "line": 25
+          "line": 13
         },
         "selection_reason": "top_definition",
         "symbol": "compile_target"

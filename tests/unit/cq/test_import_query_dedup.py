@@ -100,3 +100,57 @@ def test_import_query_ignores_commas_in_inline_comments(tmp_path: Path) -> None:
     assert finding.anchor is not None
     assert finding.anchor.file == "mod.py"
     assert finding.anchor.line == 1
+
+
+def test_import_query_matches_rust_grouped_use_targets(tmp_path: Path) -> None:
+    """Rust grouped use declarations should satisfy name-filtered import queries."""
+    tc = Toolchain.detect()
+    if not tc.has_sgpy:
+        pytest.skip("ast-grep-py not available")
+
+    repo = tmp_path / "repo"
+    _write_file(
+        repo / "mod.rs",
+        textwrap.dedent(
+            """\
+            use datafusion::execution::context::{SessionContext, SessionState};
+            pub use datafusion::execution::context::{SessionContext as PublicSessionContext, SQLOptions};
+            """
+        ),
+    )
+
+    session_query = parse_query("entity=import name=SessionContext lang=rust in=mod.rs")
+    session_plan = compile_query(session_query)
+    session_result = execute_plan(
+        ExecutePlanRequestV1(
+            plan=session_plan,
+            query=session_query,
+            root=str(repo),
+            services=resolve_runtime_services(repo),
+            symtable_enricher=SymtableEnricher(repo),
+            argv=("cq", "q", "entity=import name=SessionContext lang=rust in=mod.rs"),
+        ),
+        tc=tc,
+    )
+
+    languages = session_result.summary.get("languages")
+    assert isinstance(languages, MappingProxyType)
+    rust_summary = languages.get("rust")
+    assert isinstance(rust_summary, MappingProxyType)
+    assert rust_summary.get("matches") == 1
+    assert any("SessionContext" in finding.message for finding in session_result.key_findings)
+
+    alias_query = parse_query("entity=import name=PublicSessionContext lang=rust in=mod.rs")
+    alias_plan = compile_query(alias_query)
+    alias_result = execute_plan(
+        ExecutePlanRequestV1(
+            plan=alias_plan,
+            query=alias_query,
+            root=str(repo),
+            services=resolve_runtime_services(repo),
+            symtable_enricher=SymtableEnricher(repo),
+            argv=("cq", "q", "entity=import name=PublicSessionContext lang=rust in=mod.rs"),
+        ),
+        tc=tc,
+    )
+    assert any("PublicSessionContext" in finding.message for finding in alias_result.key_findings)

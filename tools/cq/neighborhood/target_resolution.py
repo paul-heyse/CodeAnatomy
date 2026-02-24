@@ -70,9 +70,10 @@ def resolve_target(
 
     symbol_name = spec.target_name or Path(spec.target_file or spec.raw).stem
     if allow_symbol_fallback and symbol_name:
-        symbol_match = _resolve_symbol_with_rg(root, symbol_name, language)
+        symbol_match, symbol_degrades = _resolve_symbol_with_rg(root, symbol_name, language)
         if symbol_match is not None:
             file_path, line = symbol_match
+            degrades.extend(symbol_degrades)
             if degrades:
                 degrades.append(
                     DegradeEventV1(
@@ -117,13 +118,15 @@ def resolve_target(
     )
 
 
-def _resolve_symbol_with_rg(root: Path, symbol_name: str, language: str) -> tuple[str, int] | None:
+def _resolve_symbol_with_rg(
+    root: Path, symbol_name: str, language: str
+) -> tuple[tuple[str, int] | None, tuple[DegradeEventV1, ...]]:
     """Resolve first symbol occurrence via ripgrep scoped by language.
 
     Returns:
     -------
-    tuple[str, int] | None
-        Relative file path and 1-based line number for the first hit.
+    tuple[tuple[str, int] | None, tuple[DegradeEventV1, ...]]
+        Best relative file path and 1-based line number plus degrade events.
     """
     rows = find_symbol_candidates(
         root=root,
@@ -132,7 +135,7 @@ def _resolve_symbol_with_rg(root: Path, symbol_name: str, language: str) -> tupl
         limits=INTERACTIVE,
     )
 
-    best: tuple[int, str, int] | None = None
+    ranked: list[tuple[int, str, int, str]] = []
     for rel_path, line_number, line_text in rows:
         score = _symbol_match_score(
             symbol_name=symbol_name,
@@ -140,11 +143,28 @@ def _resolve_symbol_with_rg(root: Path, symbol_name: str, language: str) -> tupl
             file_path=rel_path,
             line_text=line_text,
         )
-        if best is None or score > best[0]:
-            best = (score, rel_path, line_number)
-    if best is None:
-        return None
-    return best[1], best[2]
+        ranked.append((score, rel_path, line_number, line_text))
+    if not ranked:
+        return None, ()
+
+    ranked.sort(key=lambda row: (-row[0], row[1], row[2], row[3]))
+    best_score, best_file, best_line, _ = ranked[0]
+    tied = [row for row in ranked if row[0] == best_score]
+
+    degrades: list[DegradeEventV1] = []
+    if language == "rust" and len(tied) > 1:
+        degrades.append(
+            DegradeEventV1(
+                stage="target_resolution",
+                severity="info",
+                category="ambiguous_symbol",
+                message=(
+                    f"Multiple Rust symbol candidates for {symbol_name}; "
+                    f"chose best-ranked {best_file}:{best_line}"
+                ),
+            )
+        )
+    return (best_file, best_line), tuple(degrades)
 
 
 def _symbol_match_score(
@@ -157,23 +177,46 @@ def _symbol_match_score(
     name = re.escape(symbol_name)
     score = 100
     if language == "python":
-        if re.search(rf"\bdef\s+{name}\b", line_text):
-            score += 400
-        elif re.search(rf"\bclass\s+{name}\b", line_text):
-            score += 350
-        elif re.search(rf"\b{name}\s*=", line_text):
-            score += 200
+        score += _python_symbol_score_delta(name=name, line_text=line_text)
     elif language == "rust":
-        if re.search(rf"\bfn\s+{name}\b", line_text):
-            score += 400
-        elif re.search(rf"\b(struct|enum|trait)\s+{name}\b", line_text):
-            score += 350
-
-    if f"'{symbol_name}'" in line_text or f'"{symbol_name}"' in line_text:
-        score -= 200
-    if file_path.startswith("tests/"):
-        score -= 20
+        score += _rust_symbol_score_delta(name=name, line_text=line_text)
+    score += _symbol_penalty(symbol_name=symbol_name, file_path=file_path, line_text=line_text)
     return score
+
+
+def _python_symbol_score_delta(*, name: str, line_text: str) -> int:
+    if re.search(rf"\bdef\s+{name}\b", line_text):
+        return 400
+    if re.search(rf"\bclass\s+{name}\b", line_text):
+        return 350
+    if re.search(rf"\b{name}\s*=", line_text):
+        return 200
+    return 0
+
+
+def _rust_symbol_score_delta(*, name: str, line_text: str) -> int:
+    score = 0
+    if re.search(rf"^\s*(pub(\([^)]*\))?\s+)?(async\s+)?fn\s+{name}\b", line_text):
+        score += 600
+    elif re.search(rf"^\s*fn\s+{name}\b", line_text):
+        score += 500
+    elif re.search(rf"^\s*(pub(\([^)]*\))?\s+)?(struct|enum|trait)\s+{name}\b", line_text):
+        score += 350
+    if re.search(r"^\s*impl\b", line_text):
+        score -= 120
+    leading_spaces = len(line_text) - len(line_text.lstrip())
+    if leading_spaces > 0:
+        score -= min(leading_spaces, 8) * 5
+    return score
+
+
+def _symbol_penalty(*, symbol_name: str, file_path: str, line_text: str) -> int:
+    penalty = 0
+    if f"'{symbol_name}'" in line_text or f'"{symbol_name}"' in line_text:
+        penalty -= 200
+    if file_path.startswith("tests/"):
+        penalty -= 20
+    return penalty
 
 
 def _to_uri(root: Path, relative_path: str) -> str | None:

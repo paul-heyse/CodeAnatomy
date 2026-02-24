@@ -115,6 +115,10 @@ NODE_KIND_MAP: dict[str, tuple[MatchCategory, float]] = {
     # Strings (may be docstrings)
     "string": ("string_match", 0.85),
     "concatenated_string": ("string_match", 0.85),
+    "string_literal": ("string_match", 0.90),
+    "raw_string_literal": ("string_match", 0.90),
+    "byte_string_literal": ("string_match", 0.90),
+    "raw_byte_string_literal": ("string_match", 0.90),
     # Comments (shouldn't reach here via AST, but handle it)
     "comment": ("comment_match", 0.99),
     # Generic references

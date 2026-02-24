@@ -51,7 +51,48 @@
       "sgpy": "0.40.5"
     }
   },
-  "sections": [],
+  "sections": [
+    {
+      "collapsed": false,
+      "findings": [
+        {
+          "anchor": {
+            "col": 0,
+            "end_col": 24,
+            "end_line": 7,
+            "file": "tools/cq/index/files.py",
+            "line": 7
+          },
+          "category": "from_import",
+          "details": {
+            "data_items": [
+              [
+                "kind",
+                "from_import"
+              ],
+              [
+                "language",
+                "python"
+              ],
+              [
+                "name",
+                "Path"
+              ],
+              [
+                "text",
+                "from pathlib import Path"
+              ]
+            ],
+            "kind": "from_import",
+            "score": null
+          },
+          "message": "from_import: Path",
+          "severity": "info"
+        }
+      ],
+      "title": "python: Findings"
+    }
+  ],
   "summary": {
     "ambient_reads": 0,
     "bare_excepts": 0,
@@ -262,18 +303,18 @@
     ],
     "languages": {
       "python": {
-        "caps_hit": "None",
+        "caps_hit": "none",
         "files_scanned": 1,
         "matched_files": 0,
         "matches": 1,
-        "scanned_files": 0,
+        "scanned_files": 1,
         "scanned_files_is_estimate": false,
         "timed_out": false,
-        "total_matches": 0,
+        "total_matches": 1,
         "truncated": false
       },
       "rust": {
-        "caps_hit": "None",
+        "caps_hit": "none",
         "files_scanned": 0,
         "matched_files": 0,
         "matches": 0,

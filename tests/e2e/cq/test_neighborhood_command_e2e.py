@@ -152,3 +152,29 @@ def test_neighborhood_incremental_mode_cli_and_run_step_parity(
     step_summary = step_summaries.get(step_id)
     assert isinstance(step_summary, dict)
     assert step_summary.get("incremental_enrichment_mode") == "full"
+
+
+@pytest.mark.e2e
+def test_neighborhood_rust_symbol_prefers_top_level_function(
+    run_cq_result: Callable[..., CqResult],
+) -> None:
+    """Rust symbol fallback should anchor to top-level fn over impl method."""
+    result = run_cq_result(
+        [
+            "neighborhood",
+            "cq_rust_target_symbol",
+            "--lang",
+            "rust",
+            "--top-k",
+            "4",
+            "--no-semantic-enrichment",
+            "--format",
+            "json",
+            "--no-save-artifact",
+        ]
+    )
+
+    assert result.summary.get("target_resolution_kind") == "symbol_fallback"
+    target_file = result.summary.get("target_file")
+    assert isinstance(target_file, str)
+    assert target_file.endswith("tests/e2e/cq/_fixtures/rust_neighborhood_resolution.rs")

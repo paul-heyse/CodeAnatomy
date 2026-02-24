@@ -1,0 +1,153 @@
+[
+  {
+    "id": "search_rust_lint_contract",
+    "argv": [
+      "search",
+      "cq_rust_target_symbol",
+      "--lang",
+      "rust",
+      "--in",
+      "tests/e2e/cq/_fixtures",
+      "--format",
+      "json",
+      "--no-save-artifact"
+    ],
+    "checks": {
+      "summary_mode": "identifier",
+      "summary_lang_scope": "rust",
+      "query_pack_lint_status": "ok",
+      "min_total_matches": 1,
+      "forbidden_key_findings": [
+        "Query pack lint failed"
+      ]
+    }
+  },
+  {
+    "id": "q_rust_function_summary_consistency",
+    "argv": [
+      "q",
+      "entity=function name=cq_rust_target_symbol lang=rust in=tests/e2e/cq/_fixtures/rust_neighborhood_resolution.rs",
+      "--format",
+      "json",
+      "--no-save-artifact"
+    ],
+    "checks": {
+      "summary_mode": "entity",
+      "summary_lang_scope": "rust",
+      "min_total_matches": 1,
+      "require_total_matches_equals_matches": true,
+      "require_non_empty_sections": true,
+      "language_partition": "rust",
+      "require_partition_total_matches_equals_matches": true,
+      "require_partition_total_matches_equals_summary": true
+    }
+  },
+  {
+    "id": "q_rust_grouped_import_name_filter",
+    "argv": [
+      "q",
+      "entity=import name=PublicSessionContext lang=rust in=tests/e2e/cq/_fixtures/rust_grouped_imports.rs",
+      "--format",
+      "json",
+      "--no-save-artifact"
+    ],
+    "checks": {
+      "summary_mode": "entity",
+      "summary_lang_scope": "rust",
+      "min_total_matches": 1,
+      "required_key_findings": [
+        "PublicSessionContext"
+      ]
+    }
+  },
+  {
+    "id": "run_search_alias_scope_rust_only",
+    "argv": [
+      "run",
+      "--steps",
+      "[{\"type\":\"search\",\"query\":\"cq_rust_target_symbol\",\"lang\":\"rust\",\"in\":\"tests/e2e/cq/_fixtures\"}]",
+      "--format",
+      "json",
+      "--no-save-artifact"
+    ],
+    "checks": {
+      "summary_variant": "run",
+      "step_index": 0,
+      "step_lang_scope": "rust",
+      "step_languages_only": [
+        "rust"
+      ]
+    }
+  },
+  {
+    "id": "chain_search_scope_rust_only",
+    "argv": [
+      "chain",
+      "search",
+      "cq_rust_target_symbol",
+      "--lang",
+      "rust",
+      "--in",
+      "tests/e2e/cq/_fixtures",
+      "AND",
+      "q",
+      "entity=function name=cq_rust_target_symbol lang=rust in=tests/e2e/cq/_fixtures/rust_neighborhood_resolution.rs",
+      "--format",
+      "json",
+      "--no-save-artifact"
+    ],
+    "checks": {
+      "summary_mode": "run",
+      "summary_variant": "run",
+      "step_index": 0,
+      "step_lang_scope": "rust",
+      "step_languages_only": [
+        "rust"
+      ]
+    }
+  },
+  {
+    "id": "sig_impact_rust_unsupported_contract",
+    "argv": [
+      "sig-impact",
+      "register_udf",
+      "--to",
+      "register_udf(name, udf, strict)",
+      "--include",
+      "tests/e2e/cq/_fixtures/**/*.rs",
+      "--format",
+      "json",
+      "--no-save-artifact"
+    ],
+    "checks": {
+      "summary_mode": "sig-impact",
+      "summary_variant": "sig-impact",
+      "expected_evidence_count": 0,
+      "expected_section_count": 0,
+      "allowed_key_finding_categories": [
+        "capability_limitation"
+      ]
+    }
+  },
+  {
+    "id": "neighborhood_rust_symbol_resolution",
+    "argv": [
+      "neighborhood",
+      "cq_rust_target_symbol",
+      "--lang",
+      "rust",
+      "--top-k",
+      "4",
+      "--no-semantic-enrichment",
+      "--format",
+      "json",
+      "--no-save-artifact"
+    ],
+    "checks": {
+      "summary_variant": "neighborhood",
+      "summary_target_resolution_kind": "symbol_fallback",
+      "summary_target_resolution_ambiguous": false,
+      "target_file_suffix": "tests/e2e/cq/_fixtures/rust_neighborhood_resolution.rs"
+    }
+  }
+]

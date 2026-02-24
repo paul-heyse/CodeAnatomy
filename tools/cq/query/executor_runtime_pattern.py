@@ -23,6 +23,7 @@ from tools.cq.query.query_summary import (
     build_runmeta,
     summary_common_for_context,
 )
+from tools.cq.query.section_fallbacks import ensure_query_sections
 
 __all__ = ["execute_pattern_query", "execute_pattern_query_with_files"]
 
@@ -71,6 +72,7 @@ def _execute_pattern_query_impl(ctx: QueryExecutionContext) -> CqResult:
         summary,
         {
             "matches": len(key_findings),
+            "total_matches": len(key_findings),
             "files_scanned": len({r.file for r in records}),
         },
     )
@@ -79,6 +81,7 @@ def _execute_pattern_query_impl(ctx: QueryExecutionContext) -> CqResult:
         summary=summary,
         key_findings=key_findings,
     )
+    result = ensure_query_sections(result, title="Findings")
     result = runtime.maybe_add_pattern_explain(state, result)
     result = runtime.finalize_single_scope_summary(ctx, result)
     result = update_result_summary(
@@ -153,6 +156,7 @@ def _execute_pattern_query_with_files_impl(request: PatternQueryRequest) -> CqRe
         summary,
         {
             "matches": len(key_findings),
+            "total_matches": len(key_findings),
             "files_scanned": len({r.file for r in records}),
         },
     )
@@ -161,6 +165,7 @@ def _execute_pattern_query_with_files_impl(request: PatternQueryRequest) -> CqRe
         summary=summary,
         key_findings=key_findings,
     )
+    result = ensure_query_sections(result, title="Findings")
     result = runtime.maybe_add_pattern_explain(state, result)
     result = runtime.finalize_single_scope_summary(ctx, result)
     result = update_result_summary(

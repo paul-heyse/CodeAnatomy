@@ -341,18 +341,18 @@
     ],
     "languages": {
       "python": {
-        "caps_hit": "None",
+        "caps_hit": "none",
         "files_scanned": 1,
         "matched_files": 0,
         "matches": 1,
-        "scanned_files": 0,
+        "scanned_files": 1,
         "scanned_files_is_estimate": false,
         "timed_out": false,
-        "total_matches": 0,
+        "total_matches": 1,
         "truncated": false
       },
       "rust": {
-        "caps_hit": "None",
+        "caps_hit": "none",
         "files_scanned": 0,
         "matched_files": 0,
         "matches": 0,
